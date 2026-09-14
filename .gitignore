@@ -1,0 +1,22 @@
+# Build and packaging outputs
+/build/
+/dist/
+
+# Local package manager and IDE state
+/.npmcache/
+.vs/
+*.user
+
+# Downloaded/runtime-only dependencies (restored by setup-cloud.ps1)
+/services/node_modules/
+/services/vendor/
+/services/*.zip
+
+# Local account state and playback cache
+**/kugou-session.dat
+**/kugou-library.json
+**/cloud-cache/
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
