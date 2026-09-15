@@ -27,6 +27,7 @@
 #include <vector>
 #include <map>
 #include "cloud_bridge.hpp"
+#include "player/player_service.hpp"
 
 using namespace Gdiplus;
 namespace fs = std::filesystem;
@@ -215,12 +216,15 @@ MCIERROR applyVolume() {
     if(devices) devices->Release();
     return applied?0:MCIERR_UNSUPPORTED_FUNCTION;
 }
-void setVolume(int value) {
+musxi::PlayerService& playerService();
+musxi::PlayerResult setVolumeNative(int value) {
     int previous=volumePercent;volumePercent=std::clamp(value,0,100);
-    if(applyVolume()) {volumePercent=previous;notice(L"此音频暂不支持音量调节");return;}
+    if(applyVolume()) {volumePercent=previous;notice(L"此音频暂不支持音量调节");return {musxi::PlayerError::BackendFailure};}
     if(volumePercent>0) volumeBeforeMute=volumePercent;
     invalidate();
+    return {};
 }
+void setVolume(int value) {playerService().invoke(musxi::PlayerCommand::SetVolume,(unsigned)std::clamp(value,0,100));}
 void volumeAt(float x) {if(volumeBox.Width>0) setVolume((int)std::lround(std::clamp((x-volumeBox.X)/volumeBox.Width,0.0f,1.0f)*100));}
 DWORD statusNumber(const wchar_t* what) {
     wchar_t value[64]{};
@@ -258,12 +262,19 @@ void playSong(int index) {
     } else { current = index; playing = true;applyVolume(); toast.clear(); }
     reveal(index); invalidate();
 }
-void togglePlay() {
-    if (!opened) {int index=cloudView?cloudSelected:searchSelected;if(index>=0) cloudPlay(index);else notice(L"请先搜索并选择一首歌曲");return;}
-    MCIERROR error = playing ? command(L"pause mint") : command(L"play mint notify");
-    if (!error) playing = !playing;
+musxi::PlayerResult setPlaying(bool requested) {
+    if(!opened) return {musxi::PlayerError::NotReady};
+    if(playing==requested) return {};
+    MCIERROR error = command(requested?L"play mint notify":L"pause mint");
+    if (!error) playing = requested;
     else notice(L"播放状态切换失败，请重新打开这首歌曲");
     invalidate();
+    return {error?musxi::PlayerError::BackendFailure:musxi::PlayerError::None};
+}
+musxi::PlayerService& playerService();
+void togglePlay() {
+    if (!opened) {int index=cloudView?cloudSelected:searchSelected;if(index>=0) cloudPlay(index);else notice(L"请先搜索并选择一首歌曲");return;}
+    playerService().invoke(playing?musxi::PlayerCommand::Pause:musxi::PlayerCommand::Resume);
 }
 void skip(int delta) {
     if (cloudCurrent >= 0 && !cloudQueue.empty()) {
@@ -274,14 +285,39 @@ void skip(int delta) {
     if (base < 0) base = 0;
     playSong((base + delta + (int)songs.size()) % (int)songs.size());
 }
-void seekTo(float x) {
-    if (!opened || !duration) return;
-    auto target = (DWORD)(std::clamp((x - seekBox.X) / seekBox.Width, 0.0f, 1.0f) * (duration - 1));
+musxi::PlayerResult seekMilliseconds(std::uint32_t milliseconds) {
+    if (!opened || !duration) return {musxi::PlayerError::NotReady};
+    auto target = std::min<DWORD>(milliseconds,duration-1);
     bool wasPlaying = playing;
     auto error = command(L"seek mint to " + std::to_wstring(target));
     if (!error && wasPlaying) error = command(L"play mint notify");
     if (error) notice(L"此音频暂不支持跳转到该位置");
     position = statusNumber(L"position"); invalidate();
+    return {error?musxi::PlayerError::BackendFailure:musxi::PlayerError::None};
+}
+musxi::PlayerService& playerService() {
+    static musxi::PlayerService service([] {
+        musxi::PlayerState state{opened,playing,position,duration,volumePercent,{}};
+        if(opened && cloudCurrent>=0 && cloudCurrent<(int)cloudQueue.size()) state.trackId=cloudQueue[cloudCurrent].value("id","");
+        else if(opened && current>=0 && current<(int)songs.size()) state.trackId="local:"+std::to_string(current);
+        return state;
+    },[](musxi::PlayerCommand cmd,std::uint32_t value)->musxi::PlayerResult {
+        switch(cmd) {
+        case musxi::PlayerCommand::Pause:return setPlaying(false);
+        case musxi::PlayerCommand::Resume:return setPlaying(true);
+        case musxi::PlayerCommand::Seek:return seekMilliseconds(value);
+        case musxi::PlayerCommand::SetVolume:
+            return setVolumeNative((int)value);
+        case musxi::PlayerCommand::GetState:return {};
+        }
+        return {musxi::PlayerError::InvalidArgument};
+    });
+    return service;
+}
+void seekTo(float x) {
+    if(!duration || seekBox.Width<=0) return;
+    const auto target=(std::uint32_t)(std::clamp((x-seekBox.X)/seekBox.Width,0.0f,1.0f)*(duration-1));
+    playerService().invoke(musxi::PlayerCommand::Seek,target);
 }
 std::wstring timeText(DWORD ms) {
     std::wostringstream s; s << ms / 60000 << L":" << std::setw(2) << std::setfill(L'0') << (ms / 1000) % 60;
@@ -609,6 +645,7 @@ LRESULT CALLBACK wndProc(HWND hwnd, UINT message, WPARAM wp, LPARAM lp) {
         cloudTick();
         coverTick();
         if(opened && playing) {position=statusNumber(L"position");invalidate();}
+        playerService().publish();
         if(!toast.empty() && GetTickCount64()>=toastUntil) {toast.clear();invalidate();}
         return 0;
     case MM_MCINOTIFY:
@@ -627,6 +664,7 @@ LRESULT CALLBACK wndProc(HWND hwnd, UINT message, WPARAM wp, LPARAM lp) {
 } // namespace
 
 int WINAPI wWinMain(HINSTANCE instance,HINSTANCE, PWSTR, int show) {
+    (void)playerService(); // Bind the facade to the native application thread.
     SetProcessDPIAware();
     HDC screen=GetDC(nullptr);dpiScale=GetDeviceCaps(screen,LOGPIXELSX)/96.0f;ReleaseDC(nullptr,screen);
     GdiplusStartupInput input;ULONG_PTR token;

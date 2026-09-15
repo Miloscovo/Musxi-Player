@@ -19,4 +19,8 @@ if ($Test) {
     if ($LASTEXITCODE -ne 0) { throw 'Test compilation failed.' }
     & ./build/smoke.exe
     if ($LASTEXITCODE -ne 0) { throw 'Playback integration tests failed.' }
+    & $compilerPath -std=c++17 -O2 tests/player-interface.cpp -o build/player-interface.exe -static -lgdiplus -lgdi32 -lwinmm -lcomdlg32 -lshell32 -lole32 -ldwmapi -lcrypt32
+    if ($LASTEXITCODE -ne 0) { throw 'Player interface test compilation failed.' }
+    & ./build/player-interface.exe
+    if ($LASTEXITCODE -ne 0) { throw 'Player interface tests failed.' }
 }
