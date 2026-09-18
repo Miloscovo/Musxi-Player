@@ -8,6 +8,8 @@ if(NOT EXISTS "${CEF_ROOT}/cmake/FindCEF.cmake")
 endif()
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CEF_ROOT}/cmake")
 set(CEF_RUNTIME_LIBRARY_FLAG "/MT")
+set(USE_SANDBOX ON CACHE BOOL "Use SDK bootstrap sandbox" FORCE)
+set(USE_ATL OFF CACHE BOOL "ATL not needed" FORCE)
 find_package(CEF REQUIRED)
 add_subdirectory("${CEF_LIBCEF_DLL_WRAPPER_PATH}" "${CMAKE_CURRENT_BINARY_DIR}/libcef_dll_wrapper")
 set_target_properties(libcef_dll_wrapper PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED YES CXX_EXTENSIONS NO)
@@ -19,10 +21,27 @@ SET_LIBRARY_TARGET_PROPERTIES(cef_bridge)
 target_include_directories(cef_bridge PRIVATE "${CEF_ROOT}")
 target_link_libraries(cef_bridge PRIVATE music_application libcef_dll_wrapper libcef_lib ${CEF_STANDARD_LIBS})
 
-# Build-only host adapter. Browser window, IPC and lifecycle wiring follow later.
-# Do not replace the working native executable with an incomplete CEF host.
-add_library(cef_host STATIC host.cpp)
+# Separate preview host; the original native executable remains available.
+add_library(cef_host SHARED host.cpp)
 musxi_standard(cef_host 20)
 SET_LIBRARY_TARGET_PROPERTIES(cef_host)
 target_include_directories(cef_host PRIVATE "${CEF_ROOT}")
-target_link_libraries(cef_host PRIVATE cef_bridge libcef_dll_wrapper libcef_lib ${CEF_STANDARD_LIBS})
+target_link_libraries(cef_host PRIVATE cef_bridge libcef_dll_wrapper libcef_lib ${CEF_STANDARD_LIBS} shlwapi)
+set_target_properties(cef_host PROPERTIES OUTPUT_NAME MusxiPlayerWeb)
+set(CEF_TARGET cef_host)
+SET_CEF_TARGET_OUT_DIR()
+set_target_properties(cef_host PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CEF_TARGET_OUT_DIR}")
+COPY_SINGLE_FILE(cef_host "${CEF_BINARY_DIR}/bootstrap.exe" "${CEF_TARGET_OUT_DIR}/MusxiPlayerWeb.exe")
+COPY_FILES(cef_host "${CEF_BINARY_FILES}" "${CEF_BINARY_DIR}" "${CEF_TARGET_OUT_DIR}")
+COPY_FILES(cef_host "${CEF_RESOURCE_FILES}" "${CEF_RESOURCE_DIR}" "${CEF_TARGET_OUT_DIR}")
+add_custom_command(TARGET cef_host POST_BUILD
+  COMMAND ${CMAKE_COMMAND} -E copy_directory
+          "${CMAKE_SOURCE_DIR}/frontend/phase2" "${CEF_TARGET_OUT_DIR}/ui")
+SET_LPAC_ACLS(cef_host)
+foreach(asset services runtime)
+  if(EXISTS "${CMAKE_SOURCE_DIR}/build/${asset}")
+    add_custom_command(TARGET cef_host POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_directory
+              "${CMAKE_SOURCE_DIR}/build/${asset}" "${CEF_TARGET_OUT_DIR}/${asset}")
+  endif()
+endforeach()

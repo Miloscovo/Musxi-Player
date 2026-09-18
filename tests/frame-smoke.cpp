@@ -55,7 +55,12 @@ int wmain() {
         GetClientRect(hwnd,&client);MapWindowPoints(hwnd,nullptr,reinterpret_cast<POINT*>(&client),2);require(EqualRect(&client,&monitor.rcWork),"maximized window respects taskbar work area");
         click(WindowMaximize);require(!IsZoomed(hwnd),"restore button");
         click(WindowMinimize);require(IsIconic(hwnd),"minimize button");
-        ShowWindow(hwnd,SW_RESTORE);click(WindowClose);
+        ShowWindow(hwnd,SW_RESTORE);
+        musxi::setHostHooks({nullptr,nullptr,[] {return false;}});
+        SendMessageW(hwnd,WM_CLOSE,0,0);
+        require(IsWindow(hwnd),"host can defer native close until browser exits");
+        musxi::setHostHooks({});
+        click(WindowClose);
         MSG msg{};while(PeekMessageW(&msg,nullptr,0,0,PM_REMOVE)) DispatchMessageW(&msg);
         require(!IsWindow(hwnd),"close button destroys window");
     } catch(const std::exception& e) {std::cerr<<"FAIL "<<e.what()<<'\n';result=1;}

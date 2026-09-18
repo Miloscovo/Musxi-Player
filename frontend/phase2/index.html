@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self';">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Musxi Player · CEF 预览</title>
+<link rel="stylesheet" href="style.css">
+<main>
+ <p class="eyebrow">MUSXI PLAYER · 第二阶段</p>
+ <h1>音乐，连接起来。</h1>
+ <p>在原生播放器中播放音乐，这里会显示实时状态。</p>
+ <section><span id="connection">正在连接本机播放器…</span>
+ <h2 id="playback">等待状态</h2>
+ <dl><dt>进度</dt><dd id="position">—</dd><dt>音量</dt><dd id="volume">—</dd></dl>
+ <button id="refresh">刷新状态</button></section>
+ <p class="note">CEF 连接预览 · 播放操作仍在原生窗口中完成。</p>
+</main>
+<script src="native.js"></script>
+<script src="page.js"></script>
+</html>

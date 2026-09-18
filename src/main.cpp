@@ -10,6 +10,7 @@
 #include <windows.h>
 #include "application/application.hpp"
 #include "cxx17_guard.hpp"
+namespace { musxi::HostHooks hostHooks; constexpr UINT_PTR HostTick=0xCEF; }
 #include <windowsx.h>
 #include <gdiplus.h>
 #include <commdlg.h>
@@ -626,6 +627,7 @@ LRESULT CALLBACK wndProc(HWND hwnd, UINT message, WPARAM wp, LPARAM lp) {
         }
         return 0;
     case WM_TIMER:
+        if(wp==HostTick) {if(hostHooks.tick) hostHooks.tick();return 0;}
         if(wp==ScrollAnimationTick) {
             float target=(hovered==Scrollbar || draggingScroll)?1.0f:0.0f;
             scrollEmphasis+=(target-scrollEmphasis)*.22f;
@@ -659,13 +661,17 @@ LRESULT CALLBACK wndProc(HWND hwnd, UINT message, WPARAM wp, LPARAM lp) {
             else if(wp==MCI_NOTIFY_FAILURE) {playing=false;notice(L"音频播放中断，请重新播放或选择其他歌曲");}
         }
         return 0;
-    case WM_DESTROY: cloudStop();closeAudio();DeleteObject(searchFont);DeleteObject(searchBrush);KillTimer(hwnd,Tick);KillTimer(hwnd,SeekAnimationTick);KillTimer(hwnd,ScrollAnimationTick);PostQuitMessage(0);return 0;
+    case WM_CLOSE:
+        if(hostHooks.canClose && !hostHooks.canClose()) return 0;
+        break;
+    case WM_DESTROY: KillTimer(hwnd,HostTick);cloudStop();closeAudio();DeleteObject(searchFont);DeleteObject(searchBrush);KillTimer(hwnd,Tick);KillTimer(hwnd,SeekAnimationTick);KillTimer(hwnd,ScrollAnimationTick);PostQuitMessage(0);return 0;
     }
     return DefWindowProcW(hwnd,message,wp,lp);
 }
 } // namespace
 
 namespace musxi {
+void setHostHooks(HostHooks hooks) { hostHooks=hooks; }
 PlayerState applicationPlayerState() { return playerService().state(); }
 int runNativeApplication(void* nativeInstance, int show) {
     const auto instance=static_cast<HINSTANCE>(nativeInstance);
@@ -686,7 +692,11 @@ int runNativeApplication(void* nativeInstance, int show) {
     if(!hwnd) {CoUninitialize();GdiplusShutdown(token);return 1;}
     BOOL dark=darkTheme;DwmSetWindowAttribute(hwnd,20,&dark,sizeof(dark));
     ShowWindow(hwnd,show);UpdateWindow(hwnd);
-    if(wcsstr(GetCommandLineW(),L"--kugou")) {cloudLoginAfterInit=true;cloudClick(CloudHome);} else cloudConnect();
+    if(hostHooks.ready) hostHooks.ready(hwnd);
+    if(hostHooks.tick) SetTimer(hwnd,HostTick,10,nullptr);
+    if(hostHooks.connectCloud) {
+        if(wcsstr(GetCommandLineW(),L"--kugou")) {cloudLoginAfterInit=true;cloudClick(CloudHome);} else cloudConnect();
+    }
     MSG msg{};while(GetMessageW(&msg,nullptr,0,0)>0) {TranslateMessage(&msg);DispatchMessageW(&msg);}
     CoUninitialize();GdiplusShutdown(token);return (int)msg.wParam;
 }

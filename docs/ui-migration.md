@@ -38,10 +38,10 @@ translation unit; they have NOT been rewritten or fully extracted into Core.
 
 Both native libraries assert the exact C++17 language mode at compile time.
 There is no global CMAKE_CXX_STANDARD setting. SDK configuration is confined
-to src/cef, entered only with MUSXI_ENABLE_CEF=ON. cef_bridge and cef_host
-are optional C++20 static adapter targets, not a finished Web UI executable.
-The CEF wrapper also uses C++20. No browser, renderer IPC or React UI is
-connected in this adjustment; these remain stage-two work after an SDK build.
+to src/cef, entered only with MUSXI_ENABLE_CEF=ON. cef_bridge is C++20 and
+cef_host is a C++20 DLL loaded by the SDK's sandbox-enabled bootstrap executable.
+The wrapper also uses C++20. Stage two now connects a local HTML preview and
+Renderer/Browser IPC. React UI migration remains stage three.
 
 All SDK includes and links are PRIVATE. The dependency direction is
 cef_host -> cef_bridge -> music_application -> music_core. Static archives
@@ -58,7 +58,9 @@ Build ALL targets using the same MSVC toolset, architecture, configuration and
 CRT (/MT in Release, /MTd in Debug). Never mix MinGW archives with MSVC CEF
 archives. The MinGW cross-standard test does not certify the MSVC SDK ABI.
 No CEF types cross Application/Core. State reads retain the application-thread
-restriction; a future IPC handler must marshal there before calling the API.
+restriction. The current host uses a single-threaded CEF Browser UI loop on
+the native Application thread. A future multi-threaded CEF loop must marshal
+requests back to that thread before calling the service.
 
 Native verification:
 
@@ -69,17 +71,65 @@ cmake --build build/native
 ctest --test-dir build/native --output-on-failure
 ```
 
-Future SDK build (from a matching Visual Studio developer environment):
+SDK build:
 
 ```powershell
-cmake -S . -B build/cef -DMUSXI_ENABLE_CEF=ON -DCEF_ROOT=C:/SDK/cef
-cmake --build build/cef --config Release --target music_core music_application cef_bridge cef_host
+./build-cef.ps1 -CefRoot 'D:/develop/cef_binary_152.0.6+g708dc14+chromium-152.0.7977.83_windows64' -Test
 ```
 
 Verified locally: independent native library builds with CEF disabled, original
 player linkage, playback/interface/frame tests, and a C++20 consumer linked
 against both C++17 libraries (4 tests passed). The compile database confirms
 -std=c++17 on both native libraries and -std=c++20 on the boundary consumer.
-CEF adapter compilation is NOT verified: this machine has neither a CEF SDK
-nor an MSVC toolchain. Static adapter compilation will also not substitute for
-the eventual executable link, runtime resource deployment and process tests.
+## Stage two: CEF host and read-only IPC
+
+Built against CEF 152.0.6 / Chromium 152.0.7977.83, using Visual Studio 2026
+MSVC 19.51 x64. The native and CEF targets share /MT Release runtime.
+The generated projects confirm C++17 on music_core/music_application and C++20
+on the wrapper/bridge/host. CEF include paths do not appear in native targets.
+
+Run build/cef-msvc/src/cef/Release/MusxiPlayerWeb.exe. It starts the original
+native player alongside a CEF preview window. The preview shows the same
+Application instance's playback status, progress and volume, refreshed every
+500 ms. The existing native-only executable remains available. This is a
+parallel migration preview, not the final React player.
+
+The SDK bootstrap loads MusxiPlayerWeb.dll with sandbox support enabled.
+Child processes enter CefExecuteProcess before starting the native UI/backend.
+Renderer CefMessageRouter -> CEF IPC -> Browser CefMessageRouter -> C++17
+applicationPlayerState -> PlayerService is the only frontend state access path.
+CEF Browser callbacks run on the native main thread, pumped every 10 ms via
+optional HostHooks. MCI notifications and native timers keep their old path.
+Closing the native window waits for asynchronous CEF browser destruction
+before destroying the player and calling CefShutdown. Closing only the preview
+leaves the native player open.
+
+Protocol v1 request: {"version":1,"command":"player.getState","params":{}}.
+Success: {"version":1,"result":PlayerState}. CEF router query IDs correlate
+requests and replies. Errors: 400 invalid JSON/envelope/params, 403 untrusted
+frame, 404 unknown command, 500 application error. JS times out and cancels
+requests after 5 seconds. Type definitions live in frontend/phase2/native.d.ts;
+transport is centralized in native.js. No playback commands or subscriptions
+are exposed yet; polling is intentionally limited to this stage.
+
+Only the exact local preview main-frame URL can use the Bridge. Other
+navigations, frames and popups are rejected; the local page has a restrictive
+CSP and no remote scripts. Browser credentials/filesystem/Node backend are
+not exposed to JavaScript.
+
+The optional cef-ipc-smoke CTest launches a real sandboxed renderer, validates
+state response and rejection of unknown command/invalid parameters, then
+closes both windows and checks process exit. Native cloud startup is disabled
+only for this smoke test. Normal startup retains existing account behavior.
+Native playback/interface/frame/cross-standard tests also pass under MSVC.
+Existing native conversion/shadowing warnings and SDK unused-delay-load linker
+warnings remain non-fatal.
+
+Runtime CEF resources are copied by the SDK CMake helpers. Existing
+build/services and build/runtime are copied when available for native KuGou
+support; prepare them with the existing setup-cloud.ps1 workflow if missing.
+No account secrets are copied into frontend assets. CEF cache/logs and all
+build outputs remain under ignored build/. No SDK files are vendored.
+
+Next: React/TypeScript build, typed frontend service, then incremental command
+and event migration. Audio, queue and library algorithms remain native.
