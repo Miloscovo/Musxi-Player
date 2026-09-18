@@ -8,6 +8,8 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#include "application/application.hpp"
+#include "cxx17_guard.hpp"
 #include <windowsx.h>
 #include <gdiplus.h>
 #include <commdlg.h>
@@ -663,7 +665,10 @@ LRESULT CALLBACK wndProc(HWND hwnd, UINT message, WPARAM wp, LPARAM lp) {
 }
 } // namespace
 
-int WINAPI wWinMain(HINSTANCE instance,HINSTANCE, PWSTR, int show) {
+namespace musxi {
+PlayerState applicationPlayerState() { return playerService().state(); }
+int runNativeApplication(void* nativeInstance, int show) {
+    const auto instance=static_cast<HINSTANCE>(nativeInstance);
     (void)playerService(); // Bind the facade to the native application thread.
     SetProcessDPIAware();
     HDC screen=GetDC(nullptr);dpiScale=GetDeviceCaps(screen,LOGPIXELSX)/96.0f;ReleaseDC(nullptr,screen);
@@ -685,3 +690,4 @@ int WINAPI wWinMain(HINSTANCE instance,HINSTANCE, PWSTR, int show) {
     MSG msg{};while(GetMessageW(&msg,nullptr,0,0)>0) {TranslateMessage(&msg);DispatchMessageW(&msg);}
     CoUninitialize();GdiplusShutdown(token);return (int)msg.wParam;
 }
+} // namespace musxi
