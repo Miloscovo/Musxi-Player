@@ -1,6 +1,8 @@
 # Build and packaging outputs
 /build/
 /dist/
+/frontend/dist/
+/frontend/node_modules/
 
 # Local package manager and IDE state
 /.npmcache/

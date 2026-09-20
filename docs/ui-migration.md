@@ -1,4 +1,10 @@
-# UI migration: phase 1
+# UI migration: CEF + Vue 3 + TypeScript + Vite
+
+Current checkpoint: stage three implements the minimal Vue read-only preview.
+Stages four through six remain planned. The original native UI and the
+framework-free phase-two page remain available independently.
+
+## Stage one: application interface preparation
 
 The C++17 PlayerService facade is transport-independent and contains no HWND,
 GDI+, CEF or JSON types. main.cpp provides adapters to the existing MCI and
@@ -18,7 +24,7 @@ single-subscriber internal event outlet, not yet a renderer subscription API.
 All service access belongs to the application thread; a later CEF transport
 must post commands to that thread. The callbacks must not reenter the service.
 
-Deliberately deferred: CEF, React, JSON wire protocol, library extraction,
+Deliberately deferred in stage one: CEF, Web UI, JSON wire protocol, library extraction,
 queue commands and asynchronous play requests. Their completion/cancellation
 contracts must be introduced with the cloud controller extraction; a queued
 download must not be reported as successful playback. Existing global state,
@@ -41,7 +47,7 @@ There is no global CMAKE_CXX_STANDARD setting. SDK configuration is confined
 to src/cef, entered only with MUSXI_ENABLE_CEF=ON. cef_bridge is C++20 and
 cef_host is a C++20 DLL loaded by the SDK's sandbox-enabled bootstrap executable.
 The wrapper also uses C++20. Stage two now connects a local HTML preview and
-Renderer/Browser IPC. React UI migration remains stage three.
+Renderer/Browser IPC. Stage three adds an opt-in Vue 3 + TypeScript + Vite page.
 
 All SDK includes and links are PRIVATE. The dependency direction is
 cef_host -> cef_bridge -> music_application -> music_core. Static archives
@@ -92,7 +98,7 @@ Run build/cef-msvc/src/cef/Release/MusxiPlayerWeb.exe. It starts the original
 native player alongside a CEF preview window. The preview shows the same
 Application instance's playback status, progress and volume, refreshed every
 500 ms. The existing native-only executable remains available. This is a
-parallel migration preview, not the final React player.
+parallel migration preview, not the final Vue player.
 
 The SDK bootstrap loads MusxiPlayerWeb.dll with sandbox support enabled.
 Child processes enter CefExecuteProcess before starting the native UI/backend.
@@ -131,5 +137,201 @@ support; prepare them with the existing setup-cloud.ps1 workflow if missing.
 No account secrets are copied into frontend assets. CEF cache/logs and all
 build outputs remain under ignored build/. No SDK files are vendored.
 
-Next: React/TypeScript build, typed frontend service, then incremental command
-and event migration. Audio, queue and library algorithms remain native.
+## Frontend decision and architecture
+
+The phase-two audit found no frontend framework dependencies, components or
+framework-specific build configuration. frontend/phase2 contains only HTML,
+CSS, JavaScript and a TypeScript declaration file. services/package.json is
+the existing Node-based cloud adapter, not a frontend package. The CEF host,
+renderer router, browser handler and JSON protocol have no framework coupling.
+No phase-two implementation needs replacement for this frontend decision.
+
+Target call direction:
+
+```text
+Vue 3 + TypeScript components (Composition API, <script setup lang="ts">)
+  -> composable / optional store
+  -> Native API Client
+  -> CEF Renderer router -> IPC -> CEF Browser bridge (C++20)
+  -> Application Service (C++17) -> Core (C++17)
+```
+
+CEF knows only trusted Web content and IPC, never Vue components or reactivity.
+Components must not access cefQuery, CefV8Context, IPC or native objects.
+frontend/src/native/client.ts is the sole application-facing native API
+entry point. Low-level transport access stays private to that directory.
+Its initial public method is native.player.getState(), mapping the
+existing protocol v1 command and response without changing the C++ handler.
+types.ts defines command/parameter/result/error types; replies are validated
+at runtime as well as at compile time. events.ts is reserved for typed event
+subscriptions when native events are actually exposed in stage four.
+Do not advertise unsupported playback methods or pretend mock state is native.
+
+Vue owns page, dialog, sidebar, theme, hover and animation state. Playing,
+current track, position, duration, volume, queue, library and audio backend
+remain native-owned. Composable/store snapshots are UI projections only.
+On mount or renderer reload, read a fresh native snapshot. Cancel outstanding
+requests and remove timers/listeners on unmount; ignore stale responses after
+teardown. A frontend reload must never reset the native queue or playback.
+Keep the current 500 ms polling approach until event delivery is implemented.
+Pinia is optional only when shared UI state justifies it; start with a simple
+composable. No second frontend framework is needed.
+
+Frontend structure (optional directories are deferred until needed):
+
+```text
+frontend/
+  phase2/                 # retain the independent technical-validation fixture
+  src/
+    components/           # deferred until multiple components need extraction
+    views/                # deferred until multiple views exist
+    composables/          # lifecycle and native state projection
+    services/             # deferred orchestration, using native/client.ts
+    native/
+      client.ts
+      types.ts
+      events.ts           # introduce with stage-four subscriptions
+    stores/               # create only if shared state needs it
+    App.vue
+    main.ts
+  index.html
+  package.json            # Vue 3, TypeScript, Vite, Vue plugin, vue-tsc
+  tsconfig.json
+  vite.config.ts
+```
+
+## Stage three implementation and remaining acceptance gates
+
+### Stage three: minimal Vue frontend and read-only native client
+
+Create the Vue 3/TypeScript/Vite project beside phase2, with Composition API
+and script setup. Add a minimal state view and composable backed by the typed
+Native API Client. No full player UI migration or new playback commands yet.
+Install only the required frontend dependencies and keep their lockfile in source control.
+Add frontend output/dependency ignores when introducing the build.
+
+Configure relative production asset paths and copy the Vite output to the
+host's ui directory via an explicit CMake build option/step. Keep phase2 as
+the default regression fixture until the Vue path passes validation. Test
+production JS modules under the actual CEF local-file origin: Vite dev-server
+success does not prove file-origin compatibility. Preserve CSP, exact trusted
+main-frame checks and sandboxing. If file-origin module loading requires an
+adapter change, scope it to static resource delivery; do not disable browser
+security globally. A development server must not implicitly gain native access.
+
+Acceptance: frontend typecheck and production build pass; native and CEF
+targets still compile; both phase2 IPC smoke and the Vue production page work;
+mount/reload recovers native state; no CEF calls occur in components. Stop for
+review before stage four.
+
+### Stage four: native playback commands and events
+
+Expose existing Application/PlayerService operations through versioned typed
+commands: pause, resume, seek and volume. Define play/queue asynchronous
+completion and cancellation semantics before exposing them; do not report a
+queued download as successful playback. Implement native event transport for
+stateChanged, trackChanged, positionChanged and volumeChanged, with snapshot
+resynchronization and subscription cleanup. Keep all service calls on the
+Application thread. Preserve the existing internal single-subscriber event
+contract or add explicit fan-out only where needed.
+
+Acceptance: native contract tests and real Renderer IPC tests cover valid and
+invalid commands, errors, teardown and reload; UI reflects authoritative native
+state; existing playback behavior remains intact. Stop for review.
+
+### Stage five: library, account and player UI migration
+
+Incrementally move views for library/playlists, discovery/search, account,
+covers, favourites and song actions to Vue. Expose the necessary native
+Application interfaces without rewriting audio, library or queue algorithms.
+Keep filesystem, network credentials, database and audio work native-owned;
+the frontend invokes typed services only. Add shared stores only as required.
+Keep the legacy UI available while each workflow reaches feature parity.
+
+Acceptance: regression checks for migrated workflows, state synchronization,
+error/loading states, themes and existing native playback; builds remain
+runnable at each increment. Stop for review.
+
+### Stage six: integration, packaging and controlled switchover
+
+Verify window controls, DPI, keyboard, resource deployment, CEF sandbox,
+renderer recovery, startup/shutdown and release packaging. Package the Vite
+production assets and required CEF resources; keep secrets out of Web assets.
+Select the Web UI as the default only after feature parity and acceptance.
+Remove legacy UI only after explicit approval; preserve the native core and
+the independent CEF-disabled build.
+
+Acceptance: install/run/uninstall validation, native and IPC regression tests,
+frontend typecheck/build, reload/crash recovery, and verified C++17/C++20
+target isolation. Each stage ends in a compilable, preferably runnable state.
+
+## Change boundaries and risks
+
+The frontend-decision adjustment changed README.md and this plan only. src/cef/*,
+frontend/phase2/*, CMakeLists.txt, build-cef.ps1, Application/Core and tests
+were unchanged at that checkpoint. There were no unused framework packages or configs to delete.
+
+Stage-three changes are limited to frontend source/configuration,
+frontend build/deployment integration and related documentation/tests. Preserve
+the working CEF initialization, child-process entry, process routing, message
+loop, lifetime and read-only state path. The native facade is still incremental:
+most audio/cloud/library code remains in src/main.cpp and must not be described
+as already extracted modules.
+
+Key risks are local-file module loading/CSP, packaging stale frontend assets,
+renderer reload and event-subscription leaks, application-thread affinity,
+asynchronous cloud completion, and accidentally propagating SDK requirements
+across targets. Validate these at the relevant stage without widening native
+dependencies or changing core language standards.
+
+## Running the stage-three preview
+
+```powershell
+./build-cef.ps1 -CefRoot 'D:/develop/cef_binary_152.0.6+g708dc14+chromium-152.0.7977.83_windows64' -Vue -Test
+./build/cef-msvc/src/cef/Release/MusxiPlayerWeb.exe --cef-vue
+```
+
+Without --cef-vue the host still loads the phase-two fixture. The -Vue switch
+installs the locked frontend dependencies and enables MUSXI_BUILD_VUE_UI.
+Direct CMake users run npm ci in frontend first, then configure that option ON.
+An always-run asset target builds/typechecks and deploys the Vue page to ui-vue;
+phase2 continues to deploy to ui. Changes to frontend files do not require a
+C++ relink to reach the runtime folder. Node/npm are unnecessary when this
+option is OFF or when CEF is disabled.
+
+The production Vite build deliberately emits one classic IIFE script with Vue
+bundled and precompiled templates, plus external CSS and a restrictive CSP.
+This avoids file-origin module restrictions without changing the Bridge,
+allowlisting a dev server or disabling CEF security. The root index.html remains
+a normal Vite development entry; the build emits its local-file variant.
+Build settings follow https://vite.dev/guide/build and
+https://vite.dev/config/build-options ; Vue SFC syntax follows
+https://vuejs.org/api/sfc-script-setup .
+
+frontend/src/native/transport.ts is private transport with timeout, abort,
+native error propagation and protocol checks. client.ts exposes only
+player.getState; types.ts validates every PlayerState field. usePlayerState
+polls without overlapping requests and cancels on teardown/pagehide. An error
+is shown explicitly; a last successful snapshot may remain visible as stale
+data but no fabricated playback state is supplied. There is no Pinia, router,
+playback mutation API, library API or event subscription yet.
+
+The cef-vue-smoke test loads the real production bundle, checks Vue-rendered
+state, reloads the same page, fetches native state again, compares track/opened/
+volume and reports completion through the existing test-only IPC command.
+It complements cef-ipc-smoke, which retains the original invalid-command and
+invalid-parameter coverage. It does not exercise live cloud playback across a
+reload; that needs a selected track in the normal preview.
+
+Frontend checks: npm run build and npm test in frontend. The transport suite
+covers malformed responses, missing host, native errors, cancellation, timeout
+and late callbacks. TypeScript is pinned to 5.9.3 because the tested vue-tsc
+version cannot load the changed compiler entry in TypeScript 7. No C++ language
+standards or Core/Application implementation changed for stage three.
+
+Stage-three verification (2026-09-20): frontend production build/typecheck and
+7 transport tests passed; MSVC CEF build and all 6 CTests passed, including the
+phase-two IPC fixture and Vue production reload smoke. CEF-disabled MinGW
+build and all 4 native CTests passed. Generated MSVC projects retain C++17
+Core/Application without SDK includes and C++20 Host/Bridge. Existing SDK
+unused-delay-load linker warnings remain. Stage four has not started.

@@ -40,8 +40,8 @@ int run(HINSTANCE instance,int show,void* sandbox) {
     if(child>=0)return child;
     wchar_t exe[32768];GetModuleFileNameW(nullptr,exe,32768);
     const auto directory=std::filesystem::path(exe).parent_path();
-    pagePath=(directory/L"ui"/L"index.html").wstring();
     auto command=CefCommandLine::CreateCommandLine();command->InitFromString(GetCommandLineW());
+    pagePath=(directory/(command->HasSwitch("cef-vue")?L"ui-vue":L"ui")/L"index.html").wstring();
     smoke=command->HasSwitch("cef-smoke");
     if(!std::filesystem::exists(pagePath))return 2;
     CefSettings settings;

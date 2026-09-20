@@ -55,5 +55,10 @@ if(BUILD_TESTING)
     add_test(NAME cef-ipc-smoke
       COMMAND "$<TARGET_FILE_DIR:cef_host>/MusxiPlayerWeb.exe" --cef-smoke)
     set_tests_properties(cef-ipc-smoke PROPERTIES TIMEOUT 35 RUN_SERIAL TRUE)
+    if(MUSXI_BUILD_VUE_UI)
+      add_test(NAME cef-vue-smoke
+        COMMAND "$<TARGET_FILE_DIR:cef_host>/MusxiPlayerWeb.exe" --cef-vue --cef-smoke)
+      set_tests_properties(cef-vue-smoke PROPERTIES TIMEOUT 35 RUN_SERIAL TRUE)
+    endif()
   endif()
 endif()
