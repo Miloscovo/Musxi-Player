@@ -14,7 +14,7 @@
 
 ## Web UI 迁移进度
 
-已接入第三阶段的 Vue 最小只读状态预览，现有原生 UI 仍然保留；
+已接入第四阶段的 Vue 播放控制与原生事件同步，现有原生 UI 仍然保留；
 `frontend/phase2` 是独立的 HTML/JavaScript 状态预览页面。
 
 新前端采用 **Vue 3 + TypeScript + Vite**，使用 Composition API 和
@@ -40,5 +40,6 @@ Core/Application 保持 C++17，CEF Host/Bridge/wrapper 独立使用 C++20。
 ./build/cef-msvc/src/cef/Release/MusxiPlayerWeb.exe --cef-vue
 ```
 
-Vue 页面目前只显示播放状态、进度、音量和原生曲目标识。播放操作仍在原生窗口
-进行。不加 `--cef-vue` 可打开第二阶段测试页面。尚未开始第四阶段播放命令迁移。
+Vue 页面支持暂停、继续播放、跳转进度和调整音量，通过原生事件实时同步状态。
+歌曲选择、队列和云端音乐业务仍在原生窗口进行。不加 `--cef-vue` 可打开第二阶段
+测试页面。尚未开始第五阶段业务页面迁移。

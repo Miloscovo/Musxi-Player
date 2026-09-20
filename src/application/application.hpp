@@ -14,4 +14,7 @@ struct HostHooks {
 void setHostHooks(HostHooks hooks);
 // Application-thread only; returns a copy, never a borrowed backend object.
 PlayerState applicationPlayerState();
+PlayerResult applicationPlayerCommand(PlayerCommand command, std::uint32_t value=0);
+// Single host-owned observer. Clear before destroying the host; callbacks must not reenter.
+void setApplicationPlayerEvents(PlayerService::Events sink);
 }

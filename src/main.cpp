@@ -673,6 +673,8 @@ LRESULT CALLBACK wndProc(HWND hwnd, UINT message, WPARAM wp, LPARAM lp) {
 namespace musxi {
 void setHostHooks(HostHooks hooks) { hostHooks=hooks; }
 PlayerState applicationPlayerState() { return playerService().state(); }
+PlayerResult applicationPlayerCommand(PlayerCommand command,std::uint32_t value) { return playerService().invoke(command,value); }
+void setApplicationPlayerEvents(PlayerService::Events sink) { playerService().setEventSink(std::move(sink)); }
 int runNativeApplication(void* nativeInstance, int show) {
     const auto instance=static_cast<HINSTANCE>(nativeInstance);
     (void)playerService(); // Bind the facade to the native application thread.

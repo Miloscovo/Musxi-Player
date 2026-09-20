@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createNativeClient } from '../src/native/client.ts';
 import { request, type CefTransport } from '../src/native/transport.ts';
+import { subscribe } from '../src/native/events.ts';
 const state = { opened: true, playing: false, positionMs: 1200, durationMs: 3000, volumePercent: 72, trackId: 'track-1' };
 test('getState validates protocol and returns immutable native snapshot', async () => {
   const host: CefTransport = { cefQuery(q) {
@@ -39,4 +40,27 @@ test('timeout cancels native work', async () => {
 test('pre-aborted requests never dispatch', async () => {
   const controller = new AbortController(); controller.abort();
   await assert.rejects(request({ cefQuery() { assert.fail('dispatched'); }, cefQueryCancel() {} }, 'player.getState', {}, { signal: controller.signal }), { code: 499 });
+});
+test('typed commands map to the native protocol', async () => {
+  const seen: unknown[] = [];
+  const client = createNativeClient({ cefQuery(q) { seen.push(JSON.parse(q.request)); q.onSuccess(JSON.stringify({ version: 1, result: state })); return 1; }, cefQueryCancel() {} });
+  await client.player.pause(); await client.player.resume(); await client.player.seek(200); await client.player.setVolume(30);
+  assert.deepEqual(seen, [
+    { version: 1, command: 'player.pause', params: {} }, { version: 1, command: 'player.resume', params: {} },
+    { version: 1, command: 'player.seek', params: { positionMs: 200 } }, { version: 1, command: 'player.setVolume', params: { volumePercent: 30 } }
+  ]);
+});
+test('subscriptions validate events, cancel once and ignore late callbacks', () => {
+  let receive!: (reply: string) => void;
+  const cancelled: number[] = []; const events: unknown[] = [];
+  const stop = subscribe({ cefQuery(q) { assert.equal(q.persistent, true); receive = q.onSuccess; return 9; }, cefQueryCancel(id) { cancelled.push(id); } }, e => events.push(e), e => assert.fail(e.message));
+  const event = { version: 1, event: 'player.volumeChanged', state };
+  receive(JSON.stringify(event)); stop(); stop(); receive(JSON.stringify(event));
+  assert.deepEqual(events, [event]); assert.deepEqual(cancelled, [9]);
+});
+test('malformed subscription response reports an error and cancels', () => {
+  let receive!: (reply: string) => void; const codes: number[] = []; const cancelled: number[] = [];
+  subscribe({ cefQuery(q) { receive = q.onSuccess; return 4; }, cefQueryCancel(id) { cancelled.push(id); } }, () => assert.fail('invalid event delivered'), e => codes.push(e.code));
+  receive(JSON.stringify({ version: 1, event: 'player.unknown', state }));
+  assert.deepEqual(codes, [502]); assert.deepEqual(cancelled, [4]);
 });

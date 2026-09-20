@@ -49,14 +49,15 @@ int wmain() {
         setVolume(volumeBeforeMute);check(volumePercent==35,"restore volume after mute");
         Sleep(200);check(statusNumber(L"position")>0,"playback advances");
         togglePlay();check(!playing,"pause playback");
-        check(bool(playerService().invoke(musxi::PlayerCommand::Pause)) && !playing,"explicit pause is idempotent");
+        check(bool(musxi::applicationPlayerCommand(musxi::PlayerCommand::Pause)) && !playing,"application pause is idempotent");
         DWORD paused=statusNumber(L"position");Sleep(150);
         check(statusNumber(L"position")==paused,"paused position remains stable");
         { Bitmap b(1120,760);Graphics g(&b);paint(g); }
         seekTo(seekBox.X+seekBox.Width*.5f);
         check(!playing && statusNumber(L"position")>=1400,"seek while paused");
+        check(bool(musxi::applicationPlayerCommand(musxi::PlayerCommand::Seek,1000)) && !playing && statusNumber(L"position")>=1000,"application seek preserves paused state");
         togglePlay();check(playing,"resume playback");
-        check(bool(playerService().invoke(musxi::PlayerCommand::Resume)) && playing,"explicit resume is idempotent");
+        check(bool(musxi::applicationPlayerCommand(musxi::PlayerCommand::Resume)) && playing,"application resume is idempotent");
         skip(1);check(current==1 && playing,"next track");
         skip(-1);check(current==0 && playing,"previous track");
         skip(-1);check(current==1,"wrap previous track");

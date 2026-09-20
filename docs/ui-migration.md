@@ -1,7 +1,7 @@
 # UI migration: CEF + Vue 3 + TypeScript + Vite
 
-Current checkpoint: stage three implements the minimal Vue read-only preview.
-Stages four through six remain planned. The original native UI and the
+Current checkpoint: stage four adds native commands and event subscriptions.
+Stages five and six remain planned. The original native UI and the
 framework-free phase-two page remain available independently.
 
 ## Stage one: application interface preparation
@@ -286,6 +286,9 @@ dependencies or changing core language standards.
 
 ## Running the stage-three preview
 
+The following notes record stage three. The launch command still applies;
+stage four below supersedes the read-only API and polling behavior.
+
 ```powershell
 ./build-cef.ps1 -CefRoot 'D:/develop/cef_binary_152.0.6+g708dc14+chromium-152.0.7977.83_windows64' -Vue -Test
 ./build/cef-msvc/src/cef/Release/MusxiPlayerWeb.exe --cef-vue
@@ -334,4 +337,69 @@ Stage-three verification (2026-09-20): frontend production build/typecheck and
 phase-two IPC fixture and Vue production reload smoke. CEF-disabled MinGW
 build and all 4 native CTests passed. Generated MSVC projects retain C++17
 Core/Application without SDK includes and C++20 Host/Bridge. Existing SDK
-unused-delay-load linker warnings remain. Stage four has not started.
+unused-delay-load linker warnings remain. This was the stage-three checkpoint.
+
+## Stage four: playback control and authoritative events
+
+The same --cef-vue preview now supports pause, resume, seek and volume.
+Components call the composable, which calls native.player methods; only the
+native client/transport owns CEF queries. Core source and audio algorithms are
+unchanged. Application adds two C++17 facade functions: command dispatch and
+the existing single-observer setter. The CEF Browser/UI and Application thread
+remain the same thread. No CEF types cross the native boundary.
+
+Protocol v1 commands return an authoritative PlayerState after execution:
+
+| Command | Parameters | Result |
+| --- | --- | --- |
+| player.getState | {} | PlayerState |
+| player.pause | {} | PlayerState |
+| player.resume | {} | PlayerState |
+| player.seek | {positionMs: unsigned integer} | PlayerState |
+| player.setVolume | {volumePercent: integer 0..100} | PlayerState |
+
+Seek retains the native clamp to duration minus one millisecond. Pause/resume
+retain native idempotence. Errors are 400 for invalid parameters, 403 for an
+untrusted frame, 404 for unsupported commands, 409 for no opened track and
+500 for a native failure. A timeout or renderer cancellation cancels delivery,
+not a synchronous native operation already executed; commands are never
+automatically replayed. The frontend resynchronizes from native state.
+
+player.subscribe uses a persistent router query and empty params. Each message
+is {version:1,event,state}; the event is player.stateChanged,
+player.trackChanged, player.positionChanged or player.volumeChanged. The first
+message carries a complete snapshot. A new/reloaded renderer subscribes again
+and gets current state, never resets playback. The Browser fans the existing
+single PlayerService observer out to at most 16 subscriptions. CEF cancellation,
+navigation, renderer termination and browser close release the router callbacks;
+browser close also clears the application observer before its captured host dies.
+Observer callbacks serialize provided snapshots only and never reenter Core.
+
+Vue no longer polls every 500 ms. It reads on mount/manual refresh/command
+completion and receives ongoing native timer updates through events. An event
+generation counter prevents an older pending read from overwriting a newer
+event. Failed subscriptions reconnect after 1.5 seconds; teardown cancels reads,
+commands, subscriptions and retry timers. Slider drafts are transient UI state;
+displayed playback values continue to come from C++. No Pinia is introduced.
+
+Selecting a new track, queue edits and cloud download/play remain deferred to
+stage five. Before exposing these, use an explicit native operation ID and
+pending/completed/failed/cancelled status. Acceptance of a queued download is
+not playback success: completion must mean the selected audio is actually open
+and the native playback operation succeeded. New selection supersedes old
+pending selection; late completions must check that operation ID. Renderer
+reload should query the current operation/state, not enqueue it again. These
+are future contract requirements, not currently exposed APIs or rewritten logic.
+
+Tests now cover typed command mapping, event validation/cancellation and late
+callbacks; real CEF tests exercise invalid parameters, no-track errors, volume
+command/event/UI synchronization, unsubscribe and reload resubscription. The
+original phase-two unknown-command test now uses player.unknown because pause
+is a supported command. Real MCI playback regression remains in the native suite.
+Cloud playback from a Vue-selected track is not claimed or tested in this stage.
+
+Stage-four validation: frontend typecheck/production build passed, 10/10 frontend
+tests passed, MSVC CEF build with 6/6 CTests passed, and the CEF-disabled native
+build with 4/4 CTests passed. Existing native/SDK warnings remain non-fatal.
+No CMake language standards changed and src/player remains unchanged. Stage
+five has not started; no Git commit was created as part of this stage.

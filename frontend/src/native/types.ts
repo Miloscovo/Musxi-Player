@@ -8,6 +8,10 @@ export interface PlayerState {
 }
 export interface NativeCommands {
   'player.getState': { params: Record<string, never>; result: PlayerState };
+  'player.pause': { params: Record<string, never>; result: PlayerState };
+  'player.resume': { params: Record<string, never>; result: PlayerState };
+  'player.seek': { params: { positionMs: number }; result: PlayerState };
+  'player.setVolume': { params: { volumePercent: number }; result: PlayerState };
 }
 export interface NativeReply<T> { version: 1; result: T }
 export interface RequestOptions { signal?: AbortSignal }

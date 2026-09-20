@@ -20,7 +20,7 @@ setInterval(refresh, 500);
 async function verifyBridge() {
   await window.musxiNative.getState();
   for (const [command, params, expected] of [
-    ["player.pause", {}, 404], ["player.getState", { bad: true }, 400]
+    ["player.unknown", {}, 404], ["player.getState", { bad: true }, 400]
   ]) {
     let rejected = false;
     try { await window.musxiNative.request(command, params); }

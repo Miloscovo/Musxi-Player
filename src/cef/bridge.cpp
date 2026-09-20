@@ -3,12 +3,17 @@
 #include "include/wrapper/cef_message_router.h"
 #include "../application/application.hpp"
 #include "../../third_party/json.hpp"
+#include <map>
 
 namespace musxi::cef_adapter {
 namespace {
 using Json=nlohmann::json;
 CefRefPtr<CefBrowser> activeBrowser;
 bool passed=false;
+Json stateJson(const PlayerState& s) {
+    return {{"opened",s.opened},{"playing",s.playing},{"positionMs",s.positionMs},
+            {"durationMs",s.durationMs},{"volumePercent",s.volumePercent},{"trackId",s.trackId}};
+}
 class App final : public CefApp, public CefRenderProcessHandler {
 public:
     CefRefPtr<CefRenderProcessHandler> GetRenderProcessHandler() override {return this;}
@@ -40,9 +45,14 @@ public:
     CefRefPtr<CefRequestHandler> GetRequestHandler() override {return this;}
     void OnAfterCreated(CefRefPtr<CefBrowser> browser) override {
         CEF_REQUIRE_UI_THREAD();activeBrowser=browser;
+        setApplicationPlayerEvents([this](const char* name,const PlayerState& state) {
+            const auto message=Json{{"version",1},{"event",name},{"state",stateJson(state)}}.dump();
+            for(const auto& entry:subscriptions_) entry.second->Success(message);
+        });
     }
     void OnBeforeClose(CefRefPtr<CefBrowser> browser) override {
-        CEF_REQUIRE_UI_THREAD();router_->OnBeforeClose(browser);activeBrowser=nullptr;
+        CEF_REQUIRE_UI_THREAD();setApplicationPlayerEvents({});
+        router_->OnBeforeClose(browser);subscriptions_.clear();activeBrowser=nullptr;
         if(closing_ || smoke_) PostMessageW(window_,WM_CLOSE,0,0);
     }
     bool OnBeforePopup(CefRefPtr<CefBrowser>,CefRefPtr<CefFrame>,int,
@@ -62,28 +72,57 @@ public:
     }
     void OnRenderProcessTerminated(CefRefPtr<CefBrowser> b,TerminationStatus,
                                    int,const CefString&) override {router_->OnRenderProcessTerminated(b);}
-    bool OnQuery(CefRefPtr<CefBrowser>,CefRefPtr<CefFrame> frame,int64_t,
+    void OnQueryCanceled(CefRefPtr<CefBrowser>,CefRefPtr<CefFrame>,int64_t id) override {
+        CEF_REQUIRE_UI_THREAD();subscriptions_.erase(id);
+    }
+    bool OnQuery(CefRefPtr<CefBrowser>,CefRefPtr<CefFrame> frame,int64_t id,
                  const CefString& request,bool persistent,CefRefPtr<Callback> callback) override {
         CEF_REQUIRE_UI_THREAD();
         if(!frame->IsMain() || frame->GetURL().ToString()!=url_) {
             callback->Failure(403,"Untrusted frame");return true;
         }
-        if(persistent || request.length()>4096) {callback->Failure(400,"Invalid request");return true;}
+        if(request.length()>4096) {callback->Failure(400,"Invalid request");return true;}
         try {
             const auto q=Json::parse(request.ToString());
             if(!q.is_object() || q.value("version",0)!=1 ||
                !q.contains("command") || !q["command"].is_string() ||
-               !q.contains("params") || !q["params"].is_object() || !q["params"].empty()) {
+               !q.contains("params") || !q["params"].is_object()) {
                 callback->Failure(400,"Invalid protocol envelope");return true;
             }
             const auto command=q["command"].get<std::string>();
+            const auto& params=q["params"];
+            if(command=="player.subscribe") {
+                if(!persistent || !params.empty() || subscriptions_.size()>=16) {
+                    callback->Failure(400,"Invalid subscription");return true;
+                }
+                subscriptions_[id]=callback;
+                callback->Success(Json{{"version",1},{"event","player.stateChanged"},
+                    {"state",stateJson(applicationPlayerState())}}.dump());
+                return true;
+            }
+            if(persistent) {callback->Failure(400,"Persistent command not allowed");return true;}
+            const bool volume=command=="player.setVolume",seek=command=="player.seek";
+            std::uint32_t value=0;
+            if(volume || seek) {
+                const char* key=volume?"volumePercent":"positionMs";
+                if(params.size()!=1 || !params.contains(key) || !params[key].is_number_unsigned() ||
+                   params[key].get<std::uint64_t>()>(volume?100ULL:0xffffffffULL)) {
+                    callback->Failure(400,"Invalid command parameters");return true;
+                }
+                value=params[key].get<std::uint32_t>();
+            } else if(!params.empty()) {callback->Failure(400,"Unexpected parameters");return true;}
             if(command=="player.getState") {
                 // The CEF Browser UI and Application share the native main thread.
-                const auto s=applicationPlayerState();
-                callback->Success(Json{{"version",1},{"result",{
-                    {"opened",s.opened},{"playing",s.playing},{"positionMs",s.positionMs},
-                    {"durationMs",s.durationMs},{"volumePercent",s.volumePercent},
-                    {"trackId",s.trackId}}}}.dump());
+                callback->Success(Json{{"version",1},{"result",stateJson(applicationPlayerState())}}.dump());
+            } else if(command=="player.pause" || command=="player.resume" || volume || seek) {
+                const auto operation=volume?PlayerCommand::SetVolume:seek?PlayerCommand::Seek:
+                    command=="player.pause"?PlayerCommand::Pause:PlayerCommand::Resume;
+                const auto result=applicationPlayerCommand(operation,value);
+                if(!result) {
+                    const auto code=result.error==PlayerError::NotReady?409:
+                        result.error==PlayerError::InvalidArgument?400:500;
+                    callback->Failure(code,code==409?"No playable track is open":"Player command failed");
+                } else callback->Success(Json{{"version",1},{"result",stateJson(applicationPlayerState())}}.dump());
             } else if(smoke_ && command=="test.complete") {
                 passed=true;callback->Success("{}");PostMessageW(window_,WM_CLOSE,0,0);
             } else callback->Failure(404,"Unknown command");
@@ -94,6 +133,7 @@ public:
     void requestClose() {closing_=true;if(activeBrowser)activeBrowser->GetHost()->CloseBrowser(false);}
 private:
     std::string url_;HWND window_;bool smoke_,closing_=false;
+    std::map<int64_t,CefRefPtr<Callback>> subscriptions_;
     CefRefPtr<CefMessageRouterBrowserSide> router_;
     IMPLEMENT_REFCOUNTING(Client);
 };
