@@ -12,7 +12,20 @@
 - 登录自动领取 VIP
 - 可循环切换的主题，包括浅色、深色、半透明主题
 
-## 开发与测试
+## 构建
+
+本项目需要 Windows 10 或更高版本、CMake 3.20 或更高版本，以及安装了“使用 C++ 的桌面开发”工作负载的 Visual Studio 2022。
+
+使用以下命令构建 64 位 Release 版本：
+
+```powershell
+cmake -S . -B build -A x64
+cmake --build build --config Release
+```
+
+构建完成后，可执行文件位于 `build\Release\MusxiPlayer.exe`。
+
+## 测试
 
 云端接口适配层需要 Node.js LTS。安装依赖并运行全部离线测试：
 
