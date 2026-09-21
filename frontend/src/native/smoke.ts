@@ -13,6 +13,9 @@ async function waitFor(check: () => boolean) {
 
 // Invoked only by the real CEF --cef-smoke run (cloud startup is disabled).
 export async function verifyVuePage() {
+  const library = await native.library.getState();
+  if (!Array.isArray(library.playlists) || library.connected) throw new Error('Unexpected offline library state');
+  await waitFor(() => !!document.querySelector('.library-shell'));
   const state = await native.player.getState();
   if (!document.querySelector('#playback') || !document.querySelector('#volume')?.textContent?.includes(`${state.volumePercent}%`))
     throw new Error('Vue state was not rendered');
@@ -23,6 +26,9 @@ export async function verifyVuePage() {
       ['player.pause', {}, 409], ['player.resume', {}, 409], ['player.seek', { positionMs: 10 }, 409],
       ['player.setVolume', { volumePercent: 101 }, 400], ['player.seek', { positionMs: -1 }, 400],
       ['player.seek', { positionMs: 1.5 }, 400], ['player.pause', { bad: true }, 400]
+      ,['library.play', { source: 'library', id: 'missing' }, 409],
+      ['library.image', { url: 'https://example.com/private' }, 403],
+      ['library.getState', { page: 0 }, 400], ['library.unknown', {}, 404]
     ] as const) {
       let rejected = false;
       try { await request(host, command, params); }

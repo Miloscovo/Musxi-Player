@@ -1,7 +1,7 @@
 # UI migration: CEF + Vue 3 + TypeScript + Vite
 
-Current checkpoint: stage four adds native commands and event subscriptions.
-Stages five and six remain planned. The original native UI and the
+Current checkpoint: stage five adds library, discovery and account views.
+Stage six remains planned. The original native UI and the
 framework-free phase-two page remain available independently.
 
 ## Stage one: application interface preparation
@@ -402,4 +402,76 @@ Stage-four validation: frontend typecheck/production build passed, 10/10 fronten
 tests passed, MSVC CEF build with 6/6 CTests passed, and the CEF-disabled native
 build with 4/4 CTests passed. Existing native/SDK warnings remain non-fatal.
 No CMake language standards changed and src/player remains unchanged. Stage
-five has not started; no Git commit was created as part of this stage.
+five had not started at that checkpoint; no Git commit was created as part of that stage.
+
+## Stage five: library, discovery, account and song actions
+
+Vue now renders search with pagination, playlists and 50-track library pages,
+QR account login/logout, profile/avatar, sync, covers, context-menu favourite
+actions, add-to-playlist, cloud track selection and previous/next queue controls.
+LibraryView owns page/dialog/theme state. App owns a single useLibrary instance;
+both current metadata and pages share its native snapshot. CoverImage delegates
+to useCoverImage; all business calls go through native.library in client.ts.
+Pinia and a router are still unnecessary for these two views.
+
+Application exposes LibraryReply and applicationLibrary(command, paramsJson),
+implemented in library_adapter.inc beside the existing legacy implementation.
+This is an internal C++17 serialized DTO boundary using the same toolchain/CRT,
+not a public DLL ABI. The adapter validates a fixed command set, calls the
+existing cloud controller, and projects allowlisted fields only. JSON parsing
+is outside Core; no CEF or Vue headers were added to Application/Core. Existing
+audio open/decode/play operations and cloud API implementations remain in place.
+
+Commands: library.getState, search, open, login, logout, sync, menu, favorite,
+add, play, skip, cancel and image. TypeScript defines exact action params and
+validates snapshots/receipts at runtime. Track IDs must exist in native lists;
+playlist opens must reference a native playlist. Unknown commands fail. No
+generic shell, filesystem, credential or arbitrary network API is exposed.
+Library snapshots exclude tokens, cookies, session objects and audio paths.
+
+Library/account snapshots are read every 800 ms without overlapping requests,
+with abort on teardown. This bounded polling is separate from the event-driven
+PlayerState implemented in stage four. It avoids claiming an already extracted
+library event service. Snapshots include native busy/status, the latest operation
+ID and pending/completed/failed/cancelled status. Native timer processing applies
+responses; errors remain visible and actions are not automatically retried.
+Login's existing VIP/sync/avatar chain continues natively after the initial
+operation; snapshot status reports the chain's progress.
+
+A cloud play request receives an operation ID and remains pending while queued
+or downloading. A newer selection invalidates the old native generation and
+replaces the queued selection. Old downloads are discarded by the existing
+generation check. Cancel invalidates generation and drops the queued selection;
+it does not forcibly abort the shared adapter process or stop an already playing
+track. Completion is reported only after native audio open/play succeeded.
+Renderer reload reads the latest operation/state without resubmitting a track.
+Non-audio in-flight requests preserve the original single-request busy behavior.
+
+Covers use the existing native cover bridge/cache. Only URLs found in native
+track/playlist metadata are accepted, and the cloud adapter retains its existing
+URL restrictions. A separate expiring Web cover demand list survives native
+repaints. Vue receives bounded raster data URLs; CSP adds img-src data: only.
+Credentials and remote image fetching are never delegated to Web content.
+
+Themes are local UI preferences: light, dark and a glass-style palette. Native
+desktop transparency, final window integration and making Web UI the default
+belong to stage six. The legacy UI remains available throughout.
+
+Validation includes offline native library tests for pagination, redaction,
+unauthenticated requests, invalid IDs, queued selection replacement, cancellation,
+response application/failure and context-menu delivery. Existing cloud-adapter
+fixture tests cover search/QR/favourites/add/VIP behavior without changing a real
+account. Real CEF smoke loads the library UI, reads its offline snapshot, rejects
+unauthorized requests, and retains playback event/reload regression coverage.
+This is not a claim that live KuGou login, actual account writes or a real cloud
+download have been exercised during this stage; those require an authenticated
+manual acceptance run. No Git commit or push is performed automatically.
+
+Stage-five validation (2026-09-21): frontend typecheck/production build and
+13/13 frontend tests passed; 26/26 cloud adapter fixture tests passed; MSVC/CEF
+build and 7/7 CTests passed; CEF-disabled MinGW build and 5/5 CTests passed.
+The native playback smoke also injects a local silent WAV download result and
+verifies that the Web operation becomes completed only after real MCI playback
+starts for the matching track ID. Generated projects confirm C++17 native
+targets without CEF includes and C++20 CEF targets. Existing compiler warnings
+remain non-fatal. Stage six has not started.

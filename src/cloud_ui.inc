@@ -82,7 +82,7 @@ std::wstring cloudText(const Json& value, const char* key, const char* fallback 
     auto found=value.find(key);
     return cloud::toWide(found!=value.end() && found->is_string()?found->get<std::string>():fallback);
 }
-void clearQr() { cloudQr.reset(); if(cloudQrStream) {cloudQrStream->Release();cloudQrStream=nullptr;} }
+void clearQr() { libraryQr.clear();cloudQr.reset(); if(cloudQrStream) {cloudQrStream->Release();cloudQrStream=nullptr;} }
 void loadImage(const std::string& data,std::unique_ptr<Image>& target,IStream*& stream) {
     target.reset();if(stream) {stream->Release();stream=nullptr;} auto comma=data.find(','); if(comma==std::string::npos) return;
     auto encoded=data.substr(comma+1); DWORD size=0;
@@ -95,7 +95,7 @@ void loadImage(const std::string& data,std::unique_ptr<Image>& target,IStream*& 
     target.reset(Image::FromStream(stream));
     if(!target || target->GetLastStatus()!=Ok) {target.reset();stream->Release();stream=nullptr;}
 }
-void loadQr(const std::string& data) {loadImage(data,cloudQr,cloudQrStream);}
+void loadQr(const std::string& data) {loadImage(data,cloudQr,cloudQrStream);libraryQr=cloudQr?data:"";}
 void drawCover(Graphics& g,const std::string& url,RectF box,int fallback) {
     if(!url.empty() && std::find(wantedCovers.begin(),wantedCovers.end(),url)==wantedCovers.end()) wantedCovers.push_back(url);
     rounded(g,box,8,Active);
@@ -116,9 +116,13 @@ void drawCover(Graphics& g,const std::string& url,RectF box,int fallback) {
 }
 void stopCovers() {
     coverBridge.cancel();if(coverFuture.valid()) {try {coverFuture.get();} catch(...) {}}
-    coverBridge.stop();coverCache.clear();wantedCovers.clear();cloudNowCover.clear();
+    coverBridge.stop();coverCache.clear();wantedCovers.clear();webWantedCovers.clear();cloudNowCover.clear();
 }
 void coverTick() {
+    for(auto it=webWantedCovers.begin();it!=webWantedCovers.end();) {
+        if(GetTickCount64()>it->second) it=webWantedCovers.erase(it);
+        else {if(std::find(wantedCovers.begin(),wantedCovers.end(),it->first)==wantedCovers.end()) wantedCovers.push_back(it->first);++it;}
+    }
     if(coverFuture.valid()) {
         if(coverFuture.wait_for(std::chrono::milliseconds(0))!=std::future_status::ready) return;
         try {
@@ -126,8 +130,9 @@ void coverTick() {
             if(result.value("ok",false)) for(const auto& item:result.at("data").at("images")) {
                 auto entry=std::make_unique<CoverImage>();entry->retryAt=GetTickCount64()+60000;
                 loadImage(item.value("image",""),entry->image,entry->stream);
+                if(entry->image) entry->data=item.value("image","");
                 if(entry->image && (entry->image->GetWidth()>2048 || entry->image->GetHeight()>2048)) {
-                    entry->image.reset();if(entry->stream) {entry->stream->Release();entry->stream=nullptr;}
+                    entry->image.reset();entry->data.clear();if(entry->stream) {entry->stream->Release();entry->stream=nullptr;}
                 }
                 coverCache[item.value("url","")]=std::move(entry);
             }
@@ -167,6 +172,8 @@ void cloudConnect() {
     cloudRequest({{"op","init"},{"session",cloud::readSession()}});
 }
 void cloudStop() {
+    libraryNextPlay=nullptr;
+    if(libraryOperationStatus=="pending") libraryOperationStatus="cancelled";
     stopCovers();
     cloudPolling=false;cloudBridge.cancel();
     if(cloudFuture.valid()) {
@@ -177,7 +184,7 @@ void cloudStop() {
             }
         } catch(...) {}
     }
-    cloudBridge.stop();clearQr();userAvatar.reset();if(avatarStream) {avatarStream->Release();avatarStream=nullptr;}
+    cloudBridge.stop();clearQr();libraryAvatar.clear();userAvatar.reset();if(avatarStream) {avatarStream->Release();avatarStream=nullptr;}
 }
 void cloudSaveSnapshot(const Json& data) {
     try {
@@ -206,7 +213,7 @@ void cloudPlay(int index, bool useQueue) {
 void cloudTick() {
     if(songMenuOpen) return;
     if(cloudFuture.valid() && cloudFuture.wait_for(std::chrono::milliseconds(0))==std::future_status::ready) {
-        auto op=cloudOperation;Json result;
+        auto op=cloudOperation;Json result;bool applied=false;
         try {result=cloudFuture.get();} catch(...) {result={{"ok",false},{"error","本机接口请求失败"}};}
         if(!result.value("ok",false)) {
             cloudStatus=cloudText(result,"error","请求失败");if(op=="search") searchStatus=cloudStatus;
@@ -248,6 +255,7 @@ void cloudTick() {
                 cloudSaveSnapshot(data);cloudRequest({{"op","avatar"}});
             } else if(op=="avatar") {
                 loadImage(data.value("image",""),userAvatar,avatarStream);
+                libraryAvatar=userAvatar?data.value("image",""):"";
             } else if(op=="search") {
                 searchTracks=data.at("tracks");searchQuery=data.value("keywords","");searchPage=data.value("page",1);searchTotal=data.value("total",0);searchMore=data.value("hasMore",false);
                 searchScroll=0;searchSelected=searchTracks.empty()?-1:0;searchStatus=searchTracks.empty()?L"没有找到相关歌曲，试试其他关键词":L"双击歌曲播放";
@@ -256,7 +264,8 @@ void cloudTick() {
                 cloudScroll=0;cloudSelected=cloudTracks.empty()?-1:0;
                 cloudStatus=L"已加载 "+std::to_wstring(cloudTracks.size())+L" 首歌曲 · 双击播放";cloudSaveSnapshot(data);
             } else if(op=="song_menu") {
-                showSongMenu(data);
+                if(libraryMenuRequested) {libraryMenu=data;libraryMenuRequested=false;}
+                else showSongMenu(data);
             } else if(op=="song_update") {
                 cloudPlaylists=data.at("playlists");
                 if(cloudPlaylistId==data.at("playlist").value("id","")) {
@@ -284,12 +293,34 @@ void cloudTick() {
                     }
                 }
             }
+            applied=true;
         } catch(...) {cloudStatus=L"接口数据格式不兼容，请重新同步";cloudPolling=false;notice(cloudStatus);}
+        if(libraryOperationStatus=="pending" && op==libraryOperationKind &&
+           (op!="audio" || requestGeneration==libraryPlayGeneration)) {
+            bool success=result.value("ok",false) && applied;
+            if(op=="audio") success=success && requestGeneration==cloudGeneration && opened && playing && cloudCurrent>=0 &&
+                cloudCurrent<(int)cloudQueue.size() && cloudQueue[cloudCurrent].value("id","")==libraryPlayTrackId;
+            libraryOperationStatus=success?"completed":"failed";
+            libraryOperationError=success?"":utf8(cloudStatus);
+        }
+        if(op=="song_menu") libraryMenuRequested=false;
         invalidate();
     }
     if(cloudPolling && !cloudBusy() && GetTickCount64()>=cloudNextPoll) {
         if(GetTickCount64()>cloudPollDeadline) {cloudPolling=false;clearQr();cloudStatus=L"二维码已过期，请重新生成。";invalidate();}
         else cloudRequest({{"op","poll"}});
+    }
+    if(!libraryNextPlay.is_null() && !cloudBusy()) {
+        auto next=libraryNextPlay;libraryNextPlay=nullptr;
+        auto& list=next.value("source","")=="search"?searchTracks:next.value("source","")=="queue"?cloudQueue:cloudTracks;
+        auto found=std::find_if(list.begin(),list.end(),[&](const Json& row){return row.value("id","")==next.value("id","");});
+        if(found!=list.end() && cloudConnected) {
+            const bool useQueue=next.value("source","")=="queue";
+            const bool previousView=cloudView;cloudView=next.value("source","")!="search";
+            cloudPlay((int)std::distance(list.begin(),found),useQueue);cloudView=previousView;
+            libraryPlayGeneration=cloudGeneration;
+            if(!cloudBusy()) {libraryOperationStatus="failed";libraryOperationError=utf8(cloudStatus);}
+        } else {libraryOperationStatus="failed";libraryOperationError="歌曲已不在当前列表中，请刷新后重试";}
     }
     if(cloudAutoNext && !cloudBusy()) {cloudAutoNext=false;skip(1);}
 }

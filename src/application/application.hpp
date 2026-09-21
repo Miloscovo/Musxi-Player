@@ -17,4 +17,7 @@ PlayerState applicationPlayerState();
 PlayerResult applicationPlayerCommand(PlayerCommand command, std::uint32_t value=0);
 // Single host-owned observer. Clear before destroying the host; callbacks must not reenter.
 void setApplicationPlayerEvents(PlayerService::Events sink);
+// C++17 serialized DTO boundary. No SDK, UI framework, credentials or file handles.
+struct LibraryReply { int code=0; std::string message; std::string json; };
+LibraryReply applicationLibrary(const std::string& command,const std::string& params);
 }

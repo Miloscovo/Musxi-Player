@@ -84,12 +84,22 @@ ULONGLONG cloudNextPoll = 0, cloudPollDeadline = 0;
 std::wstring cloudStatus = L"登录后，把收藏带到这里。", cloudUser, cloudPlaylistName;
 std::wstring cloudNowTitle, cloudNowArtist, cloudTempPath;
 std::string cloudNowCover;
+std::string libraryQr,libraryAvatar;
+Json libraryMenu=Json::object();
+bool libraryMenuRequested=false;
+std::uint64_t libraryOperationId=0;
+std::string libraryOperationStatus="idle",libraryOperationError,libraryOperationKind;
+int libraryPlayGeneration=-1;
+std::string libraryPlayTrackId;
+Json libraryNextPlay=nullptr;
 struct CoverImage {
+    std::string data;
     std::unique_ptr<Image> image;IStream* stream=nullptr;ULONGLONG retryAt=0;
     ~CoverImage() {image.reset();if(stream) stream->Release();}
 };
 std::map<std::string,std::unique_ptr<CoverImage>> coverCache;
 std::vector<std::string> wantedCovers;
+std::map<std::string,ULONGLONG> webWantedCovers;
 cloud::Bridge coverBridge;std::future<Json> coverFuture;
 void drawCover(Graphics& g,const std::string& url,RectF box,int fallback=0);
 void coverTick();void stopCovers();
@@ -675,6 +685,7 @@ void setHostHooks(HostHooks hooks) { hostHooks=hooks; }
 PlayerState applicationPlayerState() { return playerService().state(); }
 PlayerResult applicationPlayerCommand(PlayerCommand command,std::uint32_t value) { return playerService().invoke(command,value); }
 void setApplicationPlayerEvents(PlayerService::Events sink) { playerService().setEventSink(std::move(sink)); }
+#include "application/library_adapter.inc"
 int runNativeApplication(void* nativeInstance, int show) {
     const auto instance=static_cast<HINSTANCE>(nativeInstance);
     (void)playerService(); // Bind the facade to the native application thread.

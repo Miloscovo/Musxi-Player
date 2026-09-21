@@ -101,6 +101,12 @@ public:
                 return true;
             }
             if(persistent) {callback->Failure(400,"Persistent command not allowed");return true;}
+            if(command.rfind("library.",0)==0) {
+                const auto reply=applicationLibrary(command,params.dump());
+                if(reply.code) callback->Failure(reply.code,reply.message);
+                else callback->Success(Json{{"version",1},{"result",Json::parse(reply.json)}}.dump());
+                return true;
+            }
             const bool volume=command=="player.setVolume",seek=command=="player.seek";
             std::uint32_t value=0;
             if(volume || seek) {

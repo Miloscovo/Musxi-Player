@@ -70,6 +70,19 @@ int wmain() {
         position=statusNumber(L"position");snapshot(L"build/preview-library.png");
         width=940;height=650;snapshot(L"build/preview-compact.png");
         closeAudio();check(!opened && !playing,"release audio device");
+        // Exercise the existing download-result path with a local PCM fixture:
+        // a queued Web operation completes only after MCI actually starts it.
+        wav(L"build/test-audio/Web playback.wav",3);
+        cloudQueue=Json::array({{{"id","web-fixture"},{"name","Web fixture"}}});
+        libraryPlayTrackId="web-fixture";
+        libraryPlayGeneration=requestGeneration=++cloudGeneration;
+        libraryOperationKind=cloudOperation="audio";libraryOperationStatus="pending";
+        std::promise<Json> downloaded;cloudFuture=downloaded.get_future();
+        downloaded.set_value({{"ok",true},{"data",{{"path","build/test-audio/Web playback.wav"},
+            {"track",{{"id","web-fixture"},{"name","Web fixture"},{"artist","Fixture"},{"cover",""}}}}}});
+        cloudTick();
+        check(libraryOperationStatus=="completed" && opened && playing && cloudCurrent==0,"Web operation completes after native audio starts");
+        closeAudio();cloudCurrent=-1;cloudQueue=Json::array();
         std::ofstream broken(L"build/test-audio/broken.wav");broken << "invalid audio";broken.close();
         appendSong(L"build/test-audio/broken.wav");playSong(2);
         check(!opened && !playing && current==-1 && !toast.empty(),"handle corrupt audio without crashing");

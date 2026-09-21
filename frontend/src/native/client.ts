@@ -2,12 +2,13 @@ import { request, type CefTransport } from './transport.ts';
 import { parsePlayerState, type RequestOptions, type NativeCommands } from './types.ts';
 import { subscribe, type PlayerEvent } from './events.ts';
 import type { NativeError } from './types.ts';
+import { createLibraryClient } from './library.ts';
 
 export function createNativeClient(host: CefTransport) {
   async function command<K extends keyof NativeCommands>(name: K, params: NativeCommands[K]['params'], options?: RequestOptions) {
     return parsePlayerState(await request(host, name, params, options));
   }
-  return Object.freeze({ player: Object.freeze({
+  return Object.freeze({ library: createLibraryClient(host), player: Object.freeze({
     pause: (options?: RequestOptions) => command('player.pause', {}, options),
     resume: (options?: RequestOptions) => command('player.resume', {}, options),
     seek: (positionMs: number, options?: RequestOptions) => command('player.seek', { positionMs }, options),
