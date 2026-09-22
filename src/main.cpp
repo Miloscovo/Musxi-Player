@@ -43,13 +43,18 @@ Color Line(255,218,226,221), Active(255,225,242,233);
 Color Dock(255,248,250,249), AccentHover(255,23,117,82), AccentText(255,255,255,255);
 struct Song { std::wstring path, title, format; DWORD duration = 0; };
 struct Hotspot { int id; RectF box; };
-enum { Import = 1, Previous, Play, Next, Seek, Clear, Library, CloudHome = 20, CloudLogin, CloudSync, CloudLogout, CloudBack, SearchSubmit=30, SearchPrev, SearchNext, Avatar, Theme, WindowMinimize, WindowMaximize, WindowClose, SearchRow=140000, CloudRow = 20000, CloudTrack = 80000, Row = 1000 };
+enum { Import = 1, Previous, Play, Next, Seek, Clear, Library, CloudHome = 20, CloudLogin, CloudSync, CloudLogout, CloudBack, LocalMusic = 25, SearchSubmit=30, SearchPrev, SearchNext, Avatar, Theme, WindowMinimize, WindowMaximize, WindowClose, SearchRow=140000, CloudRow = 20000, CloudTrack = 80000, Row = 1000 };
 HWND window = nullptr;
 float dpiScale = 1, width = 1120, height = 760;
 std::vector<Song> songs;
 std::vector<Hotspot> spots;
 int selected = -1, current = -1, scroll = 0, hovered = 0;
-bool opened = false, playing = false, draggingSeek = false;
+bool localView = false, opened = false, playing = false, draggingSeek = false;
+// Library state that survives a restart: two-step clear guard and the remembered resume point.
+// The resume pair only tracks local playback so cloud tracks never overwrite it.
+ULONGLONG clearArmedUntil = 0;
+int resumeSong = -1;
+DWORD resumePosition = 0, autosaveTicks = 0;
 bool draggingScroll=false;
 float scrollEmphasis=0,scrollVisual=-1,scrollTarget=0,scrollThumbLength=64,scrollGrab=0;
 int scrollMaximum=0;
@@ -172,7 +177,7 @@ std::string utf8(const std::wstring& str) {
     MultiByteToWideChar(CP_UTF8, 0, str.data(), (int)str.size(), out.data(), n);
     return out;
 }
-[[maybe_unused]] bool appendSong(const fs::path& p) {
+bool appendSong(const fs::path& p) {
     std::error_code ec;
     if (!supported(p) || !fs::is_regular_file(p, ec)) return false;
     auto absolute = fs::weakly_canonical(p, ec);
@@ -184,6 +189,112 @@ std::string utf8(const std::wstring& str) {
     songs.push_back({path, absolute.stem().wstring(), ext, 0});
     if (selected < 0) selected = 0;
     return true;
+}
+// ---- Local library persistence -------------------------------------------------
+// Stored beside the encrypted KuGou session so the player keeps a single data directory.
+fs::path libraryFile() {
+    try { return cloud::dataDir() / L"music-library.json"; } catch (...) { return {}; }
+}
+void saveLibrary() {
+    try {
+        auto file = libraryFile(); if (file.empty()) return;
+        Json data;
+        data["version"] = 1;
+        auto list = Json::array();
+        for (const auto& s : songs)
+            list.push_back({{"path", utf8(s.path)}, {"title", utf8(s.title)}, {"format", utf8(s.format)}, {"duration", (unsigned long long)s.duration}});
+        data["songs"] = std::move(list);
+        data["current"] = resumeSong;
+        data["position"] = (unsigned long long)resumePosition;
+        auto text = data.dump();
+        auto temp = file; temp += L".tmp";
+        { std::ofstream out(temp, std::ios::binary | std::ios::trunc); out.write(text.data(), (std::streamsize)text.size()); if (out.fail()) return; }
+        MoveFileExW(temp.c_str(), file.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH);
+    } catch (...) {}
+}
+void loadLibrary() {
+    try {
+        auto file = libraryFile(); if (file.empty() || !fs::exists(file)) return;
+        std::ifstream in(file, std::ios::binary);
+        std::string text((std::istreambuf_iterator<char>(in)), {});
+        auto data = Json::parse(text, nullptr, false);
+        if (data.is_discarded() || !data.is_object()) return;
+        auto list = data.find("songs");
+        if (list == data.end() || !list->is_array()) return;
+        auto stringAt = [](const Json& row, const char* key, const std::wstring& fallback) {
+            auto value = row.find(key);
+            return value != row.end() && value->is_string() ? cloud::toWide(value->get<std::string>()) : fallback;
+        };
+        auto numberAt = [](const Json& row, const char* key) -> long long {
+            auto value = row.find(key);
+            return value != row.end() && value->is_number() ? (long long)value->get<double>() : 0;
+        };
+        std::error_code ec;
+        for (const auto& row : *list) {
+            if (!row.is_object()) continue;
+            auto value = row.find("path");
+            if (value == row.end() || !value->is_string()) continue;
+            fs::path path = cloud::toWide(value->get<std::string>());
+            // Files moved or deleted outside the player are dropped instead of leaving dead rows.
+            if (!supported(path) || !fs::is_regular_file(path, ec)) continue;
+            Song song;
+            song.path = path.wstring();
+            song.title = stringAt(row, "title", path.stem().wstring());
+            song.format = stringAt(row, "format", lower(path.extension().wstring().substr(1)));
+            song.duration = (DWORD)std::clamp<long long>(numberAt(row, "duration"), 0, 24LL * 60 * 60 * 1000);
+            songs.push_back(std::move(song));
+        }
+        if (songs.empty()) return;
+        int index = (int)numberAt(data, "current");
+        if (index < 0 || index >= (int)songs.size()) return;
+        // Restore the last song and its position without opening the audio device;
+        // playback resumes from here on the first Play press.
+        current = selected = index;
+        resumeSong = index;
+        duration = songs[index].duration;
+        long long saved = numberAt(data, "position");
+        resumePosition = (DWORD)std::clamp<long long>(saved, 0, duration ? (long long)duration - 1 : 0);
+        position = resumePosition;
+        int rows = searchRows();
+        if (index < scroll) scroll = index;
+        if (index >= scroll + rows) scroll = index - rows + 1;
+    } catch (...) {}
+}
+// Native multi-select picker; the modern dialog handles long paths and file filters.
+void importFiles() {
+    std::vector<fs::path> picked;
+    IFileOpenDialog* dialog = nullptr;
+    if (SUCCEEDED(CoCreateInstance(__uuidof(FileOpenDialog), nullptr, CLSCTX_INPROC_SERVER, __uuidof(IFileOpenDialog), (void**)&dialog))) {
+        DWORD options = 0;
+        if (SUCCEEDED(dialog->GetOptions(&options)))
+            dialog->SetOptions(options | FOS_FORCEFILESYSTEM | FOS_FILEMUSTEXIST | FOS_PATHMUSTEXIST | FOS_ALLOWMULTISELECT);
+        COMDLG_FILTERSPEC filters[] = {{L"支持的音频", L"*.mp3;*.wav;*.wma"}, {L"全部文件", L"*.*"}};
+        dialog->SetFileTypes(2, filters); dialog->SetTitle(L"导入音乐文件");
+        if (SUCCEEDED(dialog->Show(window))) {
+            IShellItemArray* items = nullptr;
+            if (SUCCEEDED(dialog->GetResults(&items))) {
+                DWORD count = 0; items->GetCount(&count);
+                for (DWORD i = 0; i < count; ++i) {
+                    IShellItem* item = nullptr;
+                    if (FAILED(items->GetItemAt(i, &item))) continue;
+                    PWSTR value = nullptr;
+                    if (SUCCEEDED(item->GetDisplayName(SIGDN_FILESYSPATH, &value))) { picked.emplace_back(value); CoTaskMemFree(value); }
+                    item->Release();
+                }
+                items->Release();
+            }
+        }
+        dialog->Release();
+    }
+    if (picked.empty()) return;  // Cancelled: keep the current library untouched.
+    int added = 0;
+    for (const auto& path : picked) if (appendSong(path)) ++added;
+    int skipped = (int)picked.size() - added;
+    if (added) {
+        saveLibrary();
+        notice(L"已导入 " + std::to_wstring(added) + L" 首歌曲" + (skipped ? L"，跳过 " + std::to_wstring(skipped) + L" 个重复或不受支持的文件" : L""));
+    } else notice(L"没有可导入的文件：仅支持 MP3、WAV、WMA，重复文件会被跳过");
+    invalidate();
 }
 MCIERROR command(const std::wstring& value) { return mciSendStringW(value.c_str(), nullptr, 0, window); }
 MCIERROR applyVolume() {
@@ -232,36 +343,49 @@ void closeAudio() {
     opened = false; playing = false; position = duration = 0;
     if (!cloudTempPath.empty()) { DeleteFileW(cloudTempPath.c_str()); cloudTempPath.clear(); }
 }
-int visibleRows() { return std::max(1, (int)((height - 458) / 60)); }
 void reveal(int index) {
-    int count = visibleRows();
+    int count = searchRows();
     if (index < scroll) scroll = index;
     if (index >= scroll + count) scroll = index - count + 1;
 }
-void playSong(int index) {
+void playSong(int index, DWORD startAt = 0) {
     if (index < 0 || index >= (int)songs.size()) return;
     ++cloudGeneration; cloudCurrent = -1; cloudAutoNext = false; cloudNowTitle.clear();
     closeAudio();
-    current = -1; selected = index;
+    current = -1; selected = index; position = startAt;
+    resumeSong = index; resumePosition = startAt;
     auto error = command(L"open \"" + songs[index].path + L"\" alias mint");
     if (!error) { opened = true; error = command(L"set mint time format milliseconds"); }
     if (!error) applyVolume();
     if (!error) {
         duration = statusNumber(L"length");
         songs[index].duration = duration;
+        // Resume support: seek first, then fall back to the start if the format refuses it.
+        if (startAt && startAt < duration && command(L"seek mint to " + std::to_wstring(startAt))) position = 0;
         error = command(L"play mint notify");
     }
     if (error) {
         closeAudio();
+        position = 0;
         wchar_t reason[256]{}; mciGetErrorStringW(error, reason, 256);
         notice(L"无法播放此文件：" + std::wstring(reason));
-    } else { current = index; playing = true;applyVolume(); toast.clear(); }
-    reveal(index); invalidate();
+    } else { current = index; playing = true; applyVolume(); toast.clear(); resumePosition = 0; }
+    reveal(index); saveLibrary(); invalidate();
 }
 void togglePlay() {
-    if (!opened) {int index=cloudView?cloudSelected:searchSelected;if(index>=0) cloudPlay(index);else notice(L"请先搜索并选择一首歌曲");return;}
+    if (!opened) {
+        int index=cloudView?cloudSelected:searchSelected;
+        if(!cloudView && !localView && index>=0) {cloudPlay(index);return;}
+        if(current>=0 && current<(int)songs.size()) {playSong(resumeSong>=0?resumeSong:current,resumePosition);return;}
+        if(cloudView && index>=0) {cloudPlay(index);return;}
+        notice(L"请先导入音乐文件或选择一首歌曲");return;
+    }
     MCIERROR error = playing ? command(L"pause mint") : command(L"play mint notify");
-    if (!error) playing = !playing;
+    if (!error) {
+        playing = !playing;
+        if(cloudCurrent<0 && current>=0) {resumeSong=current;resumePosition=position;}
+        saveLibrary();
+    }
     else notice(L"播放状态切换失败，请重新打开这首歌曲");
     invalidate();
 }
@@ -281,7 +405,9 @@ void seekTo(float x) {
     auto error = command(L"seek mint to " + std::to_wstring(target));
     if (!error && wasPlaying) error = command(L"play mint notify");
     if (error) notice(L"此音频暂不支持跳转到该位置");
-    position = statusNumber(L"position"); invalidate();
+    position = statusNumber(L"position");
+    if(cloudCurrent<0 && current>=0) {resumeSong=current;resumePosition=position;saveLibrary();}
+    invalidate();
 }
 std::wstring timeText(DWORD ms) {
     std::wostringstream s; s << ms / 60000 << L":" << std::setw(2) << std::setfill(L'0') << (ms / 1000) % 60;
@@ -347,14 +473,20 @@ void paint(Graphics& g) {
     }
     hit(Avatar,{73,28,56,56});
     label(g,L"音乐空间",{26,116,150,20},11,Muted);
-    rounded(g,{16,151,170,46},10,cloudView?Side:Active);
+    bool discoverView=!cloudView && !localView;
+    rounded(g,{16,151,170,46},10,discoverView?Active:Side);
     {Pen magnifier(Mint,1.8f);g.DrawEllipse(&magnifier,31.0f,165.0f,12.0f,12.0f);stroke(g,Mint,1.8f,41,175,48,182);}
-    label(g,L"发现",{64,151,83,46},13,Mint,true);
+    label(g,L"发现",{64,151,83,46},13,discoverView?Mint:Text,true);
     hit(Library,{16,151,170,46});
-    rounded(g,{16,207,170,46},10,cloudView?Active:Side); icon(g,0,29,219,22,Mint);
-    label(g,L"音乐库",{64,207,112,46},13,cloudView?Mint:Text,true);
-    hit(CloudHome,{16,207,170,46});
+    // Local and cloud libraries are separate tabs so imported files never mix with account lists.
+    rounded(g,{16,207,170,46},10,localView?Active:Side); icon(g,Library,29,219,22,localView?Mint:Muted);
+    label(g,L"本地音乐",{64,207,112,46},13,localView?Mint:Text,true);
+    hit(LocalMusic,{16,207,170,46});
+    rounded(g,{16,263,170,46},10,cloudView?Active:Side); icon(g,0,29,275,22,Mint);
+    label(g,L"云端音乐",{64,263,112,46},13,cloudView?Mint:Text,true);
+    hit(CloudHome,{16,263,170,46});
     if (cloudView) paintCloud(g);
+    else if (localView) paintLocal(g);
     else paintDiscover(g);
     // Caption controls are painted in the client area and follow the UI theme.
     for(int i=0;i<3;++i) {
@@ -396,7 +528,7 @@ void paint(Graphics& g) {
     SolidBrush bar(Dock); g.FillRectangle(&bar,0.0f,bottom,width,112.0f);
     drawCover(g,cloudCurrent>=0?cloudNowCover:"",{24,bottom+25,58,58});
     label(g,cloudCurrent>=0?cloudNowTitle:(current>=0?songs[current].title:L"准备好听点什么？"),{96,bottom+27,200,27},13,Text,true);
-    label(g,cloudCurrent>=0?cloudNowArtist:(current>=0?L"":L"搜索音乐，开启你的音乐时光"),{96,bottom+57,205,22},10,Muted);
+    label(g,cloudCurrent>=0?cloudNowArtist:(current>=0?songs[current].format+L" · 本地音乐":std::wstring(L"搜索音乐，开启你的音乐时光")),{96,bottom+57,205,22},10,Muted);
     float center=(width+155)/2;
     RectF prev(center-86,bottom+37,38,38), play(center-24,bottom+32,48,48), next(center+48,bottom+37,38,38);
     if(hovered==Previous) rounded(g,prev,19,Active);
@@ -495,7 +627,11 @@ LRESULT CALLBACK wndProc(HWND hwnd, UINT message, WPARAM wp, LPARAM lp) {
         searchEdit=CreateWindowExW(0,L"EDIT",L"",WS_CHILD|WS_VISIBLE|ES_AUTOHSCROLL,0,0,0,0,hwnd,nullptr,GetModuleHandleW(nullptr),nullptr);
         SendMessageW(searchEdit,WM_SETFONT,(WPARAM)searchFont,TRUE);SendMessageW(searchEdit,EM_LIMITTEXT,120,0);
         SendMessageW(searchEdit,0x1501,TRUE,(LPARAM)L"搜索歌曲、歌手");
-        searchOriginal=(WNDPROC)SetWindowLongPtrW(searchEdit,GWLP_WNDPROC,(LONG_PTR)searchProc);layoutSearch();return 0;
+        searchOriginal=(WNDPROC)SetWindowLongPtrW(searchEdit,GWLP_WNDPROC,(LONG_PTR)searchProc);layoutSearch();
+        // Restore the saved library and resume point before the first paint.
+        loadLibrary();
+        if(!songs.empty()) {localView=true;layoutSearch();}
+        return 0;
     case WM_CTLCOLOREDIT:
         SetTextColor((HDC)wp,Text.ToCOLORREF());SetBkColor((HDC)wp,Card.ToCOLORREF());return (LRESULT)searchBrush;
     case WM_GETMINMAXINFO: {
@@ -547,6 +683,16 @@ LRESULT CALLBACK wndProc(HWND hwnd, UINT message, WPARAM wp, LPARAM lp) {
         if(id==WindowClose) {PostMessageW(hwnd,WM_CLOSE,0,0);return 0;}
         if(id==Theme) {toggleTheme();return 0;}
         if(cloudClick(id)) return 0;
+        if(id==Import) {importFiles();return 0;}
+        if(id==Clear) {
+            if(songs.empty()) {notice(L"列表里还没有歌曲");return 0;}
+            if(GetTickCount64()<clearArmedUntil) {
+                clearArmedUntil=0;closeAudio();current=selected=-1;scroll=0;songs.clear();resumeSong=-1;resumePosition=0;saveLibrary();
+                notice(L"已清空本地音乐列表，磁盘上的文件没有被删除");
+            } else {clearArmedUntil=GetTickCount64()+6000;notice(L"再次点击“确认清空”才会移除列表中的全部歌曲，文件不会被删除");}
+            invalidate();return 0;
+        }
+        if(localView && id>=Row && id<Row+(int)songs.size()) {selected=id-Row;invalidate();return 0;}
         if(id==Play) togglePlay();
         else if(id==Previous) skip(-1);
         else if(id==Next) skip(1);
@@ -560,6 +706,7 @@ LRESULT CALLBACK wndProc(HWND hwnd, UINT message, WPARAM wp, LPARAM lp) {
     case WM_CAPTURECHANGED: draggingVolume=false;draggingScroll=false;updateScrollAnimation();draggingSeek=false;updateSeekAnimation();return 0;
     case WM_LBUTTONDBLCLK: {
         int id=hitTest(GET_X_LPARAM(lp)/dpiScale,GET_Y_LPARAM(lp)/dpiScale);
+        if(localView && id>=Row && id<Row+(int)songs.size()) {playSong(id-Row);return 0;}
         if(cloudView && id>=CloudTrack) {cloudClick(id,true);return 0;}
         if(!cloudView) cloudClick(id,true);
         return 0;
@@ -569,20 +716,29 @@ LRESULT CALLBACK wndProc(HWND hwnd, UINT message, WPARAM wp, LPARAM lp) {
             int count=cloudPlaylistId.empty()?(int)cloudPlaylists.size():(int)cloudTracks.size();
             cloudScroll=std::clamp(cloudScroll-GET_WHEEL_DELTA_WPARAM(wp)/WHEEL_DELTA*3,0,std::max(0,count-cloudRows()));invalidate();return 0;
         }
+        if(localView) {scroll=std::clamp(scroll-GET_WHEEL_DELTA_WPARAM(wp)/WHEEL_DELTA*3,0,std::max(0,(int)songs.size()-searchRows()));invalidate();return 0;}
         searchScroll=std::clamp(searchScroll-GET_WHEEL_DELTA_WPARAM(wp)/WHEEL_DELTA*3,0,std::max(0,(int)searchTracks.size()-searchRows())); invalidate(); return 0;
     case WM_KEYDOWN:
         if(wp==VK_SPACE) togglePlay();
         else if(wp==VK_LEFT) skip(-1);
         else if(wp==VK_RIGHT) skip(1);
         else if(wp==VK_RETURN && cloudView && cloudSelected>=0) cloudPlay(cloudSelected);
-        else if(wp==VK_RETURN && !cloudView && searchSelected>=0) cloudPlay(searchSelected);
+        else if(wp==VK_RETURN && localView && selected>=0) playSong(selected);
+        else if(wp==VK_RETURN && !cloudView && !localView && searchSelected>=0) cloudPlay(searchSelected);
         else if((wp==VK_DOWN || wp==VK_UP) && cloudView && !cloudTracks.empty()) {
             cloudSelected=std::clamp(cloudSelected+(wp==VK_DOWN?1:-1),0,(int)cloudTracks.size()-1);
             if(cloudSelected<cloudScroll) cloudScroll=cloudSelected;
             if(cloudSelected>=cloudScroll+cloudRows()) cloudScroll=cloudSelected-cloudRows()+1;
             invalidate();
         }
-        else if((wp==VK_DOWN || wp==VK_UP) && !cloudView && !searchTracks.empty()) {
+        else if((wp==VK_DOWN || wp==VK_UP) && localView && !songs.empty()) {
+            int rows=searchRows();
+            selected=std::clamp(selected+(wp==VK_DOWN?1:-1),0,(int)songs.size()-1);
+            if(selected<scroll) scroll=selected;
+            if(selected>=scroll+rows) scroll=selected-rows+1;
+            invalidate();
+        }
+        else if((wp==VK_DOWN || wp==VK_UP) && !cloudView && !localView && !searchTracks.empty()) {
             searchSelected=std::clamp(searchSelected+(wp==VK_DOWN?1:-1),0,(int)searchTracks.size()-1);
             searchScroll=std::clamp(searchScroll, std::max(0,searchSelected-searchRows()+1),searchSelected);invalidate();
         }
@@ -608,7 +764,14 @@ LRESULT CALLBACK wndProc(HWND hwnd, UINT message, WPARAM wp, LPARAM lp) {
         }
         cloudTick();
         coverTick();
-        if(opened && playing) {position=statusNumber(L"position");invalidate();}
+        if(opened && playing) {
+            position=statusNumber(L"position");invalidate();
+            // Persist the local resume point about every three seconds instead of on every tick.
+            if(cloudCurrent<0 && current>=0) {
+                resumeSong=current;resumePosition=position;
+                if(++autosaveTicks>=20) {autosaveTicks=0;saveLibrary();}
+            }
+        }
         if(!toast.empty() && GetTickCount64()>=toastUntil) {toast.clear();invalidate();}
         return 0;
     case MM_MCINOTIFY:
@@ -620,7 +783,9 @@ LRESULT CALLBACK wndProc(HWND hwnd, UINT message, WPARAM wp, LPARAM lp) {
             else if(wp==MCI_NOTIFY_FAILURE) {playing=false;notice(L"音频播放中断，请重新播放或选择其他歌曲");}
         }
         return 0;
-    case WM_DESTROY: cloudStop();closeAudio();DeleteObject(searchFont);DeleteObject(searchBrush);KillTimer(hwnd,Tick);KillTimer(hwnd,SeekAnimationTick);KillTimer(hwnd,ScrollAnimationTick);PostQuitMessage(0);return 0;
+    // The resume point must be written before closeAudio() clears it.
+    case WM_ENDSESSION: if(wp) saveLibrary(); return 0;
+    case WM_DESTROY: saveLibrary();cloudStop();closeAudio();DeleteObject(searchFont);DeleteObject(searchBrush);KillTimer(hwnd,Tick);KillTimer(hwnd,SeekAnimationTick);KillTimer(hwnd,ScrollAnimationTick);PostQuitMessage(0);return 0;
     }
     return DefWindowProcW(hwnd,message,wp,lp);
 }

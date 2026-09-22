@@ -6,7 +6,7 @@ void drawScrollbar(Graphics& g,int count,int rows,int offset) {
     scrollbarBox={width-26,278,20,track};
     scrollThumbLength=std::min(track-12,std::max(std::max(64.0f,track*.18f),track*rows/count));
     scrollTarget=278+(track-scrollThumbLength)*offset/scrollMaximum;
-    std::string owner=(cloudView?"cloud:"+cloudPlaylistId:"search:"+searchQuery+std::to_string(searchPage))+":"+std::to_string(count);
+    std::string owner=(cloudView?"cloud:"+cloudPlaylistId:localView?"local:"+std::to_string((int)songs.size()):"search:"+searchQuery+std::to_string(searchPage))+":"+std::to_string(count);
     if(owner!=scrollOwner || scrollVisual<0) {scrollOwner=owner;scrollVisual=scrollTarget;}
     if(draggingScroll) scrollVisual=scrollTarget;
     else if(std::abs(scrollVisual-scrollTarget)>.2f) SetTimer(window,ScrollAnimationTick,16,nullptr);
@@ -22,13 +22,13 @@ void drawScrollbar(Graphics& g,int count,int rows,int offset) {
 void moveScrollbar(float y) {
     if(scrollMaximum<=0 || scrollbarBox.Height<=scrollThumbLength) return;
     int offset=(int)std::lround(std::clamp((y-scrollGrab-scrollbarBox.Y)/(scrollbarBox.Height-scrollThumbLength),0.0f,1.0f)*scrollMaximum);
-    if(cloudView) cloudScroll=offset;else searchScroll=offset;
+    if(cloudView) cloudScroll=offset;else if(localView) scroll=offset;else searchScroll=offset;
     scrollTarget=scrollbarBox.Y+(scrollbarBox.Height-scrollThumbLength)*offset/scrollMaximum;scrollVisual=scrollTarget;invalidate();
 }
 void layoutSearch() {
     if(!searchEdit) return;
     MoveWindow(searchEdit,(int)(254*dpiScale),(int)(141*dpiScale),(int)(std::max(100.0f,width-430)*dpiScale),(int)(28*dpiScale),TRUE);
-    ShowWindow(searchEdit,cloudView?SW_HIDE:SW_SHOW);
+    ShowWindow(searchEdit,(cloudView||localView)?SW_HIDE:SW_SHOW);
 }
 void runSearch(int page) {
     if(cloudBusy()) {notice(L"正在处理请求，请稍候再搜索");return;}
@@ -77,6 +77,44 @@ void paintDiscover(Graphics& g) {
         if(searchMore) button(g,SearchNext,{right-80,bottom-47,80,32},L"下一页");
     }
     drawScrollbar(g,(int)searchTracks.size(),rows,searchScroll);
+}
+// Local library: imported files live here, independent of the account-bound cloud lists.
+void paintLocal(Graphics& g) {
+    float left=234,right=width-32,content=right-left,bottom=height-112;
+    label(g,L"LOCAL LIBRARY",{left,29,content,22},10,Mint,true);
+    label(g,L"本地音乐",{left,55,content-300,44},30,Text,true);
+    button(g,Import,{right-280,52,132,44},L"导入音乐",true);
+    button(g,Clear,{right-140,52,92,44},GetTickCount64()<clearArmedUntil?L"确认清空":L"清空");
+    label(g,songs.empty()?L"还没有导入歌曲":L"歌曲列表和播放位置都会保存在本机",{left,122,content,30},12,Muted);
+    int rows=searchRows();
+    if(songs.empty()) {
+        float cy=std::max(294.0f,(bottom+250)/2-50);
+        rounded(g,{left+content/2-30,cy,60,60},30,Active);
+        icon(g,Import,left+content/2-16,cy+14,32,Mint);
+        label(g,L"把本机音乐加进来",{left,cy+76,content,30},16,Text,true,StringAlignmentCenter);
+        label(g,L"支持 MP3、WAV、WMA，重复文件会自动跳过",{left,cy+111,content,26},12,Muted,false,StringAlignmentCenter);
+        drawScrollbar(g,0,rows,0);
+        return;
+    }
+    label(g,L"全部歌曲",{left,218,content-200,34},18,Text,true);
+    label(g,std::to_wstring(songs.size())+L" 首 · 双击播放",{right-200,220,200,30},11,Muted,false,StringAlignmentFar);
+    scroll=std::clamp(scroll,0,std::max(0,(int)songs.size()-rows));
+    for(int row=0;row<rows && row+scroll<(int)songs.size();++row) {
+        int i=row+scroll,id=Row+i;float y=278+row*54.0f;auto& s=songs[i];
+        RectF r(left,y,content,50);if(i==selected||hovered==id) rounded(g,r,9,i==selected?Active:Card);
+        bool now=i==current;
+        if(now) icon(g,Play,left+11,y+16,18,Mint);
+        else label(g,std::to_wstring(i+1),{left+10,y,34,50},11,Muted);
+        rounded(g,{left+48,y+7,36,36},9,Active);
+        if(now) icon(g,Play,left+58,y+17,16,Mint);
+        else label(g,s.format,{left+48,y+7,36,36},9,Mint,false,StringAlignmentCenter);
+        label(g,s.title,{left+96,y+2,content-187,27},13,now?Mint:Text,true);
+        label(g,s.format+L" · "+(now?L"正在播放":L"本地音乐"),{left+96,y+28,content-187,18},10,Muted);
+        label(g,s.duration?timeText(s.duration):L"--:--",{right-80,y,66,50},11,Muted,false,StringAlignmentFar);
+        hit(id,r);
+    }
+    label(g,L"双击列表中的歌曲即可播放",{left,bottom-46,content-40,30},11,Muted);
+    drawScrollbar(g,(int)songs.size(),rows,scroll);
 }
 std::wstring cloudText(const Json& value, const char* key, const char* fallback = "") {
     auto found=value.find(key);
@@ -294,8 +332,9 @@ void cloudTick() {
     if(cloudAutoNext && !cloudBusy()) {cloudAutoNext=false;skip(1);}
 }
 bool cloudClick(int id, bool doubleClick) {
-    if(id==Library) {songContextId.clear();cloudView=false;layoutSearch();SetFocus(searchEdit);invalidate();return true;}
-    if(id==CloudHome || id==Avatar) {songContextId.clear();cloudView=true;layoutSearch();if(!cloudInitialized) cloudConnect();invalidate();return true;}
+    if(id==Library) {songContextId.clear();cloudView=false;localView=false;layoutSearch();SetFocus(searchEdit);invalidate();return true;}
+    if(id==LocalMusic) {songContextId.clear();cloudView=false;localView=true;clearArmedUntil=0;layoutSearch();invalidate();return true;}
+    if(id==CloudHome || id==Avatar) {songContextId.clear();localView=false;cloudView=true;layoutSearch();if(!cloudInitialized) cloudConnect();invalidate();return true;}
     if(!cloudView) {
         if(id==SearchSubmit) {runSearch();return true;}
         if(id==SearchPrev) {if(searchPage>1) runSearch(searchPage-1);return true;}
