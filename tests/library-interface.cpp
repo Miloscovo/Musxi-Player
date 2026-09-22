@@ -3,6 +3,10 @@
 #include <stdexcept>
 void require(bool value,const char* message) {if(!value) throw std::runtime_error(message);}
 int main() {
+    const auto legacyData=cloud::dataDir();
+    cloud::testProfile=true;
+    require(cloud::dataDir()!=legacyData && cloud::dataDir().filename()==L"MusxiPlayer-Test","test profile shares legacy storage");
+    cloud::testProfile=false;
     (void)playerService();
     auto invoke=[](const char* name,const Json& p=Json::object()) {return musxi::applicationLibrary(name,p.dump());};
     cloudTracks=Json::array();

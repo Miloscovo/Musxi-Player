@@ -59,6 +59,13 @@ if(BUILD_TESTING)
       add_test(NAME cef-vue-smoke
         COMMAND "$<TARGET_FILE_DIR:cef_host>/MusxiPlayerWeb.exe" --cef-vue --cef-smoke)
       set_tests_properties(cef-vue-smoke PROPERTIES TIMEOUT 35 RUN_SERIAL TRUE)
+      add_test(NAME cef-test-app-smoke
+        COMMAND "$<TARGET_FILE_DIR:cef_host>/MusxiPlayerWeb.exe" --test-app --cef-smoke)
+      set_tests_properties(cef-test-app-smoke PROPERTIES TIMEOUT 35 RUN_SERIAL TRUE)
+      add_test(NAME cef-unicode-smoke COMMAND ${CMAKE_COMMAND}
+        "-DHOST=$<TARGET_FILE_DIR:cef_host>/MusxiPlayerWeb.exe"
+        -P "${CMAKE_SOURCE_DIR}/tests/cef-unicode-smoke.cmake")
+      set_tests_properties(cef-unicode-smoke PROPERTIES TIMEOUT 40 RUN_SERIAL TRUE)
     endif()
   endif()
 endif()

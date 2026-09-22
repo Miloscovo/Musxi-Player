@@ -687,6 +687,7 @@ PlayerResult applicationPlayerCommand(PlayerCommand command,std::uint32_t value)
 void setApplicationPlayerEvents(PlayerService::Events sink) { playerService().setEventSink(std::move(sink)); }
 #include "application/library_adapter.inc"
 int runNativeApplication(void* nativeInstance, int show) {
+    cloud::testProfile=hostHooks.testProfile;
     const auto instance=static_cast<HINSTANCE>(nativeInstance);
     (void)playerService(); // Bind the facade to the native application thread.
     SetProcessDPIAware();

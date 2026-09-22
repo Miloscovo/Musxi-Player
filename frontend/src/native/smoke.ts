@@ -17,6 +17,15 @@ export async function verifyVuePage() {
   if (!Array.isArray(library.playlists) || library.connected) throw new Error('Unexpected offline library state');
   await waitFor(() => !!document.querySelector('.library-shell'));
   const state = await native.player.getState();
+  const windowState = await native.window.getState();
+  if (windowState.enabled) {
+    const maximized = await native.window.maximize();
+    if (!maximized.maximized) throw new Error('Test window did not maximize');
+    const restored = await native.window.maximize();
+    if (restored.maximized) throw new Error('Test window did not restore');
+    await native.window.setTheme('glass');
+    await native.window.setTheme('light');
+  }
   if (!document.querySelector('#playback') || !document.querySelector('#volume')?.textContent?.includes(`${state.volumePercent}%`))
     throw new Error('Vue state was not rendered');
   const prefix = 'musxi-reload:';
@@ -26,6 +35,7 @@ export async function verifyVuePage() {
       ['player.pause', {}, 409], ['player.resume', {}, 409], ['player.seek', { positionMs: 10 }, 409],
       ['player.setVolume', { volumePercent: 101 }, 400], ['player.seek', { positionMs: -1 }, 400],
       ['player.seek', { positionMs: 1.5 }, 400], ['player.pause', { bad: true }, 400]
+      ,['window.setTheme', { theme: 'invalid' }, 400], ['window.close', { bad: true }, 400], ['window.unknown', {}, 404]
       ,['library.play', { source: 'library', id: 'missing' }, 409],
       ['library.image', { url: 'https://example.com/private' }, 403],
       ['library.getState', { page: 0 }, 400], ['library.unknown', {}, 404]

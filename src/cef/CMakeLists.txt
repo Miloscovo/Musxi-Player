@@ -19,7 +19,7 @@ add_library(cef_bridge STATIC bridge.cpp)
 musxi_standard(cef_bridge 20)
 SET_LIBRARY_TARGET_PROPERTIES(cef_bridge)
 target_include_directories(cef_bridge PRIVATE "${CEF_ROOT}")
-target_link_libraries(cef_bridge PRIVATE music_application libcef_dll_wrapper libcef_lib ${CEF_STANDARD_LIBS})
+target_link_libraries(cef_bridge PRIVATE music_application libcef_dll_wrapper libcef_lib ${CEF_STANDARD_LIBS} comctl32)
 
 # Separate preview host; the original native executable remains available.
 add_library(cef_host SHARED host.cpp)

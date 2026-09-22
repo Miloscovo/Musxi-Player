@@ -8,6 +8,7 @@
 
 using Json = nlohmann::json;
 namespace cloud {
+inline bool testProfile=false;
 inline std::wstring toWide(const std::string& value) {
     int n = MultiByteToWideChar(CP_UTF8, 0, value.data(), (int)value.size(), nullptr, 0);
     std::wstring out(n, L'\0');
@@ -16,7 +17,7 @@ inline std::wstring toWide(const std::string& value) {
 inline std::filesystem::path dataDir() {
     wchar_t p[MAX_PATH]{};
     if (FAILED(SHGetFolderPathW(nullptr, CSIDL_LOCAL_APPDATA, nullptr, 0, p))) throw std::runtime_error("Cannot find application data directory");
-    auto dir = std::filesystem::path(p) / L"MintPlayer";
+    auto dir = std::filesystem::path(p) / (testProfile?L"MusxiPlayer-Test":L"MintPlayer");
     std::filesystem::create_directories(dir); return dir;
 }
 inline Json readSession() {

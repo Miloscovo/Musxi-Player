@@ -1,7 +1,7 @@
 # UI migration: CEF + Vue 3 + TypeScript + Vite
 
-Current checkpoint: stage five adds library, discovery and account views.
-Stage six remains planned. The original native UI and the
+Current checkpoint: stage six integrates a separate test release.
+Live-account acceptance and the production default switchover remain pending. The original native UI and the
 framework-free phase-two page remain available independently.
 
 ## Stage one: application interface preparation
@@ -474,4 +474,85 @@ The native playback smoke also injects a local silent WAV download result and
 verifies that the Web operation becomes completed only after real MCI playback
 starts for the matching track ID. Generated projects confirm C++17 native
 targets without CEF includes and C++20 CEF targets. Existing compiler warnings
-remain non-fatal. Stage six has not started.
+remain non-fatal. Stage six had not started at that checkpoint.
+
+
+## Stage six: isolated test release
+
+The agreed release is Musxi Player 测试版, installed alongside the legacy player.
+No production default changes or legacy UI deletion. The installed bootstrap and
+host DLL are renamed together to MusxiPlayerTest.exe/.dll; that executable selects
+test mode automatically. Development builds use MusxiPlayerWeb.exe --test-app.
+Phase-two and --cef-vue dual-window previews remain available.
+
+Host owns a frameless resizable top-level HWND and embeds a windowed Alloy CEF
+child. Only this window is visible. The original Application window is hidden,
+retaining its existing timers, MCI notifications and cloud completion processing.
+Closing the test window requests native shutdown, waits for CEF readiness,
+destroys the browser's parent, then releases the backend after OnBeforeClose.
+The close handler uses IsReadyToBeClosed to avoid a parent/CEF shutdown cycle.
+
+window.getState/minimize/maximize/close/setTheme use the same trusted-frame,
+versioned IPC router and return {enabled,maximized}. Only setTheme accepts a
+parameter: {theme: light|dark|glass}. Invalid shapes/values fail with 400, unknown
+commands with 404. Preview windows report enabled:false. Native UI types remain
+entirely in the CEF adapter; components call useWindow through native/client.ts.
+
+Core/Application remain C++17. The only Application changes select the isolated
+profile before startup; cloud::dataDir uses MusxiPlayer-Test for the test host,
+MintPlayer otherwise. CEF logs/cache live under LocalAppData, never the install
+directory. Test smoke uses a separate CEF cache and disables cloud startup.
+Renderer reload reads authoritative native state and does not repeat playback.
+
+Renderer termination clears subscriptions. The first termination triggers one
+reload for the browser lifetime; later failures show native retry/exit controls
+that do not depend on JavaScript. A manual retry does not re-arm automatic retry.
+Native backend and playback are not restarted. Startup resource absence fails
+before starting the backend. CEF sandbox and exact main-frame URL checks remain.
+
+Vue restores the sidebar, library/discovery pages and fixed playback dock with
+covers, title/artist, top seek bar and volume. UI-owned themes persist locally.
+Glass mode uses Windows whole-window alpha (210/255), with dark content; text
+and covers also blend with the desktop. It is not backdrop-only blur or CEF
+OSR composition. No WS_EX_TRANSPARENT/color-key is applied: blank areas remain
+interactive. Dragging uses existing header/sidebar whitespace, not an extra strip.
+CEF draggable-region notifications update native hit testing; child HWNDs forward
+caption hits to the host so movement has no round-trip mouse-down IPC latency.
+Button exclusions remain clickable, and renderer termination clears drag regions.
+The host handles per-monitor DPI resizing and work-area-aware maximization.
+Keyboard playback controls avoid editable controls and dialog/button focus.
+
+package-test.ps1 builds/tests the CEF/Vue release, includes SDK license and runs
+installer/MusxiPlayerTest.iss. Its AppId, install path and shortcuts differ from
+legacy packaging. Only runtime DLL/PAK/DAT/BIN/locales, Vue production assets,
+Node and existing cloud service dependencies are included; build archives, PDB,
+CEF profile/logs and account data are excluded. Uninstall preserves user data.
+Original package.ps1 and installer/MintPlayer.iss remain unchanged.
+
+Acceptance still requiring the user: authenticated QR login and VIP/sync chain,
+real cloud-track playback, favourite/add-to-playlist account mutations, mixed-DPI
+multi-monitor dragging, and final visual/transparent-theme preference. Do not
+interpret offline smoke tests as these live-account checks passing. Only after
+acceptance may the production default change, and legacy removal still requires
+explicit approval. No Git commit is created automatically.
+
+
+Stage-six test-release verification (2026-09-22): frontend typecheck/production
+build and 14/14 frontend tests passed; MSVC/CEF build and 8/8 CTests passed,
+including the single-window test host. CEF-disabled native targets compiled
+independently and 5/5 native tests passed, including isolated profile storage.
+Generated projects retain C++17 Core/Application and C++20 CEF targets without
+SDK include leakage into native projects. Existing warnings remain non-fatal.
+
+Windows UI checks confirmed caption-free layout, drag movement (200 px / 108 px),
+edge resizing (1120x760 to 1020x680), maximization and clean close. Earlier in this
+stage, actual renderer termination verified one automatic recovery, a persistent
+native fallback after the second termination, and successful manual retry. The
+backend was idle during that crash test: uninterrupted live cloud audio across
+renderer failure remains part of authenticated acceptance, not a claimed result.
+
+The final installer was installed under build/installer-stage6, launched without
+--test-app (the installed executable selects it automatically), passed the real
+CEF smoke, and uninstalled successfully. Test installation was removed; the
+standalone installer remains in dist. SHA256 sidecar matches the final artifact.
+The package is a test release, not approval to change the production default.
