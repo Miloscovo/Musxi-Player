@@ -14,6 +14,10 @@
 
 ## Web UI 迁移进度
 
+音频后端已完成 A1 隔离：本地文件与云端缓存统一通过 `IAudioBackend`
+播放，当前实现仍为 MCI。新增 Stop/Unload 语义及独立后端测试，尚未接入
+FFmpeg/WASAPI。见[音频后端迁移说明](docs/audio-backend-migration.md)。
+
 第六阶段已接入独立测试版窗口和安装包流程，现有原生 UI 仍然保留；
 `frontend/phase2` 是独立的 HTML/JavaScript 状态预览页面。
 

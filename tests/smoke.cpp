@@ -23,9 +23,9 @@ void snapshot(const wchar_t* name) {
     check(bitmap.Save(name,&png,nullptr)==Ok,"render UI preview");
 }
 LRESULT CALLBACK testProc(HWND h,UINT m,WPARAM w,LPARAM l) {
-    if(m==MM_MCINOTIFY) return wndProc(h,m,w,l);
     return DefWindowProcW(h,m,w,l);
 }
+DWORD audioPosition() {audioBackend().poll();return audioBackend().snapshot().positionMs;}
 int wmain() {
     GdiplusStartupInput input;ULONG_PTR token;GdiplusStartup(&token,&input,nullptr);
     CoInitializeEx(nullptr,COINIT_APARTMENTTHREADED);
@@ -43,19 +43,19 @@ int wmain() {
         check(appendSong(L"build/test-audio/Night Walk.wav"),"import second song");
         playSong(0);check(opened && playing && current==0,"open and play WAV through MCI");
         check(duration==3000,"read audio duration");
-        check(applyVolume()==0,"audio device accepts volume control");
+        check(bool(audioBackend().setVolume(volumePercent)),"audio device accepts volume control");
         setVolume(35);check(volumePercent==35,"adjust playback volume");
         setVolume(0);check(volumePercent==0 && volumeBeforeMute==35,"mute preserves previous volume");
         setVolume(volumeBeforeMute);check(volumePercent==35,"restore volume after mute");
-        Sleep(200);check(statusNumber(L"position")>0,"playback advances");
+        Sleep(200);check(audioPosition()>0,"playback advances");
         togglePlay();check(!playing,"pause playback");
         check(bool(musxi::applicationPlayerCommand(musxi::PlayerCommand::Pause)) && !playing,"application pause is idempotent");
-        DWORD paused=statusNumber(L"position");Sleep(150);
-        check(statusNumber(L"position")==paused,"paused position remains stable");
+        DWORD paused=audioPosition();Sleep(150);
+        check(audioPosition()==paused,"paused position remains stable");
         { Bitmap b(1120,760);Graphics g(&b);paint(g); }
         seekTo(seekBox.X+seekBox.Width*.5f);
-        check(!playing && statusNumber(L"position")>=1400,"seek while paused");
-        check(bool(musxi::applicationPlayerCommand(musxi::PlayerCommand::Seek,1000)) && !playing && statusNumber(L"position")>=1000,"application seek preserves paused state");
+        check(!playing && audioPosition()>=1400,"seek while paused");
+        check(bool(musxi::applicationPlayerCommand(musxi::PlayerCommand::Seek,1000)) && !playing && audioPosition()>=1000,"application seek preserves paused state");
         togglePlay();check(playing,"resume playback");
         check(bool(musxi::applicationPlayerCommand(musxi::PlayerCommand::Resume)) && playing,"application resume is idempotent");
         skip(1);check(current==1 && playing,"next track");
@@ -64,10 +64,10 @@ int wmain() {
         playSong(0);seekTo(seekBox.GetRight()-1);
         ULONGLONG deadline=GetTickCount64()+2000;
         while(current==0 && GetTickCount64()<deadline) {
-            MSG msg;while(PeekMessageW(&msg,nullptr,0,0,PM_REMOVE)) {TranslateMessage(&msg);DispatchMessageW(&msg);} Sleep(10);
+            MSG msg;while(PeekMessageW(&msg,nullptr,0,0,PM_REMOVE)) {TranslateMessage(&msg);DispatchMessageW(&msg);} pollAudio();Sleep(10);
         }
         check(current==1 && playing,"automatically advance at end of track");
-        position=statusNumber(L"position");snapshot(L"build/preview-library.png");
+        position=audioPosition();snapshot(L"build/preview-library.png");
         width=940;height=650;snapshot(L"build/preview-compact.png");
         closeAudio();check(!opened && !playing,"release audio device");
         // Exercise the existing download-result path with a local PCM fixture:
@@ -82,6 +82,8 @@ int wmain() {
             {"track",{{"id","web-fixture"},{"name","Web fixture"},{"artist","Fixture"},{"cover",""}}}}}});
         cloudTick();
         check(libraryOperationStatus=="completed" && opened && playing && cloudCurrent==0,"Web operation completes after native audio starts");
+        cloudQueue=Json::array({{{"id","new-selection"},{"name","Pending selection"}}});
+        check(musxi::applicationPlayerState().trackId=="web-fixture","pending queue change does not change the playing track identity");
         closeAudio();cloudCurrent=-1;cloudQueue=Json::array();
         std::ofstream broken(L"build/test-audio/broken.wav");broken << "invalid audio";broken.close();
         appendSong(L"build/test-audio/broken.wav");playSong(2);

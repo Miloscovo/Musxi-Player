@@ -277,19 +277,20 @@ void cloudTick() {
                 auto path=cloudText(data,"path");
                 if(requestGeneration!=cloudGeneration) {if(!path.empty()) DeleteFileW(path.c_str());}
                 else {
-                    closeAudio();current=-1;cloudCurrent=-1;
+                    if(!closeAudio()) {
+                        if(!path.empty())DeleteFileW(path.c_str());
+                        cloudStatus=L"无法释放上一首音频，请重试";notice(cloudStatus);
+                    } else {
+                    current=-1;cloudCurrent=-1;
                     cloudTempPath=path;
-                    auto error=command(L"open \""+path+L"\" alias mint");
-                    if(!error) {opened=true;error=command(L"set mint time format milliseconds");}
-                    if(!error) applyVolume();
-                    if(!error) {duration=statusNumber(L"length");error=command(L"play mint notify");}
-                    if(error) {closeAudio();cloudStatus=L"Windows 无法播放该音频编码，请尝试其他歌曲";notice(cloudStatus);}
+                    auto playbackResult=loadAndPlayAudio(path,data["track"].value("id",""));
+                    if(!playbackResult) {closeAudio();cloudStatus=L"Windows 无法播放该音频编码，请尝试其他歌曲";notice(cloudStatus);}
                     else {
-                        applyVolume();
-                        playing=true;cloudAutoNext=false;cloudNowTitle=cloudText(data["track"],"name");cloudNowArtist=cloudText(data["track"],"artist");cloudNowCover=data["track"].value("cover","");
+                        cloudAutoNext=false;cloudNowTitle=cloudText(data["track"],"name");cloudNowArtist=cloudText(data["track"],"artist");cloudNowCover=data["track"].value("cover","");
                         auto id=data["track"].value("id","");
                         for(int i=0;i<(int)cloudQueue.size();++i) if(cloudQueue[i].value("id","")==id) {cloudCurrent=i;break;}
                         cloudStatus=L"正在播放 · "+cloudNowTitle;
+                    }
                     }
                 }
             }

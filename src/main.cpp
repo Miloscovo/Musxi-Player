@@ -16,9 +16,7 @@ namespace { musxi::HostHooks hostHooks; constexpr UINT_PTR HostTick=0xCEF; }
 #include <commdlg.h>
 #include <shellapi.h>
 #include <shlobj.h>
-#include <mmsystem.h>
-#include <mmdeviceapi.h>
-#include <audiopolicy.h>
+#include "audio/mci_backend.hpp"
 #include <dwmapi.h>
 #include <algorithm>
 #include <cmath>
@@ -199,55 +197,47 @@ std::string utf8(const std::wstring& str) {
     if (selected < 0) selected = 0;
     return true;
 }
-MCIERROR command(const std::wstring& value) { return mciSendStringW(value.c_str(), nullptr, 0, window); }
-MCIERROR applyVolume() {
-    if(!opened) return 0;
-    IMMDeviceEnumerator* devices=nullptr;IMMDevice* device=nullptr;
-    IAudioSessionManager2* manager=nullptr;IAudioSessionEnumerator* sessions=nullptr;
-    bool applied=false;
-    if(SUCCEEDED(CoCreateInstance(__uuidof(MMDeviceEnumerator),nullptr,CLSCTX_ALL,__uuidof(IMMDeviceEnumerator),(void**)&devices)) &&
-       SUCCEEDED(devices->GetDefaultAudioEndpoint(eRender,eMultimedia,&device)) &&
-       SUCCEEDED(device->Activate(__uuidof(IAudioSessionManager2),CLSCTX_ALL,nullptr,(void**)&manager)) &&
-       SUCCEEDED(manager->GetSessionEnumerator(&sessions))) {
-        int count=0;sessions->GetCount(&count);
-        for(int i=0;i<count;++i) {
-            IAudioSessionControl* session=nullptr;IAudioSessionControl2* info=nullptr;ISimpleAudioVolume* volume=nullptr;DWORD pid=0;
-            if(SUCCEEDED(sessions->GetSession(i,&session)) &&
-               SUCCEEDED(session->QueryInterface(__uuidof(IAudioSessionControl2),(void**)&info)) &&
-               SUCCEEDED(info->GetProcessId(&pid)) && pid==GetCurrentProcessId() &&
-               SUCCEEDED(session->QueryInterface(__uuidof(ISimpleAudioVolume),(void**)&volume))) {
-                if(SUCCEEDED(volume->SetMasterVolume(volumePercent/100.0f,nullptr))) applied=true;
-            }
-            if(volume) volume->Release();
-            if(info) info->Release();
-            if(session) session->Release();
-        }
+musxi::IAudioBackend& audioBackend() {
+    static auto backend=musxi::makeMciAudioBackend();return *backend;
+}
+std::string audioTrackId;
+// Legacy drawing/input caches only. Native API snapshots read the backend directly.
+void syncAudioView() {
+    const auto state=audioBackend().snapshot();
+    opened=state.opened;playing=state.playing;position=state.positionMs;
+    duration=state.durationMs;volumePercent=state.volumePercent;
+}
+musxi::PlayerResult playerResult(musxi::AudioResult result) {
+    switch(result.error) {
+    case musxi::AudioError::None:return {};
+    case musxi::AudioError::NotReady:return {musxi::PlayerError::NotReady};
+    case musxi::AudioError::InvalidArgument:return {musxi::PlayerError::InvalidArgument};
+    default:return {musxi::PlayerError::BackendFailure};
     }
-    if(sessions) sessions->Release();
-    if(manager) manager->Release();
-    if(device) device->Release();
-    if(devices) devices->Release();
-    return applied?0:MCIERR_UNSUPPORTED_FUNCTION;
 }
 musxi::PlayerService& playerService();
 musxi::PlayerResult setVolumeNative(int value) {
-    int previous=volumePercent;volumePercent=std::clamp(value,0,100);
-    if(applyVolume()) {volumePercent=previous;notice(L"此音频暂不支持音量调节");return {musxi::PlayerError::BackendFailure};}
+    auto result=audioBackend().setVolume(value);syncAudioView();
+    if(!result) {notice(L"此音频暂不支持音量调节");return playerResult(result);}
     if(volumePercent>0) volumeBeforeMute=volumePercent;
     invalidate();
     return {};
 }
 void setVolume(int value) {playerService().invoke(musxi::PlayerCommand::SetVolume,(unsigned)std::clamp(value,0,100));}
 void volumeAt(float x) {if(volumeBox.Width>0) setVolume((int)std::lround(std::clamp((x-volumeBox.X)/volumeBox.Width,0.0f,1.0f)*100));}
-DWORD statusNumber(const wchar_t* what) {
-    wchar_t value[64]{};
-    if (mciSendStringW((std::wstring(L"status mint ") + what).c_str(), value, 64, nullptr)) return 0;
-    return wcstoul(value, nullptr, 10);
-}
-void closeAudio() {
-    if (opened) command(L"close mint");
-    opened = false; playing = false; position = duration = 0;
+bool closeAudio() {
+    const auto result=audioBackend().unload();syncAudioView();
+    if(!result) {notice(L"无法释放音频，请重试");return false;}
+    audioTrackId.clear();
     if (!cloudTempPath.empty()) { DeleteFileW(cloudTempPath.c_str()); cloudTempPath.clear(); }
+    return true;
+}
+musxi::AudioResult loadAndPlayAudio(const std::wstring& path,const std::string& trackId) {
+    auto result=audioBackend().load(path);
+    if(result)result=audioBackend().play();
+    if(result)audioTrackId=trackId;
+    else {audioBackend().unload();audioTrackId.clear();}
+    syncAudioView();return result;
 }
 int visibleRows() { return std::max(1, (int)((height - 458) / 60)); }
 void reveal(int index) {
@@ -258,31 +248,20 @@ void reveal(int index) {
 void playSong(int index) {
     if (index < 0 || index >= (int)songs.size()) return;
     ++cloudGeneration; cloudCurrent = -1; cloudAutoNext = false; cloudNowTitle.clear();
-    closeAudio();
+    if(!closeAudio())return;
     current = -1; selected = index;
-    auto error = command(L"open \"" + songs[index].path + L"\" alias mint");
-    if (!error) { opened = true; error = command(L"set mint time format milliseconds"); }
-    if (!error) applyVolume();
-    if (!error) {
-        duration = statusNumber(L"length");
-        songs[index].duration = duration;
-        error = command(L"play mint notify");
-    }
-    if (error) {
+    auto result=loadAndPlayAudio(songs[index].path,"local:"+std::to_string(index));
+    if (!result) {
         closeAudio();
-        wchar_t reason[256]{}; mciGetErrorStringW(error, reason, 256);
-        notice(L"无法播放此文件：" + std::wstring(reason));
-    } else { current = index; playing = true;applyVolume(); toast.clear(); }
+        notice(L"无法播放此文件，音频错误码："+std::to_wstring(result.nativeCode));
+    } else { current = index;songs[index].duration=duration;toast.clear(); }
     reveal(index); invalidate();
 }
 musxi::PlayerResult setPlaying(bool requested) {
-    if(!opened) return {musxi::PlayerError::NotReady};
-    if(playing==requested) return {};
-    MCIERROR error = command(requested?L"play mint notify":L"pause mint");
-    if (!error) playing = requested;
-    else notice(L"播放状态切换失败，请重新打开这首歌曲");
+    auto result=requested?audioBackend().resume():audioBackend().pause();syncAudioView();
+    if(!result && result.error!=musxi::AudioError::NotReady)notice(L"播放状态切换失败，请重新打开这首歌曲");
     invalidate();
-    return {error?musxi::PlayerError::BackendFailure:musxi::PlayerError::None};
+    return playerResult(result);
 }
 musxi::PlayerService& playerService();
 void togglePlay() {
@@ -299,20 +278,15 @@ void skip(int delta) {
     playSong((base + delta + (int)songs.size()) % (int)songs.size());
 }
 musxi::PlayerResult seekMilliseconds(std::uint32_t milliseconds) {
-    if (!opened || !duration) return {musxi::PlayerError::NotReady};
-    auto target = std::min<DWORD>(milliseconds,duration-1);
-    bool wasPlaying = playing;
-    auto error = command(L"seek mint to " + std::to_wstring(target));
-    if (!error && wasPlaying) error = command(L"play mint notify");
-    if (error) notice(L"此音频暂不支持跳转到该位置");
-    position = statusNumber(L"position"); invalidate();
-    return {error?musxi::PlayerError::BackendFailure:musxi::PlayerError::None};
+    auto result=audioBackend().seek(milliseconds);syncAudioView();
+    if(!result && result.error!=musxi::AudioError::NotReady)notice(L"此音频暂不支持跳转到该位置");
+    invalidate();return playerResult(result);
 }
 musxi::PlayerService& playerService() {
     static musxi::PlayerService service([] {
-        musxi::PlayerState state{opened,playing,position,duration,volumePercent,{}};
-        if(opened && cloudCurrent>=0 && cloudCurrent<(int)cloudQueue.size()) state.trackId=cloudQueue[cloudCurrent].value("id","");
-        else if(opened && current>=0 && current<(int)songs.size()) state.trackId="local:"+std::to_string(current);
+        const auto audio=audioBackend().snapshot();
+        musxi::PlayerState state{audio.opened,audio.playing,audio.positionMs,audio.durationMs,audio.volumePercent,{}};
+        if(audio.opened)state.trackId=audioTrackId;
         return state;
     },[](musxi::PlayerCommand cmd,std::uint32_t value)->musxi::PlayerResult {
         switch(cmd) {
@@ -326,6 +300,17 @@ musxi::PlayerService& playerService() {
         return {musxi::PlayerError::InvalidArgument};
     });
     return service;
+}
+void pollAudio() {
+    audioBackend().poll();syncAudioView();
+    for(const auto& event:audioBackend().takeEvents()) {
+        if(event.generation!=audioBackend().snapshot().generation)continue;
+        if(event.kind==musxi::AudioEventKind::Ended) {
+            if(cloudCurrent>=0 && cloudBusy())cloudAutoNext=true;
+            else skip(1);
+        } else notice(L"音频播放中断，请重新播放或选择其他歌曲");
+    }
+    syncAudioView();
 }
 void seekTo(float x) {
     if(!duration || seekBox.Width<=0) return;
@@ -658,18 +643,9 @@ LRESULT CALLBACK wndProc(HWND hwnd, UINT message, WPARAM wp, LPARAM lp) {
         }
         cloudTick();
         coverTick();
-        if(opened && playing) {position=statusNumber(L"position");invalidate();}
+        pollAudio();if(opened)invalidate();
         playerService().publish();
         if(!toast.empty() && GetTickCount64()>=toastUntil) {toast.clear();invalidate();}
-        return 0;
-    case MM_MCINOTIFY:
-        if(opened && (MCIDEVICEID)lp==mciGetDeviceIDW(L"mint")) {
-            if(wp==MCI_NOTIFY_SUCCESSFUL && playing) {
-                if(cloudCurrent>=0 && cloudBusy()) {playing=false;cloudAutoNext=true;}
-                else skip(1);
-            }
-            else if(wp==MCI_NOTIFY_FAILURE) {playing=false;notice(L"音频播放中断，请重新播放或选择其他歌曲");}
-        }
         return 0;
     case WM_CLOSE:
         if(hostHooks.canClose && !hostHooks.canClose()) return 0;

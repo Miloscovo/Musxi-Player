@@ -11,15 +11,15 @@ New-Item -ItemType Directory -Path build -Force | Out-Null
 $resourceCompiler = Join-Path (Split-Path $compilerPath) 'windres.exe'
 & $resourceCompiler src/version.rc -O coff -o build/version.o
 if ($LASTEXITCODE -ne 0) { throw 'Version resource compilation failed.' }
-& $compilerPath -std=c++17 -O2 -Wall -Wextra -Wpedantic -DUNICODE -D_UNICODE -DNOMINMAX -municode -mwindows src/main.cpp src/application/legacy_entry.cpp src/player/player_service.cpp build/version.o -o build/MusxiPlayer.exe -static -static-libgcc -static-libstdc++ -lgdiplus -lgdi32 -lwinmm -lcomdlg32 -lshell32 -lole32 -ldwmapi -lcrypt32
+& $compilerPath -std=c++17 -O2 -Wall -Wextra -Wpedantic -DUNICODE -D_UNICODE -DNOMINMAX -municode -mwindows src/main.cpp src/application/legacy_entry.cpp src/player/player_service.cpp src/audio/mci_backend.cpp build/version.o -o build/MusxiPlayer.exe -static -static-libgcc -static-libstdc++ -lgdiplus -lgdi32 -lwinmm -lcomdlg32 -lshell32 -lole32 -ldwmapi -lcrypt32
 if ($LASTEXITCODE -ne 0) { throw 'Build failed.' }
 Write-Host 'Built: build/MusxiPlayer.exe'
 if ($Test) {
-    & $compilerPath -std=c++17 -O2 -Wall -Wextra -Wpedantic -DUNICODE -D_UNICODE -DNOMINMAX -municode tests/smoke.cpp src/player/player_service.cpp -o build/smoke.exe -static -static-libgcc -static-libstdc++ -lgdiplus -lgdi32 -lwinmm -lcomdlg32 -lshell32 -lole32 -ldwmapi -lcrypt32
+    & $compilerPath -std=c++17 -O2 -Wall -Wextra -Wpedantic -DUNICODE -D_UNICODE -DNOMINMAX -municode tests/smoke.cpp src/player/player_service.cpp src/audio/mci_backend.cpp -o build/smoke.exe -static -static-libgcc -static-libstdc++ -lgdiplus -lgdi32 -lwinmm -lcomdlg32 -lshell32 -lole32 -ldwmapi -lcrypt32
     if ($LASTEXITCODE -ne 0) { throw 'Test compilation failed.' }
     & ./build/smoke.exe
     if ($LASTEXITCODE -ne 0) { throw 'Playback integration tests failed.' }
-    & $compilerPath -std=c++17 -O2 tests/player-interface.cpp src/player/player_service.cpp -o build/player-interface.exe -static -lgdiplus -lgdi32 -lwinmm -lcomdlg32 -lshell32 -lole32 -ldwmapi -lcrypt32
+    & $compilerPath -std=c++17 -O2 tests/player-interface.cpp src/player/player_service.cpp src/audio/mci_backend.cpp -o build/player-interface.exe -static -lgdiplus -lgdi32 -lwinmm -lcomdlg32 -lshell32 -lole32 -ldwmapi -lcrypt32
     if ($LASTEXITCODE -ne 0) { throw 'Player interface test compilation failed.' }
     & ./build/player-interface.exe
     if ($LASTEXITCODE -ne 0) { throw 'Player interface tests failed.' }
