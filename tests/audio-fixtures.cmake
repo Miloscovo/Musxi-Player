@@ -1,0 +1,22 @@
+file(MAKE_DIRECTORY "${OUT}")
+function(run)
+  execute_process(COMMAND "${FFMPEG}" -hide_banner -loglevel error -y ${ARGV}
+    RESULT_VARIABLE result ERROR_VARIABLE details)
+  if(NOT result EQUAL 0)
+    message(FATAL_ERROR "Audio fixture generation failed: ${details}")
+  endif()
+endfunction()
+# Distinct channel chirps make seek/ordering errors measurable, unlike silence.
+run(-f lavfi -i "aevalsrc=0.3*sin(2*PI*(220*t+55*t*t))|0.2*sin(2*PI*(440*t+70*t*t)):s=44100:d=3.137"
+    -c:a pcm_s16le "${OUT}/source.wav")
+foreach(pair "mp3|libmp3lame" "flac|flac" "m4a|aac" "aac|aac" "ogg|libvorbis" "opus|libopus" "wma|wmav2")
+  string(REPLACE "|" ";" fields "${pair}")
+  list(GET fields 0 extension)
+  list(GET fields 1 encoder)
+  run(-i "${OUT}/source.wav" -c:a "${encoder}" "${OUT}/source.${extension}")
+endforeach()
+foreach(extension wav mp3 flac m4a aac ogg opus wma)
+  run(-i "${OUT}/source.${extension}" -ar 48000 -ac 2 -c:a pcm_f32le -f f32le "${OUT}/${extension}.f32")
+endforeach()
+run(-i "${OUT}/source.wav" -ar 32000 -ac 1 -c:a pcm_f32le -f f32le "${OUT}/mono.f32")
+run(-i "${OUT}/source.wav" -ar 96000 -ac 6 -c:a pcm_f32le -f f32le "${OUT}/surround.f32")

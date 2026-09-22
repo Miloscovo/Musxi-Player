@@ -61,11 +61,92 @@ New backend acceptance targets Windows x64/MSVC. MinGW MCI remains supported.
 Formats: MP3, FLAC, WAV, AAC/M4A, Ogg Vorbis/Opus, unprotected WMA. Device loss
 or default-device changes stop output and prompt replay on the current default.
 No EQ, DSP, ReplayGain, gapless, exclusive output or new queue algorithm in A1.
-FFmpeg/WASAPI SDK integration, async command completion, and backend selection
-are not implemented in this checkpoint.
+WASAPI integration, async command completion, and backend selection remain
+future stages. A2 adds the opt-in decoder described below.
 
 A1 verification: MSVC/CEF Release build and 10/10 CTests passed; CEF-disabled
 MinGW build and 6/6 CTests passed. Vue typecheck/production build also passed.
 Audio checks use generated PCM WAV files, including the cloud download-result
 adapter; they do not claim a new authenticated cloud playback or device-unplug
 acceptance run. No installer or Git commit was produced for A1.
+
+## A2: independent FFmpeg decoder
+
+`src/audio/ffmpeg_decoder.hpp/.cpp` provides synchronous open/read/seek/close,
+source metadata and bounded interleaved float32 PCM blocks. The PImpl boundary
+contains no FFmpeg, device, Windows, CEF or UI types. There is no second player
+state machine, audio output, worker, queue or new Native API in A2. Existing
+MCI, PlayerService, Application, Vue and CEF source files are unchanged.
+
+`music_audio_decoder` is C++17 and links FFmpeg privately. Core/Application do
+not link it; disabling `MUSXI_ENABLE_FFMPEG` removes all FFmpeg requirements.
+The executable that consumes the decoder is responsible for DLL deployment;
+only the offline test executable currently does so. Decoding uses the libraries,
+not an ffmpeg.exe subprocess (the executable only generates test fixtures).
+
+### Reproducible build
+
+Windows x64/MSVC, using the installed CMake/Visual Studio generator:
+
+```powershell
+./setup-ffmpeg.ps1
+$sdk = "$PWD/build/deps/ffmpeg-n9.0.2-3-ga5923073bf-win64-lgpl-shared-9.0"
+cmake -S . -B build/audio-a2 -G "Visual Studio 18 2026" -A x64 -DMUSXI_ENABLE_FFMPEG=ON "-DFFMPEG_ROOT=$sdk"
+cmake --build build/audio-a2 --config Release --parallel 4
+ctest --test-dir build/audio-a2 -C Release --output-on-failure
+```
+
+The script explicitly downloads the pinned [BtbN shared LGPL SDK](https://github.com/BtbN/FFmpeg-Builds/releases/tag/autobuild-2026-09-21-13-55),
+archive `ffmpeg-n9.0.2-3-ga5923073bf-win64-lgpl-shared-9.0.zip`.
+SHA256: `a7e62ca9b34c40145a2c7482f61a78063f6c8f8dbcf17effb27e62841fa6bbd9`.
+The archive is checked before extraction; an existing SDK is not overwritten.
+`build/deps` is already Git-ignored. CMake never downloads dependencies or
+searches PATH for an SDK. Libraries: avformat 63, avcodec 63, avutil 61,
+swresample 7. Header/runtime major versions are checked when opening audio.
+The SDK reports LGPL v3 or later (`ffmpeg -L`); it is a third-party build,
+not an FFmpeg-project binary. Future distribution must retain the applicable
+license notices and supply corresponding source/relinking compliance materials.
+A2 makes no installer/license-distribution completion claim.
+
+### Contract and limits
+
+- Local regular files only, opened using Unicode Windows paths and custom AVIO.
+  Demuxer probing uses content, not filename extension. Only WAV, MP3, FLAC,
+  MOV/M4A, AAC, Ogg and ASF containers are admitted; no network/playlist input.
+- PCM rate 8–192 kHz, 1–8 channels, optional native speaker mask. Zero mask
+  selects FFmpeg's default layout. Reads return up to 65,536 frames; the internal
+  converted block is capped at 262,144 frames. This bounds our PCM staging,
+  not every internal FFmpeg allocation. Whole files are not retained in memory.
+- One owner/thread per decoder; A3 must put it on a decoding worker, never on
+  the Vue/CEF UI or WASAPI output thread. No thread safety is promised here.
+- PCM starts at frame zero. A seek flushes decoder/resampler state and discards
+  preroll to the requested output frame. Seeking to the reported end produces
+  EOF; duration can be estimated, especially raw AAC. Unknown duration is -1.
+- Near the beginning, reopen instead of seeking to zero so AAC priming/edit
+  metadata is preserved. ASF/WMA currently reopens and decodes from the start
+  for accurate positioning: seek cost grows with position. A3 must account
+  for cancellation/latency before wiring it into user playback.
+- EOF drains both decoder and resampler. A final nonempty block precedes the
+  EOF block; repeated EOF is stable. Midstream format changes are rejected.
+- Failures throw `DecodeError` with operation and native error code; standard
+  allocation/filesystem exceptions may also propagate. Decode/seek failures
+  release the stream. Invalid read size/negative seek leave a valid stream
+  intact. Failed open leaves the decoder closed. A4 maps errors to existing
+  player events; the decoder itself never shows dialogs or advances tracks.
+
+### A2 verification
+
+MSVC Release builds Core/Application/MCI and the separate decoder. Eight CTests
+pass: the six existing native checks plus fixture generation and decoder checks.
+Generated stereo chirps test WAV, MP3, FLAC, AAC/M4A, Vorbis, Opus and WMA;
+full PCM/frame counts match FFmpeg CLI reference output. Repeated seeks are
+compared with full-decode samples (lossy preroll uses an RMS tolerance).
+Additional checks cover mono/5.1 conversion, Unicode/misleading filenames,
+EOF/tails, file-handle release, corrupt/missing input and invalid arguments.
+These are deterministic generated fixtures, not an exhaustive collection of
+real-world encoders, damaged files or authenticated cloud songs.
+
+A3 remains WASAPI shared-mode output and a bounded producer/consumer PCM buffer;
+A4 connects commands/state/events and startup backend selection; A5 performs
+real-device/account regression; A6 changes defaults only after acceptance.
+No WASAPI output, automatic fallback, UI change, installer or commit in A2.
