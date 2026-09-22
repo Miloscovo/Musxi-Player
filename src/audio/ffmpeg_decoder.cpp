@@ -24,6 +24,14 @@ void check(int result,const char* operation) {if(result<0)fail(operation,result)
 constexpr int MaxConvertedFrames=262144;
 }
 struct FfmpegDecoder::Impl {
+    const std::atomic_bool* cancelled=nullptr;
+    static int interrupted(void* opaque) {
+        const auto s=static_cast<Impl*>(opaque);
+        return s->cancelled && s->cancelled->load();
+    }
+    void checkCancelled() const {
+        if(cancelled && cancelled->load())fail("Decode cancelled",AVERROR_EXIT);
+    }
     FILE* file=nullptr;
     AVIOContext* io=nullptr;
     AVFormatContext* format=nullptr;
@@ -47,12 +55,14 @@ struct FfmpegDecoder::Impl {
         if(file)fclose(file);
     }
     static int readFile(void* opaque,std::uint8_t* buffer,int size) {
+        if(interrupted(opaque))return AVERROR_EXIT;
         auto f=static_cast<Impl*>(opaque)->file;
         const auto got=fread(buffer,1,static_cast<std::size_t>(size),f);
         if(got)return static_cast<int>(got);
         return ferror(f)?AVERROR(EIO):AVERROR_EOF;
     }
     static std::int64_t seekFile(void* opaque,std::int64_t offset,int whence) {
+        if(interrupted(opaque))return AVERROR_EXIT;
         auto f=static_cast<Impl*>(opaque)->file;
         if(whence & AVSEEK_SIZE) {
             const auto current=_ftelli64(f);
@@ -67,6 +77,7 @@ struct FfmpegDecoder::Impl {
         return _ftelli64(f);
     }
     void initialize(const std::wstring& localPath,PcmFormat output) {
+        checkCancelled();
         path=localPath;
         if((avcodec_version()>>16)!=LIBAVCODEC_VERSION_MAJOR ||
            (avformat_version()>>16)!=LIBAVFORMAT_VERSION_MAJOR ||
@@ -91,6 +102,7 @@ struct FfmpegDecoder::Impl {
         format=avformat_alloc_context();
         if(!format)fail("Allocate demuxer",AVERROR(ENOMEM));
         format->pb=io;format->flags|=AVFMT_FLAG_CUSTOM_IO;
+        format->interrupt_callback={interrupted,this};
         // A2 accepts only local audio containers, not playlists or external URLs.
         check(av_opt_set(format,"format_whitelist","wav,mp3,flac,mov,aac,ogg,asf",0),"Demuxer policy");
         check(av_opt_set(format,"protocol_whitelist","file",0),"Protocol policy");
@@ -150,6 +162,7 @@ struct FfmpegDecoder::Impl {
         pending.clear();offset=0;
         if(decodedEof){convert(nullptr);return;}
         for(;;) {
+            checkCancelled();
             const auto received=avcodec_receive_frame(codec,frame);
             if(received==0){convert(frame);av_frame_unref(frame);return;}
             if(received==AVERROR_EOF){decodedEof=true;convert(nullptr);return;}
@@ -157,6 +170,7 @@ struct FfmpegDecoder::Impl {
             if(drainSent)fail("Decoder stalled while draining",AVERROR_INVALIDDATA);
             int status=0;
             do {
+                checkCancelled();
                 av_packet_unref(packet);status=av_read_frame(format,packet);
             } while(status>=0 && packet->stream_index!=stream);
             if(status==AVERROR_EOF) {
@@ -168,11 +182,11 @@ struct FfmpegDecoder::Impl {
         }
     }
 };
-FfmpegDecoder::FfmpegDecoder()=default;
+FfmpegDecoder::FfmpegDecoder(const std::atomic_bool* cancelled):cancelled_(cancelled) {}
 FfmpegDecoder::~FfmpegDecoder()=default;
 void FfmpegDecoder::close() noexcept {impl_.reset();}
 void FfmpegDecoder::open(const std::wstring& path,PcmFormat output) {
-    close();auto next=std::make_unique<Impl>();next->initialize(path,output);impl_=std::move(next);
+    close();auto next=std::make_unique<Impl>();next->cancelled=cancelled_;next->initialize(path,output);impl_=std::move(next);
 }
 const DecodedAudioInfo& FfmpegDecoder::info() const {
     if(!impl_)fail("No audio file",AVERROR(EINVAL));return impl_->info;
@@ -181,6 +195,7 @@ PcmBlock FfmpegDecoder::read(std::uint32_t maxFrames) {
     if(!impl_ || !maxFrames || maxFrames>65536)fail("Invalid read",AVERROR(EINVAL));
     auto& s=*impl_;
     try {
+        s.checkCancelled();
         while(s.offset==s.pending.size() && !s.finished)s.produce();
         PcmBlock block;block.startFrame=s.pendingStart+static_cast<std::int64_t>(s.offset/s.info.output.channels);
         if(s.offset==s.pending.size()){block.endOfStream=true;return block;}

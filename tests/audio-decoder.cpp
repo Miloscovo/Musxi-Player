@@ -5,6 +5,8 @@
 #include <fstream>
 #include <iostream>
 #include <numeric>
+#include <chrono>
+#include <thread>
 
 namespace fs=std::filesystem;
 using musxi::FfmpegDecoder;
@@ -83,6 +85,17 @@ int main(int argc,char** argv) {
         fails([&]{decoder.read(0);},"zero read accepted");
         fails([&]{decoder.seek(-1);},"negative seek accepted");
         require(!decoder.read().samples.empty(),"invalid command destroyed valid stream");
+        std::atomic_bool cancelled{true};FfmpegDecoder cancellable(&cancelled);
+        fails([&]{cancellable.open(unicode.wstring());},"cancelled open succeeded");
+        cancelled=false;cancellable.open((folder/"long.wma").wstring());cancellable.seek(170000);
+        const auto start=std::chrono::steady_clock::now();
+        std::thread cancel([&]{std::this_thread::sleep_for(std::chrono::milliseconds(2));cancelled=true;});
+        bool interrupted=false;
+        try{cancellable.read();}catch(const musxi::DecodeError&){interrupted=true;}
+        cancel.join();
+        require(interrupted,"long WMA seek did not observe cancellation");
+        require(std::chrono::steady_clock::now()-start<std::chrono::seconds(1),"decode cancellation too slow");
+        cancelled=false;cancellable.open(unicode.wstring());require(!cancellable.read().samples.empty(),"reopen after cancellation");
         std::cout<<"PASS PCM formats, Unicode paths, limits, errors and file lifecycle\n";
         return 0;
     } catch(const std::exception& e) {std::cerr<<"FAIL "<<e.what()<<'\n';return 1;}

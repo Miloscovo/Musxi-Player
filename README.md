@@ -79,3 +79,9 @@ Vue 页面支持搜索分页、歌单浏览、扫码登录/退出、同步歌单
 交错 float32 PCM。现有播放器仍使用 MCI；FFmpeg 暂不参与实际播放，也不改变
 Vue、Native API 或账号操作。SDK 默认不下载、不编译、不随播放器打包。
 构建、离线测试和已知限制见 [音频迁移说明](docs/audio-backend-migration.md#a2-independent-ffmpeg-decoder)。
+
+A3 已增加独立 WASAPI 共享模式输出测试：解码线程 → 固定容量 PCM 缓冲 →
+事件驱动输出线程，支持暂停、继续、停止、Seek、流音量与设备时钟进度。
+实际播放器仍使用 MCI，A4 再接入。带声音的测试需显式启用
+`MUSXI_TEST_AUDIO_DEVICE=ON`，测试流音量为 10%，不修改系统总音量。
+详见 [A3 输出验证](docs/audio-backend-migration.md#a3-standalone-wasapi-output)。

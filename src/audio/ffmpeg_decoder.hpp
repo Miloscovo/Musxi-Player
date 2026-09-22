@@ -1,5 +1,6 @@
 #pragma once
 #include <cstdint>
+#include <atomic>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -31,7 +32,8 @@ public:
 // No audio device, player state, network, CEF, or FFmpeg types in this boundary.
 class FfmpegDecoder {
 public:
-    FfmpegDecoder();
+    // Optional flag must outlive this decoder; only the flag may be set by another thread.
+    explicit FfmpegDecoder(const std::atomic_bool* cancelled=nullptr);
     ~FfmpegDecoder();
     FfmpegDecoder(const FfmpegDecoder&)=delete;
     FfmpegDecoder& operator=(const FfmpegDecoder&)=delete;
@@ -43,5 +45,6 @@ public:
 private:
     struct Impl;
     std::unique_ptr<Impl> impl_;
+    const std::atomic_bool* cancelled_;
 };
 }

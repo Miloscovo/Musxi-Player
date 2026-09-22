@@ -150,3 +150,84 @@ A3 remains WASAPI shared-mode output and a bounded producer/consumer PCM buffer;
 A4 connects commands/state/events and startup backend selection; A5 performs
 real-device/account regression; A6 changes defaults only after acceptance.
 No WASAPI output, automatic fallback, UI change, installer or commit in A2.
+
+## A3: standalone WASAPI output
+
+`WasapiPlayer` in `src/audio/wasapi_player.hpp/.cpp` connects the A2 decoder to
+shared-mode, event-driven WASAPI. It is an independent test pipeline, not yet
+an `IAudioBackend` adapter or an Application dependency. Core, MCI, Vue, Native
+Bridge and the installed application are unchanged. `music_audio_wasapi` uses
+C++17 with private decoder/ole32/uuid links. No Windows/COM types cross its header.
+
+The output thread owns all COM objects, commands, snapshots and terminal events.
+One decoder thread owns FFmpeg and feeds a fixed 500 ms circular PCM buffer.
+The producer waits when full; the consumer uses a nonblocking mutex attempt,
+never waits for decoding and never reads files. A 50 ms wake timeout services
+control/health checks even when device callbacks cease. Audio writes follow the
+device event and available padding; command/decode wakes can also prefill it.
+Default endpoint identity is checked every 250 ms. This is deliberately polling,
+not seamless device switching: a change or WASAPI failure stops output and
+reports an error; replay opens the then-current default endpoint.
+
+The decoder resamples to the device's mix rate/layout. The renderer accepts
+float32 or signed 16/24/32-bit PCM mix formats (including valid-bit alignment),
+1–8 channels and 8–192 kHz; other formats fail explicitly. Per-stream WASAPI
+volume avoids changing system or other application volume. The 500 ms queue is
+a memory bound, not a promise of end-to-end latency.
+
+Public control calls serialize onto the output thread and wait for command
+acknowledgment. Source open/decode/seek processing happens asynchronously. Seek
+requires source metadata to be ready. A4 must dispatch control calls away from
+the UI and map this pipeline's snapshots/errors onto the existing Native API;
+this phase does not change the old synchronous `IAudioBackend` contract.
+
+Pause stops the audio clock without discarding queued audio. Stop resets to
+zero and retains the path; play resumes/restarts. Seek stops/resets the endpoint,
+cancels/joins the previous producer, clears PCM, increments the generation and
+starts fresh decoding at the target. Old terminal events are discarded on
+seek/stop/load/unload. Device-clock consumption, clamped to submitted media,
+drives position; decoding ahead does not move the visible position. EOF is
+reported exactly once only after software PCM, endpoint padding and the final
+device-clock frames drain. Unload/destruction cancels decoding and joins threads
+before releasing their resources. There is no automatic MCI fallback.
+
+Underruns stop/reset output and wait for a small prefill (at least one endpoint
+buffer or 50 ms). No fabricated silence advances media time. Refill stalls fail
+after five seconds once source metadata is ready. Decode probe/read loops and
+custom AVIO now check an optional atomic cancellation flag, including WMA's
+linear seek discard. OS-level blocking file reads remain subject to storage
+driver responsiveness; this is not a hard real-time cancellation guarantee.
+
+### Build and run A3
+
+Use the A2 SDK/configuration above, then explicitly opt into audible tests:
+
+```powershell
+cmake -S . -B build/audio-a2 -DMUSXI_TEST_AUDIO_DEVICE=ON
+cmake --build build/audio-a2 --config Release --parallel 4
+ctest --test-dir build/audio-a2 -C Release --output-on-failure
+# Or run the standalone verifier against the generated fixtures:
+./build/audio-a2/Release/audio-output.exe ./build/audio-a2/audio-fixtures
+```
+
+The device test plays generated short clips at 10% stream volume. It fails if
+no working output device exists rather than silently passing. The default
+`MUSXI_TEST_AUDIO_DEVICE=OFF` keeps ordinary CTest runs silent; it still builds
+the standalone executable when FFmpeg is enabled. No installer is produced.
+
+### A3 validation and remaining acceptance
+
+The MSVC Release build and all nine CTests passed, including real WASAPI output
+on the current default device. Output checks cover all eight fixture formats,
+paused clock stability, paused/playing seek, stop retention, volume, drain/end
+events, full-buffer cancellation, repeated starts/stops, unloading during a long
+WMA seek, errors and subsequent reload. Offline decoder checks additionally
+cancel a 170-second WMA seek from another thread and reopen after cancellation.
+
+Automated device success verifies API behavior, not subjective listening quality.
+Physical unplug/default-device changes, other device mix formats, deliberately
+induced starvation and long listening sessions remain manual/A5 acceptance.
+The independent pipeline does not yet drive the Vue player; A4 is still required.
+Implementation follows Microsoft's [IAudioClient](https://learn.microsoft.com/en-us/windows/win32/api/audioclient/nn-audioclient-iaudioclient)
+and [IAudioClock::GetPosition](https://learn.microsoft.com/en-us/windows/win32/api/audioclient/nf-audioclient-iaudioclock-getposition)
+contracts.
