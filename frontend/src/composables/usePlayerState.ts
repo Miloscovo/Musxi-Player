@@ -45,7 +45,8 @@ export function usePlayerState() {
     });
   }
   async function execute(action: (options: { signal: AbortSignal }) => Promise<PlayerState>) {
-    if (!active || busy.value || !connected.value) return;
+    if (!active || !connected.value) return;
+    commandController?.abort();
     busy.value = true; error.value = '';
     const current = new AbortController(); commandController = current;
     try {
@@ -53,7 +54,7 @@ export function usePlayerState() {
       if (active && !current.signal.aborted) await refresh();
     } catch (e) {
       if (active && !current.signal.aborted) error.value = e instanceof Error ? e.message : '操作失败';
-    } finally { if (active) busy.value = false; }
+    } finally { if (active && commandController === current) busy.value = false; }
   }
   function stop() {
     active = false; clearTimeout(retry); unsubscribe?.(); controller?.abort(); commandController?.abort();

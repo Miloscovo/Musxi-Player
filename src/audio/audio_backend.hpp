@@ -15,6 +15,8 @@ struct AudioState {
     std::uint32_t positionMs=0, durationMs=0;
     int volumePercent=75;
     std::uint64_t generation=0;
+    std::string phase,error;
+    bool pending=false,requestedPlaying=false;
 };
 enum class AudioEventKind { Ended, Error };
 struct AudioEvent {
@@ -38,5 +40,7 @@ public:
     virtual AudioState snapshot() const=0;
     virtual void poll()=0;
     virtual std::vector<AudioEvent> takeEvents()=0;
+    // Application may delete its cache only after the last reader is released.
+    virtual bool sourceReleased(const std::wstring&) const {return true;}
 };
 }

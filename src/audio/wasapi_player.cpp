@@ -153,6 +153,7 @@ struct WasapiPlayer::Impl {
     }
     void startDecode(std::int64_t ms) {
         cancelDecode();
+        state.metadataReady=false;
         {std::lock_guard<std::mutex> lock(pcmMutex);head=count=0;ready=eof=false;decodeError.clear();decodeErrorCode=0;decodedDuration=state.durationMs;}
         cancelled=false;
         const auto file=path;const auto format=state.format;
@@ -214,7 +215,7 @@ struct WasapiPlayer::Impl {
         std::unique_lock<std::mutex> lock(pcmMutex,std::try_to_lock);
         if(!lock.owns_lock())return; // Output never waits for decoding.
         if(!decodeError.empty()){auto error=decodeError;const auto code=decodeErrorCode;lock.unlock();failed(error,code);return;}
-        state.durationMs=decodedDuration;state.bufferedFrames=static_cast<UINT32>(count/state.format.channels);
+        state.metadataReady=ready;state.durationMs=decodedDuration;state.bufferedFrames=static_cast<UINT32>(count/state.format.channels);
         if(!wanted || !ready)return;
         position();
         UINT32 padding=0;check(client->GetCurrentPadding(&padding),"Read output padding");
@@ -258,6 +259,7 @@ struct WasapiPlayer::Impl {
 };
 WasapiPlayer::WasapiPlayer():impl_(std::make_unique<Impl>()){}
 WasapiPlayer::~WasapiPlayer()=default;
+void WasapiPlayer::requestDecodeCancel() noexcept {impl_->cancelled=true;impl_->space.notify_all();}
 void WasapiPlayer::load(const std::wstring& path){impl_->guarded([&]{impl_->loadFile(path);});}
 void WasapiPlayer::play(){impl_->guarded([&]{auto& s=*impl_;
     if(s.path.empty())throw std::logic_error("No loaded track");

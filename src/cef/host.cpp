@@ -138,7 +138,11 @@ int run(HINSTANCE instance,int show,void* sandbox) {
     // A singleton redirect/early exit is not a successful IPC smoke test.
     if(!CefInitialize(CefMainArgs(instance),settings,app,sandbox))
         return smoke?4:CefGetExitCode();
-    musxi::setHostHooks({ready,tick,canClose,!smoke,testApp});
+    musxi::HostHooks hooks{ready,tick,canClose,!smoke,testApp};
+#ifdef MUSXI_ENABLE_FFMPEG
+    hooks.ffmpegAudio=testApp;
+#endif
+    musxi::setHostHooks(hooks);
     const int result=musxi::runNativeApplication(instance,(smoke || testApp)?SW_HIDE:show);
     musxi::setHostHooks({});
     const bool ok=!createFailed && (!smoke || musxi::cef_adapter::smokePassed());

@@ -17,6 +17,9 @@ namespace { musxi::HostHooks hostHooks; constexpr UINT_PTR HostTick=0xCEF; }
 #include <shellapi.h>
 #include <shlobj.h>
 #include "audio/mci_backend.hpp"
+#ifdef MUSXI_ENABLE_FFMPEG
+#include "audio/ffmpeg_backend.hpp"
+#endif
 #include <dwmapi.h>
 #include <algorithm>
 #include <cmath>
@@ -89,6 +92,7 @@ std::uint64_t libraryOperationId=0;
 std::string libraryOperationStatus="idle",libraryOperationError,libraryOperationKind;
 int libraryPlayGeneration=-1;
 std::string libraryPlayTrackId;
+bool libraryPlayPaused=false;
 Json libraryNextPlay=nullptr;
 struct CoverImage {
     std::string data;
@@ -197,8 +201,24 @@ std::string utf8(const std::wstring& str) {
     if (selected < 0) selected = 0;
     return true;
 }
-musxi::IAudioBackend& audioBackend() {
-    static auto backend=musxi::makeMciAudioBackend();return *backend;
+std::unique_ptr<musxi::IAudioBackend>& audioBackendStorage() {
+    static std::unique_ptr<musxi::IAudioBackend> backend;
+    if(!backend) {
+#ifdef MUSXI_ENABLE_FFMPEG
+        backend=hostHooks.ffmpegAudio?musxi::makeFfmpegAudioBackend():musxi::makeMciAudioBackend();
+#else
+        backend=musxi::makeMciAudioBackend();
+#endif
+    }
+    return backend;
+}
+musxi::IAudioBackend& audioBackend() {return *audioBackendStorage();}
+std::vector<std::wstring> retiredAudioCaches;
+void collectAudioCaches(bool shutdown=false) {
+    retiredAudioCaches.erase(std::remove_if(retiredAudioCaches.begin(),retiredAudioCaches.end(),[&](const std::wstring& path){
+        if(!shutdown && !audioBackend().sourceReleased(path))return false;
+        return DeleteFileW(path.c_str()) || GetLastError()==ERROR_FILE_NOT_FOUND;
+    }),retiredAudioCaches.end());
 }
 std::string audioTrackId;
 // Legacy drawing/input caches only. Native API snapshots read the backend directly.
@@ -229,12 +249,12 @@ bool closeAudio() {
     const auto result=audioBackend().unload();syncAudioView();
     if(!result) {notice(L"无法释放音频，请重试");return false;}
     audioTrackId.clear();
-    if (!cloudTempPath.empty()) { DeleteFileW(cloudTempPath.c_str()); cloudTempPath.clear(); }
+    if (!cloudTempPath.empty()) {retiredAudioCaches.push_back(cloudTempPath);cloudTempPath.clear();collectAudioCaches();}
     return true;
 }
 musxi::AudioResult loadAndPlayAudio(const std::wstring& path,const std::string& trackId) {
     auto result=audioBackend().load(path);
-    if(result)result=audioBackend().play();
+    if(result && !(libraryOperationStatus=="pending" && libraryOperationKind=="audio" && libraryPlayPaused))result=audioBackend().play();
     if(result)audioTrackId=trackId;
     else {audioBackend().unload();audioTrackId.clear();}
     syncAudioView();return result;
@@ -258,7 +278,11 @@ void playSong(int index) {
     reveal(index); invalidate();
 }
 musxi::PlayerResult setPlaying(bool requested) {
+    if(libraryOperationStatus=="pending" && libraryOperationKind=="audio")libraryPlayPaused=!requested;
+    const bool retry=requested && audioBackend().snapshot().phase=="failed" &&
+        libraryOperationKind=="audio" && libraryOperationStatus=="failed" && audioTrackId==libraryPlayTrackId;
     auto result=requested?audioBackend().resume():audioBackend().pause();syncAudioView();
+    if(result && retry){libraryOperationStatus="pending";libraryOperationError.clear();}
     if(!result && result.error!=musxi::AudioError::NotReady)notice(L"播放状态切换失败，请重新打开这首歌曲");
     invalidate();
     return playerResult(result);
@@ -266,7 +290,8 @@ musxi::PlayerResult setPlaying(bool requested) {
 musxi::PlayerService& playerService();
 void togglePlay() {
     if (!opened) {int index=cloudView?cloudSelected:searchSelected;if(index>=0) cloudPlay(index);else notice(L"请先搜索并选择一首歌曲");return;}
-    playerService().invoke(playing?musxi::PlayerCommand::Pause:musxi::PlayerCommand::Resume);
+    const auto audio=audioBackend().snapshot();
+    playerService().invoke((audio.phase.empty()?playing:audio.requestedPlaying)?musxi::PlayerCommand::Pause:musxi::PlayerCommand::Resume);
 }
 void skip(int delta) {
     if (cloudCurrent >= 0 && !cloudQueue.empty()) {
@@ -287,6 +312,9 @@ musxi::PlayerService& playerService() {
         const auto audio=audioBackend().snapshot();
         musxi::PlayerState state{audio.opened,audio.playing,audio.positionMs,audio.durationMs,audio.volumePercent,{}};
         if(audio.opened)state.trackId=audioTrackId;
+        state.phase=audio.phase.empty()?(audio.opened?(audio.playing?"playing":"paused"):"empty"):audio.phase;
+        state.error=audio.error;state.pending=audio.pending;
+        state.requestedPlaying=audio.phase.empty()?audio.playing:audio.requestedPlaying;
         return state;
     },[](musxi::PlayerCommand cmd,std::uint32_t value)->musxi::PlayerResult {
         switch(cmd) {
@@ -303,6 +331,14 @@ musxi::PlayerService& playerService() {
 }
 void pollAudio() {
     audioBackend().poll();syncAudioView();
+    collectAudioCaches();
+    const auto audio=audioBackend().snapshot();
+    if(libraryOperationStatus=="pending" && libraryOperationKind=="audio" && libraryNextPlay.is_null() &&
+       libraryPlayGeneration==cloudGeneration && audioTrackId==libraryPlayTrackId && audio.opened && !audio.pending) {
+        libraryOperationStatus=audio.phase=="failed"?"failed":"completed";
+        libraryOperationError=audio.error;
+        cloudStatus=audio.phase=="failed"?L"音频播放失败，请重试":audio.playing?L"正在播放 · "+cloudNowTitle:L"已暂停 · "+cloudNowTitle;
+    }
     for(const auto& event:audioBackend().takeEvents()) {
         if(event.generation!=audioBackend().snapshot().generation)continue;
         if(event.kind==musxi::AudioEventKind::Ended) {
@@ -650,7 +686,7 @@ LRESULT CALLBACK wndProc(HWND hwnd, UINT message, WPARAM wp, LPARAM lp) {
     case WM_CLOSE:
         if(hostHooks.canClose && !hostHooks.canClose()) return 0;
         break;
-    case WM_DESTROY: KillTimer(hwnd,HostTick);cloudStop();closeAudio();DeleteObject(searchFont);DeleteObject(searchBrush);KillTimer(hwnd,Tick);KillTimer(hwnd,SeekAnimationTick);KillTimer(hwnd,ScrollAnimationTick);PostQuitMessage(0);return 0;
+    case WM_DESTROY: KillTimer(hwnd,HostTick);cloudStop();closeAudio();audioBackendStorage().reset();collectAudioCaches(true);DeleteObject(searchFont);DeleteObject(searchBrush);KillTimer(hwnd,Tick);KillTimer(hwnd,SeekAnimationTick);KillTimer(hwnd,ScrollAnimationTick);PostQuitMessage(0);return 0;
     }
     return DefWindowProcW(hwnd,message,wp,lp);
 }
@@ -663,6 +699,17 @@ PlayerResult applicationPlayerCommand(PlayerCommand command,std::uint32_t value)
 void setApplicationPlayerEvents(PlayerService::Events sink) { playerService().setEventSink(std::move(sink)); }
 #include "application/library_adapter.inc"
 int runNativeApplication(void* nativeInstance, int show) {
+    int argc=0;auto argv=CommandLineToArgvW(GetCommandLineW(),&argc);
+    for(int i=1;argv && i<argc;++i) {
+        const std::wstring arg=argv[i];
+        if(arg==L"--audio-backend=ffmpeg")hostHooks.ffmpegAudio=true;
+        else if(arg==L"--audio-backend=mci")hostHooks.ffmpegAudio=false;
+        else if(arg.rfind(L"--audio-backend=",0)==0){LocalFree(argv);MessageBoxW(nullptr,L"音频后端只能选择 mci 或 ffmpeg",L"Musxi Player",MB_ICONERROR);return 2;}
+    }
+    if(argv)LocalFree(argv);
+#ifndef MUSXI_ENABLE_FFMPEG
+    if(hostHooks.ffmpegAudio){MessageBoxW(nullptr,L"此构建未启用 FFmpeg 音频后端",L"Musxi Player",MB_ICONERROR);return 2;}
+#endif
     cloud::testProfile=hostHooks.testProfile;
     const auto instance=static_cast<HINSTANCE>(nativeInstance);
     (void)playerService(); // Bind the facade to the native application thread.

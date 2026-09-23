@@ -12,7 +12,7 @@ if(MUSXI_ENABLE_FFMPEG)
   musxi_standard(music_audio_decoder 17)
   target_link_libraries(music_audio_decoder PRIVATE
     FFmpeg::avformat FFmpeg::avcodec FFmpeg::avutil FFmpeg::swresample)
-  add_library(music_audio_wasapi STATIC wasapi_player.cpp)
+  add_library(music_audio_wasapi STATIC wasapi_player.cpp ffmpeg_backend.cpp)
   musxi_standard(music_audio_wasapi 17)
   target_link_libraries(music_audio_wasapi PRIVATE music_audio_decoder ole32 uuid)
   # Runtime deployment belongs to the executable, not the C++17 public interface.

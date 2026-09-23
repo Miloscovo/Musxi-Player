@@ -17,7 +17,8 @@ void PlayerService::setEventSink(Events sink) {checkThread();sink_=sink;initiali
 void PlayerService::publish() {
         auto now=state();
         const bool track=!initialized_ || now.trackId!=last_.trackId;
-        const bool playback=!initialized_ || now.opened!=last_.opened || now.playing!=last_.playing;
+        const bool playback=!initialized_ || now.opened!=last_.opened || now.playing!=last_.playing ||
+            now.phase!=last_.phase || now.error!=last_.error || now.pending!=last_.pending || now.requestedPlaying!=last_.requestedPlaying;
         const bool position=!initialized_ || track || now.positionMs!=last_.positionMs || now.durationMs!=last_.durationMs;
         const bool volume=!initialized_ || now.volumePercent!=last_.volumePercent;
         last_=now;initialized_=true;

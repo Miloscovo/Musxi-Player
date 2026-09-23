@@ -63,6 +63,7 @@ export async function verifyVuePage() {
       await waitFor(() => document.querySelector('#volume')?.textContent === `${state.volumePercent}%`);
       if (events.length !== count) throw new Error('Cancelled subscription received an event');
       await native.player.setVolume(target);
+      await waitFor(() => document.querySelector('#volume')?.textContent === `${target}%`);
       window.name = prefix + JSON.stringify({ trackId: state.trackId, volumePercent: target,
         originalVolume: state.volumePercent, opened: state.opened });
     } catch (e) { await native.player.setVolume(state.volumePercent); throw e; }

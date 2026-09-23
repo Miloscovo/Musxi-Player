@@ -61,6 +61,7 @@ LibraryReply applicationLibrary(const std::string& name,const std::string& param
         if(name=="library.cancel") {
             if(!p.empty()) return {400,"无效取消参数",{}};
             if(libraryOperationStatus=="pending" && libraryOperationKind=="audio") {
+                if(audioTrackId==libraryPlayTrackId && audioBackend().snapshot().pending)closeAudio();
                 ++cloudGeneration;libraryNextPlay=nullptr;libraryOperationStatus="cancelled";
             }
             return reply({{"id",std::to_string(libraryOperationId)}});
@@ -72,7 +73,10 @@ LibraryReply applicationLibrary(const std::string& name,const std::string& param
                 if(p.size()!=1 || !p.contains("delta") || !p["delta"].is_number_integer()) return {400,"无效切歌参数",{}};
                 const int delta=p["delta"].get<int>();if(delta!=1 && delta!=-1) return {400,"无效方向",{}};
                 if(cloudQueue.empty()) return {409,"播放队列为空",{}};
-                const int index=(std::max(0,cloudCurrent)+delta+(int)cloudQueue.size())%(int)cloudQueue.size();
+                int base=std::max(0,cloudCurrent);
+                if(libraryOperationStatus=="pending" && libraryOperationKind=="audio")
+                    for(int i=0;i<(int)cloudQueue.size();++i)if(cloudQueue[i].value("id","")==libraryPlayTrackId){base=i;break;}
+                const int index=(base+delta+(int)cloudQueue.size())%(int)cloudQueue.size();
                 next={{"source","queue"},{"id",cloudQueue[index].value("id","")}};
             } else {
                 if(p.size()!=2) return {400,"无效播放参数",{}};
@@ -83,7 +87,10 @@ LibraryReply applicationLibrary(const std::string& name,const std::string& param
                 next={{"source",source},{"id",id}};
             }
             if(cloudBusy() && cloudOperation!="audio") return {409,"正在处理其他请求，请稍后重试",{}};
+            if(libraryOperationStatus=="pending" && libraryOperationKind=="audio" &&
+               audioTrackId==libraryPlayTrackId && audioBackend().snapshot().pending)closeAudio();
             ++cloudGeneration;++libraryOperationId;libraryOperationKind="audio";
+            libraryPlayPaused=false;
             libraryOperationStatus="pending";libraryOperationError.clear();libraryPlayGeneration=-1;
             libraryPlayTrackId=next.value("id","");
             libraryNextPlay=next;cloudAutoNext=false;

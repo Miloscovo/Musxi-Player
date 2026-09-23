@@ -11,6 +11,7 @@ struct HostHooks {
     bool (*canClose)()=nullptr;
     bool connectCloud=true; // Disable network startup for host smoke tests only.
     bool testProfile=false; // Separate test-release account/cache storage.
+    bool ffmpegAudio=false;
 };
 void setHostHooks(HostHooks hooks);
 // Application-thread only; returns a copy, never a borrowed backend object.

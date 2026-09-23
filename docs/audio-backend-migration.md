@@ -227,7 +227,61 @@ cancel a 170-second WMA seek from another thread and reopen after cancellation.
 Automated device success verifies API behavior, not subjective listening quality.
 Physical unplug/default-device changes, other device mix formats, deliberately
 induced starvation and long listening sessions remain manual/A5 acceptance.
-The independent pipeline does not yet drive the Vue player; A4 is still required.
+At this checkpoint, the independent pipeline did not yet drive the Vue player;
+the following A4 stage adds that integration.
 Implementation follows Microsoft's [IAudioClient](https://learn.microsoft.com/en-us/windows/win32/api/audioclient/nn-audioclient-iaudioclient)
 and [IAudioClock::GetPosition](https://learn.microsoft.com/en-us/windows/win32/api/audioclient/nf-audioclient-iaudioclock-getposition)
 contracts.
+
+## A4: Application and Vue integration
+
+`music_audio_wasapi` now also builds `ffmpeg_backend.cpp`. This adapter
+implements the existing C++17 `IAudioBackend` and is selected once at startup.
+The native executable defaults to MCI; `--audio-backend=ffmpeg` explicitly
+selects FFmpeg. A CEF `--test-app` source build configured with
+`MUSXI_ENABLE_FFMPEG=ON` selects FFmpeg by default; `--audio-backend=mci`
+chooses MCI. A build without the SDK reports an error if FFmpeg is requested.
+There is no silent fallback after a device or decoding failure. Core and
+Application remain C++17; CEF targets retain their independent C++20 setting.
+
+Application-thread audio calls change a small desired-state record and return
+without waiting for disk probes, decoding, or WASAPI commands. A worker owns
+`WasapiPlayer`, publishes snapshots/errors and serializes control commands.
+Rapid track replacement and seek use monotonically increasing revisions;
+superseded snapshots and terminal events are ignored. Pause/play intent is
+preserved through asynchronous seek and download completion. The existing
+`PlayerService` sends state events when phase, error, pending, or requested-play
+intent changes. State reload through the Native API still obtains the current
+C++ snapshot. Vue parses optional phase/error fields for old protocol clients
+and displays buffering/seeking/failure with a manual play retry.
+
+Cloud `audio` operations remain pending until the selected track is ready
+and actually playing (or ready and paused by explicit user intent). An accepted
+load command is not recorded as successful playback. The Application owns
+cache deletion: it retires a downloaded file on unload and deletes it only
+after the backend reports that no decode thread can still read it. Shutdown
+joins the backend before draining retired files. Neither the decoder nor CEF
+deletes caller-owned media.
+
+Use `./setup-ffmpeg.ps1` first, then a CEF source build such as:
+
+```powershell
+./build-cef.ps1 -CefRoot 'D:/develop/cef_binary_152.0.6+g708dc14+chromium-152.0.7977.83_windows64' -Vue -FfmpegRoot "$PWD/build/deps/ffmpeg-n9.0.2-3-ga5923073bf-win64-lgpl-shared-9.0" -Test
+./build/cef-msvc/src/cef/Release/MusxiPlayerWeb.exe --test-app
+```
+
+The build copies matching FFmpeg DLLs next to the executable; imported SDK
+headers and libraries remain private to audio targets. `build-cef.ps1` without
+`-FfmpegRoot` explicitly disables the optional backend. The old MinGW MCI
+build continues without an FFmpeg SDK. A4 does not produce or upgrade an
+installer; the existing packaging script does not yet opt into the new SDK.
+FFmpeg binary redistribution and further real-account/device testing belong
+to A5 before creating a new test installer.
+
+A4 validation: MSVC FFmpeg build 10/10 CTests, CEF/Vue build 14/14 CTests,
+and the MinGW MCI build passed. The Application test covers paused seek,
+last-request-wins track replacement, asynchronous error/retry, cloud completion
+and release-before-delete cache handling using generated local media. The
+CEF smoke tests validate page load, typed API and state rehydration. These
+do not substitute for a real Kugou account, device unplug/replug, listening
+assessment, or new installer acceptance. No commit is created for A4.

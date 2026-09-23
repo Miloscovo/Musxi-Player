@@ -11,6 +11,8 @@ struct PlayerState {
     std::uint32_t positionMs=0, durationMs=0;
     int volumePercent=75;
     std::string trackId;
+    std::string phase,error;
+    bool pending=false,requestedPlaying=false;
 };
 enum class PlayerCommand { Pause, Resume, Seek, SetVolume, GetState };
 enum class PlayerError { None, NotReady, InvalidArgument, BackendFailure, WrongThread };

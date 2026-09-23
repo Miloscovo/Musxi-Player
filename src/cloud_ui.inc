@@ -289,7 +289,7 @@ void cloudTick() {
                         cloudAutoNext=false;cloudNowTitle=cloudText(data["track"],"name");cloudNowArtist=cloudText(data["track"],"artist");cloudNowCover=data["track"].value("cover","");
                         auto id=data["track"].value("id","");
                         for(int i=0;i<(int)cloudQueue.size();++i) if(cloudQueue[i].value("id","")==id) {cloudCurrent=i;break;}
-                        cloudStatus=L"正在播放 · "+cloudNowTitle;
+                        cloudStatus=(audioBackend().snapshot().pending?L"正在加载 · ":playing?L"正在播放 · ":L"已暂停 · ")+cloudNowTitle;
                     }
                     }
                 }
@@ -299,10 +299,12 @@ void cloudTick() {
         if(libraryOperationStatus=="pending" && op==libraryOperationKind &&
            (op!="audio" || requestGeneration==libraryPlayGeneration)) {
             bool success=result.value("ok",false) && applied;
-            if(op=="audio") success=success && requestGeneration==cloudGeneration && opened && playing && cloudCurrent>=0 &&
+            if(op=="audio") success=success && requestGeneration==cloudGeneration && opened && (playing || libraryPlayPaused) && cloudCurrent>=0 &&
                 cloudCurrent<(int)cloudQueue.size() && cloudQueue[cloudCurrent].value("id","")==libraryPlayTrackId;
-            libraryOperationStatus=success?"completed":"failed";
-            libraryOperationError=success?"":utf8(cloudStatus);
+            const bool audioPending=op=="audio" && result.value("ok",false) && applied && requestGeneration==cloudGeneration &&
+                audioTrackId==libraryPlayTrackId && audioBackend().snapshot().pending;
+            libraryOperationStatus=audioPending?"pending":success?"completed":"failed";
+            libraryOperationError=(success || audioPending)?"":utf8(cloudStatus);
         }
         if(op=="song_menu") libraryMenuRequested=false;
         invalidate();

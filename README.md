@@ -82,6 +82,9 @@ Vue、Native API 或账号操作。SDK 默认不下载、不编译、不随播�
 
 A3 已增加独立 WASAPI 共享模式输出测试：解码线程 → 固定容量 PCM 缓冲 →
 事件驱动输出线程，支持暂停、继续、停止、Seek、流音量与设备时钟进度。
-实际播放器仍使用 MCI，A4 再接入。带声音的测试需显式启用
+A4 已将新后端接入源码测试版：配置 FFmpeg SDK 后，`--test-app` 使用 FFmpeg/WASAPI；
+原生版仍默认 MCI，也可在启动时用 `--audio-backend=ffmpeg` 明确选择。
+带声音的自动测试需显式启用
 `MUSXI_TEST_AUDIO_DEVICE=ON`，测试流音量为 10%，不修改系统总音量。
 详见 [A3 输出验证](docs/audio-backend-migration.md#a3-standalone-wasapi-output)。
+接入方式和当前验收范围见 [A4 说明](docs/audio-backend-migration.md#a4-application-and-vue-integration)。

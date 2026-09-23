@@ -24,7 +24,8 @@ LRESULT CALLBACK dragHitTest(HWND hwnd,UINT message,WPARAM wp,LPARAM lp,UINT_PTR
 }
 Json stateJson(const PlayerState& s) {
     return {{"opened",s.opened},{"playing",s.playing},{"positionMs",s.positionMs},
-            {"durationMs",s.durationMs},{"volumePercent",s.volumePercent},{"trackId",s.trackId}};
+            {"durationMs",s.durationMs},{"volumePercent",s.volumePercent},{"trackId",s.trackId},
+            {"phase",s.phase},{"error",s.error},{"pending",s.pending},{"requestedPlaying",s.requestedPlaying}};
 }
 class App final : public CefApp, public CefRenderProcessHandler {
 public:

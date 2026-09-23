@@ -13,6 +13,7 @@ struct OutputSnapshot {
     std::uint64_t generation=0;
     std::string error;
     std::int64_t errorCode=0;
+    bool metadataReady=false;
 };
 struct OutputEvent {
     bool ended=false;
@@ -36,6 +37,8 @@ public:
     void seek(std::int64_t milliseconds);
     void setVolume(int percent);
     void unload();
+    // Thread-safe cancellation signal only; resource release stays on the owner.
+    void requestDecodeCancel() noexcept;
     OutputSnapshot snapshot();
     std::vector<OutputEvent> takeEvents();
 private:

@@ -5,6 +5,10 @@ export interface PlayerState {
   readonly durationMs: number;
   readonly volumePercent: number;
   readonly trackId: string;
+  readonly phase?: 'empty' | 'loading' | 'buffering' | 'seeking' | 'playing' | 'paused' | 'ended' | 'failed';
+  readonly error?: string;
+  readonly pending?: boolean;
+  readonly requestedPlaying?: boolean;
 }
 export interface NativeCommands {
   'player.getState': { params: Record<string, never>; result: PlayerState };
@@ -30,7 +34,14 @@ export function parsePlayerState(value: unknown): PlayerState {
       typeof s.volumePercent !== 'number' || !Number.isInteger(s.volumePercent) ||
       s.volumePercent < 0 || s.volumePercent > 100 || typeof s.trackId !== 'string')
     throw new NativeError(502, 'Invalid native state');
+  if ((s.phase !== undefined && (typeof s.phase !== 'string' || !['empty', 'loading', 'buffering', 'seeking', 'playing', 'paused', 'ended', 'failed'].includes(s.phase))) ||
+      (s.error !== undefined && typeof s.error !== 'string') ||
+      (s.pending !== undefined && typeof s.pending !== 'boolean') ||
+      (s.requestedPlaying !== undefined && typeof s.requestedPlaying !== 'boolean'))
+    throw new NativeError(502, 'Invalid native operation state');
   return Object.freeze({ opened: s.opened, playing: s.playing,
     positionMs: s.positionMs as number, durationMs: s.durationMs as number,
-    volumePercent: s.volumePercent, trackId: s.trackId });
+    volumePercent: s.volumePercent, trackId: s.trackId,
+    phase: s.phase as PlayerState['phase'], error: s.error as string | undefined,
+    pending: s.pending as boolean | undefined, requestedPlaying: s.requestedPlaying as boolean | undefined });
 }
