@@ -285,3 +285,35 @@ and release-before-delete cache handling using generated local media. The
 CEF smoke tests validate page load, typed API and state rehydration. These
 do not substitute for a real Kugou account, device unplug/replug, listening
 assessment, or new installer acceptance. No commit is created for A4.
+
+## A5: test installer and acceptance
+
+The 0.2 test installer is built with the pinned FFmpeg shared SDK enabled.
+`package-test.ps1` requires `-FfmpegRoot` so a routine package build cannot
+silently revert the test app to MCI. The installer includes the four linked
+FFmpeg DLLs, their LGPL v3-or-later license text and the FFmpeg notice in
+`THIRD_PARTY_NOTICES.md`. It keeps the existing test-app ID and isolated data
+directory, upgrading an installed test version without touching the legacy
+native release. The test shortcut starts `--test-app`, which selects FFmpeg;
+`--audio-backend=mci` remains available for comparison.
+
+On 2026-09-23, the Windows x64/MSVC CEF build and all 14 tests passed before
+packaging. Inno Setup produced `dist/MusxiPlayer-Test-0.2-Setup-x64.exe` with
+SHA-256 `63cf8c1eacf3748ffc8c1f751c5d875d6f7a6967eb77dc7681ed443286f248fa`.
+The installer completed locally with exit code 0; the installed directory
+contains the four FFmpeg DLLs and `LICENSE-FFmpeg.txt`.
+
+The user scanned into the test profile, which synchronized three playlists.
+On an account track, they confirmed audible playback, pause/resume, seek,
+next-track and volume behavior. Switching the Windows default output while
+playing stopped playback and showed the expected prompt; manual replay worked
+on the new device and again after switching back. The same account and song
+were played through the explicit MCI override, with no obvious difference
+reported for the same controls. The running test app was restored to the
+default FFmpeg backend afterward. No account credentials or track names are
+recorded here.
+
+This acceptance covers the machine's normal/default-device-switch path.
+Physical device unplug, protected media, every supported codec on this account,
+long listening sessions, and multi-display UI behavior were not exercised.
+The legacy native default remains MCI; switching the default is an A6 decision.

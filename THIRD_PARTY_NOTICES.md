@@ -16,6 +16,12 @@ Mint Player's KuGou integration uses the following components:
 - Version: 3.12.0; https://github.com/nlohmann/json
 - Copyright notice is embedded at the top of `third_party/json.hpp`; the full MIT license is in `third_party/LICENSE-json.txt`, also copied to `LICENSE-json.txt` in the portable build.
 
+## FFmpeg (test build)
+
+- The 0.2 test installer dynamically links the `avcodec`, `avformat`, `avutil` and `swresample` libraries from the pinned Windows x64 `lgpl-shared` build `n9.0.2-3-ga5923073bf-20260921` by [BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds/releases/tag/autobuild-2026-09-21-13-55).
+- License: LGPL version 3 or later, as reported by the SDK's `ffmpeg -L`. The accompanying license text is installed as `LICENSE-FFmpeg.txt`.
+- Corresponding FFmpeg source revision: [a5923073bf](https://github.com/FFmpeg/FFmpeg/tree/a5923073bf). Third-party build scripts are available in [BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds). The DLLs are replaceable files beside the application executable.
+
 ## Node.js and npm dependencies
 
 - Node.js runtime: https://nodejs.org/ . The optional portable build copies the locally installed runtime; its accompanying license is in `build/runtime/LICENSE`.

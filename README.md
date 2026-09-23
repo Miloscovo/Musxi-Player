@@ -56,10 +56,10 @@ Vue 页面支持搜索分页、歌单浏览、扫码登录/退出、同步歌单
 ## 第六阶段测试安装包
 
 ```powershell
-./package-test.ps1 -CefRoot 'D:/develop/cef_binary_152.0.6+g708dc14+chromium-152.0.7977.83_windows64'
+./package-test.ps1 -CefRoot 'D:/develop/cef_binary_152.0.6+g708dc14+chromium-152.0.7977.83_windows64' -FfmpegRoot "$PWD/build/deps/ffmpeg-n9.0.2-3-ga5923073bf-win64-lgpl-shared-9.0"
 ```
 
-产物：`dist/MusxiPlayer-Test-0.1-Setup-x64.exe`，附 SHA256 文件。
+产物：`dist/MusxiPlayer-Test-0.2-Setup-x64.exe`，附 SHA256 文件。A5 测试包构建需提供 `-FfmpegRoot` 指向已校验的共享版 FFmpeg SDK；安装时会升级现有测试版，不影响旧原生版。
 安装名“Musxi Player 测试版”，与旧版并存，不覆盖旧版。需要先按原有
 `setup-cloud.ps1` 准备 Node 和云服务依赖；安装后的用户不需要 Node 开发环境。
 
@@ -71,13 +71,14 @@ Vue 页面支持搜索分页、歌单浏览、扫码登录/退出、同步歌单
 顶部标题旁空白和侧栏空白可拖动窗口，边缘可缩放；没有额外拖动条。
 非输入框、按钮或对话框聚焦时，空格暂停/继续，左右方向键前后跳转 5 秒。
 
-测试包等待真实账号、云端播放及多显示器 DPI 验收；通过后才决定默认 UI 切换。
+0.2 测试包已完成真实账号云端播放和音频后端验收；多显示器 DPI 仍待专项验证。
+默认 UI 和音频入口保持当前选择，后续阶段再决定切换。
 
 ## 音频后端迁移 A2
 
 已新增独立的 C++17 FFmpeg 本地文件解码模块，可输出可配置采样率与声道的
-交错 float32 PCM。现有播放器仍使用 MCI；FFmpeg 暂不参与实际播放，也不改变
-Vue、Native API 或账号操作。SDK 默认不下载、不编译、不随播放器打包。
+交错 float32 PCM。A2 阶段尚未参与实际播放；A4 起测试版已接入 FFmpeg/WASAPI。
+SDK 默认不下载、不编译；0.2 测试安装包明确启用并随包提供所需动态库。
 构建、离线测试和已知限制见 [音频迁移说明](docs/audio-backend-migration.md#a2-independent-ffmpeg-decoder)。
 
 A3 已增加独立 WASAPI 共享模式输出测试：解码线程 → 固定容量 PCM 缓冲 →
@@ -88,3 +89,4 @@ A4 已将新后端接入源码测试版：配置 FFmpeg SDK 后，`--test-app` �
 `MUSXI_TEST_AUDIO_DEVICE=ON`，测试流音量为 10%，不修改系统总音量。
 详见 [A3 输出验证](docs/audio-backend-migration.md#a3-standalone-wasapi-output)。
 接入方式和当前验收范围见 [A4 说明](docs/audio-backend-migration.md#a4-application-and-vue-integration)。
+A5 已交付并实机验收 0.2 测试安装包，结果见 [A5 记录](docs/audio-backend-migration.md#a5-test-installer-and-acceptance)。
