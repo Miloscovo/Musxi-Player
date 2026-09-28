@@ -18,7 +18,7 @@ try {
         & $npm.Source ci --ignore-scripts --no-audit --no-fund --cache "$PSScriptRoot/build/npm-cache"
         if ($LASTEXITCODE -ne 0) { throw 'Dependency installation failed.' }
     }
-    & $node.Source --test bridge.test.cjs
+    & $npm.Source test
     if ($LASTEXITCODE -ne 0) { throw 'Cloud adapter tests failed.' }
 } finally { Pop-Location }
 New-Item -ItemType Directory build/runtime -Force | Out-Null

@@ -31,6 +31,16 @@ React 是默认界面，C++ 持有真实播放状态和云端媒体库状态。�
 
 `--cef-preview` 仅用于打开早期 IPC 技术验证页；`--cef-smoke` 用于自动检查。构建要求 Windows x64/MSVC，不再构建 MinGW/MCI 版本。CMake 中的 `music_core` 与 `music_application` 仍固定为 C++17，CEF 层独立使用 C++20。
 
+云端适配器的离线测试可单独运行：
+
+```powershell
+cd services
+npm.cmd ci
+npm.cmd test
+```
+
+这些测试使用模拟数据，不会登录账号或调用酷狗接口。
+
 ## 0.2 测试安装包（暂缓更新）
 
 A6 当前只交付源码和构建验证。待需要安装包时再运行以下命令；`dist` 中已有安装包生成于本轮最后一次源码调整之前，不代表当前源码。

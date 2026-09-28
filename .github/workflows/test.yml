@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-build:
+    runs-on: windows-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Configure CMake
+        run: cmake -S . -B build -A x64 -DMUSXI_ENABLE_CEF=OFF -DMUSXI_ENABLE_FFMPEG=OFF
+
+      - name: Build Core
+        run: cmake --build build --config Release --parallel
+
+  cloud-adapter:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: services
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: services/package-lock.json
+
+      - name: Install dependencies
+        run: npm.cmd ci --ignore-scripts --no-audit --no-fund
+
+      - name: Run tests
+        run: npm.cmd test
