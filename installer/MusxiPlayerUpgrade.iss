@@ -1,23 +1,23 @@
-﻿#define AppVersion "0.2"
+#define AppVersion "0.2.0"
 [Setup]
-AppId={{E9085FC0-8A35-4EE3-BF87-0FA424B02156}
+AppId={{A696A45D-3218-45C2-A565-EAC5642B976E}
 AppName=Musxi Player 测试版
 AppVersion={#AppVersion}
 VersionInfoVersion=0.2.0.0
-DefaultDirName={localappdata}\Programs\Musxi Player 测试版
-DefaultGroupName=Musxi Player 测试版
+DefaultDirName={localappdata}\Programs\Musxi Player
+DefaultGroupName=Musxi Player
 PrivilegesRequired=lowest
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 MinVersion=10.0
 OutputDir=..\dist
-OutputBaseFilename=MusxiPlayer-Test-0.2-Setup-x64
+OutputBaseFilename=MusxiPlayer-0.2-Test-Upgrade-Setup-x64
 Compression=lzma2/fast
 SolidCompression=yes
 WizardStyle=modern
-UninstallDisplayIcon={app}\MusxiPlayerTest.exe
+UninstallDisplayIcon={app}\MusxiPlayer.exe
 CloseApplications=yes
-CloseApplicationsFilter=MusxiPlayerTest.exe
+CloseApplicationsFilter=MusxiPlayer.exe
 RestartApplications=no
 DisableProgramGroupPage=yes
 SetupLogging=yes
@@ -27,8 +27,8 @@ LicenseFile=..\licenses\Microsoft-Windows-SDK-LICENSE.rtf
 Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Shortcuts:"; Flags: unchecked
 
 [Files]
-Source: "..\build\cef-msvc\src\cef\Release\MusxiPlayerWeb.exe"; DestDir: "{app}"; DestName: "MusxiPlayerTest.exe"; Flags: ignoreversion
-Source: "..\build\cef-msvc\src\cef\Release\MusxiPlayerWeb.dll"; DestDir: "{app}"; DestName: "MusxiPlayerTest.dll"; Flags: ignoreversion
+Source: "..\build\cef-msvc\src\cef\Release\MusxiPlayerWeb.exe"; DestDir: "{app}"; DestName: "MusxiPlayer.exe"; Flags: ignoreversion
+Source: "..\build\cef-msvc\src\cef\Release\MusxiPlayerWeb.dll"; DestDir: "{app}"; DestName: "MusxiPlayer.dll"; Flags: ignoreversion
 Source: "..\build\cef-msvc\src\cef\Release\*.dll"; DestDir: "{app}"; Flags: ignoreversion; Excludes: "MusxiPlayerWeb.dll"
 Source: "..\build\cef-msvc\src\cef\Release\*.pak"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\build\cef-msvc\src\cef\Release\icudtl.dat"; DestDir: "{app}"; Flags: ignoreversion
@@ -51,8 +51,8 @@ Source: "..\build\services\node_modules\*"; DestDir: "{app}\services\node_module
 Source: "..\build\services\vendor\*"; DestDir: "{app}\services\vendor"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: ".git\*,.env,.env.*,*.log"
 
 [Icons]
-Name: "{group}\Musxi Player 测试版"; Filename: "{app}\MusxiPlayerTest.exe"; Parameters: "--test-app"; WorkingDir: "{app}"
-Name: "{autodesktop}\Musxi Player 测试版"; Filename: "{app}\MusxiPlayerTest.exe"; Parameters: "--test-app"; WorkingDir: "{app}"; Tasks: desktopicon
+Name: "{group}\Musxi Player 测试版"; Filename: "{app}\MusxiPlayer.exe"; WorkingDir: "{app}"
+Name: "{autodesktop}\Musxi Player 测试版"; Filename: "{app}\MusxiPlayer.exe"; WorkingDir: "{app}"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\MusxiPlayerTest.exe"; Parameters: "--test-app"; Description: "Launch Musxi Player 测试版"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\MusxiPlayer.exe"; Description: "Launch Musxi Player 测试版"; Flags: nowait postinstall skipifsilent

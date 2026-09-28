@@ -1,73 +1,65 @@
-import { onMounted, onUnmounted, readonly, shallowRef, ref, nextTick } from 'vue';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { native } from '../native/client';
 import type { PlayerState } from '../native/types';
-import { verifyVuePage } from '../native/smoke';
-
+import { verifyWebPage } from '../native/smoke';
 export function usePlayerState() {
-  const state = shallowRef<PlayerState | null>(null);
-  const error = ref('');
-  const loading = ref(false);
-  const busy = ref(false);
-  const connected = ref(false);
-  let active = false;
-  let retry: ReturnType<typeof setTimeout> | undefined;
-  let unsubscribe: (() => void) | undefined;
-  let commandController: AbortController | undefined;
-  let epoch = 0;
-  let controller: AbortController | undefined;
-  let smokeStarted = false;
-  async function refresh() {
-    if (!active || loading.value) return;
-    loading.value = true;
-    const current = new AbortController(); controller = current;
-    const started = epoch;
-    try {
-      const snapshot = await native.player.getState({ signal: current.signal });
-      if (active && !current.signal.aborted && started === epoch) state.value = snapshot;
-    } catch (e) {
-      if (active && !current.signal.aborted) error.value = e instanceof Error ? e.message : '读取状态失败';
-    } finally { if (active && controller === current) loading.value = false; }
-  }
-  function connect() {
-    if (!active) return;
-    unsubscribe?.();
-    unsubscribe = native.player.subscribe(event => {
-      if (!active) return;
-      ++epoch; state.value = event.state; connected.value = true; error.value = '';
-      if (!smokeStarted && new URLSearchParams(location.search).has('smoke')) {
-        smokeStarted = true;
-        void nextTick().then(verifyVuePage).catch(e => { error.value = String(e); });
-      }
-    }, e => {
-      if (!active) return;
-      connected.value = false; error.value = e.message;
-      retry = setTimeout(connect, 1500);
-    });
-  }
-  async function execute(action: (options: { signal: AbortSignal }) => Promise<PlayerState>) {
-    if (!active || !connected.value) return;
-    commandController?.abort();
-    busy.value = true; error.value = '';
-    const current = new AbortController(); commandController = current;
-    try {
-      await action({ signal: current.signal });
-      if (active && !current.signal.aborted) await refresh();
-    } catch (e) {
-      if (active && !current.signal.aborted) error.value = e instanceof Error ? e.message : '操作失败';
-    } finally { if (active && commandController === current) busy.value = false; }
-  }
-  function stop() {
-    active = false; clearTimeout(retry); unsubscribe?.(); controller?.abort(); commandController?.abort();
-  }
-  onMounted(() => {
-    active = true; void refresh(); connect();
-    window.addEventListener('pagehide', stop);
-  });
-  onUnmounted(() => { stop(); window.removeEventListener('pagehide', stop); });
-  return { state: readonly(state), error: readonly(error), loading: readonly(loading),
-    busy: readonly(busy), connected: readonly(connected), refresh,
-    pause: () => execute(options => native.player.pause(options)),
-    resume: () => execute(options => native.player.resume(options)),
-    seek: (positionMs: number) => execute(options => native.player.seek(positionMs, options)),
-    setVolume: (volumePercent: number) => execute(options => native.player.setVolume(volumePercent, options)) };
+  const [state, setState] = useState<PlayerState | null>(null);
+  const [error, setError] = useState(''); const [loading, setLoading] = useState(false);
+  const [busy, setBusy] = useState(false); const [connected, setConnected] = useState(false);
+  const smokeStarted = useRef(false);
+  const runtime = useRef({ active: false, loading: false, connected: false, epoch: 0,
+    controller: undefined as AbortController | undefined, commandController: undefined as AbortController | undefined });
+  const actions = useMemo(() => {
+    const r = runtime.current;
+    async function refresh() {
+      if (!r.active || r.loading) return;
+      r.loading = true; setLoading(true);
+      const current = new AbortController(); r.controller = current; const started = r.epoch;
+      try {
+        const snapshot = await native.player.getState({ signal: current.signal });
+        if (r.active && !current.signal.aborted && started === r.epoch) setState(snapshot);
+      } catch (e) { if (r.active && !current.signal.aborted) setError(e instanceof Error ? e.message : '读取状态失败'); }
+      finally { if (r.active && r.controller === current) { r.loading = false; setLoading(false); } }
+    }
+    async function execute(action: (options: { signal: AbortSignal }) => Promise<PlayerState>) {
+      if (!r.active || !r.connected) return;
+      r.commandController?.abort(); setBusy(true); setError('');
+      const current = new AbortController(); r.commandController = current;
+      try { await action({ signal: current.signal }); if (r.active && !current.signal.aborted) await refresh(); }
+      catch (e) { if (r.active && !current.signal.aborted) setError(e instanceof Error ? e.message : '操作失败'); }
+      finally { if (r.active && r.commandController === current) setBusy(false); }
+    }
+    return { refresh,
+      pause: () => execute(options => native.player.pause(options)),
+      resume: () => execute(options => native.player.resume(options)),
+      seek: (positionMs: number) => execute(options => native.player.seek(positionMs, options)),
+      setVolume: (volumePercent: number) => execute(options => native.player.setVolume(volumePercent, options)) };
+  }, []);
+  useEffect(() => {
+    const r = runtime.current; r.active = true; r.loading = false; r.connected = false; ++r.epoch;
+    setLoading(false); setBusy(false); setConnected(false);
+    let retry: ReturnType<typeof setTimeout> | undefined; let unsubscribe: (() => void) | undefined;
+    function connect() {
+      if (!r.active) return;
+      unsubscribe?.();
+      unsubscribe = native.player.subscribe(event => {
+        if (!r.active) return;
+        ++r.epoch; r.connected = true; setState(event.state); setConnected(true); setError('');
+      }, e => {
+        if (!r.active) return;
+        r.connected = false; setConnected(false); setError(e.message); retry = setTimeout(connect, 1500);
+      });
+    }
+    function stop() {
+      r.active = false; clearTimeout(retry); unsubscribe?.(); r.controller?.abort(); r.commandController?.abort();
+    }
+    void actions.refresh(); connect(); window.addEventListener('pagehide', stop);
+    return () => { stop(); window.removeEventListener('pagehide', stop); };
+  }, [actions]);
+  useEffect(() => {
+    if (connected && state && !smokeStarted.current && new URLSearchParams(location.search).has('smoke')) {
+      smokeStarted.current = true; void verifyWebPage().catch(e => setError(String(e)));
+    }
+  }, [connected, state]);
+  return { state, error, loading, busy, connected, ...actions };
 }

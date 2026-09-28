@@ -12,22 +12,73 @@ async function waitFor(check: () => boolean) {
 }
 
 // Invoked only by the real CEF --cef-smoke run (cloud startup is disabled).
-export async function verifyVuePage() {
+export async function verifyWebPage() {
   const library = await native.library.getState();
   if (!Array.isArray(library.playlists) || library.connected) throw new Error('Unexpected offline library state');
   await waitFor(() => !!document.querySelector('.library-shell'));
+  document.querySelector<HTMLButtonElement>('.settings-nav')?.click();
+  await waitFor(() => document.querySelectorAll('.theme-option').length === 3);
+  const cards = document.querySelectorAll<HTMLButtonElement>('.theme-option');
+  cards[0].click();
+  await waitFor(() => document.documentElement.dataset.theme === 'light');
+  cards[2].click();
+  await waitFor(() => document.documentElement.dataset.theme === 'glass-light' && cards[0].getAttribute('aria-pressed') === 'true' && cards[2].getAttribute('aria-pressed') === 'true');
+  cards[1].click();
+  await waitFor(() => document.documentElement.dataset.theme === 'glass' && cards[1].getAttribute('aria-pressed') === 'true');
+  cards[2].click();
+  await waitFor(() => document.documentElement.dataset.theme === 'dark');
+  cards[0].click();
+  await waitFor(() => document.documentElement.dataset.theme === 'light');
   const state = await native.player.getState();
   const windowState = await native.window.getState();
   if (windowState.enabled) {
+    const slider = document.querySelector<HTMLInputElement>('.transparency-slider');
+    if (!slider || slider.min !== '0' || slider.max !== '100') throw new Error('Missing transparency range');
+    const saved = slider.value;
+    cards[2].click();
+    await waitFor(() => document.documentElement.dataset.theme === 'glass-light');
+    const setRange = (value: number) => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(slider, String(value));
+      slider.dispatchEvent(new Event('input', { bubbles: true }));
+    };
+    const pixel = (x: number, y: number) => request(window as unknown as CefTransport, 'test.pixelAlpha', { x, y });
+    for (const themeCard of [cards[0], cards[1]]) {
+      themeCard.click();
+      await waitFor(() => document.documentElement.dataset.theme === (themeCard === cards[0] ? 'glass-light' : 'glass'));
+      for (const value of [0, 50, 100]) {
+        setRange(value);
+        await waitFor(() => document.documentElement.style.getPropertyValue('--background-opacity') === String(1 - value / 100));
+        const end = Date.now() + 3000; const expected = Math.round(255 * (1 - value / 100));
+        while (Math.abs(Number(await pixel(window.innerWidth - 24, Math.round(window.innerHeight * .65))) - expected) > 1) {
+          if (Date.now() > end) throw new Error(`Native background alpha did not reach ${expected}`);
+          await new Promise(resolve => setTimeout(resolve, 30));
+        }
+        // Header and title bar must not compound the page's background alpha.
+        for (const [x, y] of [[window.innerWidth - 60, 70], [window.innerWidth - 160, 16], [10, 16]]) {
+          if (Math.abs(Number(await pixel(x, y)) - expected) > 1)
+            throw new Error('Header transparency differs from page background');
+        }
+        // Preview swatches are opaque controls even when the page background is not.
+        const preview = document.querySelector('.theme-swatch')!.getBoundingClientRect();
+        if (await pixel(Math.round(preview.left + 10), Math.round(preview.top + 40)) !== 255)
+          throw new Error('Transparency faded controls');
+      }
+    }
+    setRange(Number(saved));
+    cards[0].click();
+    await waitFor(() => document.documentElement.dataset.theme === 'glass-light');
+    cards[2].click();
+    await waitFor(() => document.documentElement.dataset.theme === 'light');
     const maximized = await native.window.maximize();
     if (!maximized.maximized) throw new Error('Test window did not maximize');
     const restored = await native.window.maximize();
     if (restored.maximized) throw new Error('Test window did not restore');
+    await native.window.setTheme('glass-light');
     await native.window.setTheme('glass');
     await native.window.setTheme('light');
   }
   if (!document.querySelector('#playback') || !document.querySelector('#volume')?.textContent?.includes(`${state.volumePercent}%`))
-    throw new Error('Vue state was not rendered');
+    throw new Error('React state was not rendered');
   const prefix = 'musxi-reload:';
   if (!window.name.startsWith(prefix)) {
     const host = window as unknown as CefTransport;
@@ -52,7 +103,13 @@ export async function verifyVuePage() {
       await waitFor(() => events.length > 0 || !!subscriptionError);
       if (subscriptionError) throw subscriptionError;
       const target = state.volumePercent === 37 ? 38 : 37;
-      await native.player.setVolume(target);
+      const slider = document.querySelector<HTMLInputElement>('input[aria-label="音量"]');
+      if (!slider) throw new Error('Volume control is missing');
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(slider, String(target));
+      slider.dispatchEvent(new Event('input', { bubbles: true }));
+      if ((await native.player.getState()).volumePercent !== state.volumePercent)
+        throw new Error('Range input submitted before commit');
+      slider.dispatchEvent(new Event('change', { bubbles: true }));
       await waitFor(() => events.some(e => e.event === 'player.volumeChanged' && e.state.volumePercent === target));
       await waitFor(() => document.querySelector('#volume')?.textContent === `${target}%`);
       stop();

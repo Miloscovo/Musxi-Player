@@ -1,11 +1,6 @@
-add_library(music_audio_mci STATIC mci_backend.cpp)
-musxi_standard(music_audio_mci 17)
-target_compile_definitions(music_audio_mci PRIVATE UNICODE _UNICODE NOMINMAX)
-target_link_libraries(music_audio_mci PRIVATE winmm ole32 user32)
-
 if(MUSXI_ENABLE_FFMPEG)
   if(NOT MSVC OR NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
-    message(FATAL_ERROR "A2 FFmpeg validation requires Windows x64/MSVC; MCI still supports MinGW.")
+    message(FATAL_ERROR "FFmpeg/WASAPI requires Windows x64/MSVC.")
   endif()
   include("${PROJECT_SOURCE_DIR}/cmake/FindFFmpeg.cmake")
   add_library(music_audio_decoder STATIC ffmpeg_decoder.cpp)

@@ -1,21 +1,23 @@
-#include "../src/main.cpp"
+#include "../src/application/application.cpp"
 #include <iostream>
 #include <stdexcept>
 void require(bool value,const char* message) {if(!value) throw std::runtime_error(message);}
 int main() {
-    const auto legacyData=cloud::dataDir();
+    const auto productionData=cloud::dataDir();
     cloud::testProfile=true;
-    require(cloud::dataDir()!=legacyData && cloud::dataDir().filename()==L"MusxiPlayer-Test","test profile shares legacy storage");
+    require(cloud::dataDir()!=productionData && cloud::dataDir().filename()==L"MusxiPlayer-Test","test profile shares production storage");
     cloud::testProfile=false;
     (void)playerService();
     auto invoke=[](const char* name,const Json& p=Json::object()) {return musxi::applicationLibrary(name,p.dump());};
     cloudTracks=Json::array();
     for(int i=0;i<63;++i) cloudTracks.push_back({{"id",std::to_string(i)},{"name","song"},{"token","PRIVATE"},{"path","PRIVATE"}});
+    cloudTracks[50]["album"]="Sample Album";
     cloudPlaylists=Json::array({{{"id","p"},{"name","playlist"},{"cookie","PRIVATE"}}});
     auto snapshot=invoke("library.getState",{{"page",2}});
     require(snapshot.code==0 && snapshot.json.find("PRIVATE")==std::string::npos,"snapshot leaked internal fields");
     auto state=Json::parse(snapshot.json);
     require(state["tracks"].size()==13 && state["trackCount"]==63,"library pagination");
+    require(state["tracks"][0]["album"]=="Sample Album" && state["tracks"][1]["album"]=="","album title missing from public rows");
     require(invoke("library.getState",{{"page",0}}).code==400,"invalid page accepted");
     require(invoke("library.getState",{{"page",1.5}}).code==400,"fractional page accepted");
     require(invoke("library.search",{{"keywords"," "},{"page",1}}).code==400,"blank search accepted");

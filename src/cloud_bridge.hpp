@@ -17,8 +17,27 @@ inline std::wstring toWide(const std::string& value) {
 inline std::filesystem::path dataDir() {
     wchar_t p[MAX_PATH]{};
     if (FAILED(SHGetFolderPathW(nullptr, CSIDL_LOCAL_APPDATA, nullptr, 0, p))) throw std::runtime_error("Cannot find application data directory");
-    auto dir = std::filesystem::path(p) / (testProfile?L"MusxiPlayer-Test":L"MintPlayer");
+    auto dir = std::filesystem::path(p) / (testProfile?L"MusxiPlayer-Test":L"MusxiPlayer");
     std::filesystem::create_directories(dir); return dir;
+}
+inline bool importProfileOnce(const std::filesystem::path& source,const std::filesystem::path& target) {
+    std::filesystem::create_directories(target);
+    auto marker=target/L".test-profile-imported";
+    if(std::filesystem::exists(marker))return true;
+    for(const auto* name:{L"kugou-session.dat",L"kugou-library.json"}) {
+        auto from=source/name,to=target/name,temp=to;temp+=L".import";
+        if(!std::filesystem::exists(from) || std::filesystem::exists(to))continue;
+        std::filesystem::copy_file(from,temp,std::filesystem::copy_options::overwrite_existing);
+        if(std::filesystem::file_size(from)!=std::filesystem::file_size(temp))throw std::runtime_error("Incomplete profile copy");
+        std::filesystem::rename(temp,to);
+    }
+    std::ofstream done(marker,std::ios::binary);done<<"Imported from MusxiPlayer-Test once.\n";
+    return done.good();
+}
+inline bool migrateTestProfile() {
+    if(testProfile)return true;
+    try {auto target=dataDir();return importProfileOnce(target.parent_path()/L"MusxiPlayer-Test",target);}
+    catch(...) {return false;} // Retry on the next start; never overwrite either profile.
 }
 inline Json readSession() {
     try {
@@ -37,7 +56,7 @@ inline bool saveSession(const Json& value) {
     try {
         auto path = dataDir() / L"kugou-session.dat";
         auto text = value.dump(); DATA_BLOB in{(DWORD)text.size(), reinterpret_cast<BYTE*>(text.data())}, out{};
-        bool ok = CryptProtectData(&in, L"MintPlayer KuGou lite", nullptr, nullptr, nullptr, CRYPTPROTECT_UI_FORBIDDEN, &out);
+        bool ok = CryptProtectData(&in, L"Musxi Player KuGou", nullptr, nullptr, nullptr, CRYPTPROTECT_UI_FORBIDDEN, &out);
         SecureZeroMemory(text.data(), text.size()); if (!ok) return false;
         auto temp = path; temp += L".tmp";
         std::ofstream file(temp, std::ios::binary | std::ios::trunc);

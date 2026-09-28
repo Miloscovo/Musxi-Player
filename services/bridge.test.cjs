@@ -26,6 +26,12 @@ test('song labels separate title and artists while preserving source filename fo
   assert.equal(track({songname:'Song - Live',singername:'AC-DC'}).name,'Song - Live');
   assert.equal(track({name:'Dance Fruits Music, Steve Void - Toosie Slide (Explicit).mp3'}).name,'Toosie Slide (Explicit)');
 });
+test('playlist and search rows retain available album names',async()=>{
+  assert.equal(track({albuminfo:{album_name:'Album &amp; More'},name:'Song'}).album,'Album & More');
+  assert.equal(track({name:'Song'}).album,'');
+  const a=new Adapter(async()=>response({total:1,lists:[{FileHash:'A'.repeat(32),SongName:'Song',AlbumName:'Search Album'}]}));
+  assert.equal((await a.run({op:'search',keywords:'Song',page:1})).tracks[0].album,'Search Album');
+});
 test('favorites sort globally by newest collection time, keeping ties stable and other playlists unchanged',async()=>{
   const a=new Adapter(async(name,p)=>name==='user_playlist'?response({total:2,info:[{listid:1,is_def:2},{listid:2,is_def:1}]}):
     response({total:5,info:p.page===1?[{fileid:1,collecttime:1700000000},{fileid:2,collecttime:'1700000030'}]:[{fileid:3,collecttime:1700000020000},{fileid:4,collecttime:1700000030},{fileid:5}]}));

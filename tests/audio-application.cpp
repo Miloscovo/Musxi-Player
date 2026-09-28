@@ -1,4 +1,4 @@
-#include "../src/main.cpp"
+#include "../src/application/application.cpp"
 #include <iostream>
 void require(bool value,const char* text){if(!value)throw std::runtime_error(text);}
 template<class F> musxi::PlayerState waitState(F predicate) {
@@ -13,7 +13,7 @@ template<class F> musxi::PlayerState waitState(F predicate) {
 int main(int argc,char** argv) {
     try {
         require(argc==2,"fixture directory required");const fs::path folder=argv[1];
-        hostHooks.ffmpegAudio=true;hostHooks.connectCloud=false;
+        hostHooks.connectCloud=false;
         audioBackend().setVolume(10);
         int events=0;musxi::setApplicationPlayerEvents([&](const char*,const musxi::PlayerState&){++events;});
         const auto before=GetTickCount64();

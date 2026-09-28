@@ -1,5 +1,9 @@
 # Audio backend migration
 
+The A1–A5 sections below are historical records. A6 is the current implementation:
+Vue/CEF is the default window, FFmpeg/WASAPI is the only audio backend, and
+the native GDI UI and MCI source have been removed.
+
 ## A1: MCI isolation
 
 The active backend remains MCI. `IAudioBackend` exposes C++17 load, play,
@@ -317,3 +321,31 @@ This acceptance covers the machine's normal/default-device-switch path.
 Physical device unplug, protected media, every supported codec on this account,
 long listening sessions, and multi-display UI behavior were not exercised.
 The legacy native default remains MCI; switching the default is an A6 decision.
+
+## A6: Vue/FFmpeg default and legacy removal
+
+The 0.2 **test** upgrade keeps the old 0.1 installer AppId, so it can replace
+the old native executable at the original install location. It is not a final
+public release. The independent 0.2 test installation retains its separate
+AppId and `%LOCALAPPDATA%/MusxiPlayer-Test` profile.
+
+The application now uses FFmpeg/WASAPI exclusively. `music_core` and
+`music_application` remain C++17, while the CEF host and bridge remain C++20.
+The MCI target, its source, the GDI native UI, and the native executable entry
+were removed. Application keeps a message-only window for the existing 150 ms
+cloud/audio polling and CEF lifecycle callbacks; no visible native UI remains.
+
+The new `%LOCALAPPDATA%/MusxiPlayer` profile imports only the encrypted session
+and playlist snapshot from the independent test profile once. The original
+`MintPlayer` profile and test profile are left intact; temporary audio caches
+are not migrated. A marker prevents an explicit logout from restoring the old
+test login at the next launch. The 0.2 upgrade installer includes the FFmpeg
+shared libraries and their license, and retains the test-version product name.
+
+A5's account playback and device-change acceptance remains the audio evidence.
+A6 builds and automated smoke tests validate the new entry. Rebuilding and
+installing the upgrade package is deferred until requested; the existing dist
+artifact predates the final A6 source adjustment and must not be treated as
+current. The installer script is prepared but has not been rerun for that code;
+multi-display DPI, physical device unplug, long listening, and the account's
+full codec catalog remain unverified.

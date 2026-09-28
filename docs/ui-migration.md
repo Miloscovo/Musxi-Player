@@ -1,8 +1,23 @@
-# UI migration: CEF + Vue 3 + TypeScript + Vite
+# UI migration: CEF + React + TypeScript + Vite
 
-Current checkpoint: stage six integrates a separate test release.
-Live-account acceptance and the production default switchover remain pending. The original native UI and the
-framework-free phase-two page remain available independently.
+Current checkpoint (2026-09-27): the default UI uses React and TypeScript.
+App, LibraryView and CoverImage are TSX components; the four existing composables
+now use React Hooks. CSS, native protocol/client, C++ and CEF source are unchanged
+by this framework migration. No router or state-management library was added.
+Vite still bundles a classic IIFE app.js and external style.css under the original CSP.
+MUSXI_BUILD_VUE_UI, vue_ui and the ui-vue deployment directory retain their legacy
+names for host/build compatibility, but no Vue dependency or SFC remains.
+The framework-free phase-two page remains available only with --cef-preview.
+The Vue/A6 stage descriptions below are historical.
+
+React migration validation: TypeScript/Vite production build and all 14 native
+client tests pass. All four existing CEF smoke tests pass, including production
+reload/state recovery, subscription cancellation, native window/theme commands,
+Unicode paths and range-input preview versus commit. The actual CEF window was
+checked with the existing account for library/album/cover rendering, fixed
+headers, song hover, search, context menus, double-click playback, pause/resume,
+seek while paused, previous/next and volume. No cloud favourites/playlists were
+modified by these checks. No installer or Git commit was created.
 
 ## Stage one: application interface preparation
 
@@ -453,7 +468,8 @@ URL restrictions. A separate expiring Web cover demand list survives native
 repaints. Vue receives bounded raster data URLs; CSP adds img-src data: only.
 Credentials and remote image fetching are never delegated to Web content.
 
-Themes are local UI preferences: light, dark and a glass-style palette. Native
+Themes are local UI preferences: light or dark, with an independent translucent
+option. The existing glass value represents translucent dark. Native
 desktop transparency, final window integration and making Web UI the default
 belong to stage six. The legacy UI remains available throughout.
 
@@ -494,7 +510,7 @@ The close handler uses IsReadyToBeClosed to avoid a parent/CEF shutdown cycle.
 
 window.getState/minimize/maximize/close/setTheme use the same trusted-frame,
 versioned IPC router and return {enabled,maximized}. Only setTheme accepts a
-parameter: {theme: light|dark|glass}. Invalid shapes/values fail with 400, unknown
+parameter: {theme: light|dark|glass-light|glass}. Invalid shapes/values fail with 400, unknown
 commands with 404. Preview windows report enabled:false. Native UI types remain
 entirely in the CEF adapter; components call useWindow through native/client.ts.
 
@@ -556,3 +572,18 @@ The final installer was installed under build/installer-stage6, launched without
 CEF smoke, and uninstalled successfully. Test installation was removed; the
 standalone installer remains in dist. SHA256 sidecar matches the final artifact.
 The package is a test release, not approval to change the production default.
+
+## A6: default Vue entry
+
+The default CEF executable now opens the Vue window. The independent phase-two
+IPC page is available only through `--cef-preview`. The application no longer
+builds the GDI native window: cloud, player, cover, and operation state live in
+the C++17 Application target, with a hidden message-only window preserving
+timers, CEF callbacks, and shutdown cleanup. The CEF host still owns the visible
+window, drag/resize behavior, and recovery UI.
+
+The 0.2 test upgrade uses the old 0.1 installation identity while retaining
+“Musxi Player 测试版” in its name. The earlier independent test installation
+remains separate. No React code or additional front-end framework was added.
+Packaging and installing the latest A6 source are deferred until requested;
+the existing dist artifact predates the last source adjustment.

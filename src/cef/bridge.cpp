@@ -6,6 +6,8 @@
 #include <map>
 #include <commctrl.h>
 #include <windowsx.h>
+#include "include/cef_render_handler.h"
+#include "include/cef_display_handler.h"
 
 namespace musxi::cef_adapter {
 namespace {
@@ -46,7 +48,8 @@ private:
     IMPLEMENT_REFCOUNTING(App);
 };
 class Client final : public CefClient, public CefLifeSpanHandler,
-                     public CefRequestHandler, public CefDragHandler, public CefMessageRouterBrowserSide::Handler {
+                     public CefRequestHandler, public CefDragHandler, public CefRenderHandler,
+                     public CefDisplayHandler, public CefMessageRouterBrowserSide::Handler {
 public:
     Client(std::string url,void* window,bool smoke,void* testWindow)
         :url_(std::move(url)),window_(static_cast<HWND>(window)),testWindow_(static_cast<HWND>(testWindow)),smoke_(smoke) {
@@ -57,12 +60,39 @@ public:
     CefRefPtr<CefLifeSpanHandler> GetLifeSpanHandler() override {return this;}
     CefRefPtr<CefRequestHandler> GetRequestHandler() override {return this;}
     CefRefPtr<CefDragHandler> GetDragHandler() override {return this;}
+    CefRefPtr<CefRenderHandler> GetRenderHandler() override {return testWindow_?this:nullptr;}
+    CefRefPtr<CefDisplayHandler> GetDisplayHandler() override {return this;}
+    void GetViewRect(CefRefPtr<CefBrowser>,CefRect& rect) override {
+        RECT r{};GetClientRect(testWindow_,&r);const int dpi=GetDpiForWindow(testWindow_);
+        rect=CefRect(0,0,std::max(1,MulDiv(r.right,96,dpi)),std::max(1,MulDiv(r.bottom,96,dpi)));
+    }
+    bool GetScreenPoint(CefRefPtr<CefBrowser>,int x,int y,int& screenX,int& screenY) override {
+        const int dpi=GetDpiForWindow(testWindow_);POINT p{MulDiv(x,dpi,96),MulDiv(y,dpi,96)};
+        ClientToScreen(testWindow_,&p);screenX=p.x;screenY=p.y;return true;
+    }
+    bool GetScreenInfo(CefRefPtr<CefBrowser>,CefScreenInfo& info) override {
+        const int dpi=GetDpiForWindow(testWindow_);info.device_scale_factor=static_cast<float>(dpi)/96;
+        MONITORINFO monitor{sizeof(monitor)};
+        if(!GetMonitorInfoW(MonitorFromWindow(testWindow_,MONITOR_DEFAULTTONEAREST),&monitor))return false;
+        const auto convert=[dpi](RECT r){return CefRect(MulDiv(r.left,96,dpi),MulDiv(r.top,96,dpi),MulDiv(r.right-r.left,96,dpi),MulDiv(r.bottom-r.top,96,dpi));};
+        info.rect=convert(monitor.rcMonitor);info.available_rect=convert(monitor.rcWork);info.depth=32;info.depth_per_component=8;return true;
+    }
+    void OnPaint(CefRefPtr<CefBrowser>,PaintElementType type,const RectList&,const void* pixels,int width,int height) override {
+        presentBrowser(type==PET_POPUP,pixels,width,height);
+    }
+    void OnPopupShow(CefRefPtr<CefBrowser>,bool show) override {browserPopup(show,popupBounds_);}
+    void OnPopupSize(CefRefPtr<CefBrowser>,const CefRect& bounds) override {popupBounds_=bounds;browserPopup(true,bounds);}
+    bool OnCursorChange(CefRefPtr<CefBrowser>,CefCursorHandle cursor,cef_cursor_type_t,const CefCursorInfo&) override {
+        if(!testWindow_)return false;browserCursor(cursor);return true;
+    }
+    void OnImeCompositionRangeChanged(CefRefPtr<CefBrowser>,const CefRange&,const RectList& bounds) override {browserImeBounds(bounds);}
     void OnDraggableRegionsChanged(CefRefPtr<CefBrowser> browser,CefRefPtr<CefFrame> frame,
                                   const std::vector<CefDraggableRegion>& regions) override {
         if(!testWindow_ || !frame->IsMain() || frame->GetURL().ToString()!=url_)return;
         if(!dragRegion_)dragRegion_=CreateRectRgn(0,0,0,0);
         SetRectRgn(dragRegion_,0,0,0,0);
-        POINT origin{};MapWindowPoints(browser->GetHost()->GetWindowHandle(),testWindow_,&origin,1);
+        POINT origin{};
+        if(!browser->GetHost()->IsWindowRenderingDisabled())MapWindowPoints(browser->GetHost()->GetWindowHandle(),testWindow_,&origin,1);
         const int dpi=GetDpiForWindow(testWindow_);
         for(const auto& item:regions) {
             const auto& r=item.bounds;
@@ -150,13 +180,11 @@ public:
                         callback->Failure(400,"Invalid theme");return true;
                     }
                     const auto value=params["theme"].get<std::string>();
-                    if(value!="light" && value!="dark" && value!="glass") {callback->Failure(400,"Invalid theme");return true;}
+                    if(value!="light" && value!="dark" && value!="glass" && value!="glass-light") {callback->Failure(400,"Invalid theme");return true;}
                     if(testWindow_) {
-                        PostMessageW(testWindow_,WM_APP+43,value!="light",0);
-                        // Whole-window alpha preserves Chromium's accelerated child window.
-                        auto style=GetWindowLongPtrW(testWindow_,GWL_EXSTYLE);
-                        SetWindowLongPtrW(testWindow_,GWL_EXSTYLE,value=="glass"?style|WS_EX_LAYERED:style&~WS_EX_LAYERED);
-                        if(value=="glass")SetLayeredWindowAttributes(testWindow_,0,210,LWA_ALPHA);
+                        PostMessageW(testWindow_,WM_APP+43,value=="dark" || value=="glass",0);
+                        // Background alpha is supplied by CSS and composited by
+                        // the windowless host; text and controls remain opaque.
                         RedrawWindow(testWindow_,nullptr,nullptr,RDW_INVALIDATE|RDW_ALLCHILDREN);
                     }
                 } else {
@@ -177,6 +205,14 @@ public:
                 if(reply.code) callback->Failure(reply.code,reply.message);
                 else callback->Success(Json{{"version",1},{"result",Json::parse(reply.json)}}.dump());
                 return true;
+            }
+            if(smoke_ && command=="test.pixelAlpha") {
+                if(params.size()!=2 || !params.contains("x") || !params.contains("y") ||
+                   !params["x"].is_number_unsigned() || !params["y"].is_number_unsigned() ||
+                   params["x"].get<uint64_t>()>16384 || params["y"].get<uint64_t>()>16384) {
+                    callback->Failure(400,"Invalid pixel coordinates");return true;
+                }
+                callback->Success(Json{{"version",1},{"result",browserPixelAlpha(params["x"].get<int>(),params["y"].get<int>())}}.dump());return true;
             }
             const bool volume=command=="player.setVolume",seek=command=="player.seek";
             std::uint32_t value=0;
@@ -211,6 +247,7 @@ public:
 private:
     std::string url_;HWND window_,testWindow_;bool smoke_,closing_=false,recovered_=false;
     HRGN dragRegion_=nullptr;
+    CefRect popupBounds_;
     std::map<int64_t,CefRefPtr<Callback>> subscriptions_;
     CefRefPtr<CefMessageRouterBrowserSide> router_;
     IMPLEMENT_REFCOUNTING(Client);
@@ -229,4 +266,5 @@ bool closeBrowsers() {
 bool smokePassed() {return passed;}
 bool browserReadyToClose() {return activeBrowser && activeBrowser->GetHost()->IsReadyToBeClosed();}
 void retryBrowser() {if(activeBrowser)activeBrowser->Reload();}
+CefRefPtr<CefBrowserHost> browserHost() {return activeBrowser?activeBrowser->GetHost():nullptr;}
 }

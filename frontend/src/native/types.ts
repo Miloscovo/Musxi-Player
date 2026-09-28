@@ -42,6 +42,8 @@ export function parsePlayerState(value: unknown): PlayerState {
   return Object.freeze({ opened: s.opened, playing: s.playing,
     positionMs: s.positionMs as number, durationMs: s.durationMs as number,
     volumePercent: s.volumePercent, trackId: s.trackId,
-    phase: s.phase as PlayerState['phase'], error: s.error as string | undefined,
-    pending: s.pending as boolean | undefined, requestedPlaying: s.requestedPlaying as boolean | undefined });
+    ...(s.phase !== undefined ? { phase: s.phase as PlayerState['phase'] } : {}),
+    ...(s.error !== undefined ? { error: s.error as string } : {}),
+    ...(s.pending !== undefined ? { pending: s.pending as boolean } : {}),
+    ...(s.requestedPlaying !== undefined ? { requestedPlaying: s.requestedPlaying as boolean } : {}) });
 }

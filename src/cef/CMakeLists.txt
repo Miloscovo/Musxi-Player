@@ -21,12 +21,12 @@ SET_LIBRARY_TARGET_PROPERTIES(cef_bridge)
 target_include_directories(cef_bridge PRIVATE "${CEF_ROOT}")
 target_link_libraries(cef_bridge PRIVATE music_application libcef_dll_wrapper libcef_lib ${CEF_STANDARD_LIBS} comctl32)
 
-# Separate preview host; the original native executable remains available.
+# CEF is the application host; Core and Application remain C++17 targets.
 add_library(cef_host SHARED host.cpp)
 musxi_standard(cef_host 20)
 SET_LIBRARY_TARGET_PROPERTIES(cef_host)
 target_include_directories(cef_host PRIVATE "${CEF_ROOT}")
-target_link_libraries(cef_host PRIVATE cef_bridge libcef_dll_wrapper libcef_lib ${CEF_STANDARD_LIBS} shlwapi)
+target_link_libraries(cef_host PRIVATE cef_bridge libcef_dll_wrapper libcef_lib ${CEF_STANDARD_LIBS} comctl32 shlwapi imm32 d3d11 dcomp)
 if(MUSXI_ENABLE_FFMPEG)
   target_compile_definitions(cef_host PRIVATE MUSXI_ENABLE_FFMPEG)
   add_custom_command(TARGET cef_host POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_if_different
@@ -39,7 +39,7 @@ set_target_properties(cef_host PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CEF_TARGET
 COPY_SINGLE_FILE(cef_host "${CEF_BINARY_DIR}/bootstrap.exe" "${CEF_TARGET_OUT_DIR}/MusxiPlayerWeb.exe")
 COPY_FILES(cef_host "${CEF_BINARY_FILES}" "${CEF_BINARY_DIR}" "${CEF_TARGET_OUT_DIR}")
 COPY_FILES(cef_host "${CEF_RESOURCE_FILES}" "${CEF_RESOURCE_DIR}" "${CEF_TARGET_OUT_DIR}")
-option(MUSXI_BUILD_VUE_UI "Build and deploy the stage-three Vue preview" OFF)
+option(MUSXI_BUILD_VUE_UI "Build and deploy the Vue application" ON)
 add_custom_target(cef_ui_assets ALL
   COMMAND ${CMAKE_COMMAND} -E copy_directory
           "${CMAKE_SOURCE_DIR}/frontend/phase2" "${CEF_TARGET_OUT_DIR}/ui")

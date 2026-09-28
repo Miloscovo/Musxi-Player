@@ -9,8 +9,10 @@ test('window API validates replies and uses the shared protocol', async () => {
   } });
   assert.deepEqual(await client.setTheme('glass'), result);
   assert.deepEqual(seen[0], { version: 1, command: 'window.setTheme', params: { theme: 'glass' } });
+  assert.deepEqual(await client.setTheme('glass-light'), result);
+  assert.deepEqual(seen[1], { version: 1, command: 'window.setTheme', params: { theme: 'glass-light' } });
   await client.maximize();
-  assert.deepEqual(seen[1], { version: 1, command: 'window.maximize', params: {} });
+  assert.deepEqual(seen[2], { version: 1, command: 'window.maximize', params: {} });
   result = { enabled: 'yes', maximized: false };
   await assert.rejects(client.getState(), /Invalid window state/);
 });

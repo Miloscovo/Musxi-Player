@@ -1,6 +1,6 @@
 import { request, type CefTransport } from './transport.ts';
 import { NativeError } from './types.ts';
-export type Theme = 'light' | 'dark' | 'glass';
+export type Theme = 'light' | 'dark' | 'glass-light' | 'glass';
 export interface WindowState { enabled: boolean; maximized: boolean }
 export function createWindowClient(host: CefTransport) {
   async function call(command: string, params = {}): Promise<WindowState> {

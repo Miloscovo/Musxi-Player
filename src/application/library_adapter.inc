@@ -6,7 +6,7 @@ Json publicRows(const Json& rows,size_t offset=0,size_t limit=100) {
     for(size_t i=offset;i<rows.size() && i-offset<limit;++i) {
         const auto& row=rows[i];
         result.push_back({{"id",row.value("id","")},{"name",row.value("name","")},
-            {"artist",row.value("artist","")},{"cover",row.value("cover","")},
+            {"artist",row.value("artist","")},{"album",row.value("album","")},{"cover",row.value("cover","")},
             {"duration",row.value("duration",0.0)},{"count",row.value("count",0)},
             {"editable",row.value("editable",false)}});
     }
@@ -125,8 +125,9 @@ LibraryReply applicationLibrary(const std::string& name,const std::string& param
         } else if(name=="library.login" || name=="library.logout" || name=="library.sync") {
             if(!p.empty()) return {400,"无效账号参数",{}};
             if(name=="library.sync" && !cloudConnected) return {409,"请先扫码登录",{}};
-            cloudView=true;layoutSearch();
-            cloudClick(name=="library.login"?CloudLogin:name=="library.logout"?CloudLogout:CloudSync,false);
+            if(name=="library.login") accountLogin();
+            else if(name=="library.logout") accountLogout();
+            else accountSync();
             libraryMenu=Json::object();
             ++libraryOperationId;libraryOperationKind=cloudOperation;
             libraryOperationStatus=cloudBusy()?"pending":name=="library.logout"?"completed":"failed";

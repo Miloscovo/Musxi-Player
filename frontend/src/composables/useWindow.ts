@@ -1,24 +1,37 @@
-import { ref, onMounted } from 'vue';
+import { useCallback, useLayoutEffect, useState } from 'react';
 import { native } from '../native/client';
 import type { Theme, WindowState } from '../native/window';
 export function useWindow() {
-  const state = ref<WindowState>({ enabled: false, maximized: false });
-  const error = ref('');
-  const saved = localStorage.getItem('musxi-theme');
-  const theme = ref<Theme>(saved === 'dark' || saved === 'glass' ? saved : 'light');
-  document.documentElement.dataset.theme = theme.value;
-  async function invoke(action: () => Promise<WindowState>) {
-    try { state.value = await action(); error.value = ''; }
-    catch (e) { error.value = e instanceof Error ? e.message : '窗口操作失败'; }
-  }
-  async function changeTheme() {
-    theme.value = theme.value === 'light' ? 'dark' : theme.value === 'dark' ? 'glass' : 'light';
-    document.documentElement.dataset.theme = theme.value;
-    localStorage.setItem('musxi-theme', theme.value);
-    await invoke(() => native.window.setTheme(theme.value));
-  }
-  onMounted(() => invoke(() => native.window.setTheme(theme.value)));
-  return { state, error, theme, changeTheme,
+  const [state, setState] = useState<WindowState>({ enabled: false, maximized: false });
+  const [error, setError] = useState('');
+  const [transparency, updateTransparency] = useState(() => {
+    const saved = localStorage.getItem('musxi-transparency');
+    const value = saved === null ? 50 : Number(saved);
+    return Number.isFinite(value) ? Math.max(0, Math.min(100, value)) : 50;
+  });
+  const [theme, updateTheme] = useState<Theme>(() => {
+    const saved = localStorage.getItem('musxi-theme');
+    return saved === 'dark' || saved === 'glass' || saved === 'glass-light' ? saved : 'light';
+  });
+  const invoke = useCallback(async (action: () => Promise<WindowState>) => {
+    try { setState(await action()); setError(''); }
+    catch (e) { setError(e instanceof Error ? e.message : '窗口操作失败'); }
+  }, []);
+  const setTheme = useCallback(async (next: Theme) => {
+    updateTheme(next); document.documentElement.dataset.theme = next;
+    localStorage.setItem('musxi-theme', next);
+    await invoke(() => native.window.setTheme(next));
+  }, [invoke]);
+  useLayoutEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    void invoke(() => native.window.setTheme(theme));
+  }, []);
+  useLayoutEffect(() => {
+    const glass = theme === 'glass' || theme === 'glass-light';
+    document.documentElement.style.setProperty('--background-opacity', String(glass ? 1 - transparency / 100 : 1));
+    localStorage.setItem('musxi-transparency', String(transparency));
+  }, [theme, transparency]);
+  return { state, error, theme, setTheme, transparency, setTransparency: updateTransparency,
     minimize: () => invoke(native.window.minimize), maximize: () => invoke(native.window.maximize),
     close: () => invoke(native.window.close) };
 }

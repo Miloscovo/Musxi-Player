@@ -1,92 +1,52 @@
 # Musxi Player
 
-一款使用AI开发的简洁，开源的支持第三方的音乐播放器
+一款以 C++17 为核心、React 为界面的 Windows 音乐播放器。目前接入酷狗概念版账号与云端歌单；此接入使用第三方接口，0.2 仅供本机或私下测试。
 
-## 目前已实现功能
+## 已实现
 
-- 支持手机扫码登录酷狗概念版账号
-- 同步用户收藏的歌曲和歌单
-- 显示歌曲和歌单的封面
-- 显示用户头像
-- 支持搜索酷狗概念版中的歌曲、收藏歌曲、将歌曲添加至歌单
-- 登录自动领取 VIP
-- 可循环切换的主题，包括浅色、深色、半透明主题
+- 手机扫码登录、同步收藏歌曲和歌单，显示用户头像、歌曲及歌单封面
+- 搜索歌曲、收藏或取消收藏、添加歌曲到歌单
+- 登录后检查并领取当日概念版 VIP 权益
+- 浅色、深色、半透明主题
+- FFmpeg 解码与 WASAPI 音频输出，支持暂停、继续、切歌、Seek 和音量调整
 
-## Web UI 迁移进度
-
-音频后端已完成 A1 隔离：本地文件与云端缓存统一通过 `IAudioBackend`
-播放，当前实现仍为 MCI。新增 Stop/Unload 语义及独立后端测试，尚未接入
-FFmpeg/WASAPI。见[音频后端迁移说明](docs/audio-backend-migration.md)。
-
-第六阶段已接入独立测试版窗口和安装包流程，现有原生 UI 仍然保留；
-`frontend/phase2` 是独立的 HTML/JavaScript 状态预览页面。
-
-新前端采用 **Vue 3 + TypeScript + Vite**，使用 Composition API 和
-`<script setup lang="ts">`。调用方向为：
+## 架构与构建
 
 ```text
-Vue 组件 → Composable / 可选 Store → Native API Client
-→ CEF IPC / Native Bridge → C++ Application Service → C++ Core
+React + TypeScript + Vite
+  → Native API Client → CEF IPC/Bridge (C++20)
+  → Application/Player (C++17) → FFmpeg/WASAPI (C++17)
 ```
 
-Core/Application 保持 C++17，CEF Host/Bridge/wrapper 独立使用 C++20。
-播放器真实状态与音频、队列、媒体库逻辑由 C++ 管理；Vue 只维护界面状态和
-原生状态的显示映射。页面重新加载后通过 Native API 重新读取状态。
+React 是默认界面，C++ 持有真实播放状态和云端媒体库状态。原生 GDI 界面与 MCI 后端已从源码和构建中移除。Application 保留一个不可见的 Windows 消息窗口，用来驱动后台轮询、事件通知和资源清理；关闭 React 窗口会退出并停止播放。Core 可在不配置 CEF/FFmpeg 的情况下独立编译。
 
-第三至第六阶段依次为：Vue 最小界面和只读客户端、播放命令与事件、业务页面
-渐进迁移、整合打包与受控切换。完整边界、构建命令和验收要求见
-[UI 迁移计划](docs/ui-migration.md)。
+前端已从 Vue 迁移为 React，复用现有 CSS 和 Native API。为保持 CEF 加载与打包兼容，现有 `MUSXI_BUILD_VUE_UI`、`vue_ui` 和 `ui-vue` 名称暂时保留；这些名称不代表仍使用 Vue。
 
-构建并验证 Vue 预览：
+准备好 CEF SDK、已校验的 LGPL 共享版 FFmpeg SDK，以及 `setup-cloud.ps1` 所需本机服务依赖后，执行：
 
 ```powershell
-./build-cef.ps1 -CefRoot 'D:/develop/cef_binary_152.0.6+g708dc14+chromium-152.0.7977.83_windows64' -Vue -Test
-./build/cef-msvc/src/cef/Release/MusxiPlayerWeb.exe --cef-vue
+./build.ps1 -CefRoot 'D:/develop/cef_binary_152.0.6+g708dc14+chromium-152.0.7977.83_windows64' -FfmpegRoot 'D:/Music/build/deps/ffmpeg-n9.0.2-3-ga5923073bf-win64-lgpl-shared-9.0' -Test
+./build/cef-msvc/src/cef/Release/MusxiPlayerWeb.exe
 ```
 
-Vue 页面支持搜索分页、歌单浏览、扫码登录/退出、同步歌单、封面、右键收藏/取消
-收藏、添加到歌单、选曲播放和切歌。暂停、继续播放、进度和音量由原生事件同步。
-下载请求在 C++ 中跟踪为等待、完成、失败或取消；提交下载不代表播放成功。
-开发构建不加参数仍打开第二阶段测试页面；`--test-app` 启动单窗口测试版。
-测试安装包使用独立的 MusxiPlayerTest.exe，双击即进入 Vue；正式版默认入口未切换。
+`--cef-preview` 仅用于打开早期 IPC 技术验证页；`--cef-smoke` 用于自动检查。构建要求 Windows x64/MSVC，不再构建 MinGW/MCI 版本。CMake 中的 `music_core` 与 `music_application` 仍固定为 C++17，CEF 层独立使用 C++20。
 
-测试版支持浅色、深色和偏黑的桌面半透明主题（整窗透明，文字及封面也参与混合）。
-账号及云端操作沿用原生适配器，真实扫码和账号写入需要在登录后验收。
+## 0.2 测试安装包（暂缓更新）
 
-## 第六阶段测试安装包
+A6 当前只交付源码和构建验证。待需要安装包时再运行以下命令；`dist` 中已有安装包生成于本轮最后一次源码调整之前，不代表当前源码。
 
 ```powershell
-./package-test.ps1 -CefRoot 'D:/develop/cef_binary_152.0.6+g708dc14+chromium-152.0.7977.83_windows64' -FfmpegRoot "$PWD/build/deps/ffmpeg-n9.0.2-3-ga5923073bf-win64-lgpl-shared-9.0"
+./package.ps1 -CefRoot 'D:/develop/cef_binary_152.0.6+g708dc14+chromium-152.0.7977.83_windows64' -FfmpegRoot 'D:/Music/build/deps/ffmpeg-n9.0.2-3-ga5923073bf-win64-lgpl-shared-9.0'
 ```
 
-产物：`dist/MusxiPlayer-Test-0.2-Setup-x64.exe`，附 SHA256 文件。A5 测试包构建需提供 `-FfmpegRoot` 指向已校验的共享版 FFmpeg SDK；安装时会升级现有测试版，不影响旧原生版。
-安装名“Musxi Player 测试版”，与旧版并存，不覆盖旧版。需要先按原有
-`setup-cloud.ps1` 准备 Node 和云服务依赖；安装后的用户不需要 Node 开发环境。
+届时产物为 `dist/MusxiPlayer-0.2-Test-Upgrade-Setup-x64.exe` 和对应 SHA256 文件。安装包使用原 0.1 版安装标识进行升级，但产品名显示为“Musxi Player 测试版”；它不是正式发布版。先前独立安装的 `MusxiPlayerTest.exe` 及其 0.2 测试版仍可并存。
 
-测试版数据位于 `%LOCALAPPDATA%/MusxiPlayer-Test`；旧版仍使用 `MintPlayer`。
-首次需要重新登录，云端收藏和歌单操作仍会修改所登录账号的数据。
-卸载测试版保留账号和缓存目录，便于重新安装；不会删除旧版数据。
+新入口使用 `%LOCALAPPDATA%/MusxiPlayer`。首次启动只从 `%LOCALAPPDATA%/MusxiPlayer-Test` 复制登录会话与歌单快照一次，不复制临时歌曲缓存，不改动旧 `%LOCALAPPDATA%/MintPlayer` 数据。后续退出登录不会再次导入旧会话。两个安装实例若登录同一个账号，收藏与歌单更改仍会作用于同一云端账号。
 
-关闭窗口停止播放并退出。界面崩溃自动恢复一次，随后提供原生重试/关闭入口。
-顶部标题旁空白和侧栏空白可拖动窗口，边缘可缩放；没有额外拖动条。
-非输入框、按钮或对话框聚焦时，空格暂停/继续，左右方向键前后跳转 5 秒。
+窗口支持拖动、缩放及浅色/深色/半透明主题。界面崩溃时自动恢复一次，再失败会显示重试入口。已在本机验收 FFmpeg 与旧 MCI 的播放行为；跨显示器 DPI、物理设备拔插、全部账号可用编码及长时间播放仍待专项验证。
 
-0.2 测试包已完成真实账号云端播放和音频后端验收；多显示器 DPI 仍待专项验证。
-默认 UI 和音频入口保持当前选择，后续阶段再决定切换。
+历史迁移记录见 [UI 迁移计划](docs/ui-migration.md) 和 [音频后端迁移记录](docs/audio-backend-migration.md)。第三方许可见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 
-## 音频后端迁移 A2
+## License
 
-已新增独立的 C++17 FFmpeg 本地文件解码模块，可输出可配置采样率与声道的
-交错 float32 PCM。A2 阶段尚未参与实际播放；A4 起测试版已接入 FFmpeg/WASAPI。
-SDK 默认不下载、不编译；0.2 测试安装包明确启用并随包提供所需动态库。
-构建、离线测试和已知限制见 [音频迁移说明](docs/audio-backend-migration.md#a2-independent-ffmpeg-decoder)。
-
-A3 已增加独立 WASAPI 共享模式输出测试：解码线程 → 固定容量 PCM 缓冲 →
-事件驱动输出线程，支持暂停、继续、停止、Seek、流音量与设备时钟进度。
-A4 已将新后端接入源码测试版：配置 FFmpeg SDK 后，`--test-app` 使用 FFmpeg/WASAPI；
-原生版仍默认 MCI，也可在启动时用 `--audio-backend=ffmpeg` 明确选择。
-带声音的自动测试需显式启用
-`MUSXI_TEST_AUDIO_DEVICE=ON`，测试流音量为 10%，不修改系统总音量。
-详见 [A3 输出验证](docs/audio-backend-migration.md#a3-standalone-wasapi-output)。
-接入方式和当前验收范围见 [A4 说明](docs/audio-backend-migration.md#a4-application-and-vue-integration)。
-A5 已交付并实机验收 0.2 测试安装包，结果见 [A5 记录](docs/audio-backend-migration.md#a5-test-installer-and-acceptance)。
+本项目采用 [MIT License](LICENSE)。

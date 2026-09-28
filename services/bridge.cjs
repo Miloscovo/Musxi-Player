@@ -35,6 +35,9 @@ function arrayAt(data, keys) {
   throw new Error('酷狗返回的数据结构发生变化，未覆盖原来的同步结果');
 }
 const text = value => typeof value === 'string' || typeof value === 'number' ? String(value) : '';
+const albumName = item => [item.AlbumName, item.album_name, item.albumname, item.album,
+  item.albuminfo?.album_name, item.albuminfo?.name, item.audio_info?.album_name, item.audio_info?.albumname]
+  .map(value => text(value).replace(/<[^>]*>/g, '').replace(/&amp;/g, '&').trim()).find(Boolean) || '';
 function coverUrl(value) {
   try {
     const u = new URL(text(value).replace(/\{size\}/g, '200'));
@@ -87,7 +90,7 @@ function track(item) {
   return {
     collectedAt,
     id: text(item.fileid || item.id || hash), fileId: text(item.fileid), hash, cover: cover(item), ...info,
-    albumId: text(item.album_id || audio.album_id),
+    album: albumName(item), albumId: text(item.album_id || audio.album_id),
     audioId: text(item.album_audio_id || item.mixsongid || audio.album_audio_id),
     duration: Number(item.timelen ?? audio.timelen ?? (Number(item.duration || 0) * 1000)),
   };
@@ -280,7 +283,7 @@ class Adapter {
           const hash = text(item.FileHash || item.hash).toLowerCase();
           const t = { id: `search:${hash}:${text(item.MixSongID || item.mixsongid)}`, hash, cover: cover(item),
             ...songInfo(item),
-            albumId: text(item.AlbumID || item.album_id), audioId: text(item.MixSongID || item.mixsongid),
+            album: albumName(item), albumId: text(item.AlbumID || item.album_id), audioId: text(item.MixSongID || item.mixsongid),
             duration: Number(item.Duration || item.duration || 0) * 1000 };
           this.knownTracks.set(t.id, t); return t;
         });

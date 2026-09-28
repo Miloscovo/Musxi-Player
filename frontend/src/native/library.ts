@@ -1,6 +1,6 @@
 import { NativeError } from './types.ts';
 import { request, type CefTransport } from './transport.ts';
-export interface Track { id: string; name: string; artist: string; cover: string; duration: number; count: number; editable: boolean }
+export interface Track { id: string; name: string; artist: string; album?: string; cover: string; duration: number; count: number; editable: boolean }
 export interface LibraryState {
   connected: boolean; busy: boolean; user: string; status: string; notice: string; qr: string; avatar: string;
   playlists: Track[]; tracks: Track[]; trackCount: number; playlistId: string; playlistName: string;
@@ -36,6 +36,7 @@ export function parseLibraryState(value: unknown): LibraryState {
     if (!Array.isArray(value)) throw new NativeError(502, 'Invalid library rows');
     for (const row of value) {
       const r = object(row); fields(r, ['id', 'name', 'artist', 'cover'], 'string');
+      if (r.album !== undefined) fields(r, ['album'], 'string');
       fields(r, ['duration', 'count'], 'number'); fields(r, ['editable'], 'boolean');
     }
   };

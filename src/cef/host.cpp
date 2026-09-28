@@ -3,37 +3,133 @@
 #include "include/cef_command_line.h"
 #include "include/cef_parser.h"
 #include "../application/application.hpp"
+#include <commctrl.h>
 #include <filesystem>
 #include <shlwapi.h>
 #include <shlobj.h>
 #include <windowsx.h>
 #include <string>
+#include <imm.h>
+#include "composition_surface.hpp"
 
 namespace {
 std::wstring pagePath;
 HWND nativeWindow=nullptr;
-HWND testWindow=nullptr,webWindow=nullptr;
+HWND testWindow=nullptr;
 HWND recoveryText=nullptr,retryButton=nullptr,exitButton=nullptr;
-bool smoke=false,createFailed=false,testApp=false;
+bool smoke=false,createFailed=false,testApp=false,preview=false;
 COLORREF frameColor=RGB(255,255,255);
 ULONGLONG startTick=0;
+CompositionSurface surface;
+HCURSOR webCursor=nullptr;
+bool mouseTracked=false,imeActive=false,releasingCapture=false,renderFailed=false;
+int modifiers() {
+    int flags=0;
+    if(GetKeyState(VK_SHIFT)&0x8000)flags|=EVENTFLAG_SHIFT_DOWN;
+    if(GetKeyState(VK_CONTROL)&0x8000)flags|=EVENTFLAG_CONTROL_DOWN;
+    if(GetKeyState(VK_MENU)&0x8000)flags|=EVENTFLAG_ALT_DOWN;
+    if(GetKeyState(VK_LBUTTON)&0x8000)flags|=EVENTFLAG_LEFT_MOUSE_BUTTON;
+    if(GetKeyState(VK_RBUTTON)&0x8000)flags|=EVENTFLAG_RIGHT_MOUSE_BUTTON;
+    if(GetKeyState(VK_MBUTTON)&0x8000)flags|=EVENTFLAG_MIDDLE_MOUSE_BUTTON;
+    if(GetKeyState(VK_CAPITAL)&1)flags|=EVENTFLAG_CAPS_LOCK_ON;
+    if(GetKeyState(VK_NUMLOCK)&1)flags|=EVENTFLAG_NUM_LOCK_ON;
+    return flags;
+}
+CefMouseEvent mouseEvent(HWND hwnd,LPARAM lp,bool screen=false) {
+    POINT p{GET_X_LPARAM(lp),GET_Y_LPARAM(lp)};if(screen)ScreenToClient(hwnd,&p);
+    const int dpi=GetDpiForWindow(hwnd);CefMouseEvent event;
+    event.x=MulDiv(p.x,96,dpi);event.y=MulDiv(p.y,96,dpi);event.modifiers=modifiers();return event;
+}
+std::wstring imeText(HIMC context,DWORD type) {
+    const LONG bytes=ImmGetCompositionStringW(context,type,nullptr,0);
+    if(bytes<=0)return {};
+    std::wstring text(static_cast<size_t>(bytes)/sizeof(wchar_t),L'\0');
+    ImmGetCompositionStringW(context,type,text.data(),bytes);return text;
+}
+LRESULT hostHitTest(HWND hwnd,LPARAM lp) {
+    RECT r;GetWindowRect(hwnd,&r);
+    const int edge=IsZoomed(hwnd)?0:MulDiv(7,GetDpiForWindow(hwnd),96);
+    const int x=GET_X_LPARAM(lp),y=GET_Y_LPARAM(lp);
+    const bool l=x<r.left+edge,rr=x>=r.right-edge,t=y<r.top+edge,b=y>=r.bottom-edge;
+    if(t)return l?HTTOPLEFT:rr?HTTOPRIGHT:HTTOP;
+    if(b)return l?HTBOTTOMLEFT:rr?HTBOTTOMRIGHT:HTBOTTOM;
+    if(l)return HTLEFT;if(rr)return HTRIGHT;
+    POINT p{x,y};ScreenToClient(hwnd,&p);
+    auto region=static_cast<HRGN>(GetPropW(hwnd,musxi::cef_adapter::DragRegionProperty));
+    return region && PtInRegion(region,p.x,p.y)?HTCAPTION:HTCLIENT;
+}
 LRESULT CALLBACK testProc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp) {
+    const auto browser=musxi::cef_adapter::browserHost();
     switch(msg) {
-    case WM_ERASEBKGND: {RECT r;GetClientRect(hwnd,&r);auto brush=CreateSolidBrush(frameColor);FillRect(reinterpret_cast<HDC>(wp),&r,brush);DeleteObject(brush);return 1;}
+    case WM_SETFOCUS: if(browser)browser->SetFocus(true);return 0;
+    case WM_KILLFOCUS: if(browser){browser->SetFocus(false);if(imeActive)browser->ImeCancelComposition();}imeActive=false;return 0;
+    case WM_SETCURSOR: if(LOWORD(lp)==HTCLIENT){SetCursor(webCursor?webCursor:LoadCursorW(nullptr,IDC_ARROW));return TRUE;}break;
+    case WM_MOUSEMOVE:
+        if(browser) {
+            if(!mouseTracked){TRACKMOUSEEVENT track{sizeof(track),TME_LEAVE,hwnd,0};TrackMouseEvent(&track);mouseTracked=true;}
+            browser->SendMouseMoveEvent(mouseEvent(hwnd,lp),false);
+        }return 0;
+    case WM_MOUSELEAVE: mouseTracked=false;if(browser)browser->SendMouseMoveEvent(mouseEvent(hwnd,0),true);return 0;
+    case WM_LBUTTONDOWN: case WM_LBUTTONUP: case WM_LBUTTONDBLCLK:
+    case WM_RBUTTONDOWN: case WM_RBUTTONUP: case WM_RBUTTONDBLCLK:
+    case WM_MBUTTONDOWN: case WM_MBUTTONUP: case WM_MBUTTONDBLCLK:
+        if(browser) {
+            const bool up=msg==WM_LBUTTONUP || msg==WM_RBUTTONUP || msg==WM_MBUTTONUP;
+            const auto button=(msg==WM_RBUTTONDOWN || msg==WM_RBUTTONUP || msg==WM_RBUTTONDBLCLK)?MBT_RIGHT:
+                (msg==WM_MBUTTONDOWN || msg==WM_MBUTTONUP || msg==WM_MBUTTONDBLCLK)?MBT_MIDDLE:MBT_LEFT;
+            static int clickCount=1;
+            if(!up) {SetFocus(hwnd);SetCapture(hwnd);clickCount=(msg==WM_LBUTTONDBLCLK || msg==WM_RBUTTONDBLCLK || msg==WM_MBUTTONDBLCLK)?2:1;}
+            browser->SendMouseClickEvent(mouseEvent(hwnd,lp),button,up,clickCount);
+            if(up && !(GetKeyState(VK_LBUTTON)&0x8000) && !(GetKeyState(VK_RBUTTON)&0x8000) && !(GetKeyState(VK_MBUTTON)&0x8000)) {
+                releasingCapture=true;ReleaseCapture();releasingCapture=false;
+            }
+        }return 0;
+    case WM_CAPTURECHANGED: if(browser && !releasingCapture)browser->SendCaptureLostEvent();return 0;
+    case WM_MOUSEWHEEL: case WM_MOUSEHWHEEL:
+        if(browser) {const auto event=mouseEvent(hwnd,lp,true);const int delta=GET_WHEEL_DELTA_WPARAM(wp);
+            browser->SendMouseWheelEvent(event,msg==WM_MOUSEHWHEEL?delta:0,msg==WM_MOUSEWHEEL?delta:0);}
+        return 0;
+    case WM_KEYDOWN: case WM_SYSKEYDOWN: case WM_KEYUP: case WM_SYSKEYUP: case WM_CHAR: case WM_SYSCHAR:
+        if(browser) {
+            CefKeyEvent key;key.windows_key_code=static_cast<int>(wp);key.native_key_code=static_cast<int>(lp);key.modifiers=modifiers();
+            key.is_system_key=msg==WM_SYSKEYDOWN || msg==WM_SYSKEYUP || msg==WM_SYSCHAR;
+            key.type=(msg==WM_CHAR || msg==WM_SYSCHAR)?KEYEVENT_CHAR:(msg==WM_KEYUP || msg==WM_SYSKEYUP)?KEYEVENT_KEYUP:KEYEVENT_RAWKEYDOWN;
+            if(key.type==KEYEVENT_CHAR)key.character=key.unmodified_character=static_cast<char16_t>(wp);
+            if(wp==VK_SHIFT || wp==VK_CONTROL || wp==VK_MENU) {
+                const bool right=wp==VK_SHIFT?MapVirtualKeyW((lp>>16)&255,MAPVK_VSC_TO_VK_EX)==VK_RSHIFT:(lp&(1<<24))!=0;
+                key.modifiers|=right?EVENTFLAG_IS_RIGHT:EVENTFLAG_IS_LEFT;
+            }
+            if((wp>=VK_NUMPAD0 && wp<=VK_DIVIDE) || (wp==VK_RETURN && (lp&(1<<24))))key.modifiers|=EVENTFLAG_IS_KEY_PAD;
+            browser->SendKeyEvent(key);
+        }
+        if(msg==WM_SYSKEYDOWN && wp==VK_F4)break;
+        return 0;
+    case WM_IME_SETCONTEXT: lp&=~ISC_SHOWUICOMPOSITIONWINDOW;break;
+    case WM_IME_STARTCOMPOSITION: imeActive=true;return 0;
+    case WM_IME_ENDCOMPOSITION: if(browser && imeActive)browser->ImeCancelComposition();imeActive=false;return 0;
+    case WM_IME_CHAR: return 0; // The result string is committed below, once.
+    case WM_IME_COMPOSITION:
+        if(browser) {
+            const auto context=ImmGetContext(hwnd);
+            if(context) {
+                if(lp&GCS_RESULTSTR){browser->ImeCommitText(imeText(context,GCS_RESULTSTR),CefRange(UINT32_MAX,UINT32_MAX),0);imeActive=false;}
+                if(lp&GCS_COMPSTR) {
+                    const auto text=imeText(context,GCS_COMPSTR);const LONG caret=ImmGetCompositionStringW(context,GCS_CURSORPOS,nullptr,0);
+                    CefCompositionUnderline underline;underline.range=CefRange(0,static_cast<uint32_t>(text.size()));underline.color=CefColorSetARGB(255,100,100,100);
+                    browser->ImeSetComposition(text,{underline},CefRange(UINT32_MAX,UINT32_MAX),CefRange(std::max<LONG>(0,caret),std::max<LONG>(0,caret)));imeActive=true;
+                }
+                ImmReleaseContext(hwnd,context);
+            }
+        }return 0;
+    case WM_MOVE: if(browser)browser->NotifyMoveOrResizeStarted();break;
+    case WM_ENTERSIZEMOVE: SetTimer(hwnd,101,16,nullptr);return 0;
+    case WM_EXITSIZEMOVE: KillTimer(hwnd,101);return 0;
+    case WM_TIMER: if(wp==101){CefDoMessageLoopWork();return 0;}break;
+    case WM_ERASEBKGND: {if(GetWindowLongPtrW(hwnd,GWL_EXSTYLE)&WS_EX_NOREDIRECTIONBITMAP)return 1;RECT r;GetClientRect(hwnd,&r);auto brush=CreateSolidBrush(frameColor);FillRect(reinterpret_cast<HDC>(wp),&r,brush);DeleteObject(brush);return 1;}
     case WM_APP+43: frameColor=wp?RGB(16,18,20):RGB(255,255,255);InvalidateRect(hwnd,nullptr,TRUE);return 0;
-    case WM_NCCALCSIZE: if(wp)return 0;break;
-    case WM_NCHITTEST: {
-        RECT r;GetWindowRect(hwnd,&r);
-        const int edge=IsZoomed(hwnd)?0:MulDiv(7,GetDpiForWindow(hwnd),96);
-        const int x=GET_X_LPARAM(lp),y=GET_Y_LPARAM(lp);
-        const bool l=x<r.left+edge,rr=x>=r.right-edge,t=y<r.top+edge,b=y>=r.bottom-edge;
-        if(t)return l?HTTOPLEFT:rr?HTTOPRIGHT:HTTOP;
-        if(b)return l?HTBOTTOMLEFT:rr?HTBOTTOMRIGHT:HTBOTTOM;
-        if(l)return HTLEFT;if(rr)return HTRIGHT;
-        POINT p{x,y};ScreenToClient(hwnd,&p);
-        auto region=static_cast<HRGN>(GetPropW(hwnd,musxi::cef_adapter::DragRegionProperty));
-        return region && PtInRegion(region,p.x,p.y)?HTCAPTION:HTCLIENT;
-    }
+    case WM_NCCALCSIZE: return 0;
+    case WM_NCPAINT: return 0;
+    case WM_NCHITTEST: return hostHitTest(hwnd,lp);
     case WM_GETMINMAXINFO: {
         auto m=reinterpret_cast<MINMAXINFO*>(lp);
         m->ptMinTrackSize={MulDiv(800,GetDpiForWindow(hwnd),96),MulDiv(560,GetDpiForWindow(hwnd),96)};
@@ -43,13 +139,14 @@ LRESULT CALLBACK testProc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp) {
             m->ptMaxSize={info.rcWork.right-info.rcWork.left,info.rcWork.bottom-info.rcWork.top};
         }return 0;
     }
-    case WM_DPICHANGED: {auto r=reinterpret_cast<RECT*>(lp);SetWindowPos(hwnd,nullptr,r->left,r->top,r->right-r->left,r->bottom-r->top,SWP_NOZORDER);return 0;}
+    case WM_DPICHANGED: {auto r=reinterpret_cast<RECT*>(lp);SetWindowPos(hwnd,nullptr,r->left,r->top,r->right-r->left,r->bottom-r->top,SWP_NOZORDER);if(browser){browser->NotifyScreenInfoChanged();browser->WasResized();}return 0;}
     case WM_SIZE: {
-        RECT r;GetClientRect(hwnd,&r);const int e=IsZoomed(hwnd)?0:MulDiv(7,GetDpiForWindow(hwnd),96);
-        if(webWindow)MoveWindow(webWindow,e,e,r.right-2*e,r.bottom-2*e,TRUE);return 0;
+        if(browser){browser->WasHidden(wp==SIZE_MINIMIZED);if(wp!=SIZE_MINIMIZED)browser->WasResized();}return 0;
     }
     case musxi::cef_adapter::RecoveryFailed:
-        ShowWindow(webWindow,SW_HIDE);
+        surface.clear();
+        SetWindowLongPtrW(hwnd,GWL_EXSTYLE,GetWindowLongPtrW(hwnd,GWL_EXSTYLE)&~WS_EX_NOREDIRECTIONBITMAP);
+        InvalidateRect(hwnd,nullptr,TRUE);
         if(!recoveryText) {
             const auto instance=GetModuleHandleW(nullptr);
             recoveryText=CreateWindowW(L"STATIC",L"界面恢复失败，后台播放不受影响。",WS_CHILD|WS_VISIBLE,40,80,600,40,hwnd,nullptr,instance,nullptr);
@@ -59,8 +156,10 @@ LRESULT CALLBACK testProc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp) {
         ShowWindow(recoveryText,SW_SHOW);ShowWindow(retryButton,SW_SHOW);ShowWindow(exitButton,SW_SHOW);SetFocus(retryButton);return 0;
     case WM_COMMAND:
         if(LOWORD(wp)==1) {
+            renderFailed=false;
             ShowWindow(recoveryText,SW_HIDE);ShowWindow(retryButton,SW_HIDE);ShowWindow(exitButton,SW_HIDE);
-            ShowWindow(webWindow,SW_SHOW);musxi::cef_adapter::retryBrowser();return 0;
+            SetWindowLongPtrW(hwnd,GWL_EXSTYLE,GetWindowLongPtrW(hwnd,GWL_EXSTYLE)|WS_EX_NOREDIRECTIONBITMAP);
+            musxi::cef_adapter::retryBrowser();return 0;
         }
         if(LOWORD(wp)==2)PostMessageW(hwnd,WM_CLOSE,0,0);return 0;
     case WM_CLOSE:
@@ -82,26 +181,32 @@ void ready(void* window) {
     }
     const auto url=CefString(&parts.spec).ToString();
     CefWindowInfo info;
-    if(testApp) {
+    if(!preview) {
         WNDCLASSW wc{};wc.style=CS_DBLCLKS;wc.lpfnWndProc=testProc;wc.hInstance=GetModuleHandleW(nullptr);
         wc.lpszClassName=L"MusxiPlayerTestHost";wc.hCursor=LoadCursorW(nullptr,IDC_ARROW);
-        wc.hbrBackground=static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH));RegisterClassW(&wc);
-        testWindow=CreateWindowExW(0,wc.lpszClassName,L"Musxi Player 测试版",WS_POPUP|WS_THICKFRAME|WS_MINIMIZEBOX|WS_MAXIMIZEBOX|WS_SYSMENU|WS_CLIPCHILDREN,
-            CW_USEDEFAULT,CW_USEDEFAULT,1120,760,nullptr,nullptr,wc.hInstance,nullptr);
+        wc.hbrBackground=nullptr;RegisterClassW(&wc);
+        RECT work{};int x=CW_USEDEFAULT,y=CW_USEDEFAULT,width=1360,height=850;
+        if(SystemParametersInfoW(SPI_GETWORKAREA,0,&work,0)) {
+            const int availableWidth=work.right-work.left,availableHeight=work.bottom-work.top;
+            if(availableWidth<width)width=availableWidth;
+            if(availableHeight<height)height=availableHeight;
+            x=work.left+(availableWidth-width)/2;y=work.top+(availableHeight-height)/2;
+        }
+        testWindow=CreateWindowExW(WS_EX_NOREDIRECTIONBITMAP,wc.lpszClassName,L"Musxi Player 测试版",WS_POPUP|WS_THICKFRAME|WS_MINIMIZEBOX|WS_MAXIMIZEBOX|WS_SYSMENU|WS_CLIPCHILDREN,
+            x,y,width,height,nullptr,nullptr,wc.hInstance,nullptr);
         if(!testWindow){createFailed=true;PostMessageW(nativeWindow,WM_CLOSE,0,0);return;}
         SetWindowPos(testWindow,nullptr,0,0,0,0,SWP_NOMOVE|SWP_NOSIZE|SWP_NOZORDER|SWP_FRAMECHANGED);
-        RECT r;GetClientRect(testWindow,&r);
-        info.SetAsChild(testWindow,CefRect(7,7,r.right-14,r.bottom-14));
+        info.SetAsWindowless(testWindow);
     } else info.SetAsPopup(nullptr,"Musxi Player - CEF Preview");
     info.runtime_style=CEF_RUNTIME_STYLE_ALLOY;
-    if(!testApp)info.bounds=CefRect(160,120,960,680);
+    if(preview)info.bounds=CefRect(160,120,960,680);
     CefBrowserSettings settings;
+    if(!preview){settings.background_color=0;settings.windowless_frame_rate=30;}
     auto browser=CefBrowserHost::CreateBrowserSync(info,
         musxi::cef_adapter::makeClient(url,window,smoke,testWindow),url,settings,nullptr,nullptr);
     if(!browser) {createFailed=true;PostMessageW(nativeWindow,WM_CLOSE,0,0);}
-    else if(smoke)ShowWindow(browser->GetHost()->GetWindowHandle(),SW_HIDE);
-    if(browser && testApp) {
-        webWindow=browser->GetHost()->GetWindowHandle();
+    else if(smoke && preview)ShowWindow(browser->GetHost()->GetWindowHandle(),SW_HIDE);
+    if(browser && !preview) {
         SendMessageW(testWindow,WM_SIZE,0,0);
         if(!smoke)ShowWindow(testWindow,SW_SHOW);
     }
@@ -120,16 +225,18 @@ int run(HINSTANCE instance,int show,void* sandbox) {
     const auto directory=std::filesystem::path(exe).parent_path();
     auto command=CefCommandLine::CreateCommandLine();command->InitFromString(GetCommandLineW());
     testApp=command->HasSwitch("test-app") || std::filesystem::path(exe).filename()==L"MusxiPlayerTest.exe";
-    if(testApp)SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
-    pagePath=(directory/((testApp || command->HasSwitch("cef-vue"))?L"ui-vue":L"ui")/L"index.html").wstring();
+    preview=command->HasSwitch("cef-preview");
+    if(!preview)SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+    pagePath=(directory/(preview?L"ui":L"ui-vue")/L"index.html").wstring();
     smoke=command->HasSwitch("cef-smoke");
     if(smoke && command->HasSwitch("cef-smoke-unicode"))pagePath=(directory/L"测试 空格"/L"index.html").wstring();
     if(!std::filesystem::exists(pagePath))return 2;
     CefSettings settings;
     settings.no_sandbox=sandbox==nullptr;
+    settings.windowless_rendering_enabled=!preview;
     wchar_t local[MAX_PATH]{};
     if(FAILED(SHGetFolderPathW(nullptr,CSIDL_LOCAL_APPDATA,nullptr,0,local)))return 2;
-    const auto data=std::filesystem::path(local)/(testApp?L"MusxiPlayer-Test":L"MusxiPlayer-Preview");
+    const auto data=std::filesystem::path(local)/(preview?L"MusxiPlayer-Preview":testApp?L"MusxiPlayer-Test":L"MusxiPlayer");
     std::error_code ec;std::filesystem::create_directories(data,ec);if(ec)return 2;
     CefString(&settings.root_cache_path)=(data/(smoke?L"cef-smoke-cache":L"cef-cache")).wstring();
     CefString(&settings.log_file)=(data/L"cef.log").wstring();
@@ -138,17 +245,46 @@ int run(HINSTANCE instance,int show,void* sandbox) {
     // A singleton redirect/early exit is not a successful IPC smoke test.
     if(!CefInitialize(CefMainArgs(instance),settings,app,sandbox))
         return smoke?4:CefGetExitCode();
-    musxi::HostHooks hooks{ready,tick,canClose,!smoke,testApp};
-#ifdef MUSXI_ENABLE_FFMPEG
-    hooks.ffmpegAudio=testApp;
-#endif
+    musxi::HostHooks hooks{ready,tick,canClose,!smoke && !preview,testApp};
     musxi::setHostHooks(hooks);
-    const int result=musxi::runNativeApplication(instance,(smoke || testApp)?SW_HIDE:show);
+    const int result=musxi::runApplication(instance);
     musxi::setHostHooks({});
     const bool ok=!createFailed && (!smoke || musxi::cef_adapter::smokePassed());
     CefShutdown();
+    surface.clear();
     if(testWindow)DestroyWindow(testWindow);
     return ok?result:3;
+}
+}
+namespace musxi::cef_adapter {
+void presentBrowser(bool popup,const void* pixels,int width,int height) {
+    if(!testWindow || renderFailed)return;
+    if(surface.paint(testWindow,popup,pixels,width,height))return;
+    surface.clear();
+    if(!popup && surface.paint(testWindow,false,pixels,width,height))return;
+    renderFailed=true;
+    if(smoke)createFailed=true;
+    PostMessageW(testWindow,RecoveryFailed,0,0);
+}
+void browserPopup(bool visible,const CefRect& bounds) {
+    const int dpi=GetDpiForWindow(testWindow);
+    surface.popup(visible,{MulDiv(bounds.x,dpi,96),MulDiv(bounds.y,dpi,96),MulDiv(bounds.x+bounds.width,dpi,96),MulDiv(bounds.y+bounds.height,dpi,96)});
+    surface.present(testWindow);
+}
+void browserCursor(CefCursorHandle cursor) {webCursor=cursor;SetCursor(cursor);}
+int browserPixelAlpha(int x,int y) {
+    const int dpi=GetDpiForWindow(testWindow);return surface.alphaAt(MulDiv(x,dpi,96),MulDiv(y,dpi,96));
+}
+void browserImeBounds(const std::vector<CefRect>& bounds) {
+    if(bounds.empty() || !testWindow)return;
+    const auto context=ImmGetContext(testWindow);if(!context)return;
+    const int dpi=GetDpiForWindow(testWindow);const auto& rect=bounds.back();
+    CANDIDATEFORM candidate{};candidate.dwStyle=CFS_EXCLUDE;
+    candidate.ptCurrentPos={MulDiv(rect.x,dpi,96),MulDiv(rect.y+rect.height,dpi,96)};
+    candidate.rcArea={MulDiv(rect.x,dpi,96),MulDiv(rect.y,dpi,96),MulDiv(rect.x+rect.width,dpi,96),MulDiv(rect.y+rect.height,dpi,96)};
+    ImmSetCandidateWindow(context,&candidate);
+    COMPOSITIONFORM composition{};composition.dwStyle=CFS_POINT;composition.ptCurrentPos=candidate.ptCurrentPos;
+    ImmSetCompositionWindow(context,&composition);ImmReleaseContext(testWindow,context);
 }
 }
 CEF_BOOTSTRAP_EXPORT int RunWinMain(HINSTANCE instance,LPWSTR,int show,
