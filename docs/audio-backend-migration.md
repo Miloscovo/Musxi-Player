@@ -1,8 +1,19 @@
 # Audio backend migration
 
-The A1–A5 sections below are historical records. A6 is the current implementation:
-Vue/CEF is the default window, FFmpeg/WASAPI is the only audio backend, and
-the native GDI UI and MCI source have been removed.
+Current status (2026-09-30): React/CEF is the default window, FFmpeg/WASAPI is
+the only audio backend, and the native GDI UI and MCI source have been removed.
+The A1–A6 sections below are historical migration and acceptance records;
+their Vue, MCI, MinGW and deferred-packaging statements describe those stages.
+
+The frontend and native Release targets have been rebuilt and the 0.2.0 test
+upgrade installer generated. All 12 configured native CTests and the extracted
+installer application's CEF/React/Bridge smoke test passed. The new installer
+uses the Windows system D3DCompiler component and retains the FFmpeg DLLs and
+third-party license materials. The project license is GPL-3.0-or-later.
+Current packaging instructions are in README; the source-material obligations
+and verification scope remain in THIRD_PARTY_NOTICES.md and
+licenses/GPL-Compatibility-Review.md. Physical device unplug, broad GPU/Windows
+coverage and long listening sessions are not established by the new smoke test.
 
 ## A1: MCI isolation
 
@@ -322,7 +333,7 @@ Physical device unplug, protected media, every supported codec on this account,
 long listening sessions, and multi-display UI behavior were not exercised.
 The legacy native default remains MCI; switching the default is an A6 decision.
 
-## A6: Vue/FFmpeg default and legacy removal
+## A6: Vue/FFmpeg default and legacy removal (historical checkpoint)
 
 The 0.2 **test** upgrade keeps the old 0.1 installer AppId, so it can replace
 the old native executable at the original install location. It is not a final

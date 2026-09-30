@@ -63,7 +63,7 @@ Copy-Item -LiteralPath (Join-Path $CefRoot 'LICENSE.txt') -Destination 'build/ce
 Copy-Item -LiteralPath (Join-Path $FfmpegRoot 'LICENSE.txt') -Destination 'build/ffmpeg-license.txt'
 & $Compiler installer/MusxiPlayerUpgrade.iss
 if ($LASTEXITCODE -ne 0) { throw 'Installer compilation failed.' }
-$artifact=Join-Path $PSScriptRoot 'dist/MusxiPlayer-0.2-Test-Upgrade-Setup-x64.exe'
+$artifact=Join-Path $PSScriptRoot 'dist/MusxiPlayer-0.2.0-Test-Upgrade-Setup-x64.exe'
 $hash=Get-FileHash -LiteralPath $artifact -Algorithm SHA256
 [System.IO.File]::WriteAllText("$artifact.sha256", "$($hash.Hash.ToLower())  $([System.IO.Path]::GetFileName($artifact))`n")
 $releaseAssets=@(

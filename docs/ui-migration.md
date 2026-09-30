@@ -1,6 +1,6 @@
 # UI migration: CEF + React + TypeScript + Vite
 
-Current checkpoint (2026-09-27): the default UI uses React and TypeScript.
+Current checkpoint (2026-09-30): the default UI uses React and TypeScript.
 App, LibraryView and CoverImage are TSX components; the four existing composables
 now use React Hooks. CSS, native protocol/client, C++ and CEF source are unchanged
 by this framework migration. No router or state-management library was added.
@@ -9,6 +9,17 @@ MUSXI_BUILD_VUE_UI, vue_ui and the ui-vue deployment directory retain their lega
 names for host/build compatibility, but no Vue dependency or SFC remains.
 The framework-free phase-two page remains available only with --cef-preview.
 The Vue/A6 stage descriptions below are historical.
+
+Release follow-up (2026-09-30): the frontend and native Release targets were
+rebuilt, all 12 configured native CTests passed, and the 0.2.0 test upgrade
+installer was generated. Its extracted React/CEF application passed the native
+bridge smoke test while loading Windows' System32 D3DCompiler DLL. The installer
+excludes the SDK compiler copy, removes a legacy application-local copy on
+upgrade, and displays the project's GPL license. Third-party notices remain
+included. See README and licenses/GPL-Compatibility-Review.md for current
+packaging details and platform-test limits. Earlier statements below about
+Vue defaults or deferred packaging describe their historical checkpoints,
+not the current application. No GitHub release is implied by these local checks.
 
 React migration validation: TypeScript/Vite production build and all 14 native
 client tests pass. All four existing CEF smoke tests pass, including production
@@ -573,7 +584,7 @@ CEF smoke, and uninstalled successfully. Test installation was removed; the
 standalone installer remains in dist. SHA256 sidecar matches the final artifact.
 The package is a test release, not approval to change the production default.
 
-## A6: default Vue entry
+## A6: default Vue entry (historical checkpoint)
 
 The default CEF executable now opens the Vue window. The independent phase-two
 IPC page is available only through `--cef-preview`. The application no longer

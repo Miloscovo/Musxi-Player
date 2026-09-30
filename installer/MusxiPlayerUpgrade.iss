@@ -11,7 +11,7 @@ ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 MinVersion=10.0
 OutputDir=..\dist
-OutputBaseFilename=MusxiPlayer-0.2-Test-Upgrade-Setup-x64
+OutputBaseFilename=MusxiPlayer-0.2.0-Test-Upgrade-Setup-x64
 Compression=lzma2/fast
 SolidCompression=yes
 WizardStyle=modern
@@ -21,7 +21,7 @@ CloseApplicationsFilter=MusxiPlayer.exe
 RestartApplications=no
 DisableProgramGroupPage=yes
 SetupLogging=yes
-LicenseFile=..\licenses\Microsoft-Windows-SDK-LICENSE.rtf
+LicenseFile=..\LICENSE
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Shortcuts:"; Flags: unchecked
@@ -29,7 +29,7 @@ Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription:
 [Files]
 Source: "..\build\cef-msvc\src\cef\Release\MusxiPlayerWeb.exe"; DestDir: "{app}"; DestName: "MusxiPlayer.exe"; Flags: ignoreversion
 Source: "..\build\cef-msvc\src\cef\Release\MusxiPlayerWeb.dll"; DestDir: "{app}"; DestName: "MusxiPlayer.dll"; Flags: ignoreversion
-Source: "..\build\cef-msvc\src\cef\Release\*.dll"; DestDir: "{app}"; Flags: ignoreversion; Excludes: "MusxiPlayerWeb.dll"
+Source: "..\build\cef-msvc\src\cef\Release\*.dll"; DestDir: "{app}"; Flags: ignoreversion; Excludes: "MusxiPlayerWeb.dll,d3dcompiler_47.dll"
 Source: "..\build\cef-msvc\src\cef\Release\*.pak"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\build\cef-msvc\src\cef\Release\icudtl.dat"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\build\cef-msvc\src\cef\Release\v8_context_snapshot.bin"; DestDir: "{app}"; Flags: ignoreversion
@@ -49,6 +49,9 @@ Source: "..\services\package.json"; DestDir: "{app}\services"; Flags: ignorevers
 Source: "..\services\package-lock.json"; DestDir: "{app}\services"; Flags: ignoreversion
 Source: "..\build\services\node_modules\*"; DestDir: "{app}\services\node_modules"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: ".cache\*,*.log"
 Source: "..\build\services\vendor\*"; DestDir: "{app}\services\vendor"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: ".git\*,.env,.env.*,*.log"
+
+[InstallDelete]
+Type: files; Name: "{app}\d3dcompiler_47.dll"
 
 [Icons]
 Name: "{group}\Musxi Player 测试版"; Filename: "{app}\MusxiPlayer.exe"; WorkingDir: "{app}"
