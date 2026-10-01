@@ -3,6 +3,7 @@ param(
     [string]$CefRoot,
     [string]$RuntimeDirectory,
     [string]$PublicReleaseTag,
+    [string]$PublicSourceRevision,
     [switch]$SourceMaterials
 )
 $ErrorActionPreference = 'Stop'
@@ -68,6 +69,26 @@ if ($SourceMaterials) {
     Assert-Hash "$PSScriptRoot/$($manifest.source_bundle_path)" $manifest.source_bundle_sha256
     Assert-Hash "$PSScriptRoot/$($manifest.sdk_archive_path)" $manifest.sdk_archive_sha256
     Assert-Hash "$PSScriptRoot/build/cef-ffmpeg-source-materials/chromium-ffmpeg-$($manifest.cef.ffmpeg_commit).tar.gz" $manifest.cef.source_archive_sha256
+}
+if ($PublicSourceRevision) {
+    if ($PublicSourceRevision -notmatch '^[0-9a-f]{40}$') { throw 'Public source access requires an immutable full Git commit.' }
+    foreach ($name in @('get-ffmpeg-sources.py','licenses/CEF-FFmpeg-source-index.json','licenses/FFmpeg-build.json')) {
+        $response = Invoke-WebRequest -Uri "https://raw.githubusercontent.com/Miloscovo/Musxi-Player/$PublicSourceRevision/$name" -TimeoutSec 60
+        $public = $response.RawContentStream.ToArray()
+        $local = [IO.File]::ReadAllBytes("$PSScriptRoot/$name")
+        if ($name.EndsWith('.py')) {
+            # Git may use CRLF in a Windows working tree; compare canonical source text.
+            $public = [Text.Encoding]::UTF8.GetBytes([Text.Encoding]::UTF8.GetString($public).Replace("`r`n", "`n"))
+            $local = [Text.Encoding]::UTF8.GetBytes([Text.Encoding]::UTF8.GetString($local).Replace("`r`n", "`n"))
+        }
+        $sha = [Security.Cryptography.SHA256]::Create()
+        try {
+            if ([Convert]::ToBase64String($sha.ComputeHash($public)) -ne [Convert]::ToBase64String($sha.ComputeHash($local))) {
+                throw "Published source access differs: $name. Publish and anonymously verify a matching fixed source revision before packaging."
+            }
+        } finally { $sha.Dispose() }
+    }
+    Write-Host "Fixed public FFmpeg source index/recipe mapping verified: $PublicSourceRevision"
 }
 if ($PublicReleaseTag) {
     # Read-only verification of the existing companion-asset publication method.

@@ -3,6 +3,7 @@ import copy
 import json
 from pathlib import Path
 import runpy
+import subprocess
 import tempfile
 
 root = Path(__file__).resolve().parents[1]
@@ -38,3 +39,23 @@ with tempfile.TemporaryDirectory() as folder:
         raise AssertionError('Changed source bytes accepted')
     assert path.read_bytes() == data
 print('PASS: content hashes, binary mapping, fork identity and safe paths enforced')
+
+# Evaluate the real packaging selection without building or touching an installer.
+subprocess.run(['pwsh', '-NoProfile', '-Command', r'''
+$ErrorActionPreference='Stop'
+$tokens=$null; $errors=$null
+$ast=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PWD 'package.ps1'),[ref]$tokens,[ref]$errors)
+if ($errors.Count) { throw 'Packaging syntax errors' }
+$selection=$ast.Find({param($node) $node -is [Management.Automation.Language.AssignmentStatementAst] -and $node.Left.Extent.Text -eq '$releaseAssets'},$true).Extent.Text
+$embeddedMaterials='embedded.tar.gz'; $sourceBundlePath='playback.zip'; $cefFfmpegCommit='fixed'
+$ffmpegManifest=@{source_asset_name='playback.zip'}
+$StageSourceBundles=$false; Invoke-Expression $selection
+if (@($releaseAssets).Count -ne 0) { throw 'Default unexpectedly stages source assets' }
+$StageSourceBundles=$true; Invoke-Expression $selection
+if (@($releaseAssets).Count -ne 2) { throw 'Optional source delivery lost one FFmpeg instance' }
+$record=$ast.Find({param($node) $node -is [Management.Automation.Language.AssignmentStatementAst] -and $node.Left.Extent.Text -eq '$uploadRecord'},$true).Extent.Text
+$artifact='MusxiPlayer-Setup-0.2.0.exe'; $PublicSourceRevision='fixed'
+Invoke-Expression $record
+if (@($uploadRecord.assets).Count -ne 1 -or $uploadRecord.assets[0] -ne $artifact) { throw 'Default upload must be installer only' }
+Write-Host 'PASS: installer-only upload list and both optional source bundles'
+'''], cwd=root, check=True)

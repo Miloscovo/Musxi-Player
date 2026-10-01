@@ -4,7 +4,9 @@ param(
     [string]$Compiler="$PSScriptRoot\build\tools\package\bin\ISCC.exe",
     [string]$FixtureTool,
     [string]$Python="python.exe",
-    [switch]$RequireCleanSource
+    [switch]$RequireCleanSource,
+    [string]$PublicSourceRevision='efd72195e2202325c8a8af8b79068f63ccd1cd18',
+    [switch]$StageSourceBundles
 )
 $ErrorActionPreference='Stop'
 Set-Location $PSScriptRoot
@@ -12,7 +14,8 @@ if ($RequireCleanSource -and @(& git status --porcelain).Count -gt 0) {
     throw 'Release requires a clean committed source revision; review/commit changes before packaging.'
 }
 $ffmpegManifest=Get-Content "$PSScriptRoot/licenses/FFmpeg-build.json" -Raw | ConvertFrom-Json
-& "$PSScriptRoot/verify-ffmpeg.ps1" -FfmpegRoot $FfmpegRoot -CefRoot $CefRoot
+if (-not $PublicSourceRevision) { throw 'Provide a verified fixed public source revision; source delivery cannot be disabled.' }
+& "$PSScriptRoot/verify-ffmpeg.ps1" -FfmpegRoot $FfmpegRoot -CefRoot $CefRoot -PublicSourceRevision $PublicSourceRevision
 if (-not (Test-Path -LiteralPath $Compiler)) { throw 'Provide Inno Setup ISCC.exe using -Compiler.' }
 if (-not (Test-Path -LiteralPath (Join-Path $FfmpegRoot 'LICENSE.txt'))) { throw 'FfmpegRoot must contain the validated LGPL shared SDK and LICENSE.txt.' }
 foreach ($required in @('LICENSE','THIRD_PARTY_NOTICES.md','licenses/Microsoft-Windows-SDK-LICENSE.rtf','licenses/CEF-Chromium-CREDITS.html','licenses/FFmpeg-LICENSE.txt',$ffmpegManifest.source_bundle_path,"$($ffmpegManifest.source_bundle_path).sha256")) {
@@ -87,11 +90,10 @@ if ($LASTEXITCODE -ne 0) { throw 'Installer compilation failed.' }
 $artifact=Join-Path $PSScriptRoot 'dist/MusxiPlayer-Setup-0.2.0.exe'
 $hash=Get-FileHash -LiteralPath $artifact -Algorithm SHA256
 [System.IO.File]::WriteAllText("$artifact.sha256", "$($hash.Hash.ToLower())  $([System.IO.Path]::GetFileName($artifact))`n")
-$releaseAssets=@(
+$releaseAssets=if ($StageSourceBundles) { @(
     @{ Source=$embeddedMaterials; Name="MusxiPlayer-CEF-FFmpeg-Source-$cefFfmpegCommit.tar.gz" },
-    @{ Source=$sourceBundlePath; Name=$ffmpegManifest.source_asset_name },
-    @{ Source=(Join-Path $PSScriptRoot $ffmpegManifest.sdk_archive_path); Name='MusxiPlayer-FFmpeg-SDK-0.2.zip' }
-)
+    @{ Source=$sourceBundlePath; Name=$ffmpegManifest.source_asset_name }
+) } else { @() }
 foreach ($asset in $releaseAssets) {
     $destination=Join-Path $PSScriptRoot "dist/$($asset.Name)"
     Copy-Item -LiteralPath $asset.Source -Destination $destination -Force
@@ -102,7 +104,10 @@ foreach ($asset in $releaseAssets) {
 }
 if ((Get-Item -LiteralPath $artifact).Length -ge $githubAssetLimit) { throw 'The installer exceeds GitHub release asset size limits.' }
 Write-Host "Test upgrade installer: $artifact"
-$checksums=@($artifact) + @($releaseAssets | Where-Object { $_.Name -ne 'MusxiPlayer-FFmpeg-SDK-0.2.zip' } | ForEach-Object { Join-Path $PSScriptRoot "dist/$($_.Name)" })
+$checksums=@($artifact) + @($releaseAssets | ForEach-Object { Join-Path $PSScriptRoot "dist/$($_.Name)" })
 $lines=$checksums | ForEach-Object { "$((Get-FileHash -LiteralPath $_).Hash.ToLowerInvariant())  $([IO.Path]::GetFileName($_))" }
 [IO.File]::WriteAllText("$PSScriptRoot/dist/SHA256SUMS.txt", ($lines -join "`n") + "`n")
-Write-Host 'Release: installer/checksum plus fixed application and two FFmpeg source directions (or staged source bundles/checksums). Playback SDK is optional. CEF BSD does not require a full CEF/Chromium source or SDK attachment. Preserve embedded copyleft source/relink materials; see docs/release-source-delivery.md.'
+$uploadRecord=@{ assets=@([IO.Path]::GetFileName($artifact)); source_revision=$PublicSourceRevision;
+    source_url="https://github.com/Miloscovo/Musxi-Player/blob/$PublicSourceRevision/docs/release-source-delivery.md" }
+[IO.File]::WriteAllText("$PSScriptRoot/dist/release-assets.json", ($uploadRecord | ConvertTo-Json) + "`n")
+Write-Host "Default upload: $([IO.Path]::GetFileName($artifact)) only; use dist/release-assets.json, never a dist wildcard. Local checksums/source bundles are not default uploads. Announce the fixed source URL beside the download. -StageSourceBundles stages optional bundles without removing existing files."

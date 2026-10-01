@@ -14,12 +14,26 @@ substitute for Chromium's FFmpeg fork, and a pristine upstream FFmpeg checkout
 is not a substitute for the Chromium fork and its necessary integration files.
 The existing two source archives remain available during this migration.
 
-The playback fixed public route below was anonymously downloaded and compared
-on 2026-10-02. The embedded replacement route must also pass the public
-retrieval/material verification before changing default release delivery. New
-local scripts or documents are not a public source entrance until a reviewed
-immutable revision containing them is publicly available. Availability alone is
-not a claim of unconditional legal clearance or an official CEF rebuild.
+Both fixed public routes were anonymously recovered on 2026-10-02 from
+[`efd72195e2202325c8a8af8b79068f63ccd1cd18`](https://github.com/Miloscovo/Musxi-Player/tree/efd72195e2202325c8a8af8b79068f63ccd1cd18).
+The fresh check downloaded that commit's getter/index/manifest, used Python
+isolated mode and disabled Git credentials; no local source bundle, SDK or CEF
+workspace was an input. All 1,045 embedded file hashes and the reconstructed
+fork archive matched; playback source and recipe matched their recorded hashes.
+This is source-access verification, not unconditional legal clearance or an
+official CEF rebuild. Existing Release attachments remain untouched.
+
+**Immutable recipient entry:** [verified source guide](https://github.com/Miloscovo/Musxi-Player/blob/efd72195e2202325c8a8af8b79068f63ccd1cd18/docs/release-source-delivery.md).
+That frozen guide describes the retrieval gate before it was passed; this
+dated result records its successful execution. Download these three files from
+the same commit, preserving the `licenses/` directory:
+
+- [get-ffmpeg-sources.py](https://raw.githubusercontent.com/Miloscovo/Musxi-Player/efd72195e2202325c8a8af8b79068f63ccd1cd18/get-ffmpeg-sources.py)
+- [CEF-FFmpeg-source-index.json](https://raw.githubusercontent.com/Miloscovo/Musxi-Player/efd72195e2202325c8a8af8b79068f63ccd1cd18/licenses/CEF-FFmpeg-source-index.json)
+- [FFmpeg-build.json](https://raw.githubusercontent.com/Miloscovo/Musxi-Player/efd72195e2202325c8a8af8b79068f63ccd1cd18/licenses/FFmpeg-build.json)
+
+Only Python 3 and Git plus network access are needed for retrieval. Compilation
+requires the separately documented tools; retrieval does not compile anything.
 
 ## Fixed source index for the existing installer
 
@@ -123,6 +137,26 @@ verified backups; a local backup is not public delivery. If a required URL
 fails, restore equivalent exact public access and update the download-page
 directions before continuing binary distribution. No written source offer or
 upstream retention guarantee is invented here.
+
+### Publisher packaging defaults
+
+`package.ps1 -RequireCleanSource` retains SDK/binary/license/source-bundle
+validation and the existing local archive preparation. It verifies the public
+getter, source index and binary/build manifest at the full pinned source commit
+before building. A changed binary/source record or getter requires a newly
+published and anonymously verified source revision; pass it explicitly with
+`-PublicSourceRevision <full-commit>` after completing that review. The quick
+packaging check verifies the published mapping, not every upstream URL: run the
+full anonymous getter again when reviewing source changes or availability.
+
+`dist/release-assets.json` lists the default upload: installer EXE only, and the
+fixed source-guide URL to announce next to it. GitHub's automatic source ZIP and
+tar.gz remain. SHA256SUMS and EXE checksum sidecars stay local; `-StageSourceBundles`
+optionally copies the two source archives to dist. The developer SDK remains a
+local optional developer artifact. Do not upload a dist wildcard: existing
+archives are deliberately not deleted. No script in this change uploads assets
+or removes existing ones. `verify-ffmpeg.ps1 -PublicReleaseTag` remains available
+for the existing attachment route; `-PublicSourceRevision` checks the new route.
 
 CEF's BSD license requires the matching CEF LICENSE and Chromium credits in the
 installed package. It does not require uploading full CEF/Chromium source or
