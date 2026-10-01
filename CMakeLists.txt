@@ -38,8 +38,9 @@ if(BUILD_TESTING AND MUSXI_ENABLE_FFMPEG)
     target_link_libraries(audio-decoder PRIVATE music_audio_decoder)
     add_custom_command(TARGET audio-decoder POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_if_different
       ${FFmpeg_RUNTIME_FILES} "$<TARGET_FILE_DIR:audio-decoder>" COMMAND_EXPAND_LISTS)
+    set(MUSXI_FFMPEG_FIXTURE_TOOL "${FFMPEG_ROOT}/bin/ffmpeg.exe" CACHE FILEPATH "Development-only FFmpeg CLI with audio encoders for test fixtures")
     add_test(NAME audio-fixtures COMMAND ${CMAKE_COMMAND}
-      "-DFFMPEG=${FFMPEG_ROOT}/bin/ffmpeg.exe" "-DOUT=${CMAKE_BINARY_DIR}/audio-fixtures"
+      "-DFFMPEG=${MUSXI_FFMPEG_FIXTURE_TOOL}" "-DOUT=${CMAKE_BINARY_DIR}/audio-fixtures"
       -P "${CMAKE_SOURCE_DIR}/tests/audio-fixtures.cmake")
     set_tests_properties(audio-fixtures PROPERTIES FIXTURES_SETUP audio_samples TIMEOUT 90)
     add_test(NAME audio-decoder COMMAND audio-decoder "${CMAKE_BINARY_DIR}/audio-fixtures")

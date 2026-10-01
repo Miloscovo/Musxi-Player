@@ -1,13 +1,16 @@
 param(
     [Parameter(Mandatory=$true)][string]$CefRoot,
     [Parameter(Mandatory=$true)][string]$FfmpegRoot,
-    [string]$Compiler="$PSScriptRoot\build\tools\package\bin\ISCC.exe"
+    [string]$Compiler="$PSScriptRoot\build\tools\package\bin\ISCC.exe",
+    [string]$FixtureTool
 )
 $ErrorActionPreference='Stop'
 Set-Location $PSScriptRoot
+$ffmpegManifest=Get-Content "$PSScriptRoot/licenses/FFmpeg-build.json" -Raw | ConvertFrom-Json
+& "$PSScriptRoot/verify-ffmpeg.ps1" -FfmpegRoot $FfmpegRoot -CefRoot $CefRoot
 if (-not (Test-Path -LiteralPath $Compiler)) { throw 'Provide Inno Setup ISCC.exe using -Compiler.' }
 if (-not (Test-Path -LiteralPath (Join-Path $FfmpegRoot 'LICENSE.txt'))) { throw 'FfmpegRoot must contain the validated LGPL shared SDK and LICENSE.txt.' }
-foreach ($required in @('LICENSE','THIRD_PARTY_NOTICES.md','licenses/Microsoft-Windows-SDK-LICENSE.rtf','licenses/CEF-Chromium-CREDITS.html','licenses/FFmpeg-LICENSE.txt','build/ffmpeg-source-materials/ffmpeg-source-materials-bundle.zip','build/ffmpeg-source-materials/ffmpeg-source-materials-bundle.zip.sha256')) {
+foreach ($required in @('LICENSE','THIRD_PARTY_NOTICES.md','licenses/Microsoft-Windows-SDK-LICENSE.rtf','licenses/CEF-Chromium-CREDITS.html','licenses/FFmpeg-LICENSE.txt',$ffmpegManifest.source_bundle_path,"$($ffmpegManifest.source_bundle_path).sha256")) {
     if (-not (Test-Path -LiteralPath $required)) { throw "Missing release license/source material: $required" }
 }
 $cefFfmpegCommit='2b68d2babae73714846961fb0ee47e3b3d2e39a9'
@@ -47,10 +50,11 @@ $cefSourceEntries=$cefSourceEntries | ForEach-Object { $_ -replace '^\./','' }
 foreach ($sourceEntry in @('README.chromium','COPYING.LGPLv2.1','BUILD.gn','ffmpeg_generated.gni','chromium/patches/config_flag_changes.txt')) {
     if ($cefSourceEntries -notcontains $sourceEntry) { throw "CEF FFmpeg source archive is missing $sourceEntry." }
 }
-$sourceBundlePath=Join-Path $PSScriptRoot 'build/ffmpeg-source-materials/ffmpeg-source-materials-bundle.zip'
+$sourceBundlePath=Join-Path $PSScriptRoot $ffmpegManifest.source_bundle_path
 $sourceBundleExpected=((Get-Content -Raw "${sourceBundlePath}.sha256") -split '\s+')[0].ToLowerInvariant()
 $sourceBundleActual=(Get-FileHash -Algorithm SHA256 -LiteralPath $sourceBundlePath).Hash.ToLowerInvariant()
-if ($sourceBundleActual -ne $sourceBundleExpected) { throw 'The BtbN FFmpeg source-materials bundle does not match its checksum sidecar.' }
+if ($sourceBundleActual -ne $sourceBundleExpected) { throw 'The playback FFmpeg source-materials bundle does not match its checksum sidecar.' }
+& "$PSScriptRoot/verify-ffmpeg.ps1" -FfmpegRoot $FfmpegRoot -CefRoot $CefRoot -SourceMaterials
 $githubAssetLimit=[long]2147483648
 foreach ($sourceAsset in @($cefFfmpegSource,$sourceBundlePath)) {
     if ((Get-Item -LiteralPath $sourceAsset).Length -ge $githubAssetLimit) { throw "Source asset exceeds GitHub's 2 GiB per-file limit: $sourceAsset" }
@@ -58,7 +62,7 @@ foreach ($sourceAsset in @($cefFfmpegSource,$sourceBundlePath)) {
 foreach ($required in @('build/runtime/node.exe','build/services/node_modules','build/services/vendor')) {
     if (-not (Test-Path -LiteralPath $required)) { throw "Missing $required; run setup-cloud.ps1 first." }
 }
-& "$PSScriptRoot\build.ps1" -CefRoot $CefRoot -FfmpegRoot $FfmpegRoot -Test
+& "$PSScriptRoot\build.ps1" -CefRoot $CefRoot -FfmpegRoot $FfmpegRoot -Test -FixtureTool $FixtureTool
 Copy-Item -LiteralPath (Join-Path $CefRoot 'LICENSE.txt') -Destination 'build/cef-license.txt'
 Copy-Item -LiteralPath (Join-Path $FfmpegRoot 'LICENSE.txt') -Destination 'build/ffmpeg-license.txt'
 & $Compiler installer/MusxiPlayerUpgrade.iss
@@ -68,7 +72,8 @@ $hash=Get-FileHash -LiteralPath $artifact -Algorithm SHA256
 [System.IO.File]::WriteAllText("$artifact.sha256", "$($hash.Hash.ToLower())  $([System.IO.Path]::GetFileName($artifact))`n")
 $releaseAssets=@(
     @{ Source=$cefFfmpegSource; Name="MusxiPlayer-CEF-FFmpeg-Source-$cefFfmpegCommit.tar.gz" },
-    @{ Source=$sourceBundlePath; Name='MusxiPlayer-FFmpeg-Source-Materials-0.2.zip' }
+    @{ Source=$sourceBundlePath; Name='MusxiPlayer-FFmpeg-Source-Materials-0.2.zip' },
+    @{ Source=(Join-Path $PSScriptRoot $ffmpegManifest.sdk_archive_path); Name='MusxiPlayer-FFmpeg-SDK-0.2.zip' }
 )
 foreach ($asset in $releaseAssets) {
     $destination=Join-Path $PSScriptRoot "dist/$($asset.Name)"
@@ -80,4 +85,4 @@ foreach ($asset in $releaseAssets) {
 }
 if ((Get-Item -LiteralPath $artifact).Length -ge $githubAssetLimit) { throw 'The installer exceeds GitHub release asset size limits.' }
 Write-Host "Test upgrade installer: $artifact"
-Write-Host 'GitHub release assets: installer, CEF FFmpeg source, and BtbN FFmpeg source-materials bundle.'
+Write-Host 'Release assets: installer, playback FFmpeg source/SDK, embedded FFmpeg source, and checksum sidecars. Full CEF/application source delivery remains a separate release review item.'

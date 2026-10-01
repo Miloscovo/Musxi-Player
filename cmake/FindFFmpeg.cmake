@@ -1,5 +1,12 @@
 # Explicit SDK only: never mix PATH/MSYS headers with an unrelated DLL set.
 set(FFMPEG_ROOT "" CACHE PATH "Unpacked Windows x64 FFmpeg shared SDK")
+find_program(MUSXI_POWERSHELL NAMES pwsh powershell REQUIRED)
+execute_process(COMMAND "${MUSXI_POWERSHELL}" -NoProfile -ExecutionPolicy Bypass
+  -File "${PROJECT_SOURCE_DIR}/verify-ffmpeg.ps1" -FfmpegRoot "${FFMPEG_ROOT}"
+  RESULT_VARIABLE ffmpeg_audit_result)
+if(NOT ffmpeg_audit_result EQUAL 0)
+  message(FATAL_ERROR "FFmpeg distribution evidence check failed; update the audit before building a new SDK.")
+endif()
 if(NOT IS_DIRECTORY "${FFMPEG_ROOT}/include")
   message(FATAL_ERROR "Set FFMPEG_ROOT to a shared FFmpeg SDK (see setup-ffmpeg.ps1).")
 endif()

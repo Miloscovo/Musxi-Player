@@ -1,0 +1,13 @@
+diff --git a/DEPS b/DEPS
+index 3e9c5c6cb2..fcb22491bf 100644
+--- a/DEPS
++++ b/DEPS
+@@ -1382,7 +1382,7 @@ deps = {
+ 
+   'src/third_party/updater/chrome_win_x86/cipd': {
+       'dep_type': 'cipd',
+-      'condition': 'checkout_win',
++      'condition': 'False',
+       'packages': [
+         {
+           'package': 'chromium/third_party/updater/chrome_win_x86',

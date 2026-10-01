@@ -27,24 +27,24 @@ React 是默认界面，C++ 持有真实播放状态和云端媒体库状态。A
 准备 SDK 和服务依赖：
 
 1. 手动下载并解压 CEF Windows x64 Standard Binary Distribution。当前验证版本为 CEF `152.0.6+g708dc14` / Chromium `152.0.7977.83`，版本及来源见 [CEF 构建审计](licenses/CEF-Windows-Build-Audit.md)。下方假设解压目录为 `build/deps/cef-sdk`，该目录内应直接包含 `cmake/FindCEF.cmake`；也可把 `$cefRoot` 改为自己的 SDK 目录。构建脚本不会自动下载 CEF。
-2. 运行 `setup-ffmpeg.ps1`，下载并校验脚本固定的 LGPL 共享版 FFmpeg SDK；脚本会输出 `FFMPEG_ROOT`。下方路径与当前脚本的固定版本一致，若更新 SDK，应同步使用新的输出路径。
+2. 当前播放 SDK 已改为固定源码自行构建的 LGPL-2.1-or-later 共享库，目录约定为 `build/deps/ffmpeg-musxi-a5923073-msvc`。准备与当前清单匹配的 `MusxiPlayer-FFmpeg-SDK-0.2.zip`，首次运行 `./setup-ffmpeg.ps1 -SdkArchive <SDK ZIP 路径>`，之后可直接运行 `./setup-ffmpeg.ps1` 校验。该 ZIP 已在本地生成，当前尚未公开发布。也可使用 `build-ffmpeg.ps1` 从源码重建，完整说明见 [发行核查记录](licenses/Release-Readiness.md)；不同工具链或路径的重建结果需要重新记录发行哈希，不能假定逐字节相同。
 3. 运行 `setup-cloud.ps1` 准备本机服务依赖，再将服务文件放入 `build/services`。当前 `-Package` 分支仍有旧原生程序路径检查，因此此处使用显式复制，不调用该分支。
 
 ```powershell
 $cefRoot = (Resolve-Path './build/deps/cef-sdk').Path
 ./setup-ffmpeg.ps1
-$ffmpegRoot = (Resolve-Path './build/deps/ffmpeg-n9.0.2-3-ga5923073bf-win64-lgpl-shared-9.0').Path
+$ffmpegRoot = (Resolve-Path './build/deps/ffmpeg-musxi-a5923073-msvc').Path
 ./setup-cloud.ps1
 
 New-Item -ItemType Directory -Path './build/services' -Force | Out-Null
 Copy-Item './services/bridge.cjs', './services/package.json', './services/package-lock.json' -Destination './build/services' -Force
 Copy-Item './services/node_modules', './services/vendor' -Destination './build/services' -Recurse -Force
 
-./build.ps1 -CefRoot $cefRoot -FfmpegRoot $ffmpegRoot -Test
+./build.ps1 -CefRoot $cefRoot -FfmpegRoot $ffmpegRoot
 ./build/cef-msvc/src/cef/Release/MusxiPlayerWeb.exe
 ```
 
-`build.ps1` 会安装前端依赖、构建 React 页面和原生目标，并在指定 `-Test` 时运行 CTest。CEF 构建会把已准备的 `build/services`、`build/runtime` 和界面资源部署到程序目录。请使用上方 CEF 程序入口；`setup-cloud.ps1` 末尾的 `build/MusxiPlayer.exe --kugou` 提示是旧入口说明。
+`build.ps1` 会安装前端依赖、构建 React 页面和原生目标。运行测试时额外指定 `-Test -FixtureTool <带 libmp3lame/libvorbis/libopus 编码器的 ffmpeg.exe>`；该 CLI 只生成测试样本，不随应用分发，当前精简 SDK 不包含编码 CLI。CEF 构建会把已准备的 `build/services`、`build/runtime` 和界面资源部署到程序目录。请使用上方 CEF 程序入口；`setup-cloud.ps1` 末尾的 `build/MusxiPlayer.exe --kugou` 提示是旧入口说明。
 
 `--cef-preview` 仅用于打开早期 IPC 技术验证页；`--cef-smoke` 用于自动检查。构建要求 Windows x64/MSVC。CMake 中的 `music_core` 与 `music_application` 仍固定为 C++17，CEF 层独立使用 C++20。
 

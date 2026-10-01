@@ -1,0 +1,91 @@
+{
+  "version": "n9.0.2-3-ga5923073bf-musxi-local-1",
+  "ffmpeg_commit": "a5923073bfd8f25b7300d93af3f8e690174ebd30",
+  "build_kind": "musxi-msvc-shared",
+  "build_script": "build-ffmpeg.ps1",
+  "build_script_sha256": "ba5aea7519c7e5faa5285572c1f13bd28cbc0d595fcc9b11633b803cf1830099",
+  "source_archive_sha256": "65474f81cf8a4e2529cca6c25877fca8b6f3340a67ff804a306bbc3940cd46f6",
+  "source_bundle_path": "build/ffmpeg-local/ffmpeg-source-materials-bundle.zip",
+  "source_asset_name": "MusxiPlayer-FFmpeg-Source-Materials-0.2.zip",
+  "license": "LGPL-2.1-or-later",
+  "configuration": "--toolchain=msvc --arch=x86_64 --target-os=win32 --prefix=/d/Music/build/deps/ffmpeg-musxi-a5923073-msvc --enable-shared --disable-static --disable-gpl --disable-nonfree --disable-version3 --disable-autodetect --disable-debug --disable-doc --disable-programs --disable-avdevice --disable-avfilter --disable-swscale --disable-network --disable-everything --enable-avcodec --enable-avformat --enable-avutil --enable-swresample --enable-demuxer='wav,mp3,flac,mov,aac,ogg,asf' --enable-protocol=file --enable-parser='aac,aac_latm,ac3,dca,flac,mpegaudio,opus,vorbis' --enable-decoder='aac,aac_fixed,aac_latm,alac,flac,mp3,mp3float,mp2,mp2float,vorbis,opus,wmav1,wmav2,wmapro,wmalossless,wmavoice,pcm*,adpcm*,ac3,eac3,dca,ape,wavpack,tak,tta' --extra-version=musxi-local-1",
+  "component_versions": {
+    "avutil": "61.1.102",
+    "swresample": "7.1.102",
+    "avcodec": "63.1.102",
+    "avformat": "63.1.102"
+  },
+  "files": [
+    {
+      "file": "avutil-61.dll",
+      "bytes": 1137664,
+      "sha256": "7df33f6ea14a9104d1ce1d7249edcdd687173b26f378342449a4fdf074a333a3",
+      "distributed": true
+    },
+    {
+      "file": "avutil.lib",
+      "sdk_path": "lib/avutil.lib",
+      "sha256": "aa37fca18919163a0b6148df9bb0fb170e91fc7a45e2db2efe8d20a0a0ab13b1",
+      "distributed": false
+    },
+    {
+      "file": "swresample-7.dll",
+      "bytes": 236032,
+      "sha256": "b189030250b6833496cec0aac60b411219392e33ca2b0346aa2bb17b36a3a719",
+      "distributed": true
+    },
+    {
+      "file": "swresample.lib",
+      "sdk_path": "lib/swresample.lib",
+      "sha256": "7cdaff142a995127291c4e91af6b2cb39abfffd5e94344bcad6b7284c9ab389e",
+      "distributed": false
+    },
+    {
+      "file": "avcodec-63.dll",
+      "bytes": 1861632,
+      "sha256": "e78f7dd436b5e14ac90f0ce274deaaefc19ad525db99b6c6053ab40cfa387481",
+      "distributed": true
+    },
+    {
+      "file": "avcodec.lib",
+      "sdk_path": "lib/avcodec.lib",
+      "sha256": "5b24918633c651ef3aa0d936f3ab1d15f9d5711790fa8e06079292ba33f638ad",
+      "distributed": false
+    },
+    {
+      "file": "avformat-63.dll",
+      "bytes": 699904,
+      "sha256": "e43ff004861af44171ece58c7b6bf359dfbad3fe4dea65f27ed9e4eafafff03a",
+      "distributed": true
+    },
+    {
+      "file": "avformat.lib",
+      "sdk_path": "lib/avformat.lib",
+      "sha256": "0cd6dadf592cf0175c6b0c748980354f7e0f646562239eb72ecfaa47de01928a",
+      "distributed": false
+    }
+  ],
+  "license_sha256": "246041b6ecf9bc32d718a62c57877c78b5eb397b6467e74ed7ae2626ab189c30",
+  "header_sha256": "620f6e31157b478fc4e8b1357c9acd5c6c2b1ce3551a40867faa6cdeb7a06282",
+  "source_bundle_sha256": "241c0e2f4abb0f606ee6173bdb8da029d497825ea96afebf34f6f20bf5820a91",
+  "cef": {
+    "upstream_ffmpeg_grant": "LGPL-2.1-or-later",
+    "ffmpeg_compliance_version": "LGPL v3",
+    "source_delivery_method": "GPLv3 section 6(d) via LGPLv3; corresponding/relink materials required",
+    "publisher_selection_date": "2026-10-01",
+    "source_delivery_status": "pending-publication-and-completeness-review",
+    "version": "152.0.6+g708dc14",
+    "chromium_version": "152.0.7977.83",
+    "ffmpeg_commit": "2b68d2babae73714846961fb0ee47e3b3d2e39a9",
+    "libcef_sha256": "f5021c3477a84a9c96c0b6a01a038a568fe2cdb7d294ea84aaf6cd70b26c8a09",
+    "source_archive_sha256": "44e2a979772d63070dd354d22e32aecd209ec5689ea738c8ef81185fee3ebcfb"
+  },
+  "license_materials_sha256": {
+    "CEF-FFmpeg-COPYING.LGPLv3": "da7eabb7bafdf7d3ae5e9f223aa5bdc1eece45ac569dc21b3b037520b4464768",
+    "CEF-FFmpeg-CREDITS.txt": "84172520768a4d91d4917269a554d41ab04df6d23ec7f8ddf8a2d7d9bbb59eb4",
+    "CEF-FFmpeg-LICENSE.md": "36f6e2cb63f6a40a72b5c1b6169fb03f338d7eccd336fb3ccd4dcc0b49116dd1",
+    "FFmpeg-LICENSE.md": "2e1d16c72fd74e12063776371da757322f8b77589386532f4fd8634bde7de1af"
+  },
+  "sdk_archive_path": "build/ffmpeg-local/MusxiPlayer-FFmpeg-SDK-0.2.zip",
+  "sdk_archive_sha256": "07fc0285bb86b65713e6d788dd9590efacaac150d184f99d07b14c6b31ddcdd6"
+}

@@ -1,0 +1,91 @@
+{
+  "version": "n9.0.2-3-ga5923073bf-20260921",
+  "ffmpeg_commit": "a5923073bfd8f25b7300d93af3f8e690174ebd30",
+  "build_scripts_commit": "3e6685eda92f9288c15ac320139622dcedca09a4",
+  "release": "autobuild-2026-09-21-13-55",
+  "archive": "ffmpeg-n9.0.2-3-ga5923073bf-win64-lgpl-shared-9.0.zip",
+  "archive_sha256": "a7e62ca9b34c40145a2c7482f61a78063f6c8f8dbcf17effb27e62841fa6bbd9",
+  "license": "LGPL-3.0-or-later",
+  "configuration": "--prefix=/ffbuild/prefix --pkg-config-flags=--static --pkg-config=pkg-config --cross-prefix=x86_64-w64-mingw32- --arch=x86_64 --target-os=mingw32 --enable-version3 --disable-debug --enable-shared --disable-static --disable-w32threads --enable-pthreads --enable-iconv --enable-zlib --enable-libxml2 --enable-libvmaf --enable-fontconfig --enable-libharfbuzz --enable-libfreetype --enable-libfribidi --enable-vulkan --enable-libdav1d --enable-libvorbis --enable-librav1e --enable-librsvg --disable-libxcb --disable-xlib --disable-libpulse --enable-gmp --enable-lzma --enable-liblcevc-dec --enable-opencl --enable-amf --enable-libaom --disable-avisynth --enable-chromaprint --disable-libdavs2 --disable-libdvdread --disable-libdvdnav --disable-libfdk-aac --enable-ffnvcodec --enable-cuda-llvm --disable-frei0r --enable-libgme --enable-libkvazaar --enable-libaribb24 --enable-libaribcaption --enable-libass --enable-libbluray --enable-libjxl --enable-libmp3lame --enable-libopus --enable-libplacebo --enable-librist --enable-libssh --enable-libtheora --enable-libvpx --enable-libwebp --enable-libzmq --enable-lv2 --enable-libvpl --enable-openal --enable-liboapv --enable-libopencore-amrnb --enable-libopencore-amrwb --enable-libopenh264 --enable-libopenjpeg --enable-libopenmpt --disable-librubberband --enable-schannel --enable-sdl2 --enable-libsnappy --enable-libsoxr --enable-libsrt --enable-libsvtav1 --enable-libtwolame --enable-libuavs3d --disable-libdrm --enable-vaapi --disable-libvidstab --enable-libvvenc --disable-whisper --disable-libx264 --disable-libx265 --disable-libxavs2 --disable-libxvid --enable-libzimg --enable-libzvbi --extra-cflags=-DLIBTWOLAME_STATIC --extra-cxxflags= --extra-libs=-lgomp --extra-ldflags=-pthread --extra-ldexeflags= --cc=x86_64-w64-mingw32-gcc --cxx=x86_64-w64-mingw32-g++ --ar=x86_64-w64-mingw32-gcc-ar --ranlib=x86_64-w64-mingw32-gcc-ranlib --nm=x86_64-w64-mingw32-gcc-nm --extra-version=20260921",
+  "files": [
+    {
+      "file": "avcodec-63.dll",
+      "bytes": 90353152,
+      "sha256": "c009bf7ed6561eb46e980fc0d96732ae9e071eae1258dce4a0b8b8be8887b5e4",
+      "distributed": true
+    },
+    {
+      "file": "avdevice-63.dll",
+      "bytes": 4047872,
+      "sha256": "cd0dbf01d68440345c42d4e6e664588e0e66ecd537b0088f67e0777fa4d9dffe",
+      "distributed": false
+    },
+    {
+      "file": "avfilter-12.dll",
+      "bytes": 30806016,
+      "sha256": "d5784b74ea5a78aad5290667790f1ae3a755ecab392b1f4743c76c0be3517df3",
+      "distributed": false
+    },
+    {
+      "file": "avformat-63.dll",
+      "bytes": 22668800,
+      "sha256": "369c5e1c63cd90ebce8b5b85561558d70b5629520e4706d17ab30ac7aa04f7f1",
+      "distributed": true
+    },
+    {
+      "file": "avutil-61.dll",
+      "bytes": 3014656,
+      "sha256": "78505f59111bf587f9e7fbd160d11b9032aa3bc8ffe2d79d57f4eea34d6ac657",
+      "distributed": true
+    },
+    {
+      "file": "ffmpeg.exe",
+      "bytes": 538624,
+      "sha256": "0bcc6ff648a7be6b895e0178f0fc466befc8b90624e136d96778ba75c026d819",
+      "distributed": false
+    },
+    {
+      "file": "ffplay.exe",
+      "bytes": 18721280,
+      "sha256": "26814cf516026a3309dddb7a3883dd10b2d55e7aef1bf330c662b5fdc510e968",
+      "distributed": false
+    },
+    {
+      "file": "ffprobe.exe",
+      "bytes": 228864,
+      "sha256": "1a16f3a61f905735ef16d9f83a326d75592aaa0fb3b08af1cc5c9a9782dbf7d9",
+      "distributed": false
+    },
+    {
+      "file": "swresample-7.dll",
+      "bytes": 733696,
+      "sha256": "21c23edbeba7c28cf7900ced6a37ff43022f87d498716435bd656fe64b429d2f",
+      "distributed": true
+    },
+    {
+      "file": "swscale-10.dll",
+      "bytes": 2330624,
+      "sha256": "e92427d99c6c41fb52d326941282c6934aed8a78f4e29b0375ffd8e65b7f286c",
+      "distributed": false
+    }
+  ],
+  "license_sha256": "da7eabb7bafdf7d3ae5e9f223aa5bdc1eece45ac569dc21b3b037520b4464768",
+  "header_sha256": "965229fbdf33e393b5c9d9e8a8987d65cf7276a56ebbcc511861cbf8fab1bee7",
+  "source_bundle_sha256": "5de4888b97a3f5daed166509092db52912d49e06c4a8b50456ff1a7567b2fa64",
+  "cef": {
+    "version": "152.0.6+g708dc14",
+    "chromium_version": "152.0.7977.83",
+    "ffmpeg_commit": "2b68d2babae73714846961fb0ee47e3b3d2e39a9",
+    "libcef_sha256": "f5021c3477a84a9c96c0b6a01a038a568fe2cdb7d294ea84aaf6cd70b26c8a09",
+    "source_archive_sha256": "44e2a979772d63070dd354d22e32aecd209ec5689ea738c8ef81185fee3ebcfb"
+  },
+  "license_materials_sha256": {
+    "FFmpeg-External-NOTICES.txt": "202781d68bc4f2b634e7eb74745b9bc8494a3ca8de2922eed8a3f16bb92a498b",
+    "FFmpeg-External-Materials.json": "198e921942c28ad70b71ea5bb3f4174a4ed764372489b2e247447df3a8f6d1a1",
+    "FFmpeg-MPL-2.0.txt": "3f3d9e0024b1921b067d6f7f88deb4a60cbe7a78e76c64e3f1d7fc3b779b9d04",
+    "CEF-FFmpeg-CREDITS.txt": "84172520768a4d91d4917269a554d41ab04df6d23ec7f8ddf8a2d7d9bbb59eb4",
+    "CEF-FFmpeg-LICENSE.md": "36f6e2cb63f6a40a72b5c1b6169fb03f338d7eccd336fb3ccd4dcc0b49116dd1"
+  },
+  "btbn_workflow_run": "https://github.com/BtbN/FFmpeg-Builds/actions/runs/35598481244",
+  "btbn_build_job": "https://github.com/BtbN/FFmpeg-Builds/actions/runs/35598481244/job/106346185999"
+}

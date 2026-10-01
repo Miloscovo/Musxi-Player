@@ -1,0 +1,3 @@
+# Preserve upstream license bytes and audit hashes across Windows/Linux checkouts.
+licenses/** -text
+build-ffmpeg.ps1 text eol=lf

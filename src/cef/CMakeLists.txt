@@ -11,6 +11,12 @@ set(CEF_RUNTIME_LIBRARY_FLAG "/MT")
 set(USE_SANDBOX ON CACHE BOOL "Use SDK bootstrap sandbox" FORCE)
 set(USE_ATL OFF CACHE BOOL "ATL not needed" FORCE)
 find_package(CEF REQUIRED)
+execute_process(COMMAND "${MUSXI_POWERSHELL}" -NoProfile -ExecutionPolicy Bypass
+  -File "${PROJECT_SOURCE_DIR}/verify-ffmpeg.ps1" -FfmpegRoot "${FFMPEG_ROOT}" -CefRoot "${CEF_ROOT}"
+  RESULT_VARIABLE cef_ffmpeg_audit_result)
+if(NOT cef_ffmpeg_audit_result EQUAL 0)
+  message(FATAL_ERROR "CEF embedded FFmpeg distribution evidence check failed.")
+endif()
 add_subdirectory("${CEF_LIBCEF_DLL_WRAPPER_PATH}" "${CMAKE_CURRENT_BINARY_DIR}/libcef_dll_wrapper")
 set_target_properties(libcef_dll_wrapper PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED YES CXX_EXTENSIONS NO)
 ADD_LOGICAL_TARGET(libcef_lib "${CEF_LIB_DEBUG}" "${CEF_LIB_RELEASE}")
@@ -42,7 +48,11 @@ COPY_FILES(cef_host "${CEF_RESOURCE_FILES}" "${CEF_RESOURCE_DIR}" "${CEF_TARGET_
 option(MUSXI_BUILD_VUE_UI "Build and deploy the Vue application" ON)
 add_custom_target(cef_ui_assets ALL
   COMMAND ${CMAKE_COMMAND} -E copy_directory
-          "${CMAKE_SOURCE_DIR}/frontend/phase2" "${CEF_TARGET_OUT_DIR}/ui")
+          "${CMAKE_SOURCE_DIR}/frontend/phase2" "${CEF_TARGET_OUT_DIR}/ui"
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          "${CMAKE_SOURCE_DIR}/LICENSE" "${CMAKE_SOURCE_DIR}/THIRD_PARTY_NOTICES.md" "${CEF_TARGET_OUT_DIR}"
+  COMMAND ${CMAKE_COMMAND} -E copy_directory
+          "${CMAKE_SOURCE_DIR}/licenses" "${CEF_TARGET_OUT_DIR}/licenses")
 if(MUSXI_BUILD_VUE_UI)
   find_program(MUSXI_NPM NAMES npm.cmd npm REQUIRED)
   add_custom_target(vue_ui

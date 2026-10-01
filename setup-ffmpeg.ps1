@@ -1,22 +1,19 @@
-$ErrorActionPreference = 'Stop'
-$name = 'ffmpeg-n9.0.2-3-ga5923073bf-win64-lgpl-shared-9.0'
-$sha256 = 'a7e62ca9b34c40145a2c7482f61a78063f6c8f8dbcf17effb27e62841fa6bbd9'
-$folder = Join-Path $PSScriptRoot 'build/deps'
-$archive = Join-Path $folder "$name.zip"
-$sdk = Join-Path $folder $name
-New-Item -ItemType Directory -Path $folder -Force | Out-Null
-if (-not (Test-Path -LiteralPath $archive)) {
-    Invoke-WebRequest -Uri "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-09-21-13-55/$name.zip" -OutFile $archive
-}
-if ((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash -ne $sha256) {
-    throw 'FFmpeg archive checksum mismatch. No files were extracted; inspect the archive before retrying.'
-}
-if (-not (Test-Path -LiteralPath $sdk)) {
-    Expand-Archive -LiteralPath $archive -DestinationPath $folder
-}
-foreach ($file in @('include/libavutil/ffversion.h', 'lib/avcodec.lib', 'bin/ffmpeg.exe')) {
-    if (-not (Test-Path -LiteralPath (Join-Path $sdk $file))) {
-        throw "Incomplete FFmpeg SDK: $sdk. Existing files were not overwritten."
+param(
+    [string]$FfmpegRoot="$PSScriptRoot/build/deps/ffmpeg-musxi-a5923073-msvc",
+    [string]$SdkArchive
+)
+$ErrorActionPreference='Stop'
+if ($SdkArchive) {
+    $manifest=Get-Content "$PSScriptRoot/licenses/FFmpeg-build.json" -Raw | ConvertFrom-Json
+    if ((Get-FileHash -LiteralPath $SdkArchive -Algorithm SHA256).Hash -ne $manifest.sdk_archive_sha256) {
+        throw 'Audited FFmpeg SDK archive checksum mismatch.'
     }
+    if (Test-Path -LiteralPath $FfmpegRoot) { throw 'SDK already exists; do not overwrite a local or modified SDK.' }
+    if ((Split-Path $FfmpegRoot -Leaf) -ne 'ffmpeg-musxi-a5923073-msvc') { throw 'Use the audited SDK directory name.' }
+    Expand-Archive -LiteralPath $SdkArchive -DestinationPath (Split-Path $FfmpegRoot)
 }
-Write-Output "FFMPEG_ROOT=$sdk"
+if (-not (Test-Path -LiteralPath "$FfmpegRoot/include/libavutil/ffversion.h")) {
+    throw 'Provide the audited SDK ZIP using -SdkArchive. For source rebuilds and updating publisher hashes see licenses/Release-Readiness.md. The former BtbN production SDK is no longer used.'
+}
+& "$PSScriptRoot/verify-ffmpeg.ps1" -FfmpegRoot $FfmpegRoot
+Write-Output "FFMPEG_ROOT=$FfmpegRoot"
