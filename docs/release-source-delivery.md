@@ -1,30 +1,153 @@
-# Musxi 0.2.0 source delivery proposal
+# Musxi 0.2.0 fixed FFmpeg source delivery
 
-## Status
+## Current release identity and status — 2026-10-02
 
-Prepared for publisher review on 2026-10-01; **not an unconditional legal clearance**. Keep the official CEF runtime. The publisher selected the LGPLv3 compliance route for the audited CEF-embedded FFmpeg portions on 2026-10-01, and subsequently authorized publishing matching application source and generating a new installer. No upstream contact or full CEF rebuild is selected. The final installer records its exact clean Git revision in `release-source-record.json`; verify that revision's public availability before binary distribution. Ref `source-0.2.0-20261001` is historical, not the revised installer's source identity. It is separate from the existing historical `v0.2.0` tag, which must not be moved.
+The published v0.2.0 installer corresponds to Musxi commit
+[`0d7ba2d5741cba5d13ed0a3de089235e31dc53e4`](https://github.com/Miloscovo/Musxi-Player/tree/0d7ba2d5741cba5d13ed0a3de089235e31dc53e4).
+Its installed `release-source-record.json` identifies this exact clean revision.
+Use the full commit in source links; do not use a floating branch, a project
+homepage, or assume a tag can never move. This review does not move the tag,
+change the installed binary or remove any existing Release attachment.
 
-The rejected large custom snapshot collection is not the selected method. Its numbered ZIP parts and manifest were never completed. Do not instruct recipients to restore those nonexistent assets. Existing local source workspaces are retained for evidence and fallback preparation.
+There are **two independent FFmpeg instances**. Playback source is not a
+substitute for Chromium's FFmpeg fork, and a pristine upstream FFmpeg checkout
+is not a substitute for the Chromium fork and its necessary integration files.
+The existing two source archives remain available during this migration.
 
-Proposed delivery: a release-specific source index next to the binary download, identifying fixed public sources, Windows supplements, patches and build instructions. This avoids a custom full-CEF Release attachment; it does not eliminate recipients' downloads or the publisher's source obligations. The selected method's source-completeness and public availability checks remain prerequisites below.
+The playback fixed public route below was anonymously downloaded and compared
+on 2026-10-02. The embedded replacement route must also pass the public
+retrieval/material verification before changing default release delivery. New
+local scripts or documents are not a public source entrance until a reviewed
+immutable revision containing them is publicly available. Availability alone is
+not a claim of unconditional legal clearance or an official CEF rebuild.
 
-## Current redistribution scope (2026-10-01)
+## Fixed source index for the existing installer
 
-The published application tag was anonymously checked against all 124 committed files. New notice/packaging changes are not in that immutable tag; publish a reviewed matching revision before pointing recipients at these updates. CEF BSD requires its original LICENSE and Chromium credits in the binary package, not full-source attachments or reconstruction of official GN/PGO/ThinLTO/generated inputs. No PDB reproduction tool is required. See [current audit](../licenses/CEF-Redistribution-Audit.md). The large-source preparation directions below are retained only as an optional recipient route for embedded FFmpeg recombination/relink materials, not a CEF BSD release gate.
-
-## Fixed source index
-
-| Material | Source and identity | Evidence / limitation |
+| Instance / material | Fixed public location and identity | Correspondence |
 |---|---|---|
-| Musxi Player | The exact commit in installed `release-source-record.json`, published at `https://github.com/Miloscovo/Musxi-Player/tree/<base_commit>`. Historical ref `source-0.2.0-20261001` is not the current build identity. | Contains application source, lockfiles, build/install scripts and referenced source/license records. Verify the published ref and archive against the final local Git tree. A homepage or floating branch alone is insufficient. |
-| Playback FFmpeg | [Fixed ZIP](https://api.github.com/repos/FFmpeg/FFmpeg/zipball/a5923073bfd8f25b7300d93af3f8e690174ebd30), commit `a5923073bfd8f25b7300d93af3f8e690174ebd30`. | SHA-256 `65474f81cf8a4e2529cca6c25877fca8b6f3340a67ff804a306bbc3940cd46f6`. Use `build-ffmpeg.ps1` and [build manifest](../licenses/FFmpeg-build.json), including the generated VERSION change. |
-| Playback build materials | `build-ffmpeg.ps1` and `licenses/FFmpeg-build.json` at the installer's recorded Git commit, and the exact upstream source ZIP above. | The recipe records the generated VERSION change and all build flags. Compiler-check/config outputs can be regenerated from these source inputs; logs are evidence, not a substitute for source. The optional local 21,469,445-byte bundle has SHA-256 `241c0e2f4abb0f606ee6173bdb8da029d497825ea96afebf34f6f20bf5820a91` and is still staged by packaging. Publishing this fixed source/recipe route avoids requiring that bundle as a Release attachment; verify access before distribution. |
-| CEF | [Fixed archive](https://codeload.github.com/chromiumembedded/cef/tar.gz/708dc140cbc3286826a8abef89dc23a44ff9ea72), commit `708dc140cbc3286826a8abef89dc23a44ff9ea72`, version `152.0.6+g708dc14`. | 3,572,838 bytes; SHA-256 `69fbd8385da491757a862c7ada70318b691cb8aee4e9ea0499a63baa90cb76e7`. All 1,881 files match Git blobs. Use fixed Git checkout/history for version generation; archive-only generation is untested. |
-| Chromium and bundled dependencies | [Google archive](https://commondatastorage.googleapis.com/chromium-browser-official/chromium-152.0.7977.83.tar.xz), version `152.0.7977.83`, commit `79460ebecaa5625e57a5fb679a735659e73dc687`. | 5,916,162,416 bytes; SHA-256 `8064dd693f3eccb58d00e2f264c582b1e869c2883b28655787fe21e16e538ada`. Downloaded/inspected. Needs Windows supplements; no historical `tarball_args.gn`. |
-| Embedded FFmpeg | [Fixed tree](https://chromium.googlesource.com/chromium/third_party/ffmpeg/+/2b68d2babae73714846961fb0ee47e3b3d2e39a9/), commit `2b68d2babae73714846961fb0ee47e3b3d2e39a9`. | All 11,015 files in the Google archive match Git blobs. Separate from playback FFmpeg. A FFmpeg-only archive does not replace CEF/Chromium build/relink materials. |
-| Build tools / dependency inventory | [depot_tools](https://chromium.googlesource.com/chromium/tools/depot_tools.git), commit `2da9ee6f6c86332551055bc44245fab94675272e`; [inventory](../licenses/CEF-source-revisions.json). | Siso instance `TupZUdv9YTinXM5vf61WKpINxNrllerRprrKorxAVqEC`. Bootstrap/tool downloads remain necessary. A fresh anonymous depot_tools checkout and isolated Windows Python/CIPD bootstrap passed on 2026-10-01; a full cache-free Chromium dependency sync remains untested. |
+| Musxi application, build and installed notices | [Musxi commit 0d7ba2d](https://github.com/Miloscovo/Musxi-Player/tree/0d7ba2d5741cba5d13ed0a3de089235e31dc53e4); [manifest at that commit](https://github.com/Miloscovo/Musxi-Player/blob/0d7ba2d5741cba5d13ed0a3de089235e31dc53e4/licenses/FFmpeg-build.json) | Application revision recorded by the existing installer; manifest names/hashes both FFmpeg binary sets. |
+| Independent playback FFmpeg | [Official API ZIP at a5923073bfd8f25b7300d93af3f8e690174ebd30](https://api.github.com/repos/FFmpeg/FFmpeg/zipball/a5923073bfd8f25b7300d93af3f8e690174ebd30) | SHA-256 `65474f81cf8a4e2529cca6c25877fca8b6f3340a67ff804a306bbc3940cd46f6`; 23,180,740 bytes. This is the archive variant expected by the recipe. |
+| Playback recipe and Musxi modification | [build-ffmpeg.ps1 at 0d7ba2d](https://github.com/Miloscovo/Musxi-Player/blob/0d7ba2d5741cba5d13ed0a3de089235e31dc53e4/build-ffmpeg.ps1) | SHA-256 `ba5aea7519c7e5faa5285572c1f13bd28cbc0d595fcc9b11633b803cf1830099`; creates the only Musxi-added source file, `VERSION`, and records configure flags. |
+| CEF embedded FFmpeg fork | [Chromium FFmpeg fixed tree 2b68d2babae73714846961fb0ee47e3b3d2e39a9](https://chromium.googlesource.com/chromium/third_party/ffmpeg/+/2b68d2babae73714846961fb0ee47e3b3d2e39a9/) | Fork `README.chromium` records upstream merge `a5e6c0175a7245fc1a9f4639da2810156128aa8b`. Preserve Chromium's patches, configuration, generated source lists, license and credits. |
+| Embedded Chromium integration/build files | [Chromium fixed commit 79460ebecaa5625e57a5fb679a735659e73dc687](https://chromium.googlesource.com/chromium/src/+/79460ebecaa5625e57a5fb679a735659e73dc687/) | Retrieve selected files by exact path/revision, together with the separately pinned dependency sources. A fork-only tarball is insufficient for this supplement. |
+| Original CEF patch controls | [CEF fixed commit 708dc140cbc3286826a8abef89dc23a44ff9ea72](https://github.com/chromiumembedded/cef/tree/708dc140cbc3286826a8abef89dc23a44ff9ea72) | Original selected CEF patches explain supplemented files' patched state. These are upstream integration changes, not Musxi codec modifications. |
+| Embedded source/relink directions already public | [CEF-FFmpeg-Source-Access.md at 0d7ba2d](https://github.com/Miloscovo/Musxi-Player/blob/0d7ba2d5741cba5d13ed0a3de089235e31dc53e4/licenses/CEF-FFmpeg-Source-Access.md) and [dependency pins](https://github.com/Miloscovo/Musxi-Player/blob/0d7ba2d5741cba5d13ed0a3de089235e31dc53e4/licenses/CEF-source-revisions.json) | Identify fixed remaining source dependencies and compatible runtime replacement; retained during migration. |
 
-Do not substitute the Spotify tarball: GET returned 403, size/hash differ, and contents were not inspected. Google is a verified alternative, not a byte-identical mirror.
+### Independent playback FFmpeg: exact modifications and build inputs
+
+`n9.0.2-3-ga5923073bf-musxi-local-1` supplies `avcodec-63.dll`,
+`avformat-63.dll`, `avutil-61.dll` and `swresample-7.dll`, dynamically linked by
+Musxi. All four DLL hashes, component versions and actual configuration API
+outputs match the fixed public manifest. Each DLL reports LGPL version 2.1 or
+later. The installed program does not enforce the publisher's original DLL
+hashes against users' compatible replacement libraries.
+
+The official source ZIP has no `VERSION` file. Musxi's public recipe creates
+it with exact contents `n9.0.2-3-ga5923073bf\n`, then uses
+`--extra-version=musxi-local-1`. The suffix identifies Musxi's local build;
+it does not identify an undisclosed decoder patch. A comparison of all 10,424
+upstream files against the actual build source found no changed or missing
+files; `VERSION` was the only addition. It is generated in the publicly pinned
+recipe, so the modification does not exist only in a local build directory.
+
+The recipe builds shared Windows x64 libraries with MSVC, disables static
+libraries, GPL, nonfree, version3, autodetected external dependencies,
+networking and standalone programs. Exact configure parameters are in the
+fixed recipe and manifest, including enabled demuxers/parsers/decoders.
+Audited tools were MSVC 19.51.36257, GNU Make 4.4.1 and NASM 2.16.03; the
+application's Windows SDK record is 10.0.26100.0. Obtain separately licensed
+tools locally; do not bundle proprietary SDK/toolchain binaries as source.
+
+The optional playback source ZIP contains the unchanged official source ZIP,
+recipe, generated `config.h`, `config_components.h`, `ffbuild/config.mak`,
+`ffbuild/config.log`, `libavutil/ffversion.h`, build log and original licenses.
+The upstream configure/Makefile/version.sh plus the public recipe regenerate
+these configuration/version outputs; logs are evidence, not hidden source
+changes. Different toolchain versions or prefixes can change output bytes;
+this is not a byte-identical rebuild promise.
+
+### CEF embedded FFmpeg: separate binary and source materials
+
+The embedded fork corresponds to `libcef.dll` from CEF
+`152.0.6+g708dc14` / Chromium `152.0.7977.83`, SHA-256
+`f5021c3477a84a9c96c0b6a01a038a568fe2cdb7d294ea84aaf6cd70b26c8a09`.
+Its original LGPL-2.1-or-later notices remain intact; the publisher selected
+LGPLv3 compliance for the audited embedded portions. No Musxi FFmpeg decoder
+patch is introduced. The required Chromium fork modifications and selected
+original CEF integration patches remain distinct from Musxi's playback VERSION
+addition. LGPL/GPL original texts, FFmpeg LICENSE/CREDITS and original CEF /
+Chromium notices must be retained.
+
+The existing enriched archive includes the exact fork and selected Chromium
+FFmpeg scripts, GN/configuration files, stub generators, Opus sources, NASM
+build definitions, original applicable CEF patches, file hashes and fixed
+source-access instructions. The migration's
+[CEF-FFmpeg-source-index.json](../licenses/CEF-FFmpeg-source-index.json)
+records those exact supplemented files' public sources and reconstruction
+rules. Patches/generation rules must recreate the expected file hashes before
+this replaces the archive; fetching only a vanilla fork does not suffice.
+Remaining combined-work dependencies/relink directions stay available through
+the fixed pins above and the retained recipient instructions below.
+
+## Public retrieval and Release migration gate
+
+From a new directory, use the reviewed public `get-ffmpeg-sources.py` and its
+matching source index from an immutable Musxi commit:
+
+```powershell
+python get-ffmpeg-sources.py --component playback --output ./playback-source
+python get-ffmpeg-sources.py --component embedded --output ./embedded-source
+# Or obtain both instances into a fresh destination:
+python get-ffmpeg-sources.py --component all --output ./ffmpeg-sources
+```
+
+The destination must be new/empty. The public check must use anonymous fixed
+URLs without local Chromium/CEF workspaces, source bundles, SDKs or credentials.
+It verifies source hashes, original patches/reconstruction, Musxi's VERSION
+recipe and the manifest's binary/revision mapping. It does not download full
+Chromium/CEF or rebuild CEF. A completed transfer alone is not the verifier's
+success condition.
+
+Only after the embedded and playback retrieval checks both pass **and the
+matching index/helper are publicly available at a fixed commit**, announce a
+direct immutable source-index link next to the binary download. Then future
+default Release assets may consist only of `MusxiPlayer-Setup-<version>.exe`.
+GitHub's automatic application source ZIP/tar.gz remain, but do not contain the
+upstream FFmpeg source trees by themselves. Local compliance/source archives
+and their checks remain supported, with optional on-demand bundles; checksums
+may remain local rather than a default Release attachment.
+
+Current v0.2.0 assets are not deleted by this migration. The public index must
+remain available while its matching binaries are distributed. Keep independent
+verified backups; a local backup is not public delivery. If a required URL
+fails, restore equivalent exact public access and update the download-page
+directions before continuing binary distribution. No written source offer or
+upstream retention guarantee is invented here.
+
+CEF's BSD license requires the matching CEF LICENSE and Chromium credits in the
+installed package. It does not require uploading full CEF/Chromium source or
+reproducing official GN/PGO/ThinLTO builds. Installed Musxi GPL license,
+THIRD_PARTY_NOTICES and FFmpeg source/version/license records remain required;
+this migration removes no license text.
+
+## Historical optional recipient/relink appendix
+
+The following 2026-10-01 preparation results and large-source directions are
+retained for recipients who elect to recombine/replace the embedded library.
+They are historical evidence and optional instructions, **not new CEF BSD
+Release gates**, not the default source acquisition route, and not a request to
+repeat a full CEF/Chromium audit or upload a full source checkout.
+
+### Optional historical inputs (not default Release assets)
+
+These pins explain the historical preparation steps below; the current public
+FFmpeg getter does not acquire full CEF/Chromium trees.
+
+| Historical material | Fixed identity / source | Recorded evidence |
+|---|---|---|
+| CEF source | [Archive at 708dc140cbc3286826a8abef89dc23a44ff9ea72](https://codeload.github.com/chromiumembedded/cef/tar.gz/708dc140cbc3286826a8abef89dc23a44ff9ea72) | 3,572,838 bytes; SHA-256 `69fbd8385da491757a862c7ada70318b691cb8aee4e9ea0499a63baa90cb76e7`. |
+| Chromium source/dependencies | [Google archive 152.0.7977.83](https://commondatastorage.googleapis.com/chromium-browser-official/chromium-152.0.7977.83.tar.xz), commit `79460ebecaa5625e57a5fb679a735659e73dc687` | 5,916,162,416 bytes; SHA-256 `8064dd693f3eccb58d00e2f264c582b1e869c2883b28655787fe21e16e538ada`. Optional recipient acquisition; not a required publisher upload. |
+| depot_tools | [Fixed tree 2da9ee6f6c86332551055bc44245fab94675272e](https://chromium.googlesource.com/chromium/tools/depot_tools/+/2da9ee6f6c86332551055bc44245fab94675272e/) | Siso instance `TupZUdv9YTinXM5vf61WKpINxNrllerRprrKorxAVqEC`; dependency pins retained in [inventory](../licenses/CEF-source-revisions.json). |
 
 ### Windows supplements
 
@@ -116,7 +239,7 @@ Check the specific copyleft library source, modifications and suitable recombina
 
 ### Historical source revision inclusion check (superseded by published tag)
 
-The 2026-10-01 working-tree check found all 27 selected application build/source-delivery prerequisites present and eligible for Git, with no broken local links in the four current source/readiness records. This is an inclusion check, not a complete corresponding-source certification. Thirteen of those prerequisites are still **untracked**, so `git archive HEAD` or GitHub's current automatic source archive would omit them:
+The 2026-10-01 working-tree check found all 27 selected application build/source-delivery prerequisites present and eligible for Git, with no broken local links in the four current source/readiness records. This is an inclusion check, not a complete corresponding-source certification. At that historical check, thirteen of those prerequisites were **untracked**, so `git archive HEAD` or GitHub's current automatic source archive would omit them:
 
 - `build-ffmpeg.ps1`, `verify-ffmpeg.ps1`, this guide and `licenses/FFmpeg-build.json`;
 - `licenses/prepare-cef-windows-source.ps1`, `CEF-source.gclient`, `CEF-source-revisions.json` and `CEF-excluded-updater-test.patch` (all in `licenses/`);
@@ -140,10 +263,10 @@ The fixed source ref above is selected for the authorized publication; public av
 The publisher remains responsible for source access while the corresponding binary is available. Before making a binary public, check this fixed source ref, its required source/build/license files, and each pinned upstream route anonymously. Retain verified source archives, supplements and manifests independently of the installed application; local copies already exist in the audited workspaces. If a required route fails, pause binary downloads until equivalent exact materials are publicly served from a publisher-controlled replacement location and the directions beside the binary are updated. Recheck size/hash and source identity after relocation. This is an operating procedure, not an upstream retention guarantee, a binding written source offer, or proof of future availability.
 
 
-## Current Release source assets (2026-10-01)
+## Existing Release source assets (2026-10-01; retained during migration)
 
 The embedded asset `MusxiPlayer-CEF-FFmpeg-Source-2b68d2babae73714846961fb0ee47e3b3d2e39a9.tar.gz` is now an enriched package, SHA-256 `85ec17c8230fab13a3adacb960841583e82e65ea0d9a35d8b4c09645b59501a8`: the unchanged pinned fork tar, selected Chromium FFmpeg integration/generation scripts, stub tools, GN configuration, Opus source/build inputs, NASM build definitions, relevant original CEF patches, per-file hashes and fixed-revision source-access instructions. Its manifest explicitly maps to libcef.dll SHA-256 `f5021c3477a84a9c96c0b6a01a038a568fe2cdb7d294ea84aaf6cd70b26c8a09`. The original fork archive hash is retained separately; it is no longer the hash of the outer Release asset. Remaining combined-work dependencies are obtained through the exact source/dependency pins and steps in [CEF-FFmpeg-Source-Access.md](../licenses/CEF-FFmpeg-Source-Access.md), not master/main/latest. This supplement is not an independent Chromium GN project or a complete official-build reproduction claim.
 
 The playback asset is `MusxiPlayer-FFmpeg-Source-n9.0.2-3-ga5923073bf-musxi-local-1.zip`, SHA-256 `241c0e2f4abb0f606ee6173bdb8da029d497825ea96afebf34f6f20bf5820a91`. It retains the exact source ZIP, generated VERSION metadata change, build recipe, configuration and licenses and maps only to the four playback DLLs in FFmpeg-build.json. The SDK is optional developer convenience. Both source packages remain distinct.
 
-Build the final installer with package.ps1 -RequireCleanSource after committing the reviewed changes. The installed release-source-record.json identifies its exact Git commit and clean-source status. Publish that matching commit before binary distribution; the historical source-0.2.0-20261001 / v0.2.0 tags do not identify this revised installer and must not be moved. This finalization does not create tags, push, or upload assets.
+The currently published v0.2.0 installer records commit `0d7ba2d5741cba5d13ed0a3de089235e31dc53e4`. Future installers use package.ps1 -RequireCleanSource and identify their own exact public commit. The historical source-0.2.0-20261001 ref is not this installer's identity. This migration does not move v0.2.0, change historical commits or remove existing source assets.
