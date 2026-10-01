@@ -4,6 +4,11 @@
 /frontend/dist/
 /frontend/node_modules/
 
+# Python source-delivery checks and discontinued local CEF experiments
+__pycache__/
+*.py[cod]
+/CEF-Official-Build-Evidence/
+
 # Local package manager and IDE state
 /.npmcache/
 .vs/

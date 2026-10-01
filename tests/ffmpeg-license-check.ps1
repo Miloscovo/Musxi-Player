@@ -23,7 +23,7 @@ try {
     foreach ($name in @('verify-ffmpeg.ps1','THIRD_PARTY_NOTICES.md',$manifest.build_script)) {
         Copy-Item -LiteralPath (Join-Path $root $name) -Destination $licenseSandbox
     }
-    $licenseFiles = @('FFmpeg-build.json','FFmpeg-LICENSE.txt','FFmpeg-COPYING.GPLv3',
+    $licenseFiles = @('CEF-LICENSE.txt','CEF-Chromium-CREDITS.html','FFmpeg-build.json','FFmpeg-LICENSE.txt','FFmpeg-COPYING.GPLv3',
                      'CEF-FFmpeg-COPYING.LGPLv2.1','CEF-Source-Method-Review.md',
                      'prepare-cef-windows-source.ps1','CEF-source.gclient') +
                     @($manifest.license_materials_sha256.PSObject.Properties.Name)
@@ -31,6 +31,16 @@ try {
         Copy-Item -LiteralPath (Join-Path $root "licenses/$name") -Destination $sandboxLicenses
     }
     & "$licenseSandbox/verify-ffmpeg.ps1" -FfmpegRoot $FfmpegRoot
+    # Reject missing CEF redistribution credits without any source checkout or PDB.
+    Remove-Item -LiteralPath "$sandboxLicenses/CEF-Chromium-CREDITS.html"
+    $rejected = $false
+    try { & "$licenseSandbox/verify-ffmpeg.ps1" -FfmpegRoot $FfmpegRoot }
+    catch {
+        if ($_.Exception.Message -notlike '*Missing FFmpeg material:*CEF-Chromium-CREDITS.html') { throw }
+        $rejected = $true
+    }
+    if (-not $rejected) { throw 'Missing Chromium credits were accepted.' }
+    Copy-Item -LiteralPath "$root/licenses/CEF-Chromium-CREDITS.html" -Destination $sandboxLicenses
     Remove-Item -LiteralPath "$sandboxLicenses/CEF-FFmpeg-COPYING.LGPLv3"
     $rejected = $false
     try { & "$licenseSandbox/verify-ffmpeg.ps1" -FfmpegRoot $FfmpegRoot }

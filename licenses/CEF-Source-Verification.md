@@ -235,3 +235,9 @@ A bounded check copied the previously built candidate runtime to `build/cef-runt
 This demonstrates acceptance of that byte-different runtime through real CEF startup/UI/bridge smoke checks, and separates publisher inventory verification from installed startup. It does **not** modify executable FFmpeg code, test relinking, prove acceptance of all interface-compatible modifications, or establish corresponding-source sufficiency. An overlay can leave image/signature-related identities unchanged; the result must not be expanded into a universal absence-of-integrity-check claim.
 
 The [recipient guide](../docs/release-source-delivery.md#recipient-relink-and-installation-route) now supplies actual relink target names, runtime/resource replacement, executable/DLL basename, rollback and smoke-test steps. Compilation/packaging commands are explicitly unexecuted. Original Windows build-input/source differences and public delivery remain open; full CEF compilation and upstream contact remain outside the selected scope.
+
+## Current redistribution scope and retained FFmpeg result (2026-10-01)
+
+The [redistribution audit](CEF-Redistribution-Audit.md) supersedes historical requests to recover the official complete build. No full rebuild/reproducibility/PDB/GN/PGO/ThinLTO gate applies to CEF BSD binary redistribution.
+
+Useful supplemental result retained from the discontinued investigation: the matched official libcef PDB (GUID 0E32074A-4135-D42F-4C4C-44205044422E, age 1) contained 186 FFmpeg source checksum records; all matched the fixed Chromium embedded FFmpeg revision byte-for-byte. The pinned FFmpeg target also completed 476 compilation actions under a local preparation configuration. These are limited provenance/build-rule checks, not whole-binary reproduction or proof of all copyleft delivery obligations. Experimental tools/PDB/profile downloads remain outside the repository and release; the three newly added build-evidence files are removed.

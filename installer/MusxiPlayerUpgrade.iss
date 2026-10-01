@@ -11,7 +11,7 @@ ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 MinVersion=10.0
 OutputDir=..\dist
-OutputBaseFilename=MusxiPlayer-0.2.0-Test-Upgrade-Setup-x64
+OutputBaseFilename=MusxiPlayer-Setup-0.2.0
 Compression=lzma2/fast
 SolidCompression=yes
 WizardStyle=modern
@@ -41,6 +41,7 @@ Source: "..\build\ffmpeg-license.txt"; DestDir: "{app}"; DestName: "LICENSE-FFmp
 Source: "..\README.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\THIRD_PARTY_NOTICES.md"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\build\release-source-record.json"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\licenses\*"; DestDir: "{app}\licenses"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\third_party\LICENSE-json.txt"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\build\runtime\*"; DestDir: "{app}\runtime"; Flags: ignoreversion recursesubdirs createallsubdirs

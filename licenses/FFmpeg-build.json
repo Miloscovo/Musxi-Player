@@ -6,7 +6,7 @@
   "build_script_sha256": "ba5aea7519c7e5faa5285572c1f13bd28cbc0d595fcc9b11633b803cf1830099",
   "source_archive_sha256": "65474f81cf8a4e2529cca6c25877fca8b6f3340a67ff804a306bbc3940cd46f6",
   "source_bundle_path": "build/ffmpeg-local/ffmpeg-source-materials-bundle.zip",
-  "source_asset_name": "MusxiPlayer-FFmpeg-Source-Materials-0.2.zip",
+  "source_asset_name": "MusxiPlayer-FFmpeg-Source-n9.0.2-3-ga5923073bf-musxi-local-1.zip",
   "license": "LGPL-2.1-or-later",
   "configuration": "--toolchain=msvc --arch=x86_64 --target-os=win32 --prefix=/d/Music/build/deps/ffmpeg-musxi-a5923073-msvc --enable-shared --disable-static --disable-gpl --disable-nonfree --disable-version3 --disable-autodetect --disable-debug --disable-doc --disable-programs --disable-avdevice --disable-avfilter --disable-swscale --disable-network --disable-everything --enable-avcodec --enable-avformat --enable-avutil --enable-swresample --enable-demuxer='wav,mp3,flac,mov,aac,ogg,asf' --enable-protocol=file --enable-parser='aac,aac_latm,ac3,dca,flac,mpegaudio,opus,vorbis' --enable-decoder='aac,aac_fixed,aac_latm,alac,flac,mp3,mp3float,mp2,mp2float,vorbis,opus,wmav1,wmav2,wmapro,wmalossless,wmavoice,pcm*,adpcm*,ac3,eac3,dca,ape,wavpack,tak,tta' --extra-version=musxi-local-1",
   "component_versions": {
@@ -73,12 +73,16 @@
     "ffmpeg_compliance_version": "LGPL v3",
     "source_delivery_method": "GPLv3 section 6(d) via LGPLv3; corresponding/relink materials required",
     "publisher_selection_date": "2026-10-01",
-    "source_delivery_status": "pending-publication-and-completeness-review",
+    "source_delivery_status": "materials-prepared; final-matching-source-revision-and-publication-pending",
     "version": "152.0.6+g708dc14",
     "chromium_version": "152.0.7977.83",
     "ffmpeg_commit": "2b68d2babae73714846961fb0ee47e3b3d2e39a9",
     "libcef_sha256": "f5021c3477a84a9c96c0b6a01a038a568fe2cdb7d294ea84aaf6cd70b26c8a09",
-    "source_archive_sha256": "44e2a979772d63070dd354d22e32aecd209ec5689ea738c8ef81185fee3ebcfb"
+    "source_archive_sha256": "44e2a979772d63070dd354d22e32aecd209ec5689ea738c8ef81185fee3ebcfb",
+    "license_sha256": "2e69c36a7eaa4fa153426eab635c607ea0356cbc7a68a70f42a49e8ab8eb8106",
+    "credits_sha256": "62ff29e85b8fb98a5d85cbce5831b17c5ba6151ecdef66b81b021c66541f14f9",
+    "source_materials_path": "build/cef-ffmpeg-source-materials/embedded-source-materials.tar.gz",
+    "source_materials_sha256": "85ec17c8230fab13a3adacb960841583e82e65ea0d9a35d8b4c09645b59501a8"
   },
   "license_materials_sha256": {
     "CEF-FFmpeg-COPYING.LGPLv3": "da7eabb7bafdf7d3ae5e9f223aa5bdc1eece45ac569dc21b3b037520b4464768",

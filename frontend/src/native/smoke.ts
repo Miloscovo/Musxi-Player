@@ -19,6 +19,11 @@ export async function verifyWebPage() {
   document.querySelector<HTMLButtonElement>('.settings-nav')?.click();
   await waitFor(() => document.querySelectorAll('.theme-option').length === 3);
   const cards = document.querySelectorAll<HTMLButtonElement>('.theme-option');
+  // Color changes preserve transparency; normalize a persisted glass theme first.
+  if (cards[2].getAttribute('aria-pressed') === 'true') {
+    cards[2].click();
+    await waitFor(() => cards[2].getAttribute('aria-pressed') === 'false');
+  }
   cards[0].click();
   await waitFor(() => document.documentElement.dataset.theme === 'light');
   cards[2].click();
