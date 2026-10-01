@@ -21,7 +21,6 @@ CloseApplicationsFilter=MusxiPlayer.exe
 RestartApplications=no
 DisableProgramGroupPage=yes
 SetupLogging=yes
-LicenseFile=..\LICENSE
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Shortcuts:"; Flags: unchecked
