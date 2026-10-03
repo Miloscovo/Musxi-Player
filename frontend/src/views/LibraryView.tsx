@@ -1,3 +1,4 @@
+import { isDemoMode } from '../demo/context.ts';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import type { useLibrary } from '../composables/useLibrary';
@@ -179,6 +180,7 @@ export default function LibraryView({ library: lib, theme, onTheme, transparency
           }} maxLength={120} placeholder={view === 'library' ? '搜索此歌单中的歌曲、歌手或专辑…' : '搜索歌曲、歌手或专辑…'} aria-label="搜索歌曲、歌手或专辑"/>
         </form>}
       </div></header>
+      {isDemoMode() && <p className="demo-notice">演示模式：播放进度与导入文件夹均为模拟，不播放真实音频、不读取真实文件、不登录真实账号；刷新页面后重置。</p>}
       {view === 'library' && !showTracks && <nav className="library-sections" aria-label="音乐库分类">
         {librarySections.map(section => <Button key={section.id} variant="secondary" className="library-section"
           aria-pressed={librarySection === section.id} onClick={() => {

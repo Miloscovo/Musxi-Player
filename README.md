@@ -69,3 +69,7 @@ Copyright (c) 2026 Miloscovo.
 Musxi Player 自身代码采用 **GNU General Public License v3.0 or later**，SPDX 标识为 **GPL-3.0-or-later**。你可以依照自由软件基金会发布的 GNU GPL 第 3 版，或自行选择任何后续版本，重新分发和修改本项目。完整许可证正文见 [LICENSE](LICENSE)。
 
 第三方组件继续遵循各自的许可证；许可证、版权声明和分发注意事项见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+
+### 浏览器离线演示
+
+在 `frontend/` 执行 `npm ci` 和 `npm run dev`，打开 `http://localhost:5173/?demo`。仅明确传入 `?demo` 且没有 CEF bridge 时启用；不会覆盖桌面应用、托盘或 smoke test。演示支持歌单、搜索、队列、收藏、播放模式、音质和虚拟本地导入。歌曲进度是模拟的，不播放真实音频、不读取真实文件、不登录真实账号、不请求在线服务；刷新页面后重置。

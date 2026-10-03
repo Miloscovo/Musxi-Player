@@ -1,3 +1,4 @@
+import { createDemoTransport, isDemoMode } from '../demo/context.ts';
 import { request, type CefTransport } from './transport.ts';
 import { parsePlayerState, type RequestOptions, type NativeCommands } from './types.ts';
 import { subscribe, type PlayerEvent } from './events.ts';
@@ -6,6 +7,7 @@ import { createLibraryClient } from './library.ts';
 import { createWindowClient } from './window.ts';
 
 export function createNativeClient(host: CefTransport) {
+  if (isDemoMode(host)) host = createDemoTransport();
   async function command<K extends keyof NativeCommands>(name: K, params: NativeCommands[K]['params'], options?: RequestOptions) {
     return parsePlayerState(await request(host, name, params, options));
   }
