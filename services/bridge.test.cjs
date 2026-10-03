@@ -18,6 +18,23 @@ test('cover batches deduplicate URLs and isolate unavailable images', async () =
   } finally {global.fetch=original;}
 });
 const response = data => ({ body: { status: 1, data }, cookie: [] });
+test('restart metadata restores song identities without bypassing authentication or accepting URLs',async()=>{
+  const a=new Adapter(async()=>response({qrcode:'test-key',base64:'data:image/png;base64,fixture'}));
+  const hash='a'.repeat(32);
+  await a.run({op:'init',tracks:[{id:'saved',hash,name:'Saved',albumId:'123',audioId:'456',url:'http://localhost/private',token:'private'},
+    {id:'local:1',hash},{id:'bad',hash:'invalid'}]});
+  assert.equal(a.knownTracks.size,1);assert.equal(a.knownTracks.get('saved').albumId,'123');
+  assert.equal(a.knownTracks.get('saved').url,undefined);assert.equal(a.knownTracks.get('saved').token,undefined);
+  await assert.rejects(a.run({op:'qualities',id:'saved'}));
+  await a.run({op:'qr'});assert.equal(a.knownTracks.get('saved').audioId,'456');
+  a.call=async(name,p)=>{
+    if(name==='user_detail')return response({nickname:'Fixture'});
+    assert.equal(name,'song_url');assert.equal(p.hash,hash);assert.equal(p.album_id,'123');assert.equal(p.album_audio_id,'456');
+    return response({url:[]});
+  };
+  await a.run({op:'init',session:{platform:'lite',cookie:{token:'fixture',userid:'123'}}});
+  await a.run({op:'qualities',id:'saved'});
+});
 test('song labels separate title and artists while preserving source filename for cloud writes',()=>{
   const a=track({name:'MIKS - Left Alone.mp3'});assert.equal(a.name,'Left Alone');assert.equal(a.artist,'MIKS');assert.equal(a.fileName,'MIKS - Left Alone.mp3');
   const b=track({name:'Vicetone、Meron Ryan - Walk Thru Fire.mp3',singerinfo:[{name:'Vicetone'},{name:'Meron Ryan'}]});
@@ -123,4 +140,25 @@ test('upstream failures are sanitized and never expose credentials in messages',
   const a = authenticated(async () => { throw Error('fixture-token secret request'); });
   await assert.rejects(a.run({ op: 'sync' }), error => !error.message.includes('fixture-token'));
   assert.equal(track({ hash: 'A'.repeat(32), name: '歌曲', timelen: 1234 }).duration, 1234);
+});
+test('quality menu only lists entitled and confirmed audio; fallback is not advertised', async () => {
+  const a=authenticated(async (_name,p)=>response(p.quality===128?
+    {url:['https://example.com/standard.mp3'],bitrate:128000,extName:'mp3'}:
+    p.quality===320?{url:['https://example.com/standard.mp3'],bitrate:128000,extName:'mp3'}:{url:[]}));
+  a.knownTracks.set('song',{id:'song',hash:'a'.repeat(32)});
+  const result=await a.run({op:'qualities',id:'song'});
+  assert.deepEqual(result.options.map(option=>option.id),['128']);
+  assert.equal(JSON.stringify(result).includes('https://'),false);
+  await assert.rejects(a.run({op:'audio',id:'song',quality:'320'}),/该音质暂时不可用/);
+  await assert.rejects(a.run({op:'audio',id:'song',quality:'unknown'}),/无效音质/);
+  a.call=async()=>response({url:['https://example.com/lossless.flac'],extName:'flac',bitrate:900000});
+  assert.deepEqual((await a.run({op:'qualities',id:'song'})).options.map(option=>option.id),['flac']);
+  assert.equal((await a.run({op:'audio',id:'song',quality:'flac'})).quality,'flac');
+});
+test('real song_url bitRate field enables standard and high-quality choices', async () => {
+  const a=authenticated(async (_name,p)=>response({url:['https://example.com/audio'],
+    bitRate:p.quality==='flac'?1013000:Number(p.quality)*1000,extName:p.quality==='flac'?'flac':'mp3'}));
+  a.knownTracks.set('song',{id:'song',hash:'a'.repeat(32)});
+  assert.deepEqual((await a.run({op:'qualities',id:'song'})).options.map(option=>option.id),['128','320','flac']);
+  assert.equal((await a.run({op:'audio',id:'song',quality:'320'})).quality,'320');
 });

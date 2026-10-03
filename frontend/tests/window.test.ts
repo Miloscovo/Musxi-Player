@@ -13,6 +13,10 @@ test('window API validates replies and uses the shared protocol', async () => {
   assert.deepEqual(seen[1], { version: 1, command: 'window.setTheme', params: { theme: 'glass-light' } });
   await client.maximize();
   assert.deepEqual(seen[2], { version: 1, command: 'window.maximize', params: {} });
+  for (const command of ['minimizeToTray', 'toggleVisibility', 'dismissTrayMenu'] as const) {
+    await client[command]();
+    assert.deepEqual(seen.at(-1), { version: 1, command: `window.${command}`, params: {} });
+  }
   result = { enabled: 'yes', maximized: false };
   await assert.rejects(client.getState(), /Invalid window state/);
 });

@@ -14,8 +14,8 @@ export function useWindow() {
     return saved === 'dark' || saved === 'glass' || saved === 'glass-light' ? saved : 'light';
   });
   const invoke = useCallback(async (action: () => Promise<WindowState>) => {
-    try { setState(await action()); setError(''); }
-    catch (e) { setError(e instanceof Error ? e.message : '窗口操作失败'); }
+    try { setState(await action()); setError(''); return true; }
+    catch (e) { setError(e instanceof Error ? e.message : '窗口操作失败'); return false; }
   }, []);
   const setTheme = useCallback(async (next: Theme) => {
     updateTheme(next); document.documentElement.dataset.theme = next;
@@ -33,5 +33,6 @@ export function useWindow() {
   }, [theme, transparency]);
   return { state, error, theme, setTheme, transparency, setTransparency: updateTransparency,
     minimize: () => invoke(native.window.minimize), maximize: () => invoke(native.window.maximize),
+    minimizeToTray: () => invoke(native.window.minimizeToTray),
     close: () => invoke(native.window.close) };
 }

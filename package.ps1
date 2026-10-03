@@ -87,7 +87,8 @@ $sourceRecord=@{ base_commit=$commit; working_tree_dirty=($status.Count -gt 0);
 if ($status.Count -gt 0) { Write-Warning 'Uncommitted source: this installer is a review candidate, not a binary matching the old published tag.' }
 & $Compiler installer/MusxiPlayerUpgrade.iss
 if ($LASTEXITCODE -ne 0) { throw 'Installer compilation failed.' }
-$artifact=Join-Path $PSScriptRoot 'dist/MusxiPlayer-Setup-0.2.0.exe'
+$appVersion=(Get-Content "$PSScriptRoot/frontend/package.json" -Raw | ConvertFrom-Json).version
+$artifact=Join-Path $PSScriptRoot "dist/MusxiPlayer-Setup-$appVersion.exe"
 $hash=Get-FileHash -LiteralPath $artifact -Algorithm SHA256
 [System.IO.File]::WriteAllText("$artifact.sha256", "$($hash.Hash.ToLower())  $([System.IO.Path]::GetFileName($artifact))`n")
 $releaseAssets=if ($StageSourceBundles) { @(
