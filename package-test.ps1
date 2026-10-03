@@ -12,7 +12,7 @@ if (-not (Test-Path -LiteralPath (Join-Path $FfmpegRoot 'LICENSE.txt'))) { throw
 foreach ($required in @('build/runtime/node.exe','build/services/node_modules','build/services/vendor')) {
     if (-not (Test-Path -LiteralPath $required)) { throw "Missing $required; run setup-cloud.ps1 first." }
 }
-./build-cef.ps1 -CefRoot $CefRoot -Vue -Test -FfmpegRoot $FfmpegRoot -FixtureTool $FixtureTool
+./build-cef.ps1 -CefRoot $CefRoot -Test -FfmpegRoot $FfmpegRoot -FixtureTool $FixtureTool
 Copy-Item -LiteralPath (Join-Path $CefRoot 'LICENSE.txt') -Destination 'build/cef-license.txt'
 Copy-Item -LiteralPath (Join-Path $FfmpegRoot 'LICENSE.txt') -Destination 'build/ffmpeg-license.txt'
 & $Compiler installer/MusxiPlayerTest.iss

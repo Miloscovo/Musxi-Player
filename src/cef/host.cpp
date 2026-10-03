@@ -227,7 +227,7 @@ int run(HINSTANCE instance,int show,void* sandbox) {
     testApp=command->HasSwitch("test-app") || std::filesystem::path(exe).filename()==L"MusxiPlayerTest.exe";
     preview=command->HasSwitch("cef-preview");
     if(!preview)SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
-    pagePath=(directory/(preview?L"ui":L"ui-vue")/L"index.html").wstring();
+    pagePath=(directory/(preview?L"ui":L"ui-react")/L"index.html").wstring();
     smoke=command->HasSwitch("cef-smoke");
     if(smoke && command->HasSwitch("cef-smoke-unicode"))pagePath=(directory/L"测试 空格"/L"index.html").wstring();
     if(!std::filesystem::exists(pagePath))return 2;
