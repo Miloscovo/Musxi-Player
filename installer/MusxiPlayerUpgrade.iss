@@ -1,9 +1,9 @@
-#define AppVersion "0.2.0"
+#define AppVersion "0.3.0"
 [Setup]
 AppId={{A696A45D-3218-45C2-A565-EAC5642B976E}
 AppName=Musxi Player 测试版
 AppVersion={#AppVersion}
-VersionInfoVersion=0.2.0.0
+VersionInfoVersion=0.3.0.0
 DefaultDirName={localappdata}\Programs\Musxi Player
 DefaultGroupName=Musxi Player
 PrivilegesRequired=lowest
@@ -11,7 +11,7 @@ ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 MinVersion=10.0
 OutputDir=..\dist
-OutputBaseFilename=MusxiPlayer-Setup-0.2.0
+OutputBaseFilename=MusxiPlayer-Setup-{#AppVersion}
 Compression=lzma2/fast
 SolidCompression=yes
 WizardStyle=modern
@@ -34,7 +34,7 @@ Source: "..\build\cef-msvc\src\cef\Release\icudtl.dat"; DestDir: "{app}"; Flags:
 Source: "..\build\cef-msvc\src\cef\Release\v8_context_snapshot.bin"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\build\cef-msvc\src\cef\Release\vk_swiftshader_icd.json"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\build\cef-msvc\src\cef\Release\locales\*"; DestDir: "{app}\locales"; Flags: ignoreversion recursesubdirs
-Source: "..\frontend\dist\*"; DestDir: "{app}\ui-react"; Flags: ignoreversion recursesubdirs
+Source: "..\frontend\dist\*"; DestDir: "{app}\ui-vue"; Flags: ignoreversion recursesubdirs
 Source: "..\build\cef-license.txt"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\build\ffmpeg-license.txt"; DestDir: "{app}"; DestName: "LICENSE-FFmpeg.txt"; Flags: ignoreversion
 Source: "..\README.md"; DestDir: "{app}"; Flags: ignoreversion

@@ -2,6 +2,7 @@ param(
     [Parameter(Mandatory=$true)][string]$CefRoot,
     [string]$Generator = 'Visual Studio 18 2026',
     [switch]$Test,
+    [switch]$Vue,
     [Parameter(Mandatory=$true)][string]$FfmpegRoot,
     [string]$FixtureTool
 )
@@ -23,7 +24,7 @@ try {
 } finally { Pop-Location }
 $fixtureArguments = @()
 if ($FixtureTool) { $fixtureArguments = @("-DMUSXI_FFMPEG_FIXTURE_TOOL=$FixtureTool") }
-& $cmakePath -S . -B build/cef-msvc -G $Generator -A x64 -DMUSXI_ENABLE_CEF=ON "-DCEF_ROOT=$CefRoot" -DMUSXI_BUILD_REACT_UI=ON -DMUSXI_ENABLE_FFMPEG=ON "-DFFMPEG_ROOT=$FfmpegRoot" @fixtureArguments
+& $cmakePath -S . -B build/cef-msvc -G $Generator -A x64 -DMUSXI_ENABLE_CEF=ON "-DCEF_ROOT=$CefRoot" -DMUSXI_BUILD_VUE_UI=ON -DMUSXI_ENABLE_FFMPEG=ON "-DFFMPEG_ROOT=$FfmpegRoot" @fixtureArguments
 if ($LASTEXITCODE -ne 0) { throw 'CEF configure failed.' }
 & $cmakePath --build build/cef-msvc --config Release --parallel 6
 if ($LASTEXITCODE -ne 0) { throw 'CEF build failed.' }

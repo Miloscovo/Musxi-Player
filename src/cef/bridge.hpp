@@ -5,6 +5,13 @@
 namespace musxi::cef_adapter {
 CefRefPtr<CefApp> makeApp();
 CefRefPtr<CefClient> makeClient(const std::string& trustedUrl, void* nativeWindow, bool smokeTest, void* testWindow=nullptr);
+CefRefPtr<CefClient> makeTrayClient(const std::string& trustedUrl, void* nativeWindow);
+void closeTrayBrowser();
+bool trayBrowserReadyToClose();
+void trayMenuClosed();
+bool minimizeToTray();
+void toggleTrayWindow();
+void dismissTrayMenu();
 bool closeBrowsers();
 bool smokePassed();
 bool browserReadyToClose();

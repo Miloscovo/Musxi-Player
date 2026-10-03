@@ -16,6 +16,7 @@
 - Avoid unrelated refactors, dependency additions, generated-file edits, project-structure changes, and packaging or installation work unless requested.
 - Preserve unrelated working-tree changes. Do not reset, revert, or overwrite user changes outside the task scope.
 - Keep theme transparency on background colors only. Do not lower the opacity of containers that hold text, controls, or album art.
+- Use the shared `--hover-surface` token for hover backgrounds. Dark and translucent dark themes use a translucent white highlight, not green. Preserve controls that intentionally have no hover background.
 - Do not log credentials, session data, or private service responses.
 
 ## Frontend and CEF constraints

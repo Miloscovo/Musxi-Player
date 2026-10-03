@@ -2,8 +2,8 @@ import type { LibraryState, Track } from '../native/library';
 import type { PlayerState } from '../native/types';
 
 const playlists: Track[] = [
-  { id: 'demo-favorites', name: '晚风与耳机', artist: '本地演示歌单', album: '', cover: '', duration: 0, count: 4, editable: false },
-  { id: 'demo-focus', name: '专注时刻', artist: '本地演示歌单', album: '', cover: '', duration: 0, count: 3, editable: false },
+  { id: 'demo-favorites', name: '我喜欢', artist: '本地演示歌单', album: '', cover: '', duration: 0, count: 4, editable: true },
+  { id: 'demo-focus', name: '专注时刻', artist: '本地演示歌单', album: '', cover: '', duration: 0, count: 3, editable: true },
   { id: 'demo-discovery', name: '最近常听', artist: '本地演示歌单', album: '', cover: '', duration: 0, count: 3, editable: false },
 ];
 
@@ -23,15 +23,15 @@ const songs: Track[] = [
 export function createDemoLibrary(): LibraryState {
   return {
     connected: true, busy: false, user: '本地演示', status: '演示媒体库', notice: '演示数据仅保存在此页面，不会登录账号或连接网络。', qr: '', avatar: '',
-    playlists, tracks: [], trackCount: songs.length, playlistId: '', playlistName: '', search: [], keywords: '', searchPage: 0,
+    playlists: playlists.map(list => ({ ...list })), localPlaylists: [], queue: [], queueCurrentId: '', playbackOrder: 'sequential', tracks: [], trackCount: 0, playlistId: '', playlistName: '', search: [], keywords: '', searchPage: 0,
     searchMore: false, searchTotal: 0, now: { name: '', artist: '', cover: '' },
     menu: { id: '', liked: false, canFavorite: false, playlists: [] }, operation: { id: '', status: 'idle', kind: '', error: '' },
   };
 }
 
 export function createDemoPlayer(): PlayerState {
-  return { opened: true, playing: false, positionMs: 0, durationMs: songs[0].duration, volumePercent: 64, trackId: songs[0].id,
-    phase: 'paused', pending: false, requestedPlaying: false };
+  return { opened: false, playing: false, positionMs: 0, durationMs: 0, volumePercent: 64, trackId: '',
+    phase: 'empty', pending: false, requestedPlaying: false };
 }
 
 export function demoSongs(): Track[] { return songs.map(song => ({ ...song })); }

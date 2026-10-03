@@ -7,6 +7,8 @@
 #include <filesystem>
 #include <shlwapi.h>
 #include <shlobj.h>
+#include <shellapi.h>
+#include <algorithm>
 #include <windowsx.h>
 #include <string>
 #include <imm.h>
@@ -23,6 +25,80 @@ ULONGLONG startTick=0;
 CompositionSurface surface;
 HCURSOR webCursor=nullptr;
 bool mouseTracked=false,imeActive=false,releasingCapture=false,renderFailed=false;
+constexpr UINT TrayMessage=WM_APP+44;
+const UINT TaskbarCreated=RegisterWindowMessageW(L"TaskbarCreated");
+bool trayAdded=false;
+HICON trayIcon=nullptr;
+HWND trayWindow=nullptr;
+std::string mainUrl;
+NOTIFYICONDATAW trayData(HWND hwnd) {
+    NOTIFYICONDATAW data{};data.cbSize=sizeof(data);data.hWnd=hwnd;data.uID=1;
+    data.uFlags=NIF_MESSAGE|NIF_ICON|NIF_TIP|NIF_SHOWTIP;
+    data.uCallbackMessage=TrayMessage;data.hIcon=trayIcon;
+    wcscpy_s(data.szTip,L"Musxi Player");return data;
+}
+bool addTray(HWND hwnd) {
+    if(trayAdded)return true;
+    if(!trayIcon) {
+        wchar_t exe[32768];GetModuleFileNameW(nullptr,exe,32768);
+        ExtractIconExW(exe,0,nullptr,&trayIcon,1);
+        if(!trayIcon)trayIcon=CopyIcon(LoadIconW(nullptr,IDI_APPLICATION));
+    }
+    auto data=trayData(hwnd);
+    if(!Shell_NotifyIconW(NIM_ADD,&data))return false;
+    data.uVersion=NOTIFYICON_VERSION_4;Shell_NotifyIconW(NIM_SETVERSION,&data);
+    trayAdded=true;return true;
+}
+void removeTray(HWND hwnd) {
+    if(trayAdded){auto data=trayData(hwnd);Shell_NotifyIconW(NIM_DELETE,&data);trayAdded=false;}
+    if(trayIcon){DestroyIcon(trayIcon);trayIcon=nullptr;}
+}
+void showFromTray(HWND hwnd) {
+    ShowWindow(hwnd,IsIconic(hwnd)?SW_RESTORE:SW_SHOW);
+    if(auto browser=musxi::cef_adapter::browserHost()){browser->WasHidden(false);browser->WasResized();}
+    SetForegroundWindow(hwnd);
+}
+bool hideToTray(HWND hwnd) {
+    // Never hide the only reachable window if the notification icon cannot be added.
+    if(!addTray(hwnd))return false;
+    if(auto browser=musxi::cef_adapter::browserHost())browser->WasHidden(true);
+    ShowWindow(hwnd,SW_HIDE);
+    return true;
+}
+void exitFromTray() {
+    if(nativeWindow)PostMessageW(nativeWindow,WM_CLOSE,0,0);
+}
+LRESULT CALLBACK trayProc(HWND hwnd,UINT message,WPARAM wp,LPARAM lp) {
+    if(message==WM_CLOSE && musxi::cef_adapter::trayBrowserReadyToClose()) {DestroyWindow(hwnd);return 0;}
+    if(message==WM_CLOSE || (message==WM_ACTIVATE && LOWORD(wp)==WA_INACTIVE && IsWindowVisible(hwnd))) {
+        ShowWindow(hwnd,SW_HIDE);musxi::cef_adapter::closeTrayBrowser();return 0;
+    }
+    return DefWindowProcW(hwnd,message,wp,lp);
+}
+void trayMenu(HWND) {
+    if(trayWindow){SetForegroundWindow(trayWindow);return;}
+    POINT p{};GetCursorPos(&p);MONITORINFO monitor{sizeof(monitor)};
+    GetMonitorInfoW(MonitorFromPoint(p,MONITOR_DEFAULTTONEAREST),&monitor);
+    // Match the shadcn menu itself, without a visible backing-window margin.
+    const int dpi=GetDpiForWindow(testWindow);
+    const int width=MulDiv(208,dpi,96),height=MulDiv(84,dpi,96);
+    p.x=std::clamp(p.x,monitor.rcWork.left,monitor.rcWork.right-width);
+    p.y=std::clamp(p.y-height-MulDiv(4,dpi,96),monitor.rcWork.top,monitor.rcWork.bottom-height);
+    WNDCLASSW wc{};wc.lpfnWndProc=trayProc;wc.hInstance=GetModuleHandleW(nullptr);
+    wc.lpszClassName=L"MusxiTrayMenu";wc.hCursor=LoadCursorW(nullptr,IDC_ARROW);RegisterClassW(&wc);
+    trayWindow=CreateWindowExW(WS_EX_TOOLWINDOW|WS_EX_TOPMOST,wc.lpszClassName,L"Musxi Player",WS_POPUP|WS_CLIPCHILDREN,
+        p.x,p.y,width,height,nullptr,nullptr,wc.hInstance,nullptr);
+    if(!trayWindow)return;
+    const int corner=MulDiv(20,dpi,96);
+    auto region=CreateRoundRectRgn(0,0,width+1,height+1,corner,corner);
+    if(region && !SetWindowRgn(trayWindow,region,FALSE))DeleteObject(region);
+    CefWindowInfo info;info.SetAsChild(trayWindow,CefRect(0,0,width,height));info.runtime_style=CEF_RUNTIME_STYLE_ALLOY;
+    CefBrowserSettings settings;settings.background_color=CefColorSetARGB(255,24,24,24);
+    const auto url=mainUrl.substr(0,mainUrl.find('?'))+"?tray=1";
+    auto browser=CefBrowserHost::CreateBrowserSync(info,musxi::cef_adapter::makeTrayClient(url,nativeWindow),url,settings,nullptr,nullptr);
+    if(!browser){DestroyWindow(trayWindow);trayWindow=nullptr;return;}
+    ShowWindow(trayWindow,SW_SHOW);SetForegroundWindow(trayWindow);
+}
 int modifiers() {
     int flags=0;
     if(GetKeyState(VK_SHIFT)&0x8000)flags|=EVENTFLAG_SHIFT_DOWN;
@@ -60,7 +136,17 @@ LRESULT hostHitTest(HWND hwnd,LPARAM lp) {
 }
 LRESULT CALLBACK testProc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp) {
     const auto browser=musxi::cef_adapter::browserHost();
+    if(msg==TaskbarCreated && trayAdded) {
+        trayAdded=false;
+        if(!addTray(hwnd))showFromTray(hwnd);
+        return 0;
+    }
     switch(msg) {
+    case TrayMessage:
+        if(LOWORD(lp)==WM_LBUTTONDBLCLK || LOWORD(lp)==NIN_KEYSELECT)showFromTray(hwnd);
+        if(LOWORD(lp)==WM_CONTEXTMENU || LOWORD(lp)==WM_RBUTTONUP)trayMenu(hwnd);
+        return 0;
+    case WM_DESTROY: removeTray(hwnd);return 0;
     case WM_SETFOCUS: if(browser)browser->SetFocus(true);return 0;
     case WM_KILLFOCUS: if(browser){browser->SetFocus(false);if(imeActive)browser->ImeCancelComposition();}imeActive=false;return 0;
     case WM_SETCURSOR: if(LOWORD(lp)==HTCLIENT){SetCursor(webCursor?webCursor:LoadCursorW(nullptr,IDC_ARROW));return TRUE;}break;
@@ -161,10 +247,11 @@ LRESULT CALLBACK testProc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp) {
             SetWindowLongPtrW(hwnd,GWL_EXSTYLE,GetWindowLongPtrW(hwnd,GWL_EXSTYLE)|WS_EX_NOREDIRECTIONBITMAP);
             musxi::cef_adapter::retryBrowser();return 0;
         }
-        if(LOWORD(wp)==2)PostMessageW(hwnd,WM_CLOSE,0,0);return 0;
+        if(LOWORD(wp)==2)exitFromTray();return 0;
     case WM_CLOSE:
         if(musxi::cef_adapter::browserReadyToClose())DestroyWindow(hwnd);
-        else if(nativeWindow)PostMessageW(nativeWindow,WM_CLOSE,0,0);return 0;
+        else if(nativeWindow)PostMessageW(nativeWindow,WM_CLOSE,0,0);
+        return 0;
     }
     return DefWindowProcW(hwnd,msg,wp,lp);
 }
@@ -180,6 +267,7 @@ void ready(void* window) {
         createFailed=true;PostMessageW(nativeWindow,WM_CLOSE,0,0);return;
     }
     const auto url=CefString(&parts.spec).ToString();
+    mainUrl=url;
     CefWindowInfo info;
     if(!preview) {
         WNDCLASSW wc{};wc.style=CS_DBLCLKS;wc.lpfnWndProc=testProc;wc.hInstance=GetModuleHandleW(nullptr);
@@ -208,7 +296,10 @@ void ready(void* window) {
     else if(smoke && preview)ShowWindow(browser->GetHost()->GetWindowHandle(),SW_HIDE);
     if(browser && !preview) {
         SendMessageW(testWindow,WM_SIZE,0,0);
-        if(!smoke)ShowWindow(testWindow,SW_SHOW);
+        if(!smoke) {
+            ShowWindow(testWindow,SW_SHOW);
+            addTray(testWindow);
+        }
     }
     startTick=GetTickCount64();
 }
@@ -216,7 +307,13 @@ void tick() {
     CefDoMessageLoopWork();
     if(smoke && GetTickCount64()-startTick>20000)PostMessageW(nativeWindow,WM_CLOSE,0,0);
 }
-bool canClose() {return musxi::cef_adapter::closeBrowsers();}
+bool canClose() {
+    if(!musxi::cef_adapter::closeBrowsers())return false;
+    // The windowless browser is gone. Remove its frozen surface before blocking
+    // native cleanup and CefShutdown, rather than leaving a dead window visible.
+    if(testWindow) {surface.clear();DestroyWindow(testWindow);testWindow=nullptr;}
+    return true;
+}
 int run(HINSTANCE instance,int show,void* sandbox) {
     auto app=musxi::cef_adapter::makeApp();
     const int child=CefExecuteProcess(CefMainArgs(instance),app,sandbox);
@@ -227,7 +324,7 @@ int run(HINSTANCE instance,int show,void* sandbox) {
     testApp=command->HasSwitch("test-app") || std::filesystem::path(exe).filename()==L"MusxiPlayerTest.exe";
     preview=command->HasSwitch("cef-preview");
     if(!preview)SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
-    pagePath=(directory/(preview?L"ui":L"ui-react")/L"index.html").wstring();
+    pagePath=(directory/(preview?L"ui":L"ui-vue")/L"index.html").wstring();
     smoke=command->HasSwitch("cef-smoke");
     if(smoke && command->HasSwitch("cef-smoke-unicode"))pagePath=(directory/L"测试 空格"/L"index.html").wstring();
     if(!std::filesystem::exists(pagePath))return 2;
@@ -257,6 +354,10 @@ int run(HINSTANCE instance,int show,void* sandbox) {
 }
 }
 namespace musxi::cef_adapter {
+bool minimizeToTray() {return testWindow && hideToTray(testWindow);}
+void toggleTrayWindow() {if(testWindow){if(IsWindowVisible(testWindow))hideToTray(testWindow);else showFromTray(testWindow);}}
+void dismissTrayMenu() {if(trayWindow)PostMessageW(trayWindow,WM_CLOSE,0,0);}
+void trayMenuClosed() {if(trayWindow){DestroyWindow(trayWindow);trayWindow=nullptr;}}
 void presentBrowser(bool popup,const void* pixels,int width,int height) {
     if(!testWindow || renderFailed)return;
     if(surface.paint(testWindow,popup,pixels,width,height))return;

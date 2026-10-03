@@ -1,0 +1,25 @@
+/* Only prefixed utilities: no Preflight reset or changes to existing elements. */
+@import "tailwindcss/theme.css" layer(theme) prefix(tw);
+@import "tailwindcss/utilities.css" prefix(tw) source(none);
+@source "./components/ui";
+
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *, [data-theme="glass"], [data-theme="glass"] *));
+
+:root { --tw-primary-contrast: #ffffff; }
+:root[data-theme="dark"], :root[data-theme="glass"] { --tw-primary-contrast: #181818; }
+
+/* Reuse Musxi colors; transparency stays on background colors. */
+@theme inline {
+  --color-background: var(--surface);
+  --color-foreground: var(--ink);
+  --color-primary: var(--accent);
+  --color-primary-foreground: var(--tw-primary-contrast);
+  --color-secondary: var(--side);
+  --color-secondary-foreground: var(--ink);
+  --color-accent: var(--hover-surface);
+  --color-accent-foreground: var(--ink);
+  --color-destructive: #c42b36;
+  --color-border: var(--line);
+  --color-input: var(--line);
+  --color-ring: var(--accent);
+}

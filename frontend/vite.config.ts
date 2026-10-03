@@ -1,4 +1,6 @@
 import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import tailwindcss from '@tailwindcss/vite';
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 
@@ -6,7 +8,8 @@ import react from '@vitejs/plugin-react';
 // enabling file-origin module access or weakening CEF browser security.
 export default defineConfig(({ command }) => ({
   base: './',
-  plugins: [react(), {
+  resolve: { alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) } },
+  plugins: [react(), tailwindcss(), {
     name: 'cef-local-html',
     generateBundle() {
       const html = readFileSync(new URL('./index.html', import.meta.url), 'utf8')

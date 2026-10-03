@@ -13,6 +13,9 @@ export function createWindowClient(host: CefTransport) {
     getState: () => call('window.getState'),
     minimize: () => call('window.minimize'), maximize: () => call('window.maximize'),
     close: () => call('window.close'),
+    minimizeToTray: () => call('window.minimizeToTray'),
+    toggleVisibility: () => call('window.toggleVisibility'),
+    dismissTrayMenu: () => call('window.dismissTrayMenu'),
     setTheme: (theme: Theme) => call('window.setTheme', { theme })
   });
 }

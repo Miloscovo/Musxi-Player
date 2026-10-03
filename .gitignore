@@ -22,6 +22,8 @@ __pycache__/
 # Local account state and playback cache
 **/kugou-session.dat
 **/kugou-library.json
+**/playback-history.json
+**/local-music.json
 **/cloud-cache/
 
 # OS/editor noise

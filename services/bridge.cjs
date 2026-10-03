@@ -6,6 +6,18 @@ const fs = require('node:fs/promises');
 const readline = require('node:readline');
 const VENDOR = path.join(__dirname, 'vendor', 'KuGouMusicApi-a5a98013cce79fe0ae2ad65fc84b68176ebcfc1e');
 const ALLOWED = new Set(['login_qr_key', 'login_qr_create', 'login_qr_check', 'user_detail', 'user_playlist', 'playlist_track_all_new', 'song_url', 'search', 'playlist_tracks_add', 'playlist_tracks_del', 'user_vip_detail', 'youth_month_vip_record', 'youth_day_vip']);
+const QUALITIES = [{id:'128',name:'标准 · 128 kbps'}, {id:'320',name:'高品质 · 320 kbps'}, {id:'flac',name:'无损 · FLAC'}];
+function confirmedQuality(data, id) {
+  const bitrate=Number(data.bitRate ?? data.bitrate ?? data.bit_rate ?? 0);
+  const format=String(data.extName ?? data.extname ?? data.ext_name ?? '').toLowerCase();
+  if(id==='flac')return format==='flac';
+  return format!=='flac' && (bitrate===Number(id) || bitrate===Number(id)*1000);
+}
+function audioUrl(data) {
+  const value=Array.isArray(data.url)?data.url[0]:data.url;
+  if(!value)return '';
+  try {const url=new URL(value);return ['http:','https:'].includes(url.protocol)?url.href:'';} catch {return '';}
+}
 
 function liveCaller() {
   process.env.platform = 'lite';
@@ -300,6 +312,14 @@ class Adapter {
         return { playlistFlags: (first.data?.info || []).map(p=>({is_def:p.is_def,is_mine:p.is_mine,is_edit:p.is_edit,type:p.type,favoriteName:p.name==='我喜欢'})), first: responseShape(first), second: responseShape(second), tracks: responseShape(tracks), tracksEnd: responseShape(tracksEnd) };
       }
       case 'init': {
+        // Restart metadata can identify songs, but never supplies playback URLs or credentials.
+        if(Array.isArray(request.tracks)) for(const row of request.tracks.slice(0,10001)) {
+          if(!row || typeof row.id!=='string' || row.id.length>4096 || !row.id || row.id.startsWith('local:') || !/^[a-f0-9]{32}$/i.test(row.hash))continue;
+          const t={};
+          for(const key of ['id','name','artist','album','hash','fileId','fileName','albumId','audioId'])t[key]=text(row[key]).slice(0,4096);
+          t.hash=t.hash.toLowerCase();t.cover=coverUrl(row.cover);t.duration=Number.isFinite(row.duration)&&row.duration>=0?row.duration:0;
+          this.knownTracks.set(t.id,t);
+        }
         const s = request.session;
         if (s?.platform === 'lite' && s.cookie?.token && s.cookie?.userid) {
           this.cookie = s.cookie;
@@ -311,7 +331,7 @@ class Adapter {
         return { connected: !!this.profile, profile: this.profile, session: this.session() };
       }
       case 'qr': {
-        this.reset();
+        const tracks=this.knownTracks;this.reset();this.knownTracks=tracks;
         const body = await this.api('login_qr_key');
         this.key = text(body.data?.qrcode);
         if (!this.key) throw new Error('没有收到登录二维码，请稍后重试');
@@ -345,22 +365,38 @@ class Adapter {
         const list = await this.playlistTracks(p);
         return { playlist: p, tracks: list, syncedAt: new Date().toISOString() };
       }
+      case 'qualities': {
+        this.auth();const t=this.knownTracks.get(text(request.id));
+        if(!t || !/^[a-f0-9]{32}$/.test(t.hash))throw Error('此歌曲暂时没有可播放的音频标识');
+        const results=await Promise.all(QUALITIES.map(async option=>{
+          try {
+            const body=await this.api('song_url',{hash:t.hash,album_id:t.albumId,album_audio_id:t.audioId,quality:option.id==='flac'?'flac':Number(option.id)});
+            const data=body.data || body;
+            return {option:audioUrl(data) && confirmedQuality(data,option.id)?option:null};
+          } catch(error) {return {error};}
+        }));
+        if(results.every(result=>result.error))throw results[0].error;
+        return {id:t.id,options:results.flatMap(result=>result.option?[result.option]:[])};
+      }
       case 'audio': {
         this.auth(); const t = this.knownTracks.get(text(request.id));
         if (!t || !/^[a-f0-9]{32}$/.test(t.hash)) throw new Error('此歌曲暂时没有可播放的音频标识');
-        const body = await this.api('song_url', { hash: t.hash, album_id: t.albumId, album_audio_id: t.audioId, quality: 128 });
+        const quality=request.quality===undefined?'128':String(request.quality);
+        if(!QUALITIES.some(option=>option.id===quality))throw Error('无效音质');
+        const body = await this.api('song_url', { hash: t.hash, album_id: t.albumId, album_audio_id: t.audioId, quality: quality==='flac'?'flac':Number(quality) });
         const data = body.data || body;
+        if(request.quality!==undefined && !confirmedQuality(data,quality))throw Error('该音质暂时不可用，已保留当前播放');
         t.cover = cover(data) || t.cover;
         const value = Array.isArray(data.url) ? data.url[0] : data.url;
         if (!value) throw new Error('此账号暂时无法播放该歌曲，可能需要会员或歌曲已下架');
         const url = new URL(value);
         if (!['http:', 'https:'].includes(url.protocol)) throw new Error('音频地址无效');
         // Audio comes only from the account-authorized URL returned by upstream.
-        if (!request.cacheDir) return { url: url.href, track: t };
+        if (!request.cacheDir) return { url: url.href, track: t, quality:confirmedQuality(data,quality)?quality:'' };
         // Fetch only the playback URL provided for this account. No alternate sources.
         const dir = path.resolve(request.cacheDir);
         await fs.mkdir(dir, { recursive: true });
-        const file = path.join(dir, crypto.randomBytes(16).toString('hex') + '.mp3');
+        const file = path.join(dir, crypto.randomBytes(16).toString('hex') + (quality==='flac'?'.flac':'.mp3'));
         let handle;
         try {
           const response = await fetch(url, { signal: AbortSignal.timeout(75000) });
@@ -374,7 +410,7 @@ class Adapter {
           }
           if (size < 128) throw new Error('音频内容为空');
           await handle.close(); handle = null;
-          return { path: file, track: t };
+          return { path: file, track: t, quality:confirmedQuality(data,quality)?quality:'' };
         } catch {
           if (handle) await handle.close();
           await fs.unlink(file).catch(() => {});
@@ -394,7 +430,7 @@ async function main() {
   catch { send(JSON.stringify({ ok: false, error: '接口依赖未安装，请运行 setup-cloud.ps1' }) + '\n'); process.exitCode = 1; return; }
   const lines = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
   for await (const line of lines) {
-    if (line.length > 1024 * 1024) { send('{"ok":false,"error":"请求过大"}\n'); continue; }
+    if (line.length > 16 * 1024 * 1024) { send('{"ok":false,"error":"请求过大"}\n'); continue; }
     try {
       const result = await adapter.run(JSON.parse(line));
       send(JSON.stringify({ ok: true, data: result }) + '\n');

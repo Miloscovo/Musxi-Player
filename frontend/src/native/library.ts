@@ -1,18 +1,31 @@
 import { NativeError } from './types.ts';
 import { request, type CefTransport } from './transport.ts';
 export interface Track { id: string; name: string; artist: string; album?: string; cover: string; duration: number; count: number; editable: boolean }
+export type PlaybackOrder = 'sequential' | 'random' | 'repeat-one';
+export type AudioQuality = '128' | '320' | 'flac';
 export interface LibraryState {
   connected: boolean; busy: boolean; user: string; status: string; notice: string; qr: string; avatar: string;
-  playlists: Track[]; tracks: Track[]; trackCount: number; playlistId: string; playlistName: string;
+  playlists: Track[]; localPlaylists?: Track[]; tracks: Track[]; trackCount: number; playlistId: string; playlistName: string;
+  queue?: Track[]; queueCurrentId?: string;
+  playbackOrder?: PlaybackOrder;
+  qualities?: { id: string; current: string; options: { id: AudioQuality; name: string }[] };
   search: Track[]; keywords: string; searchPage: number; searchMore: boolean; searchTotal: number;
-  now: { name: string; artist: string; cover: string };
+  now: { name: string; artist: string; cover: string; liked?: boolean; canFavorite?: boolean };
   menu: { id: string; liked: boolean; canFavorite: boolean; playlists: Track[] };
   operation: { id: string; status: 'idle' | 'pending' | 'completed' | 'failed' | 'cancelled'; kind: string; error: string };
 }
 export interface LibraryCommands {
   'library.search': { keywords: string; page: number };
   'library.open': { id: string };
-  'library.play': { source: 'search' | 'library' | 'queue'; id: string };
+  'library.play': { source: 'search' | 'library' | 'queue' | 'local'; id: string };
+  'library.importLocal': Record<string, never>;
+  'library.playPlaylist': { id: string };
+  'library.setPlaybackOrder': { order: PlaybackOrder };
+  'library.qualities': { id: string };
+  'library.setQuality': { id: string; quality: AudioQuality };
+  'library.queueNext': { source: 'search' | 'library' | 'local'; id: string };
+  'library.queueRemove': { id: string };
+  'library.queueClear': Record<string, never>;
   'library.skip': { delta: -1 | 1 };
   'library.menu': { id: string };
   'library.favorite': { id: string; enabled: boolean };
@@ -41,7 +54,21 @@ export function parseLibraryState(value: unknown): LibraryState {
     }
   };
   for (const key of ['playlists', 'tracks', 'search']) rows(v[key]);
+  if(v.localPlaylists !== undefined) rows(v.localPlaylists);
+  if(v.queue !== undefined) rows(v.queue);
+  if(v.queueCurrentId !== undefined) fields(v, ['queueCurrentId'], 'string');
+  if(v.playbackOrder !== undefined && !['sequential', 'random', 'repeat-one'].includes(v.playbackOrder as string)) throw new NativeError(502, 'Invalid playback order');
+  if(v.qualities !== undefined) {
+    const quality=object(v.qualities);fields(quality,['id','current'],'string');
+    if(!Array.isArray(quality.options))throw new NativeError(502,'Invalid audio qualities');
+    for(const entry of quality.options) {
+      const option=object(entry);fields(option,['id','name'],'string');
+      if(!['128','320','flac'].includes(option.id as string))throw new NativeError(502,'Invalid audio quality');
+    }
+  }
   const now = object(v.now); fields(now, ['name', 'artist', 'cover'], 'string');
+  if(now.liked !== undefined) fields(now, ['liked'], 'boolean');
+  if(now.canFavorite !== undefined) fields(now, ['canFavorite'], 'boolean');
   const menu = object(v.menu); fields(menu, ['id'], 'string'); fields(menu, ['liked', 'canFavorite'], 'boolean'); rows(menu.playlists);
   const operation = object(v.operation); fields(operation, ['id', 'status', 'kind', 'error'], 'string');
   if (!['idle', 'pending', 'completed', 'failed', 'cancelled'].includes(operation.status as string)) throw new NativeError(502, 'Invalid operation status');
@@ -61,7 +88,15 @@ export function createLibraryClient(host: CefTransport) {
     },
     search: (keywords: string, page: number, signal?: AbortSignal) => dispatch('library.search', { keywords, page }, signal),
     open: (id: string, signal?: AbortSignal) => dispatch('library.open', { id }, signal),
-    play: (source: 'search' | 'library' | 'queue', id: string, signal?: AbortSignal) => dispatch('library.play', { source, id }, signal),
+    play: (source: 'search' | 'library' | 'queue' | 'local', id: string, signal?: AbortSignal) => dispatch('library.play', { source, id }, signal),
+    importLocal: (signal?: AbortSignal) => dispatch('library.importLocal', {}, signal),
+    playPlaylist: (id: string, signal?: AbortSignal) => dispatch('library.playPlaylist', { id }, signal),
+    setPlaybackOrder: (order: PlaybackOrder, signal?: AbortSignal) => dispatch('library.setPlaybackOrder', { order }, signal),
+    qualities: (id: string, signal?: AbortSignal) => dispatch('library.qualities', { id }, signal),
+    setQuality: (id: string, quality: AudioQuality, signal?: AbortSignal) => dispatch('library.setQuality', { id, quality }, signal),
+    queueNext: (source: 'search' | 'library' | 'local', id: string, signal?: AbortSignal) => dispatch('library.queueNext', { source, id }, signal),
+    queueRemove: (id: string, signal?: AbortSignal) => dispatch('library.queueRemove', { id }, signal),
+    queueClear: (signal?: AbortSignal) => dispatch('library.queueClear', {}, signal),
     skip: (delta: -1 | 1, signal?: AbortSignal) => dispatch('library.skip', { delta }, signal),
     menu: (id: string, signal?: AbortSignal) => dispatch('library.menu', { id }, signal),
     favorite: (id: string, enabled: boolean, signal?: AbortSignal) => dispatch('library.favorite', { id, enabled }, signal),

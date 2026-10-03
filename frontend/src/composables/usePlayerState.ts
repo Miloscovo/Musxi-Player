@@ -2,9 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { native } from '../native/client';
 import type { PlayerState } from '../native/types';
 import { verifyWebPage } from '../native/smoke';
-import { isDemoMode } from '../demo/context.ts';
 export function usePlayerState() {
-  const demoMode = isDemoMode();
   const [state, setState] = useState<PlayerState | null>(null);
   const [error, setError] = useState(''); const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false); const [connected, setConnected] = useState(false);
@@ -55,12 +53,9 @@ export function usePlayerState() {
     function stop() {
       r.active = false; clearTimeout(retry); unsubscribe?.(); r.controller?.abort(); r.commandController?.abort();
     }
-    if (demoMode) {
-      r.connected = true; setConnected(true); void actions.refresh();
-    } else { void actions.refresh(); connect(); }
-    window.addEventListener('pagehide', stop);
+    void actions.refresh(); connect(); window.addEventListener('pagehide', stop);
     return () => { stop(); window.removeEventListener('pagehide', stop); };
-  }, [actions, demoMode]);
+  }, [actions]);
   useEffect(() => {
     if (connected && state && !smokeStarted.current && new URLSearchParams(location.search).has('smoke')) {
       smokeStarted.current = true; void verifyWebPage().catch(e => {

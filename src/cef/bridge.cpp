@@ -4,6 +4,7 @@
 #include "../application/application.hpp"
 #include "../../third_party/json.hpp"
 #include <map>
+#include <iostream>
 #include <commctrl.h>
 #include <windowsx.h>
 #include "include/cef_render_handler.h"
@@ -13,6 +14,8 @@ namespace musxi::cef_adapter {
 namespace {
 using Json=nlohmann::json;
 CefRefPtr<CefBrowser> activeBrowser;
+CefRefPtr<CefBrowser> trayBrowser;
+bool shuttingDown=false;
 bool passed=false;
 LRESULT CALLBACK dragHitTest(HWND hwnd,UINT message,WPARAM wp,LPARAM lp,UINT_PTR id,DWORD_PTR parent) {
     if(message==WM_NCHITTEST) {
@@ -51,8 +54,8 @@ class Client final : public CefClient, public CefLifeSpanHandler,
                      public CefRequestHandler, public CefDragHandler, public CefRenderHandler,
                      public CefDisplayHandler, public CefMessageRouterBrowserSide::Handler {
 public:
-    Client(std::string url,void* window,bool smoke,void* testWindow)
-        :url_(std::move(url)),window_(static_cast<HWND>(window)),testWindow_(static_cast<HWND>(testWindow)),smoke_(smoke) {
+    Client(std::string url,void* window,bool smoke,void* testWindow,bool tray=false)
+        :url_(std::move(url)),window_(static_cast<HWND>(window)),testWindow_(static_cast<HWND>(testWindow)),smoke_(smoke),tray_(tray) {
         router_=CefMessageRouterBrowserSide::Create(CefMessageRouterConfig());
         router_->AddHandler(this,false);
     }
@@ -62,6 +65,10 @@ public:
     CefRefPtr<CefDragHandler> GetDragHandler() override {return this;}
     CefRefPtr<CefRenderHandler> GetRenderHandler() override {return testWindow_?this:nullptr;}
     CefRefPtr<CefDisplayHandler> GetDisplayHandler() override {return this;}
+    bool OnConsoleMessage(CefRefPtr<CefBrowser>,cef_log_severity_t,const CefString& message,const CefString&,int) override {
+        if(smoke_ && message.ToString().rfind("CEF smoke failed:",0)==0)std::cerr<<message.ToString()<<"\n";
+        return false;
+    }
     void GetViewRect(CefRefPtr<CefBrowser>,CefRect& rect) override {
         RECT r{};GetClientRect(testWindow_,&r);const int dpi=GetDpiForWindow(testWindow_);
         rect=CefRect(0,0,std::max(1,MulDiv(r.right,96,dpi)),std::max(1,MulDiv(r.bottom,96,dpi)));
@@ -106,6 +113,7 @@ public:
         },reinterpret_cast<LPARAM>(testWindow_));
     }
     void OnAfterCreated(CefRefPtr<CefBrowser> browser) override {
+        if(tray_){trayBrowser=browser;return;}
         CEF_REQUIRE_UI_THREAD();activeBrowser=browser;
         setApplicationPlayerEvents([this](const char* name,const PlayerState& state) {
             const auto message=Json{{"version",1},{"event",name},{"state",stateJson(state)}}.dump();
@@ -113,6 +121,11 @@ public:
         });
     }
     void OnBeforeClose(CefRefPtr<CefBrowser> browser) override {
+        if(tray_) {
+            router_->OnBeforeClose(browser);trayBrowser=nullptr;trayMenuClosed();
+            if(shuttingDown)PostMessageW(window_,WM_CLOSE,0,0);
+            return;
+        }
         CEF_REQUIRE_UI_THREAD();setApplicationPlayerEvents({});
         router_->OnBeforeClose(browser);subscriptions_.clear();activeBrowser=nullptr;
         if(testWindow_)RemovePropW(testWindow_,DragRegionProperty);
@@ -135,6 +148,7 @@ public:
     }
     void OnRenderProcessTerminated(CefRefPtr<CefBrowser> b,TerminationStatus,
                                    int,const CefString&) override {
+        if(tray_){b->GetHost()->CloseBrowser(true);return;}
         router_->OnRenderProcessTerminated(b);subscriptions_.clear();
         if(dragRegion_)SetRectRgn(dragRegion_,0,0,0,0);
         if(closing_)return;
@@ -163,6 +177,14 @@ public:
             }
             const auto command=q["command"].get<std::string>();
             const auto& params=q["params"];
+            if(tray_) {
+                if(persistent || !params.empty()) {callback->Failure(400,"Invalid tray command");return true;}
+                if(command=="window.toggleVisibility")toggleTrayWindow();
+                else if(command=="window.dismissTrayMenu")dismissTrayMenu();
+                else if(command=="window.close")PostMessageW(window_,WM_CLOSE,0,0);
+                else {callback->Failure(403,"Command unavailable in tray menu");return true;}
+                callback->Success(Json{{"version",1},{"result",{{"enabled",true},{"maximized",false}}}}.dump());return true;
+            }
             if(command=="player.subscribe") {
                 if(!persistent || !params.empty() || subscriptions_.size()>=16) {
                     callback->Failure(400,"Invalid subscription");return true;
@@ -189,10 +211,11 @@ public:
                     }
                 } else {
                     if(!params.empty()){callback->Failure(400,"Unexpected window parameters");return true;}
-                    if(command!="window.getState" && command!="window.minimize" && command!="window.maximize" && command!="window.close") {
+                    if(command!="window.getState" && command!="window.minimize" && command!="window.maximize" && command!="window.close" && command!="window.minimizeToTray") {
                         callback->Failure(404,"Unknown window command");return true;
                     }
                     if(testWindow_) {
+                        if(command=="window.minimizeToTray" && !minimizeToTray()) {callback->Failure(500,"无法创建系统托盘图标，请重试。");return true;}
                         if(command=="window.minimize")ShowWindow(testWindow_,SW_MINIMIZE);
                         if(command=="window.maximize")ShowWindow(testWindow_,IsZoomed(testWindow_)?SW_RESTORE:SW_MAXIMIZE);
                         if(command=="window.close")PostMessageW(testWindow_,WM_CLOSE,0,0);
@@ -245,7 +268,7 @@ public:
     }
     void requestClose() {closing_=true;if(activeBrowser)activeBrowser->GetHost()->CloseBrowser(false);}
 private:
-    std::string url_;HWND window_,testWindow_;bool smoke_,closing_=false,recovered_=false;
+    std::string url_;HWND window_,testWindow_;bool smoke_,tray_,closing_=false,recovered_=false;
     HRGN dragRegion_=nullptr;
     CefRect popupBounds_;
     std::map<int64_t,CefRefPtr<Callback>> subscriptions_;
@@ -259,10 +282,13 @@ CefRefPtr<CefClient> makeClient(const std::string& url,void* window,bool smoke,v
 }
 bool closeBrowsers() {
     CEF_REQUIRE_UI_THREAD();
-    if(!activeBrowser)return true;
-    static_cast<Client*>(activeBrowser->GetHost()->GetClient().get())->requestClose();
-    return false;
+    shuttingDown=true;closeTrayBrowser();
+    if(activeBrowser)static_cast<Client*>(activeBrowser->GetHost()->GetClient().get())->requestClose();
+    return !activeBrowser && !trayBrowser;
 }
+CefRefPtr<CefClient> makeTrayClient(const std::string& url,void* window) {return new Client(url,window,false,nullptr,true);}
+void closeTrayBrowser() {if(trayBrowser)trayBrowser->GetHost()->CloseBrowser(false);}
+bool trayBrowserReadyToClose() {return trayBrowser && trayBrowser->GetHost()->IsReadyToBeClosed();}
 bool smokePassed() {return passed;}
 bool browserReadyToClose() {return activeBrowser && activeBrowser->GetHost()->IsReadyToBeClosed();}
 void retryBrowser() {if(activeBrowser)activeBrowser->Reload();}

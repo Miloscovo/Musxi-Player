@@ -1,4 +1,13 @@
-# Musxi 0.2.0 fixed FFmpeg source delivery
+# Musxi fixed FFmpeg source delivery
+
+## v0.3.0
+
+The v0.3.0 installer uses the same audited CEF and two FFmpeg binary sets as
+v0.2.0. The fixed third-party source entry and retrieval instructions below
+continue to apply. Application source is available at the v0.3.0 tag; the
+installed `release-source-record.json` records its exact clean Git commit.
+The v0.2.0 identities below are historical and do not identify the v0.3.0
+application binary. Default v0.3.0 Release uploads contain only the installer.
 
 ## Current release identity and status — 2026-10-02
 

@@ -34,7 +34,7 @@ Source: "..\build\cef-msvc\src\cef\Release\icudtl.dat"; DestDir: "{app}"; Flags:
 Source: "..\build\cef-msvc\src\cef\Release\v8_context_snapshot.bin"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\build\cef-msvc\src\cef\Release\vk_swiftshader_icd.json"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\build\cef-msvc\src\cef\Release\locales\*"; DestDir: "{app}\locales"; Flags: ignoreversion recursesubdirs
-Source: "..\frontend\dist\*"; DestDir: "{app}\ui-react"; Flags: ignoreversion recursesubdirs
+Source: "..\frontend\dist\*"; DestDir: "{app}\ui-vue"; Flags: ignoreversion recursesubdirs
 Source: "..\build\cef-license.txt"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\build\ffmpeg-license.txt"; DestDir: "{app}"; DestName: "LICENSE-FFmpeg.txt"; Flags: ignoreversion
 Source: "..\README.md"; DestDir: "{app}"; Flags: ignoreversion

@@ -1,9 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { native } from '../native/client';
-import type { LibraryState } from '../native/library';
-import { isDemoMode } from '../demo/context.ts';
+import type { LibraryState, PlaybackOrder, AudioQuality } from '../native/library';
 export function useLibrary() {
-  const demoMode = isDemoMode();
   const [state, setState] = useState<LibraryState | null>(null);
   const [error, setError] = useState(''); const [pending, setPending] = useState(false); const [page, setPage] = useState(1);
   const runtime = useRef({ active: false, pending: false, page: 1, state: null as LibraryState | null,
@@ -53,7 +51,15 @@ export function useLibrary() {
     return { refresh, loadNextPage,
       search: (query: string, p = 1) => run(signal => native.library.search(query, p, signal)),
       open: (id: string) => { changePage(1); return run(signal => native.library.open(id, signal)); },
-      play: (source: 'search' | 'library', id: string) => playback(signal => native.library.play(source, id, signal)),
+      play: (source: 'search' | 'library' | 'queue' | 'local', id: string) => playback(signal => native.library.play(source, id, signal)),
+      playPlaylist: (id: string) => run(signal => native.library.playPlaylist(id, signal)),
+      setPlaybackOrder: (order: PlaybackOrder) => run(signal => native.library.setPlaybackOrder(order, signal)),
+      qualities: (id: string) => run(signal => native.library.qualities(id, signal)),
+      setQuality: (id: string, quality: AudioQuality) => run(signal => native.library.setQuality(id, quality, signal)),
+      queueNext: (source: 'search' | 'library' | 'local', id: string) => run(signal => native.library.queueNext(source, id, signal)),
+      queueRemove: (id: string) => run(signal => native.library.queueRemove(id, signal)),
+      queueClear: () => run(signal => native.library.queueClear(signal)),
+      importLocal: () => run(signal => native.library.importLocal(signal)),
       skip: (delta: -1 | 1) => playback(signal => native.library.skip(delta, signal)),
       menu: (id: string) => run(signal => native.library.menu(id, signal)),
       favorite: (id: string, enabled: boolean) => run(signal => native.library.favorite(id, enabled, signal)),
@@ -64,10 +70,10 @@ export function useLibrary() {
   useEffect(() => {
     const r = runtime.current; r.active = true; r.pending = false; r.task = null;
     r.controller = new AbortController(); setPending(false);
-    void actions.refresh(); const timer = demoMode ? undefined : setInterval(() => void actions.refresh(), 800);
+    void actions.refresh(); const timer = setInterval(() => void actions.refresh(), 800);
     function stop() { r.active = false; clearInterval(timer); r.controller.abort(); }
     window.addEventListener('pagehide', stop);
     return () => { stop(); window.removeEventListener('pagehide', stop); };
-  }, [actions, demoMode]);
+  }, [actions]);
   return { state, error, pending, page, ...actions };
 }

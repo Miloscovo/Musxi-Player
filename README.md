@@ -9,6 +9,10 @@
 - 登录后检查并领取当日概念版 VIP 权益
 - 浅色、深色、半透明主题
 - FFmpeg 解码与 WASAPI 音频输出，支持暂停、继续、切歌、Seek 和音量调整
+- 本地音乐文件夹导入、文件夹歌单和全部本地歌曲整合
+- 播放列表、下一首播放、顺序播放、随机播放、单曲循环及在线音质选择
+- 系统托盘及后台播放；重启后恢复歌曲、播放进度和队列，保持暂停
+- 可完全收起的侧栏、shadcn/ui 控件和统一的主题悬停效果
 
 ## 架构与构建
 
@@ -18,7 +22,7 @@ React + TypeScript + Vite
   → Application/Player (C++17) → FFmpeg/WASAPI (C++17)
 ```
 
-React 是默认界面，C++ 持有真实播放状态和云端媒体库状态。Application 保留一个不可见的 Windows 消息窗口，用来驱动后台轮询、事件通知和资源清理；关闭 React 窗口会退出并停止播放。Core 可在不配置 CEF/FFmpeg 的情况下独立编译。
+React 是默认界面，C++ 持有真实播放状态和云端媒体库状态。Application 保留一个不可见的 Windows 消息窗口，用来驱动后台轮询、事件通知和资源清理；点击关闭按钮可选择退出或最小化到托盘，最小化后继续播放。Core 可在不配置 CEF/FFmpeg 的情况下独立编译。
 
 以下命令在仓库根目录的 PowerShell 中执行。仓库可以放在任意目录，示例不依赖开发者的本地盘符。
 
@@ -65,3 +69,7 @@ Copyright (c) 2026 Miloscovo.
 Musxi Player 自身代码采用 **GNU General Public License v3.0 or later**，SPDX 标识为 **GPL-3.0-or-later**。你可以依照自由软件基金会发布的 GNU GPL 第 3 版，或自行选择任何后续版本，重新分发和修改本项目。完整许可证正文见 [LICENSE](LICENSE)。
 
 第三方组件继续遵循各自的许可证；许可证、版权声明和分发注意事项见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+
+### 浏览器离线演示
+
+在 `frontend/` 执行 `npm ci` 和 `npm run dev`，打开 `http://localhost:5173/?demo`。仅明确传入 `?demo` 且没有 CEF bridge 时启用；不会覆盖桌面应用、托盘或 smoke test。演示支持歌单、搜索、队列、收藏、播放模式、音质和虚拟本地导入。歌曲进度是模拟的，不播放真实音频、不读取真实文件、不登录真实账号、不请求在线服务；刷新页面后重置。
