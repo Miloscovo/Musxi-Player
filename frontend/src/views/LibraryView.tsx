@@ -4,6 +4,7 @@ import type { useLibrary } from '../composables/useLibrary';
 import type { Theme } from '../native/window';
 import { safeImage, type Track } from '../native/library';
 import CoverImage from '../components/CoverImage';
+import { isDemoMode } from '../demo/context.ts';
 
 type ThemeOption = 'light' | 'dark' | 'glass';
 const themes: { id: ThemeOption; label: string; description: string }[] = [
@@ -22,6 +23,7 @@ export default function LibraryView({ library: lib, theme, onTheme, transparency
   transparency?: number; onTransparency?: (value: number) => void;
 }) {
   const { state, error, pending, page } = lib;
+  const demoMode = isDemoMode();
   const [playlistRows, setPlaylistRows] = useState<Track[]>([]); const [searchRows, setSearchRows] = useState<Track[]>([]);
   const [view, setView] = useState<'library' | 'search' | 'settings'>('library');
   const [query, setQuery] = useState(''); const [showTracks, setShowTracks] = useState(false);
@@ -156,8 +158,9 @@ export default function LibraryView({ library: lib, theme, onTheme, transparency
             else setQuery(event.currentTarget.value);
           }} maxLength={120} placeholder={view === 'library' ? '搜索此歌单中的歌曲、歌手或专辑…' : '搜索歌曲、歌手或专辑…'} aria-label="搜索歌曲、歌手或专辑"/>
         </form>}
-        {view === 'library' && !showTracks && state?.connected && <button disabled={busy} onClick={lib.sync}>同步歌单</button>}
+        {view === 'library' && !showTracks && state?.connected && !demoMode && <button disabled={busy} onClick={lib.sync}>同步歌单</button>}
       </div></header>
+      {demoMode && <p className="demo-notice" role="status">演示模式 · 示例数据仅在本机页面中使用，不连接账号、网络或真实音频设备</p>}
       {view === 'library' && !showTracks && <div className="welcome"><h2>{state?.connected ? `你好，${state.user}` : '把喜欢的音乐带到这里'}</h2><p>{state?.status}</p>{!state?.connected && <button onClick={() => setAccount(true)}>扫码登录</button>}</div>}
       {error && <p role="alert" className="error">{error}</p>}
       {state?.operation.status === 'failed' && <p role="alert" className="error">{state.operation.error}</p>}

@@ -249,3 +249,5 @@ html,body,#app,main.app-shell { background:transparent!important }
 .library-shell:is([data-theme=glass],[data-theme=glass-light]) .welcome { background:transparent }
 .library-shell:is([data-theme=glass],[data-theme=glass-light]) .collection-search { background:transparent }
 .player { box-shadow:none }
+
+.demo-notice{margin:0 0 18px;padding:8px 12px;border:1px solid #27aa8055;border-radius:8px;color:var(--muted);font-size:12px}

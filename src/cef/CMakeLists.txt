@@ -45,7 +45,7 @@ set_target_properties(cef_host PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CEF_TARGET
 COPY_SINGLE_FILE(cef_host "${CEF_BINARY_DIR}/bootstrap.exe" "${CEF_TARGET_OUT_DIR}/MusxiPlayerWeb.exe")
 COPY_FILES(cef_host "${CEF_BINARY_FILES}" "${CEF_BINARY_DIR}" "${CEF_TARGET_OUT_DIR}")
 COPY_FILES(cef_host "${CEF_RESOURCE_FILES}" "${CEF_RESOURCE_DIR}" "${CEF_TARGET_OUT_DIR}")
-option(MUSXI_BUILD_VUE_UI "Build and deploy the Vue application" ON)
+option(MUSXI_BUILD_REACT_UI "Build and deploy the React application" ON)
 add_custom_target(cef_ui_assets ALL
   COMMAND ${CMAKE_COMMAND} -E copy_directory
           "${CMAKE_SOURCE_DIR}/frontend/phase2" "${CEF_TARGET_OUT_DIR}/ui"
@@ -53,16 +53,16 @@ add_custom_target(cef_ui_assets ALL
           "${CMAKE_SOURCE_DIR}/LICENSE" "${CMAKE_SOURCE_DIR}/THIRD_PARTY_NOTICES.md" "${CEF_TARGET_OUT_DIR}"
   COMMAND ${CMAKE_COMMAND} -E copy_directory
           "${CMAKE_SOURCE_DIR}/licenses" "${CEF_TARGET_OUT_DIR}/licenses")
-if(MUSXI_BUILD_VUE_UI)
+if(MUSXI_BUILD_REACT_UI)
   find_program(MUSXI_NPM NAMES npm.cmd npm REQUIRED)
-  add_custom_target(vue_ui
+  add_custom_target(react_ui
     COMMAND "${MUSXI_NPM}" run build
     WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/frontend"
     VERBATIM)
-  add_dependencies(cef_ui_assets vue_ui)
+  add_dependencies(cef_ui_assets react_ui)
   add_custom_command(TARGET cef_ui_assets POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory
-            "${CMAKE_SOURCE_DIR}/frontend/dist" "${CEF_TARGET_OUT_DIR}/ui-vue")
+            "${CMAKE_SOURCE_DIR}/frontend/dist" "${CEF_TARGET_OUT_DIR}/ui-react")
 endif()
 add_dependencies(cef_host cef_ui_assets)
 SET_LPAC_ACLS(cef_host)

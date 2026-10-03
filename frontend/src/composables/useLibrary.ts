@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { native } from '../native/client';
 import type { LibraryState } from '../native/library';
+import { isDemoMode } from '../demo/context.ts';
 export function useLibrary() {
+  const demoMode = isDemoMode();
   const [state, setState] = useState<LibraryState | null>(null);
   const [error, setError] = useState(''); const [pending, setPending] = useState(false); const [page, setPage] = useState(1);
   const runtime = useRef({ active: false, pending: false, page: 1, state: null as LibraryState | null,
@@ -62,10 +64,10 @@ export function useLibrary() {
   useEffect(() => {
     const r = runtime.current; r.active = true; r.pending = false; r.task = null;
     r.controller = new AbortController(); setPending(false);
-    void actions.refresh(); const timer = setInterval(() => void actions.refresh(), 800);
+    void actions.refresh(); const timer = demoMode ? undefined : setInterval(() => void actions.refresh(), 800);
     function stop() { r.active = false; clearInterval(timer); r.controller.abort(); }
     window.addEventListener('pagehide', stop);
     return () => { stop(); window.removeEventListener('pagehide', stop); };
-  }, [actions]);
+  }, [actions, demoMode]);
   return { state, error, pending, page, ...actions };
 }
