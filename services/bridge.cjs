@@ -23,7 +23,7 @@ function liveCaller() {
   process.env.platform = 'lite';
   require('axios').defaults.timeout = 18000;
   // Upstream diagnostics must never leak credentials onto our IPC/log streams.
-  console.log = console.warn = console.error = () => {};
+  console.log = console.info = console.debug = console.warn = console.error = () => {};
   const { createRequest } = require(path.join(VENDOR, 'util/request'));
   return (name, params) => {
     if (!ALLOWED.has(name)) throw new Error('不支持的接口');
@@ -53,7 +53,7 @@ const albumName = item => [item.AlbumName, item.album_name, item.albumname, item
 function coverUrl(value) {
   try {
     const u = new URL(text(value).replace(/\{size\}/g, '200'));
-    if (!['http:', 'https:'].includes(u.protocol) || !/(^|\.)(kugou\.com|kgimg\.com)$/.test(u.hostname) || u.username || u.password) return '';
+    if (!['http:', 'https:'].includes(u.protocol) || !/(^|\.)(kugou\.com|kgimg\.com|music\.126\.net|music\.163\.com|y\.qq\.com|y\.gtimg\.cn|qpic\.cn|qlogo\.cn)$/.test(u.hostname) || u.username || u.password) return '';
     u.protocol = 'https:';return u.href;
   } catch { return ''; }
 }
@@ -253,10 +253,10 @@ class Adapter {
         return {id:t.id,playlist:target,tracks:after,playlists:lists,message:kind==='favorite'?(adding?'已收藏到“我喜欢”':'已取消收藏'):(submitted?'已添加到歌单':'这首歌曲已在该歌单中')};
       }
       case 'covers': {
-        const urls = [...new Set((Array.isArray(request.urls) ? request.urls : []).map(coverUrl).filter(Boolean))].slice(0, 8);
+        const urls = [...new Set((Array.isArray(request.urls) ? request.urls : []).filter(url => typeof url === 'string' && coverUrl(url)))].slice(0, 8);
         const images = await Promise.all(urls.map(async url => {
           try {
-            const r = await fetch(url, { signal: AbortSignal.timeout(8000), redirect: 'error' });
+            const r = await fetch(coverUrl(url), { signal: AbortSignal.timeout(8000), redirect: 'error' });
             if (!r.ok) throw Error('image');
             const chunks = [];let size = 0;
             for await (const chunk of r.body) {
@@ -426,16 +426,16 @@ class Adapter {
 async function main() {
   const send = process.stdout.write.bind(process.stdout);
   let adapter;
-  try { adapter = new Adapter(liveCaller()); }
+  try { adapter = new (require('./multi-platform.cjs').MultiPlatform)({kugou:new Adapter(liveCaller()),netease:require('./netease.cjs').liveNetease(),qq:new (require('./qq.cjs').QQAdapter)()}); }
   catch { send(JSON.stringify({ ok: false, error: '接口依赖未安装，请运行 setup-cloud.ps1' }) + '\n'); process.exitCode = 1; return; }
   const lines = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
-  for await (const line of lines) {
+  try { for await (const line of lines) {
     if (line.length > 16 * 1024 * 1024) { send('{"ok":false,"error":"请求过大"}\n'); continue; }
     try {
       const result = await adapter.run(JSON.parse(line));
       send(JSON.stringify({ ok: true, data: result }) + '\n');
     } catch (error) { send(JSON.stringify({ ok: false, error: error.message || '同步失败' }) + '\n'); }
-  }
+  } } finally { adapter.close(); }
 }
 if (require.main === module) main().catch(() => { process.exitCode = 1; });
 module.exports = { Adapter, playlist, track };

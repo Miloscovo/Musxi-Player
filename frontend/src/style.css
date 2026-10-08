@@ -50,7 +50,7 @@ main.app-shell { --sidebar-width:clamp(190px,15.5vw,240px); overflow:hidden; bor
 .window-buttons .window-maximize { display:grid; place-items:center }
 .sidebar .avatar-button { width:70px; height:70px; margin:0 auto; padding:0; border-radius:50%; background:var(--soft) }
 .sidebar .eyebrow { margin:14px 0 40px; color:var(--muted); font-size:13px; font-weight:600; letter-spacing:.2px; text-align:center }
-.sidebar>button:not(.avatar-button) { display:flex; align-items:center; gap:14px; width:100%; height:60px; margin:4px 0; padding:0 28px; border-radius:14px; background:transparent; color:var(--ink); font-family:inherit; font-size:16px; font-weight:700 }
+.sidebar>button:not(.avatar-button) { display:flex; align-items:center; gap:14px; width:100%; height:60px; margin:4px 0; padding:0 28px; border-radius:14px; background:transparent; color:var(--ink); font-family:inherit; font-size:16px; font-weight:550 }
 .sidebar>button .icon { width:24px; height:24px }
 .sidebar>button.selected { position:relative; background:transparent; color:var(--accent) }
 .sidebar>button:not(.avatar-button):hover { background:var(--hover-surface) }
@@ -75,7 +75,7 @@ main.app-shell { --sidebar-width:clamp(190px,15.5vw,240px); overflow:hidden; bor
 .song-context-item[data-disabled] { color:var(--muted); opacity:.6; pointer-events:none }
 .song-context-item svg { margin-left:auto; width:16px; height:16px; flex-shrink:0; fill:none; stroke:currentColor; stroke-width:1.8 }
 .playlist-header .page-heading { transform:translateY(-8px) }
-.discovery-title { transform:translateY(-8px) }
+.discovery-title,.recent-title { transform:translateY(-8px) }
 .settings-title { transform:translateY(-8px) }
 .library-content>header::before { position:absolute; top:-32px; left:-34px; right:-34px; height:32px; background:transparent; content:"" }
 .page-heading,.header-actions { display:flex; align-items:center; min-width:0 }
@@ -84,10 +84,11 @@ main.app-shell { --sidebar-width:clamp(190px,15.5vw,240px); overflow:hidden; bor
 .back-button { display:grid; place-items:center; flex:none; width:40px; height:42px; padding:0; background:transparent; color:var(--ink) }
 .back-button .icon { width:30px; height:30px }
 .header-actions { flex:none; margin-left:auto; gap:12px }
-.header-actions .playlist-play-button { display:inline-flex; align-items:center; justify-content:center; flex:none; gap:4px; width:85px; height:38px; padding:0 12px; border-radius:5px; background:#0a7c67; font-size:14px; transform:translateY(-8px) }
+.header-actions .playlist-play-button { display:inline-flex; align-items:center; justify-content:center; flex:none; gap:4px; width:85px; height:38px; padding:0 12px; border-radius:5px; background:var(--side); color:var(--ink); font-size:14px; transform:translateY(-8px) }
 .playlist-play-button svg { width:16px; height:16px; fill:currentColor }
-.playlist-play-button:enabled:hover { background:#086352 }
-:root:is([data-theme=dark],[data-theme=glass]) :is(.playlist-play-button,[data-variant=default],[data-variant=secondary],[data-variant=outline],[data-variant=ghost]):enabled:hover { background:var(--hover-surface); color:var(--ink) }
+.playlist-play-button:enabled:hover { background:var(--hover-surface) }
+:root :is(.playlist-play-button,[data-variant=default],[data-variant=secondary],[data-variant=outline],[data-variant=ghost],[data-variant=destructive]):enabled:hover { background:var(--hover-surface); color:var(--ink) }
+:root [data-variant=default]:enabled:hover { --hover-surface:color-mix(in srgb,var(--accent) 90%,#fff); background:var(--hover-surface); color:var(--tw-primary-contrast); }
 :root:is([data-theme=dark],[data-theme=glass]) .playlist-play-button { color:#fff }
 .playlist-play-button:disabled { cursor:default }
 .collection-search { display:flex; align-items:center; gap:10px; width:min(430px,37vw); height:48px; padding:0 16px; border-radius:16px; background:var(--search); color:var(--ink); -webkit-app-region:no-drag }
@@ -108,6 +109,7 @@ main.app-shell { --sidebar-width:clamp(190px,15.5vw,240px); overflow:hidden; bor
 .playlist-grid .playlist { column-gap:32px }
 .playlist:hover { background:var(--hover-surface) }
 .playlist .cover { width:96px; height:96px; border-radius:12px; font-size:32px }
+.playlist .playlist-heart { width:44px; height:44px }
 .playlist-info { display:flex; flex:1; min-width:0; flex-direction:column; justify-content:center; gap:8px; text-align:left }
 .playlist-info strong { flex:none; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:18px }
 .playlist-info span { color:var(--muted); white-space:nowrap; font-size:14px }
@@ -200,6 +202,8 @@ main.app-shell { --sidebar-width:clamp(190px,15.5vw,240px); overflow:hidden; bor
 .queue-control:disabled { cursor:default }
 .volume-control { display:flex; align-items:center; gap:12px; width:min(210px,100%); margin:0; color:var(--ink) }
 .volume-control>.icon { flex:none; width:34px; height:34px }
+.volume-control .volume-button { padding:0; background:transparent; color:inherit; }
+.volume-button svg { display:block; width:100%; height:100%; }
 .volume-control input { width:100%; min-width:65px; height:18px; margin:0; appearance:none; background:transparent }
 .volume-control input::-webkit-slider-runnable-track { height:6px; border-radius:6px; background:linear-gradient(to right,var(--accent) var(--volume),#cbd6d9 var(--volume)) }
 .volume-control input::-webkit-slider-thumb { width:18px; height:18px; margin-top:-6px; appearance:none; border-radius:50%; background:var(--accent) }
@@ -286,6 +290,10 @@ html,body,#app,main.app-shell { background:transparent!important }
 .close-dialog h2 { margin:0; font-size:18px; line-height:1.5 }
 .close-dialog p { margin:12px 0 20px; font-size:14px; color:var(--muted) }
 .close-dialog-actions { display:flex; justify-content:flex-end; gap:10px }
+.close-dialog-actions .close-minimize { background:var(--side); color:var(--ink) }
+.close-dialog-actions .close-minimize:enabled:hover { background:var(--hover-surface) }
+:root:is([data-theme=dark],[data-theme=glass]) :is(.playlist-play-button,.close-dialog-actions button) { --hover-surface:#ffffff26 }
+:root:is([data-theme=dark],[data-theme=glass]) :is(.playlist-play-button,.close-dialog-actions button):enabled:hover { background:var(--hover-surface); color:var(--ink) }
 .tray-menu-page { background:var(--app-surface)!important }
 .tray-menu-trigger { width:100%; height:100% }
 .tray-menu-page [data-radix-popper-content-wrapper] { transform:translate(0,0)!important; width:100% }
@@ -337,3 +345,39 @@ html,body,#app,main.app-shell { background:transparent!important }
 @media(max-width:700px) { .collection-search { width:min(380px,calc(100vw - 36px)) } }
 
 .demo-notice { margin: 8px 0; color: var(--muted); font-size: 12px; }
+
+.account-dialog { width:460px; max-width:calc(100vw - 32px); }
+.account-dialog-heading { display:flex; align-items:center; justify-content:space-between; }
+.account-dialog-heading h2 { margin:0; font-size:20px; }
+.account-platforms { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:8px; margin-top:22px; }
+.account-dialog .account-platform-button { height:auto; min-width:0; padding:16px 4px; flex-direction:column; gap:10px; }
+.account-platform-button small { font-size:12px; color:var(--muted); max-width:100%; overflow:hidden; text-overflow:ellipsis; }
+.account-platform-icon { width:40px; height:40px; flex-shrink:0; object-fit:contain; border-radius:50%; }
+.account-qr-body { min-height:100px; text-align:center; margin:20px 0; }
+.account-user-avatar { width:80px; height:80px; margin:12px auto 0; background:var(--side); overflow:hidden; }
+.account-user-avatar img { display:block; width:100%; height:100%; object-fit:cover; }
+.account-qr-body .qr { border-radius:8px; background:#fff; padding:8px; }
+.account-dialog-actions { display:flex; justify-content:space-between; gap:12px; margin-top:20px; }
+:root .account-dialog-actions button[data-variant=destructive]:enabled:hover { background:color-mix(in srgb,#c42b36 90%,#fff); color:#fff; }
+.song-platform { display:inline; margin-left:10px; color:var(--muted); font-size:10px; font-weight:400; }
+.track-name:has(.song-platforms) { display:flex; align-items:center; }
+.track-name:has(.song-platforms) .track-title { min-width:0; overflow:hidden; text-overflow:ellipsis; }
+.song-platforms { display:inline-flex; flex-shrink:0; gap:5px; margin-left:10px; }
+.song-platform-tag { display:inline-block; padding:1px 5px; border:1px solid currentColor; border-radius:5px; font-size:12px; font-weight:400; line-height:16px; }
+.song-platform-tag.netease { color:#d72b49; }
+.song-platform-tag.kugou { color:#087ac2; }
+.song-platform-tag.qq { color:#087e48; }
+.playback-title { display:flex; align-items:center; gap:10px; margin-bottom:6px; min-width:0; }
+.player .playback-title h2 { margin:0; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.player .playback-platform { flex-shrink:0; width:auto; height:auto; padding:1px 5px; border:1px solid currentColor; border-radius:5px; background:transparent; font-size:12px; font-weight:400; line-height:16px; }
+:root:is([data-theme=dark],[data-theme=glass]) .song-platform-tag.netease { color:#ff5474; }
+:root:is([data-theme=dark],[data-theme=glass]) .song-platform-tag.kugou { color:#45b7ff; }
+:root:is([data-theme=dark],[data-theme=glass]) .song-platform-tag.qq { color:#54d98b; }
+.sidebar-accounts { display:grid; gap:18px; margin:0 10px 24px; padding-bottom:26px; border-bottom:1px solid var(--line); }
+.sidebar-account { display:grid; grid-template-columns:36px minmax(0,1fr) 36px; align-items:center; gap:10px; }
+.sidebar-account .account-platform-icon { width:36px; height:36px; }
+.sidebar-account strong { font-size:16px; font-weight:550; white-space:nowrap; }
+.platform-avatar { width:36px; height:36px; padding:0; border-radius:50%; overflow:hidden; background:var(--surface); border:1px solid var(--line); -webkit-app-region:no-drag; }
+.platform-avatar:hover { box-shadow:0 0 0 3px var(--hover-surface); }
+.platform-avatar img { display:block; width:100%; height:100%; object-fit:cover; }
+@media(max-width:1100px) { .sidebar-accounts { margin-inline:4px; } .sidebar-account { grid-template-columns:28px minmax(0,1fr) 28px; gap:6px; } .sidebar-account .account-platform-icon,.platform-avatar { width:28px; height:28px; } .sidebar-account strong { font-size:13px; } }

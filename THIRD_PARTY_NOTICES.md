@@ -1,5 +1,19 @@
 # Third-party notices and license audit
 
+## Music platform identification artwork (2026-10-06)
+
+The bundled 512×512 NetEase Cloud Music, QQ Music and KuGou Concept icons in `frontend/src/assets/platforms/` are the official publisher application artwork obtained through Apple's public App Store lookup API. Copyright and trademark rights remain with Hangzhou Netease Cloud Music Technology Co., Ltd., Tencent Technology (Shenzhen) Company Limited, and Guangzhou KuGou Technology CO., LTD respectively. These product marks identify the connected services; they are not licensed under the project's GPL or third-party MIT licenses. Application IDs, publisher names and original artwork URLs are recorded in `frontend/src/assets/platforms/SOURCES.md`.
+
+## Added music platforms and Python runtime (2026-10-05)
+
+QQMusicApi 0.8.1 has a Musxi modification dated 2026-10-06: its raw-response cookie snapshot iterates actual name/value pairs to preserve empty cookies returned after QR confirmation. The guarded build recipe is `services/setup_python_runtime.py`; full modified source is distributed in the Python runtime. Original GPL license and copyrights are retained; details are in `licenses/python/qqmusic-api-python/MUSXI-MODIFICATIONS.md`.
+
+- **NetEase API:** MIT source subset from `NeteaseCloudMusicApiEnhanced/api-enhanced` commit `2aab9957dfd5231e5b192aecdb177f93ace4c92e`, with LICENSE and modification notes in `services/vendor/`. No unblock or alternate-source dependency is distributed. YesPlayMusic is a flow reference only; its UI source is not copied.
+- **QQMusicApi:** `qqmusic-api-python` 0.8.1, source commit `3fc57f02e4eddb68a069bba4e0e12a7893f2a814`, GPL-3.0-or-later. Bundling explicitly approved by the user. Python source is distributed with the runtime, with license materials under `licenses/python/qqmusic-api-python/`. The upstream research/non-commercial README statement is documented for publisher review.
+- **Python:** official Windows x64 CPython 3.13.7 embedded runtime; PSF and historical texts retained in `licenses/python/Python-LICENSE.txt`. Fixed official URL, SHA-256, all 22 dependency versions and verified wheel URLs/hashes are recorded in `services/python-runtime.json` and `services/python-requirements.lock`. Included package license and notice texts are in `licenses/python/`.
+- **Node services:** production dependency versions, license identifiers and acquisition URLs are recorded in `licenses/cloud-node/manifest.json`, with matching texts. New fzstd 0.1.1 is MIT. Updated axios 1.20.0 and form-data 4.0.6 are MIT; node-forge 1.4.0 uses its BSD option. Existing dependencies retain their licenses.
+- Fixed sources, changes, build recipe and license choices: [music-platforms.md](docs/music-platforms.md). Project LICENSE is unchanged. This describes the working build, not published historical installers.
+
 Musxi Player's own code is licensed under **GPL-3.0-or-later** (GNU GPL version 3 or, at the recipient's option, any later version); see the project [LICENSE](LICENSE) and [README](README.md#license). This does not replace or relicense any third-party component. All third-party license texts, copyrights, attributions and distribution obligations below remain applicable.
 
 This inventory records the Windows x64 application produced by the current source build and installer configuration. Versions come from the configured SDKs, binary version output, vendored revision, and npm lockfiles. License files listed below are upstream copies or the unmodified license section included in the published package README. The extracted 0.2.0 installer was checked for matching FFmpeg DLLs. Existing installers predate subsequent notice updates and do not acquire those updates automatically.

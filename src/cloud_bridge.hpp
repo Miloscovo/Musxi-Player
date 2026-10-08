@@ -69,6 +69,7 @@ inline void forgetSession() { std::error_code ec; std::filesystem::remove(dataDi
 // One in-flight request per bridge. The UI polls its future without blocking.
 class Bridge {
     HANDLE input = nullptr, output = nullptr;
+    HANDLE job = nullptr;
     std::atomic<HANDLE> process{nullptr};
     std::atomic<bool> stopping{false};
 public:
@@ -100,9 +101,20 @@ public:
         si.hStdInput = childIn; si.hStdOutput = childOut; si.hStdError = nullHandle;
         PROCESS_INFORMATION pi{};
         std::wstring cmd = L"\"" + node.wstring() + L"\" \"" + service.wstring() + L"\"";
-        bool ok = CreateProcessW(node.c_str(), cmd.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW, nullptr, service.parent_path().c_str(), &si, &pi);
+        job=CreateJobObjectW(nullptr,nullptr);
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};limits.BasicLimitInformation.LimitFlags=JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        if(!job || !SetInformationJobObject(job,JobObjectExtendedLimitInformation,&limits,sizeof(limits))) {
+            CloseHandle(childIn);CloseHandle(childOut);if(nullHandle!=INVALID_HANDLE_VALUE)CloseHandle(nullHandle);
+            stop();error=L"无法建立接口进程回收机制";return false;
+        }
+        bool ok = CreateProcessW(node.c_str(), cmd.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW | CREATE_SUSPENDED, nullptr, service.parent_path().c_str(), &si, &pi);
         CloseHandle(childIn); CloseHandle(childOut); if (nullHandle != INVALID_HANDLE_VALUE) CloseHandle(nullHandle);
         if (!ok) { stop(); error = L"酷狗接口进程启动失败"; return false; }
+        if(!AssignProcessToJobObject(job,pi.hProcess)) {
+            TerminateProcess(pi.hProcess,0);CloseHandle(pi.hThread);CloseHandle(pi.hProcess);
+            stop();error=L"无法管理接口子进程";return false;
+        }
+        ResumeThread(pi.hThread);
         CloseHandle(pi.hThread); process = pi.hProcess; return true;
     }
     Json call(const Json& request) {
@@ -130,13 +142,14 @@ public:
             return {{"ok", false}, {"error", "请求超时，请退出账号连接后重试"}, {"fatal", true}};
         } catch (...) { return {{"ok", false}, {"error", "本机接口连接已中断，请重新连接"}, {"fatal", true}}; }
     }
-    void cancel() { stopping = true; auto p = process.load(); if (p) TerminateProcess(p, 0); }
+    void cancel() { stopping = true; if(job)TerminateJobObject(job,0);else {auto p = process.load(); if (p) TerminateProcess(p, 0);} }
     // Call stop only after the request future has completed.
     void stop() {
         cancel(); auto p = process.exchange(nullptr);
         if (p) { WaitForSingleObject(p, 1000); CloseHandle(p); }
         if (input) { CloseHandle(input); input = nullptr; }
         if (output) { CloseHandle(output); output = nullptr; }
+        if (job) { CloseHandle(job); job = nullptr; }
     }
 };
 }

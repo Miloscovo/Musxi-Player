@@ -18,6 +18,18 @@ test('cover batches deduplicate URLs and isolate unavailable images', async () =
   } finally {global.fetch=original;}
 });
 const response = data => ({ body: { status: 1, data }, cookie: [] });
+test('NetEase and QQ HTTP covers download over HTTPS but retain the requested cache key',async()=>{
+  const original=global.fetch;const downloaded=[];
+  global.fetch=async url=>{downloaded.push(url);return {ok:true,body:(async function*(){yield Buffer.from('fixture');})()};};
+  try {
+    const urls=['http://p1.music.126.net/cover.jpg','http://y.gtimg.cn/cover.jpg','http://qpic.y.qq.com/cover.jpg'];
+    const a=new Adapter(async()=>{throw Error('No account request expected');});
+    const result=await a.run({op:'covers',urls:[...urls,urls[0],'http://localhost/private']});
+    assert.deepEqual(result.images.map(image=>image.url),urls);
+    assert.deepEqual(downloaded,urls.map(url=>url.replace('http:','https:')));
+    assert.ok(result.images.every(image=>image.image.startsWith('data:image/jpeg;base64,')));
+  } finally {global.fetch=original;}
+});
 test('restart metadata restores song identities without bypassing authentication or accepting URLs',async()=>{
   const a=new Adapter(async()=>response({qrcode:'test-key',base64:'data:image/png;base64,fixture'}));
   const hash='a'.repeat(32);

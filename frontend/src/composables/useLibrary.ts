@@ -1,3 +1,4 @@
+import type { MusicPlatform } from '../native/library';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { native } from '../native/client';
 import type { LibraryState, PlaybackOrder, AudioQuality } from '../native/library';
@@ -51,20 +52,23 @@ export function useLibrary() {
     return { refresh, loadNextPage,
       search: (query: string, p = 1) => run(signal => native.library.search(query, p, signal)),
       open: (id: string) => { changePage(1); return run(signal => native.library.open(id, signal)); },
-      play: (source: 'search' | 'library' | 'queue' | 'local', id: string) => playback(signal => native.library.play(source, id, signal)),
+      play: (source: 'search' | 'library' | 'queue' | 'local' | 'recent', id: string) => playback(signal => native.library.play(source, id, signal)),
       playPlaylist: (id: string) => run(signal => native.library.playPlaylist(id, signal)),
       setPlaybackOrder: (order: PlaybackOrder) => run(signal => native.library.setPlaybackOrder(order, signal)),
       qualities: (id: string) => run(signal => native.library.qualities(id, signal)),
       setQuality: (id: string, quality: AudioQuality) => run(signal => native.library.setQuality(id, quality, signal)),
-      queueNext: (source: 'search' | 'library' | 'local', id: string) => run(signal => native.library.queueNext(source, id, signal)),
+      setPlatform: (id: string, platform: MusicPlatform) => run(signal => native.library.setPlatform(id, platform, signal)),
+      queueNext: (source: 'search' | 'library' | 'local' | 'recent', id: string) => run(signal => native.library.queueNext(source, id, signal)),
       queueRemove: (id: string) => run(signal => native.library.queueRemove(id, signal)),
       queueClear: () => run(signal => native.library.queueClear(signal)),
+      recentRemove: (id:string) => run(signal=>native.library.recentRemove(id,signal)),
+      recentClear: () => run(signal=>native.library.recentClear(signal)),
       importLocal: () => run(signal => native.library.importLocal(signal)),
       skip: (delta: -1 | 1) => playback(signal => native.library.skip(delta, signal)),
       menu: (id: string) => run(signal => native.library.menu(id, signal)),
-      favorite: (id: string, enabled: boolean) => run(signal => native.library.favorite(id, enabled, signal)),
-      add: (id: string, playlistId: string) => run(signal => native.library.add(id, playlistId, signal)),
-      login: () => run(signal => native.library.login(signal)), logout: () => run(signal => native.library.logout(signal)),
+      favorite: (id: string, enabled: boolean, platform?: MusicPlatform) => run(signal => native.library.favorite(id, enabled, signal, platform)),
+      add: (id: string, playlistId: string, platform?: MusicPlatform) => run(signal => native.library.add(id, playlistId, signal, platform)),
+      login: (platform?:MusicPlatform) => run(signal => native.library.login(signal,platform)), logout: (platform?:MusicPlatform) => run(signal => native.library.logout(signal,platform)),
       sync: () => run(signal => native.library.sync(signal)), cancel: () => run(signal => native.library.cancel(signal)) };
   }, []);
   useEffect(() => {

@@ -9,6 +9,7 @@ import { Dialog, DialogTrigger, DialogContent, DialogTitle, DialogDescription } 
 import MessageAlerts from './components/MessageAlerts';
 import QueuePanel from './components/QueuePanel';
 import PlayerActions from './components/PlayerActions';
+import PlaybackPlatform from './components/PlaybackPlatform';
 
 export default function App() {
   const shell = useWindow(); const library = useLibrary();
@@ -16,6 +17,8 @@ export default function App() {
   const { state, error, loading, busy, connected, pause, resume, seek, setVolume } = usePlayerState();
   const [seekDraft, setSeekDraft] = useState<number | null>(null);
   const [volumeDraft, setVolumeDraft] = useState<number | null>(null);
+  const lastVolume = useRef(50);
+  useEffect(() => { if (state && state.volumePercent > 0) lastVolume.current = state.volumePercent; }, [state?.volumePercent]);
   const [closeOpen, setCloseOpen] = useState(false);
   const [actionNotice, setActionNotice] = useState({ text: '', token: '0' });
   const showActionNotice = (text: string) => setActionNotice(previous => ({ text, token: String(Number(previous.token) + 1) }));
@@ -91,7 +94,7 @@ export default function App() {
           <DialogDescription>最小化后，歌曲会继续在后台播放。</DialogDescription>
           <div className="close-dialog-actions">
             <Button variant="secondary" onClick={shell.close}>退出</Button>
-            <Button ref={trayButton} onClick={async () => { if (await shell.minimizeToTray()) setCloseOpen(false); }}>最小化</Button>
+            <Button variant="ghost" className="close-minimize" ref={trayButton} onClick={async () => { if (await shell.minimizeToTray()) setCloseOpen(false); }}>最小化</Button>
           </div>
         </DialogContent>
       </Dialog>
@@ -104,7 +107,8 @@ export default function App() {
         disabled={!connected || !state.opened || !state.durationMs}
         onInput={event => setSeekDraft(Number(event.currentTarget.value))} aria-label="歌曲进度" />}
       <div className="player-track"><CoverImage url={currentTrack?.cover || ''} />
-        <div className="track"><h2 id="playback" title={currentTrack?.name}>{currentTrack?.name || '尚未选择歌曲'}</h2>
+        <div className="track"><div className="playback-title"><h2 id="playback" title={currentTrack?.name}>{currentTrack?.name || '尚未选择歌曲'}</h2>
+          <PlaybackPlatform library={library} currentId={state?.opened ? state.trackId : ''}/></div>
           <p>{currentTrack?.artist || status}</p></div>
       </div>
       {state && <PlayerActions library={library} currentId={state.opened ? state.trackId : ''} onNotice={showActionNotice}>
@@ -115,14 +119,17 @@ export default function App() {
         </Button>
         <Button variant="unstyled" aria-label="下一首" onClick={() => library.skip(1)}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M17.5 5.5v13"/><path d="M5.5 5.5v13L16 12z"/></svg></Button>
       </PlayerActions>}
-      <div className="player-side">{state && <label className="volume-control">
-        <svg className="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 9h4l5-4v14l-5-4H3z" fill="currentColor"/>
-          {!!state.volumePercent && <path d="M16 8a6 6 0 0 1 0 8m3-11a10 10 0 0 1 0 14" fill="none" stroke="currentColor" strokeWidth="1.5"/>}</svg>
+      <div className="player-side">{state && <div className="volume-control">
+        <Button variant="unstyled" className="icon volume-button" aria-label={state.volumePercent===0 ? '取消静音' : '静音'} aria-pressed={state.volumePercent===0} disabled={busy || !connected}
+          onClick={()=>{if(state.volumePercent>0)lastVolume.current=state.volumePercent;void setVolume(state.volumePercent===0 ? lastVolume.current : 0);}}>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 9h4l5-4v14l-5-4H3z" fill="currentColor"/>
+          <path d={state.volumePercent===0 ? 'm16 9 6 6m0-6-6 6' : 'M16 8a6 6 0 0 1 0 8m3-11a10 10 0 0 1 0 14'} fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
+        </Button>
         <input ref={volumeInput} type="range" min="0" max="100" value={volumeDraft ?? state.volumePercent}
           style={{ '--volume': `${volumeDraft ?? state.volumePercent}%` } as CSSProperties}
           disabled={busy || !connected} onInput={event => setVolumeDraft(Number(event.currentTarget.value))} aria-label="音量" />
         <span id="volume" className="sr-only">{state.volumePercent}%</span>
-      </label>}
+      </div>}
         <QueuePanel library={library} />
       </div>
       <MessageAlerts messages={messages} />

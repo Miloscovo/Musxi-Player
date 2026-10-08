@@ -48,6 +48,7 @@ int main(int argc,char** argv) {
         while(GetTickCount64()<until){pollAudio();auto state=musxi::applicationPlayerState();if(state.playing && state.positionMs>50)break;Sleep(5);}
         auto state=musxi::applicationPlayerState();
         requireLocal(state.playing && state.positionMs>50 && state.trackId==id,"local FFmpeg/WASAPI playback failed");
+        requireLocal(!recentTracks.empty() && recentTracks[0]["id"]==id,"successful local playback missing from recent history");
         requireLocal(!Json::parse(musxi::applicationLibrary("library.getState","{}").json)["now"]["name"].get<std::string>().empty(),"local now-playing title missing");
         dto=Json::parse(musxi::applicationLibrary("library.getState","{}").json);
         requireLocal(dto["queue"].size()==1 && dto["queueCurrentId"]==id && !dto["queue"][0].contains("path"),"local play enqueued the entire playlist or exposed a private path");

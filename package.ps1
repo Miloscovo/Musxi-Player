@@ -70,7 +70,7 @@ $githubAssetLimit=[long]2147483648
 foreach ($sourceAsset in @($cefFfmpegSource,$sourceBundlePath)) {
     if ((Get-Item -LiteralPath $sourceAsset).Length -ge $githubAssetLimit) { throw "Source asset exceeds GitHub's 2 GiB per-file limit: $sourceAsset" }
 }
-foreach ($required in @('build/runtime/node.exe','build/services/node_modules','build/services/vendor')) {
+foreach ($required in @('build/runtime/node.exe','build/runtime/python/python.exe','build/services/qq_bridge.py','build/services/netease.cjs','build/services/multi-platform.cjs','build/services/node_modules','build/services/vendor')) {
     if (-not (Test-Path -LiteralPath $required)) { throw "Missing $required; run setup-cloud.ps1 first." }
 }
 & "$PSScriptRoot\build.ps1" -CefRoot $CefRoot -FfmpegRoot $FfmpegRoot -Test -FixtureTool $FixtureTool
