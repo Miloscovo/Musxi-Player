@@ -25,6 +25,30 @@ test('images allow only raster data, never remote or executable URLs', () => {
   assert.equal(safeImage('data:image/svg+xml;base64,AAAA'), '');
   assert.equal(safeImage('data:image/png;base64,AAAA'), 'data:image/png;base64,AAAA');
 });
+test('platform metadata is optional for legacy hosts but rejects unknown providers',()=>{
+  const favorite={id:'liked',name:'我喜欢',artist:'',cover:'',duration:0,count:1,editable:true,favorite:true};
+  assert.equal(parseLibraryState({...snapshot,playlists:[favorite]}).playlists[0].favorite,true);
+  assert.throws(()=>parseLibraryState({...snapshot,playlists:[{...favorite,favorite:'yes'}]}),{code:502});
+  assert.equal(parseLibraryState({...snapshot,recent:[favorite]}).recent?.length,1);
+  assert.throws(()=>parseLibraryState({...snapshot,recent:Array(501).fill(favorite)}),{code:502});
+  assert.equal(parseLibraryState({...snapshot,now:{...snapshot.now,platform:'qq'}}).now.platform,'qq');
+  assert.deepEqual(parseLibraryState({...snapshot,now:{...snapshot.now,platforms:['qq','netease']}}).now.platforms,['qq','netease']);
+  assert.throws(()=>parseLibraryState({...snapshot,now:{...snapshot.now,platforms:['unknown']}}),{code:502});
+  const provider={platform:'qq',liked:true,canFavorite:true,playlists:[]};
+  assert.equal(parseLibraryState({...snapshot,menu:{...snapshot.menu,providers:[provider]}}).menu.providers?.[0].liked,true);
+  assert.throws(()=>parseLibraryState({...snapshot,menu:{...snapshot.menu,providers:[provider,provider]}}),{code:502});
+  assert.throws(()=>parseLibraryState({...snapshot,now:{...snapshot.now,platform:'invalid'}}),{code:502});
+  const accounts=[{platform:'qq',name:'QQ 音乐',connected:true,user:'Account',error:''}];
+  assert.equal(parseLibraryState({...snapshot,accounts,loginPlatform:'qq'}).accounts?.[0].platform,'qq');
+  assert.throws(()=>parseLibraryState({...snapshot,accounts:[{...accounts[0],platform:'unknown'}]}),{code:502});
+  assert.throws(()=>parseLibraryState({...snapshot,loginPlatform:'unknown'}),{code:502});
+  assert.equal(parseLibraryState({...snapshot,accounts:[{...accounts[0],avatar:'data:image/png;base64,AAAA'}]}).accounts?.[0].avatar,'data:image/png;base64,AAAA');
+  assert.throws(()=>parseLibraryState({...snapshot,accounts:[{...accounts[0],avatar:123}]}),{code:502});
+  const track={id:'song',name:'Song',artist:'Artist',cover:'',duration:0,count:0,editable:false,platforms:['netease','qq']};
+  assert.deepEqual(parseLibraryState({...snapshot,search:[track]}).search[0].platforms,['netease','qq']);
+  assert.throws(()=>parseLibraryState({...snapshot,search:[{...track,platforms:['unknown']}]}),{code:502});
+  assert.throws(()=>parseLibraryState({...snapshot,search:[{...track,platforms:['qq','qq']}]}),{code:502});
+});
 test('library client sends typed business actions and preserves operation IDs', async () => {
   const seen: unknown[] = [];
   const native = createNativeClient({ cefQuery(q) {
@@ -55,4 +79,14 @@ test('library client sends typed business actions and preserves operation IDs', 
   assert.deepEqual(seen.at(-1), { version: 1, command: 'library.qualities', params: { id: 'song' } });
   await native.library.setQuality('song','flac');
   assert.deepEqual(seen.at(-1), { version: 1, command: 'library.setQuality', params: { id: 'song', quality: 'flac' } });
+  await native.library.setPlatform('song','qq');
+  assert.deepEqual(seen.at(-1), { version: 1, command: 'library.setPlatform', params: { id: 'song', platform: 'qq' } });
+  await native.library.favorite('song',false,undefined,'qq');
+  assert.deepEqual(seen.at(-1), { version: 1, command: 'library.favorite', params: { id: 'song', enabled:false, platform:'qq' } });
+  await native.library.add('song','qq:playlist',undefined,'qq');
+  assert.deepEqual(seen.at(-1), { version: 1, command: 'library.add', params: { id: 'song', playlistId:'qq:playlist', platform:'qq' } });
+  await native.library.login(undefined,'netease');
+  assert.deepEqual(seen.at(-1),{version:1,command:'library.login',params:{platform:'netease'}});
+  await native.library.logout(undefined,'qq');
+  assert.deepEqual(seen.at(-1),{version:1,command:'library.logout',params:{platform:'qq'}});
 });

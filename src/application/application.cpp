@@ -49,12 +49,26 @@ Json libraryMenu=Json::object(),libraryNextPlay=nullptr;
 Json libraryNowMenu=Json::object();
 Json libraryQualities=Json::object();
 std::string currentQuality;
+std::string loginPlatform="kugou";
+Json cloudAccounts=Json::array();
 bool libraryQualityChange=false;
+bool libraryPlatformChange=false;
+struct PlatformRollback {
+    Json track=nullptr,menu=Json::object();
+    std::wstring path;
+    std::string quality;
+    std::uint32_t position=0;
+};
+PlatformRollback platformRollback;
 std::string playbackOrder="sequential";
 Json currentPlaybackTrack=nullptr;
 std::wstring retainedPlaybackCache;
 ULONGLONG playbackSaveAt=0;
 Json cloudPlaylists=Json::array(),cloudTracks=Json::array(),cloudQueue=Json::array(),searchTracks=Json::array();
+Json recentTracks=Json::array();
+std::uint64_t recentRecordedGeneration=0;
+std::string recentLastPlayedId;
+std::size_t cloudFavoritesCount=0;
 struct CoverImage {std::string data;ULONGLONG retryAt=0;};
 std::map<std::string,std::unique_ptr<CoverImage>> coverCache;
 std::vector<std::string> wantedCovers;
@@ -82,6 +96,7 @@ musxi::IAudioBackend& audioBackend() {return *audioBackendStorage();}
 std::vector<std::wstring> retiredAudioCaches;
 void collectAudioCaches(bool shutdown=false) {
     retiredAudioCaches.erase(std::remove_if(retiredAudioCaches.begin(),retiredAudioCaches.end(),[&](const std::wstring& path){
+        if(path==platformRollback.path)return false;
         if(!retainedPlaybackCache.empty() && _wcsicmp(fs::path(path).lexically_normal().generic_wstring().c_str(),
             fs::path(retainedPlaybackCache).lexically_normal().generic_wstring().c_str())==0)return false;
         if(!shutdown && !audioBackend().sourceReleased(path))return false;
@@ -120,6 +135,29 @@ musxi::AudioResult loadAndPlayAudio(const std::wstring& path,const std::string& 
     if(result)audioTrackId=trackId;
     else {audioBackend().unload();audioTrackId.clear();}
     syncAudioView();return result;
+}
+void discardPlatformRollback() {
+    if(!platformRollback.path.empty())retiredAudioCaches.push_back(platformRollback.path);
+    platformRollback={};libraryPlatformChange=false;
+}
+bool restorePlatformSource() {
+    if(platformRollback.path.empty())return false;
+    const auto previous=platformRollback;
+    const auto failedId=audioTrackId;
+    if(!closeAudio())return false;
+    platformRollback={};libraryPlatformChange=false;
+    cloudTempPath=previous.path;
+    const auto result=loadAndPlayAudio(previous.path,previous.track.value("id",""));
+    if(!result)return false;
+    audioBackend().seek(previous.position);
+    currentPlaybackTrack=previous.track;currentQuality=previous.quality;libraryNowMenu=previous.menu;libraryQualities=Json::object();
+    cloudNowTitle=cloud::toWide(previous.track.value("name",""));cloudNowArtist=cloud::toWide(previous.track.value("artist",""));cloudNowCover=previous.track.value("cover","");
+    for(auto& row:cloudQueue)if(row.value("id","")==failedId)row=previous.track;
+    cloudCurrent=-1;for(int i=0;i<(int)cloudQueue.size();++i)if(cloudQueue[i].value("id","")==audioTrackId)cloudCurrent=i;
+    libraryPlayTrackId=audioTrackId;
+    cloudStatus=L"平台切换失败，已恢复原播放源";notice(cloudStatus);
+    libraryOperationStatus="failed";libraryOperationError=utf8(cloudStatus);
+    return true;
 }
 musxi::PlayerResult setPlaying(bool requested) {
     if(libraryOperationStatus=="pending" && libraryOperationKind=="audio")libraryPlayPaused=!requested;
@@ -189,6 +227,18 @@ void pollAudio() {
     audioBackend().poll();syncAudioView();
     collectAudioCaches();
     const auto audio=audioBackend().snapshot();
+    if(audio.opened && audio.playing && !audio.pending && audio.phase!="failed" && recentRecordedGeneration!=cloudGeneration && libraryPlayGeneration==cloudGeneration &&
+       audioTrackId==libraryPlayTrackId && currentPlaybackTrack.is_object() && currentPlaybackTrack.value("id","")==audioTrackId) {
+        if(!libraryQualityChange || audioTrackId!=recentLastPlayedId) {
+            auto track=currentPlaybackTrack;track["duration"]=audio.durationMs;recordRecentTrack(track);
+        }
+        recentLastPlayedId=audioTrackId;
+        recentRecordedGeneration=cloudGeneration;
+    }
+    if(!platformRollback.path.empty() && libraryPlayGeneration==cloudGeneration && !audio.pending) {
+        if(audio.phase=="failed") {restorePlatformSource();return;}
+        discardPlatformRollback();
+    }
     if(libraryOperationStatus=="pending" && libraryOperationKind=="audio" && libraryNextPlay.is_null() && !cloudBusy() &&
        libraryPlayGeneration==cloudGeneration && audioTrackId==libraryPlayTrackId && audio.opened && !audio.pending) {
         libraryOperationStatus=audio.phase=="failed"?"failed":"completed";
@@ -268,9 +318,11 @@ void cloudConnect() {
     auto tracks=Json::array();
     for(const auto& row:cloudQueue)if(row.value("id","").rfind("local:",0)!=0)tracks.push_back(playbackTrack(row));
     if(currentPlaybackTrack.is_object() && currentPlaybackTrack.value("id","").rfind("local:",0)!=0)tracks.push_back(playbackTrack(currentPlaybackTrack));
-    cloudRequest({{"op","init"},{"session",cloud::readSession()},{"tracks",tracks}});
+    for(const auto& row:recentTracks)if(row.value("id","").rfind("local:",0)!=0)tracks.push_back(playbackTrack(row));
+    cloudRequest({{"op","init"},{"profileDir",cloud::dataDir().u8string()},{"session",cloud::readSession()},{"tracks",tracks}});
 }
 void cloudStop() {
+    discardPlatformRollback();
     libraryNextPlay=nullptr;
     if(libraryOperationStatus=="pending") libraryOperationStatus="cancelled";
     stopCovers();
@@ -294,6 +346,7 @@ void cloudSaveSnapshot(const Json& data) {
     } catch(...) {notice(L"已同步，但暂时无法保存本机歌单快照");}
 }
 void cloudPlay(int index, bool useQueue, bool search) {
+    discardPlatformRollback();
     libraryQualityChange=false;
     auto& list=useQueue?cloudQueue:(search?searchTracks:cloudTracks);
     if(index<0 || index>=(int)list.size()) return;
@@ -312,7 +365,7 @@ void cloudPlay(int index, bool useQueue, bool search) {
     try {
         // Session-specific directory avoids interfering with another running player.
         auto dir=cloud::dataDir()/L"cloud-cache"/std::to_wstring(GetCurrentProcessId());
-        cloudRequest({{"op","audio"},{"id",list[index].value("id","")},{"index",index},{"cacheDir",dir.u8string()}});
+        cloudRequest({{"op","audio"},{"id",list[index].value("id","")},{"index",index},{"cacheDir",dir.u8string()},{"sources",list[index].value("sources",Json::array())}});
         // Index is kept on the UI thread, outside the adapter's response schema.
     } catch(...) {notice(L"无法创建本机播放缓存");}
 }
@@ -321,6 +374,7 @@ void cloudTick() {
         auto op=cloudOperation;Json result;bool applied=false;
         try {result=cloudFuture.get();} catch(...) {result={{"ok",false},{"error","本机接口请求失败"}};}
         if(!result.value("ok",false)) {
+            if(op=="audio")libraryPlatformChange=false;
             cloudStatus=cloudText(result,"error","请求失败");
             if(op!="avatar" && op!="vip_auto") {cloudPolling=false;notice(cloudStatus);}
             if(result.value("fatal",false)) {cloudBridge.stop();cloudInitialized=false;cloudConnected=false;}
@@ -328,21 +382,35 @@ void cloudTick() {
             else if(op=="vip_auto" && cloudConnected) cloudRequest({{"op","sync"}});
         } else try {
             const auto& data=result.at("data");
-            if(data.contains("session") && data["session"].contains("cookie") && data["session"]["cookie"].contains("token")) {
+            if(data.contains("favoritesCount") && data["favoritesCount"].is_number_unsigned())cloudFavoritesCount=data["favoritesCount"].get<std::size_t>();
+            if(data.contains("accounts")) {cloudAccounts=data["accounts"];cloudConnected=data.value("connected",false);}
+            if(data.contains("session") && (data["session"].value("platform","")=="multi" || (data["session"].contains("cookie") && data["session"]["cookie"].contains("token")))) {
                 if(!cloud::saveSession(data["session"])) notice(L"登录成功，但凭证未能加密保存，下次需要重新扫码");
             }
             if(op=="init") {
                 cloudInitialized=true;cloudConnected=data.value("connected",false);
-                if(cloudConnected) {cloudUser=cloudText(data["profile"],"name");cloudStatus=L"正在检查概念版 VIP 权益…";cloudRequest({{"op","vip_auto"}});}
+                if(cloudLoginAfterInit) {cloudUser=cloudText(data["profile"],"name");cloudRequest({{"op","qr"},{"platform",loginPlatform}});}
+                else if(cloudConnected) {cloudUser=cloudText(data["profile"],"name");cloudStatus=L"正在检查概念版 VIP 权益…";cloudRequest({{"op","vip_auto"}});}
                 else {
                     cloudStatus=data.value("verificationFailed",false)?L"暂时无法验证已有登录，请检查网络或重新扫码。":L"使用手机酷狗概念版扫码登录。";
-                    if(cloudLoginAfterInit) cloudRequest({{"op","qr"}});
+                    if(cloudLoginAfterInit) cloudRequest({{"op","qr"},{"platform",loginPlatform}});
                 }
                 cloudLoginAfterInit=false;
+            } else if(op=="logout") {
+                cloudPolling=false;clearQr();cloudPlaylists=data.at("playlists");
+                cloudUser=cloudText(data["profile"],"name");
+                const auto platform=data.value("platform","");
+                const auto belongs=[&](const std::string& id) {return platform=="netease"?id.rfind("netease:",0)==0:platform=="qq"?id.rfind("qq:",0)==0:id.rfind("netease:",0)!=0 && id.rfind("qq:",0)!=0 && id.rfind("local:",0)!=0;};
+                if(opened && belongs(audioTrackId))closeAudio();
+                if(cloudPlaylistId=="musxi:cloud-favorites" || belongs(cloudPlaylistId)) {cloudPlaylistId.clear();cloudTracks=Json::array();}
+                cloudQueue.erase(std::remove_if(cloudQueue.begin(),cloudQueue.end(),[&](const Json& row){return belongs(row.value("id",""));}),cloudQueue.end());
+                cloudCurrent=-1;for(int i=0;i<(int)cloudQueue.size();++i)if(cloudQueue[i].value("id","")==audioTrackId)cloudCurrent=i;
+                if(belongs(audioTrackId))libraryNowMenu=Json::object();
+                libraryMenu=Json::object();cloudStatus=L"已退出所选平台，其他账号保持登录。";
             } else if(op=="qr") {
                 loadQr(data.value("image",""));cloudPolling=!libraryQr.empty();
                 cloudNextPoll=GetTickCount64()+2000;cloudPollDeadline=GetTickCount64()+180000;
-                cloudStatus=cloudPolling?L"请使用手机酷狗概念版扫描二维码。":L"二维码加载失败，请重新生成。";
+                cloudStatus=cloudPolling?L"请使用所选平台的手机应用扫描二维码。":L"二维码加载失败，请重新生成。";
             } else if(op=="poll") {
                 auto state=data.value("status","");cloudNextPoll=GetTickCount64()+2000;
                 if(state=="connected") {
@@ -350,7 +418,7 @@ void cloudTick() {
                     cloudUser=cloudText(data["profile"],"name");cloudStatus=L"登录成功，正在检查概念版 VIP 权益…";
                     cloudRequest({{"op","vip_auto"}});
                 } else if(state=="expired") {cloudPolling=false;clearQr();cloudStatus=L"二维码已过期，请点击扫码登录重新生成。";}
-                else cloudStatus=state=="confirm"?L"已扫描，请在手机上确认登录。":L"等待扫码，请使用手机酷狗概念版。";
+                else cloudStatus=state=="confirm"?L"已扫描，请在手机上确认登录。":L"等待扫码，请使用所选平台的手机应用。";
             } else if(op=="vip_auto") {
                 if(data.value("outcome","")=="claimed" && data.value("notify",false)) notice(L"VIP 领取成功，今日概念版 VIP 已到账");
                 cloudStatus=L"正在同步收藏歌单…";cloudRequest({{"op","sync"}});
@@ -363,11 +431,12 @@ void cloudTick() {
             } else if(op=="search") {
                 searchTracks=data.at("tracks");searchQuery=data.value("keywords","");searchPage=data.value("page",1);searchTotal=data.value("total",0);searchMore=data.value("hasMore",false);
             } else if(op=="tracks") {
+                if(data.contains("playlists"))cloudPlaylists=data["playlists"];
                 cloudTracks=data.at("tracks");cloudPlaylistId=data.at("playlist").value("id","");cloudPlaylistName=cloudText(data["playlist"],"name");
                 cloudStatus=L"已加载 "+std::to_wstring(cloudTracks.size())+L" 首歌曲 · 双击播放";cloudSaveSnapshot(data);
             } else if(op=="song_menu") {
                 libraryMenu=data;libraryMenuRequested=false;
-                if(data.value("id","")==audioTrackId)libraryNowMenu=data;
+                if(data.value("sourceId",data.value("id",std::string{}))==audioTrackId) {libraryNowMenu=data;libraryNowMenu["id"]=audioTrackId;}
             } else if(op=="qualities") {
                 libraryQualities=data;
             } else if(op=="song_update") {
@@ -381,7 +450,8 @@ void cloudTick() {
                 if(requestGeneration!=cloudGeneration) {if(!path.empty()) DeleteFileW(path.c_str());}
                 else {
                     const auto previousAudio=audioBackend().snapshot();
-                    const bool restorePosition=libraryQualityChange && audioTrackId==data["track"].value("id","");
+                    const bool restorePosition=libraryQualityChange && (audioTrackId==data["track"].value("id","") || audioTrackId==data.value("requestedId",std::string{}));
+                    if(libraryPlatformChange && restorePosition)platformRollback={currentPlaybackTrack,libraryNowMenu,cloudTempPath,currentQuality,previousAudio.positionMs};
                     if(!closeAudio()) {
                         if(!path.empty())DeleteFileW(path.c_str());
                         cloudStatus=L"无法释放上一首音频，请重试";notice(cloudStatus);
@@ -389,13 +459,23 @@ void cloudTick() {
                     cloudCurrent=-1;
                     cloudTempPath=path;
                     auto playbackResult=loadAndPlayAudio(path,data["track"].value("id",""));
-                    if(!playbackResult) {closeAudio();cloudStatus=L"Windows 无法播放该音频编码，请尝试其他歌曲";notice(cloudStatus);}
+                    if(!playbackResult) {if(!restorePlatformSource()) {closeAudio();cloudStatus=L"Windows 无法播放该音频编码，请尝试其他歌曲";notice(cloudStatus);}}
                     else {
                         currentQuality=data.value("quality","");
+                        if(libraryPlatformChange) {libraryNowMenu=Json::object();libraryQualities=Json::object();}
+                        const auto sources=restorePosition && currentPlaybackTrack.is_object()?currentPlaybackTrack.value("sources",Json::array()):Json::array();
                         currentPlaybackTrack=data["track"];
+                        if(!sources.empty() && !currentPlaybackTrack.contains("sources"))currentPlaybackTrack["sources"]=sources;
+                        const auto requestedId=data.value("requestedId",std::string{});
+                        if(!requestedId.empty()) {
+                            if(libraryPlayTrackId==requestedId)libraryPlayTrackId=data["track"].value("id","");
+                            for(auto& row:cloudQueue)if(row.value("id","")==requestedId)row=data["track"];
+                            std::set<std::string> ids;
+                            cloudQueue.erase(std::remove_if(cloudQueue.begin(),cloudQueue.end(),[&](const Json& row){return !ids.insert(row.value("id","")).second;}),cloudQueue.end());
+                        }
                         if(restorePosition) {
                             const auto seekResult=audioBackend().seek(previousAudio.positionMs);
-                            if(!seekResult)notice(L"音质已切换，但无法恢复播放位置");
+                            if(!seekResult)notice(L"已切换，但无法恢复播放位置");
                         }
                         cloudAutoNext=false;cloudNowTitle=cloudText(data["track"],"name");cloudNowArtist=cloudText(data["track"],"artist");cloudNowCover=data["track"].value("cover","");
                         auto id=data["track"].value("id","");
@@ -405,6 +485,7 @@ void cloudTick() {
                     }
                 }
             }
+            if(data.contains("warnings"))for(const auto& warning:data["warnings"])if(warning.is_string())notice(cloudText(Json{{"warning",warning}},"warning"));
             applied=true;
         } catch(...) {cloudStatus=L"接口数据格式不兼容，请重新同步";cloudPolling=false;notice(cloudStatus);}
         if(libraryOperationStatus=="pending" && op==libraryOperationKind &&
@@ -441,7 +522,7 @@ void accountLogout() {
     cloudStop();cloudInitialized=false;cloudConnected=false;cloudAutoNext=false;++cloudGeneration;
     if(!localActive && opened) {closeAudio();cloudCurrent=-1;}
     searchTracks=Json::array();
-    cloudPlaylists=Json::array();cloudTracks=Json::array();cloudQueue=Json::array();cloudUser.clear();cloudPlaylistId.clear();
+    cloudPlaylists=Json::array();cloudTracks=Json::array();cloudQueue=Json::array();cloudUser.clear();cloudPlaylistId.clear();cloudFavoritesCount=0;
     try {cloud::forgetSession();std::error_code ec;fs::remove(cloud::dataDir()/L"kugou-library.json",ec);} catch(...) {}
     cloudStatus=L"已退出账号并清除本机登录信息。";
 }
@@ -449,7 +530,7 @@ void accountLogin() {
     if(cloudBusy()) return;
     cloudPolling=false;clearQr();
     if(!cloudInitialized) {cloudLoginAfterInit=true;cloudConnect();}
-    else {cloudStatus=L"正在生成登录二维码…";cloudRequest({{"op","qr"}});}
+    else {cloudStatus=L"正在生成登录二维码…";cloudRequest({{"op","qr"},{"platform",loginPlatform}});}
 }
 void accountSync() {
     if(!cloudBusy()) {cloudStatus=L"正在同步收藏歌单…";cloudRequest({{"op","sync"}});}

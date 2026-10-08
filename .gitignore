@@ -16,7 +16,8 @@ __pycache__/
 
 # Downloaded/runtime-only dependencies (restored by setup-cloud.ps1)
 /services/node_modules/
-/services/vendor/
+/services/vendor/*
+!/services/vendor/NeteaseCloudMusicApi-2aab9957dfd5231e5b192aecdb177f93ace4c92e/
 /services/*.zip
 
 # Local account state and playback cache

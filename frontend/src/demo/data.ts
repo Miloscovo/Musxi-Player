@@ -2,7 +2,7 @@ import type { LibraryState, Track } from '../native/library';
 import type { PlayerState } from '../native/types';
 
 const playlists: Track[] = [
-  { id: 'demo-favorites', name: '我喜欢', artist: '本地演示歌单', album: '', cover: '', duration: 0, count: 4, editable: true },
+  { id: 'demo-favorites', name: '我喜欢', artist: '本地演示歌单', album: '', cover: '', duration: 0, count: 4, editable: true, favorite:true },
   { id: 'demo-focus', name: '专注时刻', artist: '本地演示歌单', album: '', cover: '', duration: 0, count: 3, editable: true },
   { id: 'demo-discovery', name: '最近常听', artist: '本地演示歌单', album: '', cover: '', duration: 0, count: 3, editable: false },
 ];

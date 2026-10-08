@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import type { useLibrary } from '../composables/useLibrary';
 import type { PlaybackOrder } from '../native/library';
+import { platformNames, type MusicPlatform } from '../native/library';
 import { Button } from './ui/button';
 import { Popover, PopoverTrigger, PopoverContent } from './ui/popover';
 
@@ -16,6 +17,7 @@ export default function PlayerActions({ library, currentId, onNotice, children }
   const [addOpen, setAddOpen] = useState(false);
   const [orderOpen, setOrderOpen] = useState(false);
   const [qualityOpen, setQualityOpen] = useState(false);
+  const [favoriteOpen, setFavoriteOpen] = useState(false);
   const fetched = useRef({ track: '', update: '' });
   const local = currentId.startsWith('local:');
   const state = library.state;
@@ -27,20 +29,33 @@ export default function PlayerActions({ library, currentId, onNotice, children }
     void library.menu(currentId);
   }, [currentId, local, update, state?.connected, state?.busy, library.pending, library.menu]);
   const ready = state?.menu.id === currentId;
+  const currentPlatform=state?.now.platform || (currentId.startsWith('netease:')?'netease':currentId.startsWith('qq:')?'qq':'kugou');
+  const providers=ready ? state.menu.providers : undefined;
+  const liked=!local && (providers?.some(provider=>provider.liked) || !!state?.now.liked);
+  useEffect(()=>setFavoriteOpen(false),[currentId]);
   const unavailable = !currentId || library.pending || (!local && (!state?.connected || state.busy));
   const order = orders.find(item => item.id === state?.playbackOrder) || orders[0];
   const qualityReady=state?.qualities?.id===currentId;
   function localNotice() { onNotice('本地歌曲无法收藏和添加到歌单'); }
   return <div className="play-controls">
-    <Button variant="unstyled" aria-label={!local && state?.now.liked ? '取消收藏当前歌曲' : '收藏当前歌曲'}
-      aria-pressed={!local && !!state?.now.liked} disabled={unavailable} className="player-favorite"
-      onClick={() => {
-        if (local) return localNotice();
-        if (!state?.now.canFavorite) return onNotice('当前歌曲暂时无法收藏');
-        void library.favorite(currentId, !state.now.liked);
-      }}>
+    <Popover open={favoriteOpen} onOpenChange={setFavoriteOpen}>
+    <PopoverTrigger asChild><Button variant="unstyled" aria-label={liked ? '取消收藏当前歌曲' : '收藏当前歌曲'}
+      aria-pressed={liked} disabled={unavailable} className="player-favorite"
+      onClick={event => { if(local) {event.preventDefault();localNotice();} else void library.menu(currentId); }}>
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20S3 14.5 3 8.5a4.5 4.5 0 0 1 9-1 4.5 4.5 0 0 1 9 1C21 14.5 12 20 12 20Z"/></svg>
-    </Button>
+    </Button></PopoverTrigger>
+    <PopoverContent side="top" sideOffset={16} className="player-action-menu" aria-label="收藏平台">
+      {ready ? (['netease','kugou','qq'] as MusicPlatform[]).filter(platform=>(state.accounts?.find(account=>account.platform===platform)?.connected ?? (platform==='kugou' && state.connected)) && (platform===currentPlatform || state.now.platforms?.includes(platform) || providers?.some(provider=>provider.platform===platform))).map(platform=>{
+        const provider=providers?.find(provider=>provider.platform===platform);
+        const selected=provider?.liked ?? (platform===currentPlatform && state.now.liked) ?? false;
+        const canFavorite=provider?.canFavorite ?? (!providers && platform===currentPlatform && state.menu.canFavorite);
+        return <Button key={platform} variant="unstyled" aria-pressed={selected} disabled={library.pending || !canFavorite}
+          onClick={()=>{void library.favorite(currentId,!selected,provider?platform:undefined);setFavoriteOpen(false);}}>
+          {platformNames[platform]}
+        </Button>;
+      }) : <span>正在获取收藏状态…</span>}
+    </PopoverContent>
+    </Popover>
     <Popover open={addOpen} onOpenChange={setAddOpen}>
       <PopoverTrigger asChild><Button variant="unstyled" aria-label="添加当前歌曲到歌单" disabled={unavailable}
         onClick={event => { if (local) { event.preventDefault(); localNotice(); } else void library.menu(currentId); }}>

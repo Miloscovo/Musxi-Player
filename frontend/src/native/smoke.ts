@@ -8,6 +8,7 @@ import LibraryView from '../views/LibraryView';
 import MessageAlerts from '../components/MessageAlerts';
 import QueuePanel from '../components/QueuePanel';
 import PlayerActions from '../components/PlayerActions';
+import { AccountDialog } from '../components/AccountDialog';
 import type { useLibrary } from '../composables/useLibrary';
 
 async function waitFor(check: () => boolean, message = 'Event/UI update timed out') {
@@ -73,7 +74,7 @@ export async function verifyWebPage() {
   document.body.append(fixture);
   const root = createRoot(fixture); const actions: string[] = [];
   const song = { id: 'smoke-song', name: 'Menu check', artist: 'Fixture', cover: '', duration: 60000, count: 0, editable: false };
-  const playlist = { ...song, id: 'smoke-playlist', name: '我喜欢', editable: true, count: 1 };
+  const playlist = { ...song, id: 'smoke-playlist', name: '我喜欢', editable: true, count: 1, favorite:true };
   function checkPlaylistText(card: Element) {
     const cover=card.querySelector('.cover')!.getBoundingClientRect();
     const info=card.querySelector('.playlist-info')!.getBoundingClientRect();
@@ -84,7 +85,7 @@ export async function verifyWebPage() {
       throw new Error('Playlist name/count are not left-aligned and centered beside the cover');
   }
   const fixtureLibrary: ReturnType<typeof useLibrary> = {
-    state: { ...library, connected: true, playlists: [playlist], tracks: [song], trackCount: 1,
+    state: { ...library, connected: true, playlists: [{...playlist,id:'smoke-other',name:'其他歌单',favorite:false},playlist], tracks: [song], trackCount: 1,
       playlistId: playlist.id, playlistName: playlist.name,
       menu: { id: song.id, liked: false, canFavorite: true, playlists: [playlist] } },
     error: '', pending: false, page: 1, open: async () => {},
@@ -96,9 +97,12 @@ export async function verifyWebPage() {
     setPlaybackOrder: async order => { actions.push(`order:${order}`); },
     qualities: async id => { actions.push(`qualities:${id}`); },
     setQuality: async (id,quality) => { actions.push(`quality:${id}:${quality}`); },
+    setPlatform: async (id,platform) => { actions.push(`platform:${id}:${platform}`); },
     queueNext: async (source, id) => { actions.push(`next:${source}:${id}`); },
     queueRemove: async id => { actions.push(`remove:${id}`); },
     queueClear: async () => { actions.push('clearQueue'); },
+    recentRemove: async id=>{actions.push(`recentRemove:${id}`);},
+    recentClear: async ()=>{actions.push('recentClear');},
     loadNextPage: async () => false, refresh: async () => true,
     search: async () => {}, skip: async () => {}, login: async () => {}, logout: async () => {}, sync: async () => {}, cancel: async () => {},
     play: async (source, id) => { actions.push(`play:${id}`, `play:${source}:${id}`); },
@@ -106,19 +110,36 @@ export async function verifyWebPage() {
   try {
     root.render(createElement(LibraryView, { library: fixtureLibrary, theme: 'light', onTheme: async () => {} }));
     await waitFor(() => !!fixture.querySelector('.playlist'));
-    checkPlaylistText(fixture.querySelector('.playlist')!);
-    fixture.querySelector<HTMLButtonElement>('.playlist')!.click();
+    const favoritesCard=fixture.querySelector<HTMLButtonElement>('.playlist')!;
+    if(favoritesCard.querySelector('strong')?.textContent!=='云端收藏整合' || !favoritesCard.querySelector('svg path'))throw new Error('Cloud favorites entry is missing or not first');
+    checkPlaylistText(favoritesCard);
+    const cardNames=Array.from(fixture.querySelectorAll('.playlist strong')).map(e=>e.textContent);
+    if(JSON.stringify(cardNames)!==JSON.stringify(['云端收藏整合','我喜欢','其他歌单']))throw new Error('Created playlist favorites ordering failed');
+    if(favoritesCard.querySelector('svg')!.getBoundingClientRect().width!==44)throw new Error('Cloud favorites heart size is incorrect');
+    fixtureLibrary.state={...fixtureLibrary.state!,connected:false};
+    root.render(createElement(LibraryView,{library:fixtureLibrary,theme:'light',onTheme:async()=>{}}));
+    await waitFor(()=>!Array.from(fixture.querySelectorAll('.playlist strong')).some(e=>e.textContent==='云端收藏整合'));
+    if(!fixture.querySelector('.library-section-empty')?.textContent?.includes('登录后'))throw new Error('Signed-out library prompt missing');
+    fixtureLibrary.state={...fixtureLibrary.state!,connected:true};
+    root.render(createElement(LibraryView,{library:fixtureLibrary,theme:'light',onTheme:async()=>{}}));
+    await waitFor(()=>fixture.querySelector('.playlist strong')?.textContent==='云端收藏整合');
+    const playlistCard=Array.from(fixture.querySelectorAll<HTMLButtonElement>('.playlist')).find(card=>card.querySelector('strong')?.textContent===playlist.name)!;
+    checkPlaylistText(playlistCard);
+    playlistCard.click();
     await waitFor(() => !!fixture.querySelector('.song.track-row'));
     const playlistPlay = fixture.querySelector<HTMLButtonElement>('[aria-label="播放歌单"]')!;
     const previousTheme = document.documentElement.getAttribute('data-theme');
+    const buttonBackground=document.createElement('span');buttonBackground.style.background='var(--side)';fixture.append(buttonBackground);
     try {
       for (const theme of ['dark', 'glass']) {
         document.documentElement.setAttribute('data-theme', theme);
+        await new Promise(resolve=>setTimeout(resolve,250));
         const style = getComputedStyle(playlistPlay);
-        if (style.backgroundColor !== 'rgb(10, 124, 103)' || style.color !== 'rgb(255, 255, 255)')
+        if (style.backgroundColor !== getComputedStyle(buttonBackground).backgroundColor || style.color !== 'rgb(255, 255, 255)')
           throw new Error(`Playlist play button colors changed in ${theme}`);
       }
     } finally {
+      buttonBackground.remove();
       if (previousTheme === null) document.documentElement.removeAttribute('data-theme');
       else document.documentElement.setAttribute('data-theme', previousTheme);
     }
@@ -154,7 +175,7 @@ export async function verifyWebPage() {
     await new Promise(resolve => setTimeout(resolve, 25));
     fixture.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerType: 'mouse', button: 0 }));
     await waitFor(() => !document.querySelector('[data-slot=context-menu-content]'));
-    fixture.querySelector<HTMLButtonElement>('.sidebar button:nth-of-type(3)')!.click();
+    Array.from(fixture.querySelectorAll<HTMLButtonElement>('.sidebar > button')).find(button => button.textContent?.trim() === '音乐库')!.click();
     await waitFor(() => !!fixture.querySelector('[aria-label="音乐库分类"]'));
     fixture.querySelector<HTMLButtonElement>('[aria-label="音乐库分类"] button:last-child')!.click();
     await waitFor(() => !!fixture.querySelector('.local-import'), 'Fixture local import button did not render');
@@ -223,7 +244,7 @@ export async function verifyWebPage() {
     document.dispatchEvent(new KeyboardEvent('keydown', { key:'Escape',bubbles:true }));
     await waitFor(() => !document.querySelector('[data-slot=popover-content]'));
     const actionNotices: string[] = [];
-    fixtureLibrary.state={...fixtureLibrary.state!,busy:false,now:{...fixtureLibrary.state!.now,liked:true,canFavorite:true},menu:{id:song.id,liked:true,canFavorite:true,playlists:[playlist]}};
+    fixtureLibrary.state={...fixtureLibrary.state!,busy:false,accounts:[{platform:'kugou',name:'酷狗概念版',connected:true,user:'',error:''},{platform:'qq',name:'QQ 音乐',connected:false,user:'',error:''}],now:{...fixtureLibrary.state!.now,platform:'kugou',platforms:['kugou','qq'],liked:true,canFavorite:true},menu:{id:song.id,liked:true,canFavorite:true,playlists:[playlist]}};
     const renderPlayerActions = (id: string) => root.render(createElement('section', { className:'player', style:{position:'absolute',bottom:0,right:0,left:0} },
       createElement(PlayerActions,{library:fixtureLibrary,currentId:id,onNotice:text=>actionNotices.push(text),children:null})));
     renderPlayerActions(song.id);
@@ -231,7 +252,15 @@ export async function verifyWebPage() {
     const favorite=fixture.querySelector<HTMLButtonElement>('.player-favorite')!;
     if(getComputedStyle(favorite.querySelector('svg')!).fill!=='rgb(243, 75, 80)')throw new Error('Favorite heart is not filled red');
     favorite.click();
+    await waitFor(()=>!!document.querySelector('[aria-label="收藏平台"][data-slot=popover-content]'));
+    const favoriteMenu=document.querySelector<HTMLElement>('[aria-label="收藏平台"][data-slot=popover-content]')!;
+    const favoriteOptions=favoriteMenu.querySelectorAll<HTMLButtonElement>('button');
+    if(favoriteMenu.dataset.side!=='top' || favoriteOptions.length!==1 || favoriteOptions[0].getAttribute('aria-pressed')!=='true'
+      || favoriteMenu.textContent?.includes('QQ') || favoriteMenu.textContent?.includes('网易云'))throw new Error('Favorite platform filtering, selected state or login gating failed');
+    favoriteOptions[0].click();
     await waitFor(() => actions.includes(`favorite:${song.id}:false`));
+    await waitFor(()=>!document.querySelector('[aria-label="收藏平台"][data-slot=popover-content]'));
+    await new Promise<void>(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve())));
     fixture.querySelector<HTMLButtonElement>('[aria-label="添加当前歌曲到歌单"]')!.click();
     await waitFor(() => !!document.querySelector('.player-action-menu'), 'Player add menu did not open');
     const addMenu=document.querySelector<HTMLElement>('.player-action-menu')!;
@@ -275,6 +304,23 @@ export async function verifyWebPage() {
     await waitFor(() => !!document.querySelector('.player-action-menu'));
     if(!document.querySelector('.player-action-menu')?.textContent?.includes('原始音质'))throw new Error('Local quality menu does not use original quality');
     document.querySelector<HTMLButtonElement>('.player-action-menu button')!.click();
+    fixtureLibrary.state={...fixtureLibrary.state!,recent:[{...song,platform:'qq',platforms:['netease','kugou','qq']}]};
+    root.render(createElement(LibraryView,{library:fixtureLibrary,theme:'light',onTheme:async()=>{}}));
+    await waitFor(()=>!!fixture.querySelector('.sidebar'));
+    Array.from(fixture.querySelectorAll<HTMLButtonElement>('.sidebar button')).find(button=>button.textContent?.includes('最近播放'))!.click();
+    await waitFor(()=>fixture.querySelectorAll('.song-platform-tag').length===3);
+    if(JSON.stringify(Array.from(fixture.querySelectorAll('.song-platform-tag')).map(tag=>tag.textContent))!==JSON.stringify(['网易云','酷狗','QQ']))throw new Error('Recent history did not display all supported platforms');
+    const avatar='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aT9sAAAAASUVORK5CYII=';
+    for(const platform of ['netease','qq','kugou'] as const) {
+      fixtureLibrary.state={...fixtureLibrary.state!,avatar:'',accounts:[{platform,name:platform,connected:true,user:'Avatar fixture',error:'',avatar}]};
+      root.render(createElement(AccountDialog,{key:platform,open:true,onOpenChange:()=>{},initialPlatform:platform,library:fixtureLibrary}));
+      await waitFor(()=>document.querySelector<HTMLImageElement>('.account-user-avatar img')?.src===avatar);
+      const box=document.querySelector<HTMLElement>('.account-user-avatar')!.getBoundingClientRect();
+      if(box.width!==80 || box.height!==80)throw new Error('Account avatar is not an 80px square');
+      fixtureLibrary.state={...fixtureLibrary.state!,accounts:[{platform,name:platform,connected:true,user:'Avatar fixture',error:'',avatar:''}]};
+      root.render(createElement(AccountDialog,{key:platform,open:true,onOpenChange:()=>{},initialPlatform:platform,library:fixtureLibrary}));
+      await waitFor(()=>!!document.querySelector('.account-user-avatar') && !document.querySelector('.account-user-avatar img'));
+    }
     const renderMessages = (text: string) => root.render(createElement('section', { className: 'player',
       style: { position: 'absolute', bottom: 0, left: 0, right: 0 } },
       createElement(MessageAlerts, { messages: { notice: { text } } })));
@@ -401,6 +447,12 @@ export async function verifyWebPage() {
       slider.dispatchEvent(new Event('change', { bubbles: true }));
       await waitFor(() => events.some(e => e.event === 'player.volumeChanged' && e.state.volumePercent === target));
       await waitFor(() => document.querySelector('#volume')?.textContent === `${target}%`);
+      const mute=document.querySelector<HTMLButtonElement>('.volume-button');
+      if(!mute)throw new Error('Mute button is missing');
+      await waitFor(()=>!mute.disabled);mute.click();
+      await waitFor(()=>document.querySelector('#volume')?.textContent==='0%' && mute.getAttribute('aria-pressed')==='true' && !mute.disabled);
+      if(!mute.querySelector('path[d="m16 9 6 6m0-6-6 6"]'))throw new Error('Muted speaker cross is missing');
+      mute.click();await waitFor(()=>document.querySelector('#volume')?.textContent===`${target}%` && mute.getAttribute('aria-pressed')==='false');
       stop();
       // A following query is processed after the cancellation IPC.
       await native.player.getState();
