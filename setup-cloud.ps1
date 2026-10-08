@@ -26,14 +26,12 @@ Copy-Item -LiteralPath $node.Source -Destination build/runtime/node.exe -Force
 & $node.Source -e "fetch('https://raw.githubusercontent.com/nodejs/node/'+process.version+'/LICENSE').then(r=>{if(!r.ok)throw Error(r.status);return r.text()}).then(t=>require('fs').writeFileSync('build/runtime/LICENSE',t)).catch(e=>{console.error(e.message);process.exit(1)})"
 if ($LASTEXITCODE -ne 0) { throw 'Could not obtain the matching Node.js license.' }
 if ($Package) {
-    if (-not (Test-Path build/MusxiPlayer.exe)) { throw 'Run ./build.ps1 first.' }
+    # Stage services for build.ps1/build-cef.ps1, which deploy build/services next to MusxiPlayerWeb.exe.
     New-Item -ItemType Directory build/services -Force | Out-Null
     Copy-Item services/bridge.cjs,services/package.json,services/package-lock.json -Destination build/services -Force
     Copy-Item -LiteralPath services/node_modules -Destination build/services -Recurse -Force
     New-Item -ItemType Directory build/services/vendor -Force | Out-Null
     Copy-Item -LiteralPath $vendor -Destination build/services/vendor -Recurse -Force
-    Copy-Item README.md,THIRD_PARTY_NOTICES.md -Destination build -Force
-    Copy-Item -LiteralPath third_party/LICENSE-json.txt -Destination build/LICENSE-json.txt -Force
-    Write-Host 'Portable application: build/MusxiPlayer.exe with build/runtime and build/services.'
+    Write-Host 'Services staged in build/services; build/runtime contains node.exe.'
 }
-Write-Host 'Cloud integration ready. Run build/MusxiPlayer.exe --kugou to sign in.'
+Write-Host 'Cloud integration ready. Build with ./build.ps1, then run build/cef-msvc/src/cef/Release/MusxiPlayerWeb.exe.'

@@ -73,7 +73,9 @@ export function createDemoTransport(): CefTransport {
         case 'player.setVolume': if (!Number.isInteger(p.volumePercent) || p.volumePercent < 0 || p.volumePercent > 100) fail('无效音量', 400); player.volumePercent = p.volumePercent; break;
         default: fail('不支持的演示命令', 404);
       }
-      emit(); return player;
+      // Match the native event names so subscribers see the same stream as in CEF.
+      emit(command === 'player.setVolume' ? 'player.volumeChanged' : command === 'player.seek' ? 'player.positionChanged' : 'player.stateChanged');
+      return player;
     }
     if (command === 'library.getState') {
       const rows = currentRows(); library.trackCount = rows.length;
