@@ -76,6 +76,17 @@ test('demo playback delivers events and advances only while playing', async () =
     assert.equal((await c.player.getState()).playing,false);
   } finally { unsubscribe(); }
 });
+test('demo volume and seek use native event names', async () => {
+  const c = client(); const events: string[] = [];
+  const unsubscribe = c.player.subscribe(e => events.push(e.event), error => { throw error; });
+  try {
+    await c.library.open('demo-focus'); await c.library.play('library', 'demo-2'); await c.player.pause();
+    events.length = 0; await c.player.setVolume(30);
+    assert.deepEqual(events, ['player.volumeChanged']);
+    events.length = 0; await c.player.seek(2000);
+    assert.deepEqual(events, ['player.positionChanged']);
+  } finally { unsubscribe(); }
+});
 test('single play, playlist append and clear preserve current playback', async () => {
   const c = client(); await c.library.open('demo-focus'); await c.library.play('library', 'demo-2');
   assert.equal((await c.library.getState()).queue?.length, 1);
