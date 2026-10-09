@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createNativeClient } from '../src/native/client.ts';
-import { parseLibraryState, safeImage } from '../src/native/library.ts';
+import { parseLibraryState, parseLyrics, safeImage } from '../src/native/library.ts';
 const snapshot = {
   connected: false, busy: false, user: '', status: '', notice: '', qr: '', avatar: '',
   playlists: [], tracks: [], trackCount: 0, playlistId: '', playlistName: '', search: [],
@@ -89,4 +89,12 @@ test('library client sends typed business actions and preserves operation IDs', 
   assert.deepEqual(seen.at(-1),{version:1,command:'library.login',params:{platform:'netease'}});
   await native.library.logout(undefined,'qq');
   assert.deepEqual(seen.at(-1),{version:1,command:'library.logout',params:{platform:'qq'}});
+});
+test('lyrics replies are validated before reaching the UI', () => {
+  const reply = { status: 'ready', source: 'local', id: 'local:1', platform: 'local', origin: 'lrc-file', kind: 'synced', lines: [{ timeMs: 500, text: 'line' }] };
+  assert.deepEqual(parseLyrics(reply), reply);
+  assert.deepEqual(parseLyrics({ ...reply, status: 'pending', platform: '', origin: '', kind: 'none', lines: [] }).status, 'pending');
+  for (const bad of [{ status: 'done' }, { source: 'elsewhere' }, { platform: 'spotify' }, { origin: 'web' }, { kind: 'karaoke' },
+    { lines: [{ timeMs: -1, text: 'x' }] }, { lines: [{ timeMs: 1 }] }, { lines: 'x' }, { id: 7 }])
+    assert.throws(() => parseLyrics({ ...reply, ...bad }), { code: 502 });
 });

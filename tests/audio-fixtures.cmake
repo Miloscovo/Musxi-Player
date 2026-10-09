@@ -21,3 +21,7 @@ endforeach()
 run(-i "${OUT}/source.wav" -ar 32000 -ac 1 -c:a pcm_f32le -f f32le "${OUT}/mono.f32")
 run(-i "${OUT}/source.wav" -ar 96000 -ac 6 -c:a pcm_f32le -f f32le "${OUT}/surround.f32")
 run(-f lavfi -i "anullsrc=r=44100:cl=stereo" -t 180 -c:a wmav2 "${OUT}/long.wma")
+# Embedded lyrics: Vorbis comment, ID3v2 USLT (lyrics-eng) and MP4 ©lyr.
+run(-i "${OUT}/source.wav" -t 1 -c:a flac -metadata "LYRICS=[00:00.50]Tagged line" "${OUT}/lyrics.flac")
+run(-i "${OUT}/source.wav" -t 1 -c:a libmp3lame -id3v2_version 3 -metadata "lyrics-eng=[00:00.50]Tagged line" "${OUT}/lyrics.mp3")
+run(-i "${OUT}/source.wav" -t 1 -c:a aac -metadata "lyrics=[00:00.50]Tagged line" "${OUT}/lyrics.m4a")

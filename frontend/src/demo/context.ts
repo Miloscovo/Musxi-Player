@@ -101,6 +101,12 @@ export function createDemoTransport(): CefTransport {
       return library;
     }
     if (command === 'library.image') return '';
+    if (command === 'library.lyrics') {
+      const song = track(String(p.id));
+      // Synthetic lines every eight seconds; same shape as the native reply.
+      const lines = Array.from({ length: Math.min(40, Math.floor(song.duration / 8000)) }, (_, i) => ({ timeMs: i * 8000, text: `${song.name} · 演示歌词第 ${i + 1} 行` }));
+      return { status: 'ready', source: p.source, id: song.id, platform: song.id.startsWith('local:') ? 'local' : 'kugou', origin: lines.length ? 'lrc-file' : '', kind: lines.length ? 'synced' : 'none', lines };
+    }
     switch (command) {
       case 'library.search': {
         const keyword = String(p.keywords).trim().toLocaleLowerCase();

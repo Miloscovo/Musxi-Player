@@ -18,6 +18,7 @@
 #include <iomanip>
 #include <map>
 #include <memory>
+#include <optional>
 #include <set>
 #include <random>
 #include <sstream>
@@ -27,6 +28,7 @@
 #include "../audio/ffmpeg_backend.hpp"
 #include "../audio/ffmpeg_decoder.hpp"
 #include "../cloud_bridge.hpp"
+#include "../lyrics/lyrics.hpp"
 #include "../cxx17_guard.hpp"
 namespace fs=std::filesystem;
 namespace {
@@ -215,6 +217,7 @@ musxi::PlayerService& playerService() {
 }
 #include "local_music.inc"
 #include "playback_history.inc"
+#include "lyrics.inc"
 void advancePlayback() {
     if(playbackOrder=="repeat-one" && opened && !cloudQueue.empty()) {
         auto result=audioBackend().seek(0);
@@ -548,7 +551,7 @@ LRESULT CALLBACK wndProc(HWND hwnd,UINT message,WPARAM wp,LPARAM lp){
     case WM_CREATE: SetTimer(hwnd,Tick,150,nullptr);return 0;
     case WM_TIMER:
         if(wp==HostTick){if(hostHooks.tick)hostHooks.tick();return 0;}
-        localTick();cloudTick();coverTick();pollAudio();playerService().publish();
+        localTick();lyricsTick();cloudTick();coverTick();pollAudio();playerService().publish();
         if(hostHooks.connectCloud && GetTickCount64()>=playbackSaveAt) {
             savePlaybackHistory(cloud::dataDir()/L"playback-history.json");playbackSaveAt=GetTickCount64()+5000;
         }
@@ -559,7 +562,7 @@ LRESULT CALLBACK wndProc(HWND hwnd,UINT message,WPARAM wp,LPARAM lp){
     case WM_DESTROY:
         applicationClosing=true;
         if(hostHooks.connectCloud)savePlaybackHistory(cloud::dataDir()/L"playback-history.json");
-        localCancelled=true;if(localScan.valid()){try{localScan.get();}catch(...){}}applicationWindow=nullptr;
+        localCancelled=true;if(localScan.valid()){try{localScan.get();}catch(...){}}stopLyrics();applicationWindow=nullptr;
         KillTimer(hwnd,HostTick);KillTimer(hwnd,Tick);cloudStop();closeAudio();
         audioBackendStorage().reset();collectAudioCaches(true);PostQuitMessage(0);return 0;
     }

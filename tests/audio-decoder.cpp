@@ -71,6 +71,9 @@ int main(int argc,char** argv) {
         fs::copy_file(folder/"source.flac",unicode,fs::copy_options::overwrite_existing);
         decoder.open(unicode.wstring());compare(decode(decoder),reference(folder/"flac.f32"),"Unicode/probing");
         decoder.seek(999999);require(decoder.read().endOfStream,"seek beyond duration clamps to end");
+        require(musxi::FfmpegDecoder::embeddedLyrics((folder/"source.wav").wstring()).empty(),"untagged file reported lyrics");
+        for(const auto* ext:{"flac","mp3","m4a"})
+            require(musxi::FfmpegDecoder::embeddedLyrics((folder/(std::string("lyrics.")+ext)).wstring())=="[00:00.50]Tagged line",std::string("embedded lyrics: ")+ext);
         decoder.close();decoder.close();
         // Renaming checks the decoder has released its local file handle.
         const auto renamed=folder/L"released.mp3";if(fs::exists(renamed))fs::remove(renamed);
