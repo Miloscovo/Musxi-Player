@@ -42,6 +42,8 @@ public:
     const DecodedAudioInfo& info() const;
     PcmBlock read(std::uint32_t maxFrames=4096);
     void seek(std::int64_t positionMs);
+    // Raw container/stream lyrics tag (LYRICS, lyrics-xxx, UNSYNCEDLYRICS); empty when absent.
+    static std::string embeddedLyrics(const std::wstring& localPath,const std::atomic_bool* cancelled=nullptr);
 private:
     struct Impl;
     std::unique_ptr<Impl> impl_;

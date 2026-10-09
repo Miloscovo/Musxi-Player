@@ -42,6 +42,13 @@ export interface LibraryCommands {
   'library.login': {platform?:MusicPlatform}; 'library.logout': {platform?:MusicPlatform};
   'library.sync': Record<string, never>; 'library.cancel': Record<string, never>;
 }
+export type LyricsSource = 'search' | 'library' | 'queue' | 'local' | 'recent';
+export interface LyricsLine { timeMs: number; text: string }
+export interface Lyrics {
+  status: 'pending' | 'ready'; source: LyricsSource; id: string;
+  platform: MusicPlatform | 'local' | ''; origin: 'lrc-file' | 'embedded' | 'online' | 'cache' | '';
+  kind: 'synced' | 'plain' | 'none'; lines: LyricsLine[];
+}
 const object = (value: unknown): Record<string, unknown> => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new NativeError(502, 'Invalid library object');
   return value as Record<string, unknown>;
@@ -104,7 +111,18 @@ export function parseLibraryState(value: unknown): LibraryState {
   if (!['idle', 'pending', 'completed', 'failed', 'cancelled'].includes(operation.status as string)) throw new NativeError(502, 'Invalid operation status');
   return value as LibraryState;
 }
-export const safeImage = (value: string) => /^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=\r\n]+$/.test(value) ? value : '';
+export function parseLyrics(value: unknown): Lyrics {
+  const v = object(value); fields(v, ['id'], 'string');
+  if (!['pending', 'ready'].includes(v.status as string)) throw new NativeError(502, 'Invalid lyrics status');
+  if (!['search', 'library', 'queue', 'local', 'recent'].includes(v.source as string)) throw new NativeError(502, 'Invalid lyrics source');
+  if (!['', 'local', 'kugou', 'netease', 'qq'].includes(v.platform as string)) throw new NativeError(502, 'Invalid lyrics platform');
+  if (!['', 'lrc-file', 'embedded', 'online', 'cache'].includes(v.origin as string)) throw new NativeError(502, 'Invalid lyrics origin');
+  if (!['synced', 'plain', 'none'].includes(v.kind as string)) throw new NativeError(502, 'Invalid lyrics kind');
+  if (!Array.isArray(v.lines) || v.lines.length > 5000) throw new NativeError(502, 'Invalid lyrics lines');
+  for (const entry of v.lines) { const line = object(entry); fields(line, ['timeMs'], 'number'); fields(line, ['text'], 'string'); }
+  return value as Lyrics;
+}
+export const safeImage =(value: string) => /^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=\r\n]+$/.test(value) ? value : '';
 export function createLibraryClient(host: CefTransport) {
   async function dispatch<K extends keyof LibraryCommands>(command: K, params: LibraryCommands[K], signal?: AbortSignal) {
     const result = object(await request(host, command, params, { signal }));
@@ -116,6 +134,8 @@ export function createLibraryClient(host: CefTransport) {
       const value = await request(host, 'library.image', { url }, { signal });
       if (typeof value !== 'string') throw new NativeError(502, 'Invalid image'); return safeImage(value);
     },
+    // Poll while status is 'pending'; discard replies whose id is no longer the current song.
+    async lyrics(source: LyricsSource, id: string, signal?: AbortSignal) { return parseLyrics(await request(host, 'library.lyrics', { source, id }, { signal })); },
     search: (keywords: string, page: number, signal?: AbortSignal) => dispatch('library.search', { keywords, page }, signal),
     open: (id: string, signal?: AbortSignal) => dispatch('library.open', { id }, signal),
     play: (source: 'search' | 'library' | 'queue' | 'local' | 'recent', id: string, signal?: AbortSignal) => dispatch('library.play', { source, id }, signal),

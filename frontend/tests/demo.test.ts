@@ -87,6 +87,13 @@ test('demo volume and seek use native event names', async () => {
     assert.deepEqual(events, ['player.positionChanged']);
   } finally { unsubscribe(); }
 });
+test('demo lyrics match the native reply contract', async () => {
+  const c = client();
+  const lyrics = await c.library.lyrics('library', 'demo-2');
+  assert.equal(lyrics.status, 'ready'); assert.equal(lyrics.id, 'demo-2'); assert.equal(lyrics.kind, 'synced');
+  assert.ok(lyrics.lines.length > 1 && lyrics.lines.every((line, i) => i === 0 || line.timeMs > lyrics.lines[i - 1].timeMs));
+  await assert.rejects(c.library.lyrics('library', 'missing'), { code: 404 });
+});
 test('single play, playlist append and clear preserve current playback', async () => {
   const c = client(); await c.library.open('demo-focus'); await c.library.play('library', 'demo-2');
   assert.equal((await c.library.getState()).queue?.length, 1);

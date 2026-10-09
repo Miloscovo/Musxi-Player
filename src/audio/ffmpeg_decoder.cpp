@@ -188,6 +188,17 @@ void FfmpegDecoder::close() noexcept {impl_.reset();}
 void FfmpegDecoder::open(const std::wstring& path,PcmFormat output) {
     close();auto next=std::make_unique<Impl>();next->cancelled=cancelled_;next->initialize(path,output);impl_=std::move(next);
 }
+std::string FfmpegDecoder::embeddedLyrics(const std::wstring& path,const std::atomic_bool* cancelled) {
+    Impl s;s.cancelled=cancelled;s.initialize(path,{});
+    // av_dict_get is case-insensitive; IGNORE_SUFFIX also matches ID3 USLT keys such as lyrics-eng.
+    const auto find=[](const AVDictionary* tags)->std::string {
+        for(const auto* key:{"lyrics","unsyncedlyrics"})
+            if(const auto entry=av_dict_get(tags,key,nullptr,AV_DICT_IGNORE_SUFFIX))return entry->value;
+        return {};
+    };
+    auto value=find(s.format->metadata);
+    return value.empty()?find(s.format->streams[s.stream]->metadata):value;
+}
 const DecodedAudioInfo& FfmpegDecoder::info() const {
     if(!impl_)fail("No audio file",AVERROR(EINVAL));return impl_->info;
 }

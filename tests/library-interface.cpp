@@ -163,5 +163,50 @@ int main() try {
     require(invoke("library.recentClear").code==0 && recentTracks.empty(),"recent clear failed");
     require(invoke("library.play",{{"source","recent"},{"id","missing"}}).code==404,"unknown recent song accepted");
     std::filesystem::remove(recentFile);
+    {
+    // Lyrics: parameter validation, local sidecar priority, async polling and stale-song isolation.
+    require(invoke("library.lyrics",{{"source","library"}}).code==400,"lyrics accepted missing id");
+    require(invoke("library.lyrics",{{"source","nowhere"},{"id","0"}}).code==400,"lyrics accepted unknown source");
+    require(invoke("library.lyrics",{{"source","library"},{"id","missing"}}).code==404,"lyrics accepted unknown song");
+    cloudTracks=Json::array({{{"id","netease:lyric"},{"name","Online"}}});
+    auto online=Json::parse(invoke("library.lyrics",{{"source","library"},{"id","netease:lyric"}}).json);
+    require(online["status"]=="ready" && online["kind"]=="none" && online["platform"]=="netease" && online["id"]=="netease:lyric","online lyrics placeholder");
+    const auto lyricsFolder=cloud::dataDir()/(L"lyrics-check-"+std::to_wstring(GetCurrentProcessId()));
+    fs::create_directories(lyricsFolder);
+    {std::ofstream audio(lyricsFolder/L"歌曲.mp3",std::ios::binary);audio<<"not audio";}
+    {std::ofstream lrc(lyricsFolder/L"歌曲.lrc",std::ios::binary);lrc<<"\xEF\xBB\xBF[00:01.00]\xE4\xBD\xA0\xE5\xA5\xBD\n[00:00.50]First";}
+    {std::ofstream gbk(lyricsFolder/L"旧歌.lrc",std::ios::binary);gbk<<"[00:02.00]\xC4\xE3\xBA\xC3";}
+    {std::ofstream audio(lyricsFolder/L"旧歌.mp3",std::ios::binary);audio<<"not audio";}
+    localTracks=Json::array({{{"id","local:1"},{"path",(lyricsFolder/L"歌曲.mp3").u8string()},{"name","歌曲.mp3"}},
+        {{"id","local:2"},{"path",(lyricsFolder/L"旧歌.mp3").u8string()},{"name","旧歌.mp3"}},
+        {{"id","local:3"},{"path",(lyricsFolder/L"没有歌词.mp3").u8string()},{"name","没有歌词.mp3"}}});
+    require(invoke("library.lyrics",{{"source","local"},{"id","local:9"}}).code==404,"lyrics accepted unknown local song");
+    const auto pollLyrics=[&](const char* id) {
+        const auto until=GetTickCount64()+5000;
+        while(GetTickCount64()<until) {
+            auto reply=invoke("library.lyrics",{{"source","local"},{"id",id}});
+            require(reply.code==0,"local lyrics request failed");
+            auto value=Json::parse(reply.json);
+            require(value["id"]==id && value["source"]=="local","lyrics reply belongs to another song");
+            if(value["status"]=="ready")return value;
+            Sleep(5);
+        }
+        throw std::runtime_error("local lyrics never completed");
+    };
+    auto local=pollLyrics("local:1");
+    require(local["kind"]=="synced" && local["origin"]=="lrc-file" && local["platform"]=="local","sidecar lyrics");
+    require(local["lines"].size()==2 && local["lines"][0]["timeMs"]==500 && local["lines"][1]["text"]=="\xE4\xBD\xA0\xE5\xA5\xBD","sidecar lines or UTF-8 BOM");
+    require(local.dump().find(lyricsFolder.u8string())==std::string::npos,"lyrics reply exposed a private path");
+    auto gbkLyrics=pollLyrics("local:2");
+    require(gbkLyrics["kind"]=="synced" && gbkLyrics["lines"][0]["text"]=="\xE4\xBD\xA0\xE5\xA5\xBD","GBK sidecar not decoded");
+    auto none=pollLyrics("local:3");
+    require(none["kind"]=="none" && none["origin"]=="" && none["lines"].empty(),"missing local lyrics");
+    // Switching songs mid-lookup must never surface the previous song's lines.
+    auto cached=Json::parse(invoke("library.lyrics",{{"source","local"},{"id","local:1"}}).json);
+    require(cached["id"]=="local:1","cached lyrics lost");
+    auto nextSong=pollLyrics("local:2");
+    require(nextSong["lines"][0]["timeMs"]==2000,"stale lyrics after switching songs");
+    stopLyrics();fs::remove_all(lyricsFolder);localTracks=Json::array();
+    }
     std::cout<<"PASS library boundary, pagination, operation lifecycle and redaction\n";
 } catch(const std::exception& error) {std::cerr<<error.what()<<'\n';return 1;}
