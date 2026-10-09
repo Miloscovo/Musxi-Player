@@ -33,6 +33,25 @@ LibraryReply applicationLibrary(const std::string& name,const std::string& param
         const auto p=Json::parse(parameters);
         if(!p.is_object()) return {400,"参数必须为对象",{}};
         const auto reply=[](const Json& value)->LibraryReply {return {0,{},value.dump()};};
+        if(name=="library.getPlaybackSettings") {
+            if(!p.empty())return {400,"无效播放设置参数",{}};
+            return reply(playbackSettingsSnapshot());
+        }
+        if(name=="library.setPlaybackSettings") {
+            if(p.size()!=2)return {400,"无效播放设置参数",{}};
+            if(!p.contains("outputDevice") || !p["outputDevice"].is_string())return {400,"无效输出设备",{}};
+            const auto quality=requiredText(p,"defaultQuality"),device=p["outputDevice"].get<std::string>();
+            if(!validDefaultQuality(quality) || device.size()>1024 || device.find('\0')!=std::string::npos)return {400,"无效播放设置",{}};
+            const auto before=playbackSettingsSnapshot();
+            if(!device.empty() && device!=preferredOutputDevice && std::none_of(before["devices"].begin(),before["devices"].end(),[&](const Json& row){return row["id"]==device;}))return {409,"输出设备已断开，请刷新设备列表",{}};
+            const auto result=audioBackend().setOutputDevicePreference(cloud::toWide(device));
+            if(!result)return {503,"输出设备设置暂不可用",{}};
+            if(!savePlaybackSettings(cloud::dataDir()/L"playback-settings.json",quality,device)) {
+                audioBackend().setOutputDevicePreference(cloud::toWide(preferredOutputDevice));return {500,"播放设置保存失败",{}};
+            }
+            defaultAudioQuality=quality;preferredOutputDevice=device;
+            auto settings=before;settings["defaultQuality"]=quality;settings["outputDevice"]=device;return reply(settings);
+        }
         if(name=="library.setPlaybackOrder") {
             if(p.size()!=1)return {400,"无效播放顺序参数",{}};
             const auto order=requiredText(p,"order");

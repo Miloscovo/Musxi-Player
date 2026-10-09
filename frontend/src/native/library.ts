@@ -5,6 +5,20 @@ export const platformNames: Record<MusicPlatform,string> = {kugou:'酷狗概念�
 export interface Track { platform?: MusicPlatform | ''; platforms?:MusicPlatform[]; favorite?:boolean; id: string; name: string; artist: string; album?: string; cover: string; duration: number; count: number; editable: boolean }
 export type PlaybackOrder = 'sequential' | 'random' | 'repeat-one';
 export type AudioQuality = '128' | '320' | 'flac';
+export interface PlaybackSettings { defaultQuality: AudioQuality; outputDevice: string; devices: { id: string; name: string }[] }
+export function parsePlaybackSettings(value: unknown): PlaybackSettings {
+  const v = object(value);
+  if (!['128','320','flac'].includes(v.defaultQuality as string) || typeof v.outputDevice !== 'string' || v.outputDevice.length > 1024
+    || !Array.isArray(v.devices) || v.devices.length > 256) throw new NativeError(502, 'Invalid playback settings');
+  const ids = new Set<string>();
+  for (const device of v.devices) {
+    const row = object(device);
+    if (typeof row.id !== 'string' || !row.id || row.id.length > 1024 || typeof row.name !== 'string' || !row.name || ids.has(row.id))
+      throw new NativeError(502, 'Invalid output device');
+    ids.add(row.id);
+  }
+  return value as PlaybackSettings;
+}
 export interface LibraryState {
   favoritesCount?: number;
   recent?:Track[];
@@ -129,6 +143,10 @@ export function createLibraryClient(host: CefTransport) {
     fields(result, ['id'], 'string'); return { id: result.id as string };
   }
   return Object.freeze({
+    async getPlaybackSettings(signal?: AbortSignal) { return parsePlaybackSettings(await request(host, 'library.getPlaybackSettings', {}, { signal })); },
+    async setPlaybackSettings(settings: Pick<PlaybackSettings, 'defaultQuality' | 'outputDevice'>, signal?: AbortSignal) {
+      return parsePlaybackSettings(await request(host, 'library.setPlaybackSettings', settings, { signal }));
+    },
     async getState(page = 1, signal?: AbortSignal) { return parseLibraryState(await request(host, 'library.getState', { page }, { signal })); },
     async image(url: string, signal?: AbortSignal) {
       const value = await request(host, 'library.image', { url }, { signal });

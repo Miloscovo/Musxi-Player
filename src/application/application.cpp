@@ -27,6 +27,7 @@
 #include "application.hpp"
 #include "../audio/ffmpeg_backend.hpp"
 #include "../audio/ffmpeg_decoder.hpp"
+#include "../audio/wasapi_player.hpp"
 #include "../cloud_bridge.hpp"
 #include "../lyrics/lyrics.hpp"
 #include "../cxx17_guard.hpp"
@@ -84,6 +85,7 @@ std::string utf8(const std::wstring& str){
     std::string out(n,'\0');WideCharToMultiByte(CP_UTF8,0,str.data(),(int)str.size(),out.data(),n,nullptr,nullptr);return out;
 }
 void cloudPlay(int index,bool useQueue=false,bool search=false);
+#include "playback_settings.inc"
 void enqueuePlayedTrack(const Json& track) {
     const auto id=track.value("id","");
     if(std::none_of(cloudQueue.begin(),cloudQueue.end(),[&](const Json& row){return row.value("id","")==id;}))
@@ -91,7 +93,11 @@ void enqueuePlayedTrack(const Json& track) {
 }
 std::unique_ptr<musxi::IAudioBackend>& audioBackendStorage() {
     static std::unique_ptr<musxi::IAudioBackend> backend;
-    if(!backend)backend=musxi::makeFfmpegAudioBackend();
+    if(!backend) {
+        loadPlaybackSettings(cloud::dataDir()/L"playback-settings.json");
+        backend=musxi::makeFfmpegAudioBackend();
+        backend->setOutputDevicePreference(cloud::toWide(preferredOutputDevice));
+    }
     return backend;
 }
 musxi::IAudioBackend& audioBackend() {return *audioBackendStorage();}
@@ -368,7 +374,7 @@ void cloudPlay(int index, bool useQueue, bool search) {
     try {
         // Session-specific directory avoids interfering with another running player.
         auto dir=cloud::dataDir()/L"cloud-cache"/std::to_wstring(GetCurrentProcessId());
-        cloudRequest({{"op","audio"},{"id",list[index].value("id","")},{"index",index},{"cacheDir",dir.u8string()},{"sources",list[index].value("sources",Json::array())}});
+        cloudRequest({{"op","audio"},{"id",list[index].value("id","")},{"index",index},{"cacheDir",dir.u8string()},{"sources",list[index].value("sources",Json::array())},{"defaultQuality",defaultAudioQuality}});
         // Index is kept on the UI thread, outside the adapter's response schema.
     } catch(...) {notice(L"无法创建本机播放缓存");}
 }

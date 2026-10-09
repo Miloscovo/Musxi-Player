@@ -1,5 +1,6 @@
 #include "../src/audio/wasapi_player.hpp"
 #include <chrono>
+#include <algorithm>
 #include <filesystem>
 #include <iostream>
 #include <thread>
@@ -25,6 +26,8 @@ int main(int argc,char** argv) {
         player.load((folder/"source.wav").wstring());
         const auto initial=waitFor(player,[](auto s){return s.durationMs>0 && s.bufferedFrames==s.capacityFrames;});
         require(initial.positionMs==0 && initial.phase==OutputPhase::Ready,"load autoplayed");
+        const auto devices=musxi::audioOutputDevices();
+        require(std::any_of(devices.begin(),devices.end(),[&](const auto& device){return device.id==initial.outputDeviceId && !device.name.empty();}),"default endpoint missing from enumeration");
         std::cout<<"Device: "<<initial.format.sampleRate<<" Hz, "<<initial.format.channels<<" channels\n";
         player.play();waitFor(player,[](auto s){return s.positionMs>=180;});
         player.pause();const auto paused=player.snapshot().positionMs;
@@ -43,6 +46,12 @@ int main(int argc,char** argv) {
         // Repeat resets while PCM is full: cancellation must wake producer waits.
         for(int n=0;n<8;++n){player.stop();player.play();}
         player.unload();require(player.snapshot().phase==OutputPhase::Empty && player.takeEvents().empty(),"unload/stale event");
+        player.load((folder/"source.wav").wstring(),initial.outputDeviceId);
+        require(waitFor(player,[](auto s){return s.metadataReady;}).outputDeviceId==initial.outputDeviceId,"explicit output device ignored");
+        player.unload();
+        player.load((folder/"source.wav").wstring(),L"missing-output-device");
+        require(waitFor(player,[](auto s){return s.metadataReady;}).outputDeviceId==initial.outputDeviceId,"missing device did not fall back to default");
+        player.unload();
         for(const auto ext:{"mp3","flac","m4a","aac","ogg","opus","wma"}) {
             player.load((folder/(std::string("source.")+ext)).wstring());
             waitFor(player,[](auto s){return s.durationMs>0;});

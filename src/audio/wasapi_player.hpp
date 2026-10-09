@@ -3,6 +3,8 @@
 #include <memory>
 
 namespace musxi {
+struct AudioOutputDevice { std::wstring id,name; };
+std::vector<AudioOutputDevice> audioOutputDevices();
 enum class OutputPhase { Empty, Ready, Buffering, Playing, Paused, Ended, Failed };
 struct OutputSnapshot {
     OutputPhase phase=OutputPhase::Empty;
@@ -12,6 +14,7 @@ struct OutputSnapshot {
     std::uint32_t bufferedFrames=0,capacityFrames=0,underruns=0;
     std::uint64_t generation=0;
     std::string error;
+    std::wstring outputDeviceId;
     std::int64_t errorCode=0;
     bool metadataReady=false;
 };
@@ -30,7 +33,7 @@ public:
     ~WasapiPlayer();
     WasapiPlayer(const WasapiPlayer&)=delete;
     WasapiPlayer& operator=(const WasapiPlayer&)=delete;
-    void load(const std::wstring& path);
+    void load(const std::wstring& path,const std::wstring& outputDevice=L"");
     void play();
     void pause();
     void stop();

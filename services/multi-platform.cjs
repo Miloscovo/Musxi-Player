@@ -38,6 +38,17 @@ class MultiPlatform {
     const result=await this.call(platform,{op:'search',keywords:`${track.name} ${track.artist}`,page:1});
     return result.tracks?.find(row=>platformOf(row.id)===platform && trackKey(row)===trackKey(track));
   }
+  async audioWithDefault(platform,request) {
+    if(request.defaultQuality===undefined || request.quality!==undefined)return this.call(platform,request);
+    const qualities=['flac','320','128'];
+    const start=qualities.indexOf(request.defaultQuality);
+    if(start<0)throw Error('无效默认音质');
+    for(const quality of qualities.slice(start)) {
+      try {return await this.call(platform,{...request,defaultQuality:undefined,quality});}
+      catch { /* Try a lower quality without exposing private service errors. */ }
+    }
+    throw Error('该平台没有可播放的音质');
+  }
   async readFavorites(platform) {
     const tracks=[];
     for(const list of (this.playlists[platform] || []).filter(p=>p.favorite && p.editable)) {
@@ -142,7 +153,7 @@ class MultiPlatform {
         const source=request.sources.find(row=>platformOf(row.id)===platform);
         if(!source || !this.accounts[platform]?.connected)continue;
         try {
-          const result=await this.call(platform,{...request,id:source.id,sources:undefined});
+          const result=await this.audioWithDefault(platform,{...request,id:source.id,sources:undefined});
           if(!result.track || (!result.path && !result.url))continue;
           return this.decorate({...result,requestedId:request.id,platform,track:{...result.track,platform,sources:request.sources}});
         } catch { /* Try the next signed-in platform without exposing private service errors. */ }
@@ -151,7 +162,7 @@ class MultiPlatform {
     }
     const platform=['qr','poll','avatar'].includes(op)?this.active:platformOf(request.id);
     if(request.playlistId && platformOf(request.playlistId)!==platform)throw Error('只能添加到同一平台的歌单');
-    const result=await this.call(platform,request);
+    const result=op==='audio'?await this.audioWithDefault(platform,request):await this.call(platform,request);
     if(op==='song_update' && request.aggregate)return this.decorate({...await this.favorites(),message:result.message});
     if(op==='song_menu' && request.menuId){result.sourceId=request.id;result.id=request.menuId;}
     if(op==='song_update') {

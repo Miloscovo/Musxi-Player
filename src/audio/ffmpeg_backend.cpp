@@ -11,7 +11,7 @@ namespace musxi {
 namespace {
 class FfmpegBackend final:public IAudioBackend {
     struct Request {
-        std::wstring path;
+        std::wstring path,device;
         std::uint64_t revision=0,source=0,seek=0,intent=0;
         std::uint32_t position=0;
         bool play=false;
@@ -22,7 +22,7 @@ class FfmpegBackend final:public IAudioBackend {
     bool exiting_=false;
     AudioState state_;
     std::vector<AudioEvent> events_;
-    std::wstring activePath_,inflightPath_;
+    std::wstring activePath_,inflightPath_,preferredDevice_;
     WasapiPlayer player_;
     std::thread worker_;
     void changed(bool cancel=false) {
@@ -42,7 +42,7 @@ class FfmpegBackend final:public IAudioBackend {
                 if(request.source!=source || request.seek!=preparedSeek)inflightPath_=request.path;}
             try {
                 if(request.source!=source || request.seek!=preparedSeek) {
-                    if(request.path.empty())player_.unload();else player_.load(request.path);
+                    if(request.path.empty())player_.unload();else player_.load(request.path,request.device);
                     {std::lock_guard<std::mutex> lock(mutex_);activePath_=request.path;inflightPath_.clear();}
                     source=request.source;preparedSeek=request.seek;seek=0;intent=0;
                 }
@@ -96,10 +96,23 @@ public:
     }
     AudioResult load(const std::wstring& path) override {
         if(path.empty())return {AudioError::InvalidArgument,0};
-        std::lock_guard<std::mutex> lock(mutex_);desired_.path=path;++desired_.source;desired_.seek=0;++desired_.intent;desired_.play=false;
+        std::lock_guard<std::mutex> lock(mutex_);desired_.path=path;desired_.device=preferredDevice_;++desired_.source;desired_.seek=0;desired_.position=0;++desired_.intent;desired_.play=false;
         state_.opened=true;state_.playing=false;state_.positionMs=state_.durationMs=0;++state_.generation;state_.phase="loading";events_.clear();changed(true);return {};
     }
     AudioResult play() override {return resume();}
+    AudioResult setOutputDevicePreference(const std::wstring& id) override {
+        std::lock_guard<std::mutex> lock(mutex_);
+        preferredDevice_=id;
+        if(desired_.device==id)return {};
+        desired_.device=id;
+        if(!desired_.path.empty()) {
+            // Keep an outstanding seek target; otherwise resume at the current clock.
+            if(state_.phase!="loading" && state_.phase!="seeking")desired_.position=state_.positionMs;
+            ++desired_.source;++desired_.seek;++desired_.intent;
+            state_.phase="seeking";events_.clear();changed(true);
+        }
+        return {};
+    }
     AudioResult resume() override {
         std::lock_guard<std::mutex> lock(mutex_);if(desired_.path.empty())return {AudioError::NotReady,0};
         if(state_.phase=="failed"){++desired_.source;state_.phase="loading";}

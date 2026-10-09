@@ -45,3 +45,10 @@ When adding a new production dependency:
 - Distinguish development-only dependencies from dependencies distributed with the application.
 - Flag GPL, AGPL, SSPL, nonfree, proprietary, or unclear licenses for manual review before adding the dependency.
 - Do not change the project's own `LICENSE` unless explicitly requested.
+
+## AI collaboration attribution for future commits
+
+- For new commits containing development work actually assisted by OpenAI Codex, explicitly record that AI contribution in the commit message.
+- Preserve the actual developer's Git Author identity. Do not rewrite existing commit history or apply this policy retroactively.
+- Prefer a standard `Co-authored-by` trailer only when a Codex-associated email address has been verified. Do not invent or use unverified OpenAI email addresses or GitHub identities, and do not present Codex as an independent human contributor.
+- If no verified Codex-associated email is available, add the exact line `AI-assisted-by: OpenAI Codex` to the commit body.

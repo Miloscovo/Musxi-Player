@@ -17,6 +17,7 @@ export function createDemoTransport(): CefTransport {
   const lists = new Map(library.playlists.map(list => [list.id, demoPlaylistSongs(list.id)]));
   const platformLikes = new Map<MusicPlatform,Set<string>>();
   const listeners = new Map<number, (reply: string) => void>();
+  let playbackSettings = { defaultQuality: '128', outputDevice: '', devices: [{ id: 'demo-output', name: '演示音频设备' }] };
   let requestId = 0, operationId = 0;
   let timer: ReturnType<typeof setInterval> | undefined;
   let lastTick = Date.now();
@@ -92,6 +93,12 @@ export function createDemoTransport(): CefTransport {
       // Match the native event names so subscribers see the same stream as in CEF.
       emit(command === 'player.setVolume' ? 'player.volumeChanged' : command === 'player.seek' ? 'player.positionChanged' : 'player.stateChanged');
       return player;
+    }
+    if (command === 'library.getPlaybackSettings') return playbackSettings;
+    if (command === 'library.setPlaybackSettings') {
+      if (!['128','320','flac'].includes(p.defaultQuality as string) || (p.outputDevice !== '' && p.outputDevice !== 'demo-output')) fail('无效播放设置', 400);
+      playbackSettings = { ...playbackSettings, defaultQuality: String(p.defaultQuality), outputDevice: String(p.outputDevice) };
+      return playbackSettings;
     }
     if (command === 'library.getState') {
       library.favoritesCount = favoriteRows().length;

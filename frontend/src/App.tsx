@@ -99,7 +99,7 @@ export default function App() {
         </DialogContent>
       </Dialog>
     </div></div>}
-    <LibraryView library={library} theme={shell.theme} onTheme={shell.setTheme} transparency={shell.transparency} onTransparency={shell.setTransparency} />
+    <LibraryView library={library} theme={shell.theme} appearance={shell.appearance} onAppearance={shell.setAppearance} transparency={shell.transparency} onTransparency={shell.setTransparency} />
     <section className="player" aria-label="播放器" aria-busy={loading}>
       {state && <input ref={seekInput} className="seek-bar" type="range" min="0" max={Math.max(0, state.durationMs - 1)}
         value={seekDraft ?? state.positionMs} title={time(seekDraft ?? state.positionMs)}

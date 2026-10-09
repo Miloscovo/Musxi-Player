@@ -5,6 +5,7 @@
 #include <windows.h>
 #include <audioclient.h>
 #include <mmdeviceapi.h>
+#include <functiondiscoverykeys_devpkey.h>
 #include <ksmedia.h>
 #include <wrl/client.h>
 #include <algorithm>
@@ -32,6 +33,28 @@ struct Handle {
 };
 struct CoMemory {void* value=nullptr;~CoMemory(){CoTaskMemFree(value);}};
 }
+std::vector<AudioOutputDevice> audioOutputDevices() {
+    const auto hr=CoInitializeEx(nullptr,COINIT_MULTITHREADED);
+    if(FAILED(hr) && hr!=RPC_E_CHANGED_MODE)check(hr,"Initialize device enumeration");
+    struct Cleanup {bool initialized;~Cleanup(){if(initialized)CoUninitialize();}} cleanup{SUCCEEDED(hr)};
+    ComPtr<IMMDeviceEnumerator> enumerator;
+    check(CoCreateInstance(__uuidof(MMDeviceEnumerator),nullptr,CLSCTX_ALL,IID_PPV_ARGS(&enumerator)),"Create device enumerator");
+    ComPtr<IMMDeviceCollection> devices;
+    check(enumerator->EnumAudioEndpoints(eRender,DEVICE_STATE_ACTIVE,&devices),"List output devices");
+    UINT count=0;check(devices->GetCount(&count),"Count output devices");
+    std::vector<AudioOutputDevice> rows;
+    for(UINT i=0;i<count;++i) {
+        ComPtr<IMMDevice> device;check(devices->Item(i,&device),"Read output device");
+        CoMemory id;check(device->GetId(reinterpret_cast<LPWSTR*>(&id.value)),"Read output ID");
+        ComPtr<IPropertyStore> properties;check(device->OpenPropertyStore(STGM_READ,&properties),"Read output properties");
+        PROPVARIANT name{};
+        const auto result=properties->GetValue(PKEY_Device_FriendlyName,&name);
+        const std::wstring label=SUCCEEDED(result) && name.vt==VT_LPWSTR && name.pwszVal?name.pwszVal:L"音频输出设备";
+        PropVariantClear(&name);
+        rows.push_back({static_cast<wchar_t*>(id.value),label});
+    }
+    return rows;
+}
 struct WasapiPlayer::Impl {
     Handle wake,audioReady;
     std::thread output,decode;
@@ -46,7 +69,8 @@ struct WasapiPlayer::Impl {
     std::size_t head=0,count=0;
     OutputSnapshot state;
     std::vector<OutputEvent> events;
-    std::wstring path,deviceId;
+    std::wstring path,deviceId,preferredDevice;
+    bool usingDefault=true;
     ComPtr<IMMDeviceEnumerator> enumerator;
     ComPtr<IMMDevice> device;
     ComPtr<IAudioClient> client;
@@ -116,8 +140,14 @@ struct WasapiPlayer::Impl {
     }
     void openDevice() {
         check(CoCreateInstance(__uuidof(MMDeviceEnumerator),nullptr,CLSCTX_ALL,IID_PPV_ARGS(&enumerator)),"Create device enumerator");
-        check(enumerator->GetDefaultAudioEndpoint(eRender,eMultimedia,&device),"No default output device");
+        usingDefault=true;
+        if(!preferredDevice.empty() && SUCCEEDED(enumerator->GetDevice(preferredDevice.c_str(),&device))) {
+            DWORD status=0;
+            usingDefault=FAILED(device->GetState(&status)) || status!=DEVICE_STATE_ACTIVE;
+        }
+        if(usingDefault) {device.Reset();check(enumerator->GetDefaultAudioEndpoint(eRender,eMultimedia,&device),"No default output device");}
         CoMemory id;check(device->GetId(reinterpret_cast<LPWSTR*>(&id.value)),"Get device ID");deviceId=static_cast<wchar_t*>(id.value);
+        state.outputDeviceId=deviceId;
         check(device->Activate(__uuidof(IAudioClient),CLSCTX_ALL,nullptr,reinterpret_cast<void**>(client.GetAddressOf())),"Activate WASAPI");
         CoMemory mix;check(client->GetMixFormat(reinterpret_cast<WAVEFORMATEX**>(&mix.value)),"Get device format");
         const auto f=static_cast<WAVEFORMATEX*>(mix.value);
@@ -210,7 +240,7 @@ struct WasapiPlayer::Impl {
         const auto now=std::chrono::steady_clock::now();
         if(now-deviceCheck>std::chrono::milliseconds(250)) {
             deviceCheck=now;
-            if(currentDevice()!=deviceId)throw OutputError("Default output changed; replay to use the new device",AUDCLNT_E_DEVICE_INVALIDATED);
+            if(usingDefault && currentDevice()!=deviceId)throw OutputError("Default output changed; replay to use the new device",AUDCLNT_E_DEVICE_INVALIDATED);
         }
         std::unique_lock<std::mutex> lock(pcmMutex,std::try_to_lock);
         if(!lock.owns_lock())return; // Output never waits for decoding.
@@ -260,7 +290,7 @@ struct WasapiPlayer::Impl {
 WasapiPlayer::WasapiPlayer():impl_(std::make_unique<Impl>()){}
 WasapiPlayer::~WasapiPlayer()=default;
 void WasapiPlayer::requestDecodeCancel() noexcept {impl_->cancelled=true;impl_->space.notify_all();}
-void WasapiPlayer::load(const std::wstring& path){impl_->guarded([&]{impl_->loadFile(path);});}
+void WasapiPlayer::load(const std::wstring& path,const std::wstring& outputDevice){impl_->guarded([&]{impl_->preferredDevice=outputDevice;impl_->loadFile(path);});}
 void WasapiPlayer::play(){impl_->guarded([&]{auto& s=*impl_;
     if(s.path.empty())throw std::logic_error("No loaded track");
     if(!s.client)s.loadFile(s.path);

@@ -37,6 +37,8 @@ public:
     virtual AudioResult seek(std::uint32_t positionMs)=0;
     virtual AudioResult setVolume(int percent)=0;
     virtual AudioResult unload()=0;
+    // Apply to current output asynchronously, preserving position and playback intent.
+    virtual AudioResult setOutputDevicePreference(const std::wstring&) {return {AudioError::NotReady,0};}
     virtual AudioState snapshot() const=0;
     virtual void poll()=0;
     virtual std::vector<AudioEvent> takeEvents()=0;

@@ -25,6 +25,17 @@ int main() try {
     cloud::testProfile=false;
     (void)playerService();
     auto invoke=[](const char* name,const Json& p=Json::object()) {return musxi::applicationLibrary(name,p.dump());};
+    require(invoke("library.getPlaybackSettings",{{"extra",true}}).code==400,"extra playback settings parameters accepted");
+    require(invoke("library.setPlaybackSettings",{{"defaultQuality","invalid"},{"outputDevice",""}}).code==400,"invalid default quality accepted");
+    require(invoke("library.setPlaybackSettings",{{"defaultQuality","128"},{"outputDevice",42}}).code==400,"non-string output device accepted");
+    const auto settingsFile=fs::temp_directory_path()/L"musxi-playback-settings-test"/L"settings.json";
+    require(savePlaybackSettings(settingsFile,"flac","saved-output"),"settings save failed");
+    loadPlaybackSettings(settingsFile);
+    require(defaultAudioQuality=="flac" && preferredOutputDevice=="saved-output","settings did not restore after restart");
+    {std::ofstream file(settingsFile);file<<"{\"defaultQuality\":\"invalid\",\"outputDevice\":\"bad\"}";}
+    loadPlaybackSettings(settingsFile);
+    require(defaultAudioQuality=="flac" && preferredOutputDevice=="saved-output","invalid settings replaced valid preferences");
+    fs::remove(settingsFile);defaultAudioQuality="128";preferredOutputDevice.clear();
     cloudTracks=Json::array();
     for(int i=0;i<63;++i) cloudTracks.push_back({{"id",std::to_string(i)},{"name","song"},{"token","PRIVATE"},{"path","PRIVATE"}});
     cloudTracks[50]["album"]="Sample Album";

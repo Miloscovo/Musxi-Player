@@ -12,7 +12,7 @@
 @theme inline {
   --color-background: var(--surface);
   --color-foreground: var(--ink);
-  --color-primary: var(--accent);
+  --color-primary: var(--accent-fill);
   --color-primary-foreground: var(--tw-primary-contrast);
   --color-secondary: var(--side);
   --color-secondary-foreground: var(--ink);

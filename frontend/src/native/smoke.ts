@@ -108,7 +108,7 @@ export async function verifyWebPage() {
     play: async (source, id) => { actions.push(`play:${id}`, `play:${source}:${id}`); },
   };
   try {
-    root.render(createElement(LibraryView, { library: fixtureLibrary, theme: 'light', onTheme: async () => {} }));
+    root.render(createElement(LibraryView, { library: fixtureLibrary, theme: 'light' }));
     await waitFor(() => !!fixture.querySelector('.playlist'));
     const favoritesCard=fixture.querySelector<HTMLButtonElement>('.playlist')!;
     if(favoritesCard.querySelector('strong')?.textContent!=='云端收藏整合' || !favoritesCard.querySelector('svg path'))throw new Error('Cloud favorites entry is missing or not first');
@@ -117,11 +117,11 @@ export async function verifyWebPage() {
     if(JSON.stringify(cardNames)!==JSON.stringify(['云端收藏整合','我喜欢','其他歌单']))throw new Error('Created playlist favorites ordering failed');
     if(favoritesCard.querySelector('svg')!.getBoundingClientRect().width!==44)throw new Error('Cloud favorites heart size is incorrect');
     fixtureLibrary.state={...fixtureLibrary.state!,connected:false};
-    root.render(createElement(LibraryView,{library:fixtureLibrary,theme:'light',onTheme:async()=>{}}));
+    root.render(createElement(LibraryView,{library:fixtureLibrary,theme:'light'}));
     await waitFor(()=>!Array.from(fixture.querySelectorAll('.playlist strong')).some(e=>e.textContent==='云端收藏整合'));
     if(!fixture.querySelector('.library-section-empty')?.textContent?.includes('登录后'))throw new Error('Signed-out library prompt missing');
     fixtureLibrary.state={...fixtureLibrary.state!,connected:true};
-    root.render(createElement(LibraryView,{library:fixtureLibrary,theme:'light',onTheme:async()=>{}}));
+    root.render(createElement(LibraryView,{library:fixtureLibrary,theme:'light'}));
     await waitFor(()=>fixture.querySelector('.playlist strong')?.textContent==='云端收藏整合');
     const playlistCard=Array.from(fixture.querySelectorAll<HTMLButtonElement>('.playlist')).find(card=>card.querySelector('strong')?.textContent===playlist.name)!;
     checkPlaylistText(playlistCard);
@@ -188,7 +188,7 @@ export async function verifyWebPage() {
     await waitFor(() => actions.includes('importLocal'), 'Import button did not dispatch');
     const localPlaylist={...playlist,id:'local-folder:1',name:'本地文件夹',editable:false};
     fixtureLibrary.state = { ...fixtureLibrary.state!, playlistId: 'musxi:local', playlistName: '本地音乐', localPlaylists:[localPlaylist], connected: false };
-    root.render(createElement(LibraryView, { library: fixtureLibrary, theme: 'light', onTheme: async () => {} }));
+    root.render(createElement(LibraryView, { library: fixtureLibrary, theme: 'light' }));
     await waitFor(() => Array.from(fixture.querySelectorAll('.playlist')).some(button=>button.textContent?.includes(localPlaylist.name)), 'Local folder card did not render');
     checkPlaylistText(Array.from(fixture.querySelectorAll('.playlist')).find(button=>button.textContent?.includes(localPlaylist.name))!);
     if(fixture.querySelector('.track-table'))throw new Error('Local home still shows the song table');
@@ -204,7 +204,7 @@ export async function verifyWebPage() {
     await waitFor(() => !!fixture.querySelector('.local-all'));
     Array.from(fixture.querySelectorAll<HTMLButtonElement>('.playlist')).find(button=>button.textContent?.includes(localPlaylist.name))!.click();
     fixtureLibrary.state={...fixtureLibrary.state!,playlistId:localPlaylist.id,playlistName:localPlaylist.name};
-    root.render(createElement(LibraryView, { library: fixtureLibrary, theme: 'light', onTheme: async () => {} }));
+    root.render(createElement(LibraryView, { library: fixtureLibrary, theme: 'light' }));
     await waitFor(() => !!fixture.querySelector('.song.track-row'), 'Local song did not render');
     fixture.querySelector<HTMLElement>('.song.track-row')!.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
     if (!actions.includes(`play:local:${song.id}`)) throw new Error('Local double-click did not play offline');
@@ -305,7 +305,7 @@ export async function verifyWebPage() {
     if(!document.querySelector('.player-action-menu')?.textContent?.includes('原始音质'))throw new Error('Local quality menu does not use original quality');
     document.querySelector<HTMLButtonElement>('.player-action-menu button')!.click();
     fixtureLibrary.state={...fixtureLibrary.state!,recent:[{...song,platform:'qq',platforms:['netease','kugou','qq']}]};
-    root.render(createElement(LibraryView,{library:fixtureLibrary,theme:'light',onTheme:async()=>{}}));
+    root.render(createElement(LibraryView,{library:fixtureLibrary,theme:'light'}));
     await waitFor(()=>!!fixture.querySelector('.sidebar'));
     Array.from(fixture.querySelectorAll<HTMLButtonElement>('.sidebar button')).find(button=>button.textContent?.includes('最近播放'))!.click();
     await waitFor(()=>fixture.querySelectorAll('.song-platform-tag').length===3);
@@ -338,21 +338,34 @@ export async function verifyWebPage() {
     await waitFor(() => fixture.querySelector('[data-slot=alert-description]')?.textContent === '导入完成', 'New message did not display');
   } finally { root.unmount(); fixture.remove(); }
   document.querySelector<HTMLButtonElement>('.settings-nav')?.click();
-  await waitFor(() => document.querySelectorAll('.theme-option').length === 3);
-  const cards = document.querySelectorAll<HTMLButtonElement>('.theme-option');
-  // Color changes preserve transparency; normalize a persisted glass theme first.
-  if (cards[2].getAttribute('aria-pressed') === 'true') {
-    cards[2].click();
-    await waitFor(() => cards[2].getAttribute('aria-pressed') === 'false');
+  await waitFor(() => document.querySelectorAll('.settings-sections button').length === 2);
+  const settingsTabs = document.querySelectorAll<HTMLButtonElement>('.settings-sections button');
+  if (Math.abs(settingsTabs[0].getBoundingClientRect().width-settingsTabs[1].getBoundingClientRect().width)>1
+    || document.querySelector('.settings-content h2')) throw new Error('Settings tabs or removed subtitle are incorrect');
+  settingsTabs[1].click();
+  await waitFor(() => !!document.querySelector('#audio-output-device'), 'Playback settings did not load');
+  if (document.querySelector('.settings-content h2') || document.querySelectorAll('#default-audio-quality option').length !== 3)
+    throw new Error('Playback settings structure is incorrect');
+  settingsTabs[0].click();
+  await waitFor(() => document.querySelectorAll('.appearance-segment').length === 3);
+  const cards = document.querySelectorAll<HTMLButtonElement>('.appearance-segment');
+  const toggle = document.querySelector<HTMLButtonElement>('.appearance-switch')!;
+  if (toggle.getAttribute('aria-checked') === 'true') {
+    toggle.click();
+    await waitFor(() => toggle.getAttribute('aria-checked') === 'false');
   }
   cards[0].click();
   await waitFor(() => document.documentElement.dataset.theme === 'light');
-  cards[2].click();
-  await waitFor(() => document.documentElement.dataset.theme === 'glass-light' && cards[0].getAttribute('aria-pressed') === 'true' && cards[2].getAttribute('aria-pressed') === 'true');
+  if (document.querySelector('.appearance-slider')) throw new Error('Disabled transparency did not hide slider');
+  toggle.click();
+  await waitFor(() => document.documentElement.dataset.theme === 'glass-light' && cards[0].getAttribute('aria-pressed') === 'true');
   cards[1].click();
   await waitFor(() => document.documentElement.dataset.theme === 'glass' && cards[1].getAttribute('aria-pressed') === 'true');
-  cards[2].click();
+  toggle.click();
   await waitFor(() => document.documentElement.dataset.theme === 'dark');
+  cards[2].click();
+  await waitFor(() => document.documentElement.dataset.theme === (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
+    && localStorage.getItem('musxi-appearance-mode') === 'system');
   cards[0].click();
   await waitFor(() => document.documentElement.dataset.theme === 'light');
   const state = await native.player.getState();
@@ -367,11 +380,11 @@ export async function verifyWebPage() {
       || document.activeElement !== buttons[1]) throw new Error('Incorrect shadcn close confirmation');
     dialog.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
     await waitFor(() => !document.querySelector('[data-slot=dialog-content]'));
-    const slider = document.querySelector<HTMLInputElement>('.transparency-slider');
+    toggle.click();
+    await waitFor(() => document.documentElement.dataset.theme === 'glass-light');
+    const slider = document.querySelector<HTMLInputElement>('.appearance-slider');
     if (!slider || slider.min !== '0' || slider.max !== '100') throw new Error('Missing transparency range');
     const saved = slider.value;
-    cards[2].click();
-    await waitFor(() => document.documentElement.dataset.theme === 'glass-light');
     const setRange = (value: number) => {
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(slider, String(value));
       slider.dispatchEvent(new Event('input', { bubbles: true }));
@@ -390,19 +403,28 @@ export async function verifyWebPage() {
         }
         // Header and title bar must not compound the page's background alpha.
         for (const [x, y] of [[window.innerWidth - 60, 70], [window.innerWidth - 160, 16], [10, 16]]) {
-          if (Math.abs(Number(await pixel(x, y)) - expected) > 1)
-            throw new Error('Header transparency differs from page background');
+          let alpha = Number(await pixel(x, y));
+          while (Math.abs(alpha - expected) > 1 && Date.now() < end) {
+            await new Promise(resolve => setTimeout(resolve, 30));
+            alpha = Number(await pixel(x, y));
+          }
+          if (Math.abs(alpha - expected) > 1)
+            throw new Error(`Header transparency differs at ${x},${y}: ${alpha}, expected ${expected}`);
         }
-        // Preview swatches are opaque controls even when the page background is not.
-        const preview = document.querySelector('.theme-swatch')!.getBoundingClientRect();
-        if (await pixel(Math.round(preview.left + 10), Math.round(preview.top + 40)) !== 255)
+        // Selected controls stay opaque while the window background becomes transparent.
+        const preview = themeCard.getBoundingClientRect();
+        if (await pixel(Math.round(preview.left + 10), Math.round(preview.top + 10)) !== 255)
           throw new Error('Transparency faded controls');
       }
     }
     setRange(Number(saved));
     cards[0].click();
     await waitFor(() => document.documentElement.dataset.theme === 'glass-light');
-    cards[2].click();
+    toggle.click();
+    await waitFor(() => document.documentElement.dataset.theme === 'light' && !document.querySelector('.appearance-slider'));
+    toggle.click();
+    await waitFor(() => document.querySelector<HTMLInputElement>('.appearance-slider')?.value === saved);
+    toggle.click();
     await waitFor(() => document.documentElement.dataset.theme === 'light');
     const maximized = await native.window.maximize();
     if (!maximized.maximized) throw new Error('Test window did not maximize');

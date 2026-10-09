@@ -13,17 +13,14 @@ import { Tooltip, TooltipTrigger, TooltipProvider, TooltipContent } from '../com
 import { ContextMenu, ContextMenuTrigger, ContextMenuContent, ContextMenuItem,
   ContextMenuSub, ContextMenuSubTrigger, ContextMenuSubContent } from '../components/ui/context-menu';
 
-type ThemeOption = 'light' | 'dark' | 'glass';
+import AppearanceSettings from '../components/AppearanceSettings';
+import PlaybackSettings from '../components/PlaybackSettings';
+import type { Appearance } from '../composables/appearance';
 type LibrarySection = 'created' | 'saved' | 'local';
 const librarySections: { id: LibrarySection; label: string; icon: string }[] = [
   { id: 'created', label: '自建歌单', icon: 'M12 8v8M8 12h8M22 12a10 10 0 1 1-20 0 10 10 0 0 1 20 0Z' },
   { id: 'saved', label: '收藏歌单', icon: 'm12 3 2.8 5.7 6.3.9-4.6 4.5 1.1 6.3-5.6-3-5.6 3 1.1-6.3L3 9.6l6.3-.9L12 3Z' },
   { id: 'local', label: '本地音乐', icon: 'M3 7V5a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z' },
-];
-const themes: { id: ThemeOption; label: string; description: string }[] = [
-  { id: 'light', label: '浅色', description: '明亮、清爽的白色界面' },
-  { id: 'dark', label: '深色', description: '低亮度的深色界面' },
-  { id: 'glass', label: '半透明', description: '与浅色或深色搭配使用' },
 ];
 function appendUnique(previous: Track[], incoming?: Track[]) {
   if (!incoming?.length) return previous;
@@ -31,8 +28,8 @@ function appendUnique(previous: Track[], incoming?: Track[]) {
   for (const track of incoming) { const index=indices.get(track.id); if(index!==undefined)rows[index]=track;else {indices.set(track.id,rows.length);rows.push(track);} }
   return rows;
 }
-export default function LibraryView({ library: lib, theme, onTheme, transparency = 50, onTransparency }: {
-  library: ReturnType<typeof useLibrary>; theme: Theme; onTheme: (next: Theme) => Promise<void>;
+export default function LibraryView({ library: lib, theme, appearance, onAppearance, transparency = 50, onTransparency }: {
+  library: ReturnType<typeof useLibrary>; theme: Theme; appearance?: Appearance; onAppearance?: (next: Appearance) => void;
   transparency?: number; onTransparency?: (value: number) => void;
 }) {
   const { state, error, pending, page } = lib;
@@ -40,6 +37,7 @@ export default function LibraryView({ library: lib, theme, onTheme, transparency
   const [view, setView] = useState<'library' | 'search' | 'settings' | 'recent'>('library');
   const [query, setQuery] = useState(''); const [showTracks, setShowTracks] = useState(false);
   const [librarySection, setLibrarySection] = useState<LibrarySection>('created');
+  const [settingsSection, setSettingsSection] = useState<'appearance' | 'playback'>('appearance');
   const [playlistQuery, setPlaylistQuery] = useState('');
   const content = useRef<HTMLDivElement>(null);
   const songScroll = useRef<HTMLDivElement>(null);
@@ -49,8 +47,6 @@ export default function LibraryView({ library: lib, theme, onTheme, transparency
   const loadingMore = useRef(false); const [scrollbarVisible, setScrollbarVisible] = useState(false);
   const [account, setAccount] = useState(false); const [menuId, setMenuId] = useState('');
   const [accountPlatform, setAccountPlatform] = useState<MusicPlatform | null>(null);
-  const isDark = theme === 'dark' || theme === 'glass';
-  const translucent = theme === 'glass' || theme === 'glass-light';
   const isLocal = view === 'library' && librarySection === 'local';
   const visiblePlaylists = state?.playlists.filter(list => librarySection === 'created' ? list.editable
     : librarySection === 'saved' ? !list.editable : false).sort((a,b)=>librarySection==='created' ? Number(!!b.favorite)-Number(!!a.favorite) : 0) ?? [];
@@ -94,12 +90,6 @@ export default function LibraryView({ library: lib, theme, onTheme, transparency
     observer.observe(element);
     return () => observer.disconnect();
   }, [virtualSongs]);
-  function selectedTheme(id: ThemeOption) { return id === 'glass' ? translucent : id === 'dark' ? isDark : !isDark; }
-  function chooseTheme(id: ThemeOption) {
-    const dark = id === 'glass' ? isDark : id === 'dark';
-    const glass = id === 'glass' ? !translucent : translucent;
-    void onTheme(glass ? (dark ? 'glass' : 'glass-light') : (dark ? 'dark' : 'light'));
-  }
   useLayoutEffect(() => {
     const changed = state?.playlistId !== previousPlaylist.current;
     previousPlaylist.current = state?.playlistId;
@@ -195,6 +185,12 @@ export default function LibraryView({ library: lib, theme, onTheme, transparency
         </form>}
       </div></header>}
       {view !== 'recent' && isDemoMode() && <p className="demo-notice">演示模式：播放进度与导入文件夹均为模拟，不播放真实音频、不读取真实文件、不登录真实账号；刷新页面后重置。</p>}
+      {view === 'settings' && <nav className="library-sections settings-sections" aria-label="设置分类">
+        {([{ id: 'appearance', label: '外观', icon: 'M12 3a9 9 0 1 0 0 18h1a2 2 0 0 0 1.5-3.3l-.2-.2a1.5 1.5 0 0 1 1.1-2.5H18a3 3 0 0 0 3-3 9 9 0 0 0-9-9ZM8 8a.8.8 0 1 0 0-1.6.8.8 0 0 0 0 1.6Zm5-1a.8.8 0 1 0 0-1.6.8.8 0 0 0 0 1.6Zm4 4a.8.8 0 1 0 0-1.6.8.8 0 0 0 0 1.6ZM6 13a.8.8 0 1 0 0-1.6.8.8 0 0 0 0 1.6Z' },
+          { id: 'playback', label: '播放', icon: 'M11 4 6 8H3v8h3l5 4V4Zm4 4a6 6 0 0 1 0 8m3-11a10 10 0 0 1 0 14' }] as const).map(section =>
+          <Button key={section.id} variant="secondary" className="library-section" aria-pressed={settingsSection === section.id}
+            onClick={() => { resetScroll();setSettingsSection(section.id); }}><svg className="icon" viewBox="0 0 24 24" aria-hidden="true"><path d={section.icon}/></svg>{section.label}</Button>)}
+      </nav>}
       {view === 'library' && !showTracks && <nav className="library-sections" aria-label="音乐库分类">
         {librarySections.map(section => <Button key={section.id} variant="secondary" className="library-section"
           aria-pressed={librarySection === section.id} onClick={() => {
@@ -223,14 +219,7 @@ export default function LibraryView({ library: lib, theme, onTheme, transparency
           <small>包含子文件夹，重复文件不会重复导入；具体编码须受当前解码器支持。</small>
         </TooltipContent></Tooltip>
       </TooltipProvider></div>}
-      {view === 'settings' ? <section className="settings-content" aria-label="外观设置"><h2>外观</h2><p>选择适合你的界面主题</p>
-        <div className="theme-options">{themes.map(option => <div key={option.id} className="theme-card"><Button variant="unstyled" className={`theme-option${selectedTheme(option.id) ? ' selected' : ''}`} aria-pressed={selectedTheme(option.id)} onClick={() => chooseTheme(option.id)}>
-          <span className={`theme-swatch ${option.id}${option.id === 'glass' && !isDark ? ' glass-light' : ''}`} aria-hidden="true"><span/></span>
-          <strong>{option.label}</strong><small>{option.description}</small>
-        </Button>{option.id === 'glass' && <input className="transparency-slider" type="range" min="0" max="100" step="1" value={transparency}
-          aria-label="背景透明度" aria-valuetext={`${transparency}%透明`} title={`背景透明度 ${transparency}%`}
-          onChange={event => onTransparency?.(Number(event.currentTarget.value))} />}</div>)}</div>
-      </section> : view === 'library' && !showTracks ? <>
+      {view === 'settings' ? settingsSection === 'playback' ? <PlaybackSettings/> : <AppearanceSettings appearance={appearance ?? { mode: theme === 'dark' || theme === 'glass' ? 'dark' : 'light', transparent: theme === 'glass' || theme === 'glass-light', tone: 'green' }} onAppearance={onAppearance ?? (() => {})} transparency={transparency} onTransparency={onTransparency ?? (() => {})}/> : view === 'library' && !showTracks ? <>
         {!isLocal && <>
           <div className="playlist-grid">{librarySection === 'created' && state?.connected && <Button variant="ghost" className="playlist" disabled={busy || !state?.connected} onClick={() => open('musxi:cloud-favorites')}><div className="cover placeholder" aria-hidden="true"><svg className="playlist-heart size-11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1.1-1.1a5.5 5.5 0 0 0-7.8 7.8L12 21l8.8-8.6a5.5 5.5 0 0 0 0-7.8Z"/></svg></div><div className="playlist-info"><strong>云端收藏整合</strong><span>{state?.favoritesCount ?? (state?.playlistId === 'musxi:cloud-favorites' ? state.trackCount : 0)} 首</span></div></Button>}{visiblePlaylists.map(list => <Button variant="ghost" key={list.id} className="playlist" disabled={busy} onClick={() => open(list.id)}><CoverImage url={list.cover}/><div className="playlist-info"><strong>{list.name}</strong><span>{list.count} 首{list.platform && ` · ${platformNames[list.platform]}`}</span></div></Button>)}</div>
           {!state?.connected ? <div className="library-section-empty"><p>登录后查看你的音乐库。</p><Button onClick={() => {setAccountPlatform(null);setAccount(true);}}>扫码登录</Button></div>

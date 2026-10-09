@@ -21,19 +21,35 @@ int main(int argc,char** argv) {
         require(GetTickCount64()-before<100,"load blocked Application thread");
         auto s=waitState([](auto s){return s.playing && s.positionMs>50;});
         require(s.trackId=="first" && events>0,"native state/event identity");
+        const auto preferenceBefore=audioBackend().snapshot();
+        require(bool(audioBackend().setOutputDevicePreference(L"missing-device")),"output preference rejected");
+        require(audioBackend().snapshot().pending,"device change did not schedule immediate output reload");
+        s=waitState([](auto s){return !s.pending && s.playing;});
+        require(audioBackend().snapshot().generation==preferenceBefore.generation && s.positionMs>=preferenceBefore.positionMs && s.positionMs<preferenceBefore.positionMs+500
+            && s.trackId=="first" && s.volumePercent==10,"device change lost track, position, volume or playing intent");
         musxi::applicationPlayerCommand(musxi::PlayerCommand::Pause);
         waitState([](auto s){return !s.pending && !s.playing;});
         for(unsigned target:{400,1800,250,1100})musxi::applicationPlayerCommand(musxi::PlayerCommand::Seek,target);
         s=waitState([](auto s){return !s.pending && s.positionMs==1100;});
         require(!s.playing && !s.requestedPlaying,"latest seek lost paused intent");
+        require(bool(audioBackend().setOutputDevicePreference(L"")),"default output switch rejected");
+        s=waitState([](auto s){return !s.pending && s.positionMs==1100;});
+        require(!s.playing && !s.requestedPlaying && s.volumePercent==10,"device switch lost paused state or volume");
+        // A pending seek must win over the old output clock during device reload.
+        audioBackend().seek(1800);audioBackend().setOutputDevicePreference(L"missing-device");
+        s=waitState([](auto s){return !s.pending && s.positionMs==1800;});
+        require(!s.playing,"device switch autoplayed a pending paused seek");
+        audioBackend().setOutputDevicePreference(L"");
+        s=waitState([](auto s){return !s.pending && s.positionMs==1800;});
         musxi::applicationPlayerCommand(musxi::PlayerCommand::Resume);
         waitState([](auto s){return s.playing;});
         require(bool(loadAndPlayAudio((folder/"long.wma").wstring(),"old")),"long load");
         audioBackend().seek(170000);
         require(bool(loadAndPlayAudio((folder/"source.flac").wstring(),"latest")),"replacement load");
+        audioBackend().setOutputDevicePreference(L"missing-device");
         audioBackend().pause();
         s=waitState([](auto s){return !s.pending && s.trackId=="latest";});
-        require(!s.playing,"old resume overwrote latest pause");
+        require(!s.playing && s.positionMs<500,"device switch during load retained old position or lost latest pause");
         closeAudio();
         // Exercise cloud download completion, with no login or network request.
         const auto cache=folder/"application-cache.wav";fs::copy_file(folder/"source.wav",cache,fs::copy_options::overwrite_existing);

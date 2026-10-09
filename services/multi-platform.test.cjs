@@ -124,3 +124,22 @@ test('song menus query signed-in matching providers and preserve the actual-sour
   adapters.netease.run=async()=>{throw Error('private credential data');};
   const failed=await manager.run({op:'song_menu',id:'original',track});assert.equal(failed.providers.length,1);assert.equal(failed.warnings.length,1);assert.ok(!JSON.stringify(failed).includes('private'));
 });
+
+test('default quality falls down without changing explicit per-song selection',async()=>{
+ const seen=[];
+ const manager=new MultiPlatform({kugou:{async run(r){seen.push(r.quality);if(r.quality==='flac')throw Error('Unavailable');return {track:{id:'one'},path:'fixture',quality:r.quality};}}});
+ const result=await manager.run({op:'audio',id:'one',defaultQuality:'flac'});
+ assert.equal(result.quality,'320');assert.deepEqual(seen,['flac','320']);
+ seen.length=0;
+ await assert.rejects(manager.run({op:'audio',id:'one',quality:'flac',defaultQuality:'128'}),/Unavailable/);
+ assert.deepEqual(seen,['flac']);
+});
+test('default quality falls down on each source and preserves platform fallback',async()=>{
+ const seen=[];
+ const manager=new MultiPlatform(Object.fromEntries(['netease','kugou'].map(p=>[p,{async run(r){seen.push([p,r.quality]);if(p==='netease' || r.quality!=='128')throw Error('Unavailable');return {track:{id:'one'},path:'fixture',quality:r.quality};}}])));
+ manager.accounts={netease:{connected:true},kugou:{connected:true}};
+ const result=await manager.run({op:'audio',id:'one',sources:[{id:'netease:one'},{id:'one'}],defaultQuality:'flac'});
+ assert.equal(result.platform,'kugou');assert.equal(result.quality,'128');
+ assert.deepEqual(seen,[['netease','flac'],['netease','320'],['netease','128'],['kugou','flac'],['kugou','320'],['kugou','128']]);
+ await assert.rejects(manager.run({op:'audio',id:'one',defaultQuality:'bad'}),/无效默认音质/);
+});
