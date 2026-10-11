@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { useWindow } from './composables/useWindow';
 import CoverImage from './components/CoverImage';
 import { usePlayerState } from './composables/usePlayerState';
@@ -10,6 +10,7 @@ import MessageAlerts from './components/MessageAlerts';
 import QueuePanel from './components/QueuePanel';
 import PlayerActions from './components/PlayerActions';
 import PlaybackPlatform from './components/PlaybackPlatform';
+import LyricsView from './views/LyricsView';
 
 export default function App() {
   const shell = useWindow(); const library = useLibrary();
@@ -20,6 +21,8 @@ export default function App() {
   const lastVolume = useRef(50);
   useEffect(() => { if (state && state.volumePercent > 0) lastVolume.current = state.volumePercent; }, [state?.volumePercent]);
   const [closeOpen, setCloseOpen] = useState(false);
+  const [lyricsOpen, setLyricsOpen] = useState(false);
+  const closeLyrics = useCallback(() => setLyricsOpen(false), []);
   const [actionNotice, setActionNotice] = useState({ text: '', token: '0' });
   const showActionNotice = (text: string) => setActionNotice(previous => ({ text, token: String(Number(previous.token) + 1) }));
   const trayButton = useRef<HTMLButtonElement>(null);
@@ -99,14 +102,22 @@ export default function App() {
         </DialogContent>
       </Dialog>
     </div></div>}
-    <LibraryView library={library} theme={shell.theme} appearance={shell.appearance} onAppearance={shell.setAppearance} transparency={shell.transparency} onTransparency={shell.setTransparency} />
+    <div className="app-body">
+      <div className="library-layer" inert={lyricsOpen}><LibraryView library={library} theme={shell.theme} appearance={shell.appearance} onAppearance={shell.setAppearance} transparency={shell.transparency} onTransparency={shell.setTransparency} /></div>
+      {lyricsOpen && <LyricsView trackId={state?.opened ? state.trackId : ''} now={currentTrack} positionMs={state?.positionMs ?? 0}
+        canSeek={connected && !!state?.opened && !!state.durationMs} onSeek={positionMs => void seek(positionMs)} onClose={closeLyrics} />}
+    </div>
     <section className="player" aria-label="播放器" aria-busy={loading}>
       {state && <input ref={seekInput} className="seek-bar" type="range" min="0" max={Math.max(0, state.durationMs - 1)}
         value={seekDraft ?? state.positionMs} title={time(seekDraft ?? state.positionMs)}
         style={{ '--progress': `${state.durationMs ? (seekDraft ?? state.positionMs) / state.durationMs * 100 : 0}%` } as CSSProperties}
         disabled={!connected || !state.opened || !state.durationMs}
         onInput={event => setSeekDraft(Number(event.currentTarget.value))} aria-label="歌曲进度" />}
-      <div className="player-track"><CoverImage url={currentTrack?.cover || ''} />
+      <div className="player-track"><Button variant="unstyled" className="lyrics-toggle" aria-expanded={lyricsOpen}
+          aria-label={lyricsOpen ? '收起歌词页' : '展开歌词页'} title={lyricsOpen ? '收起歌词' : '查看歌词'} onClick={() => setLyricsOpen(open => !open)}>
+          <CoverImage url={currentTrack?.cover || ''} />
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d={lyricsOpen ? 'm6 9 6 6 6-6' : 'm6 15 6-6 6 6'}/></svg>
+        </Button>
         <div className="track"><div className="playback-title"><h2 id="playback" title={currentTrack?.name}>{currentTrack?.name || '尚未选择歌曲'}</h2>
           <PlaybackPlatform library={library} currentId={state?.opened ? state.trackId : ''}/></div>
           <p>{currentTrack?.artist || status}</p></div>

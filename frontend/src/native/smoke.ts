@@ -347,8 +347,10 @@ export async function verifyWebPage() {
   if (document.querySelector('.settings-content h2') || document.querySelectorAll('#default-audio-quality option').length !== 3)
     throw new Error('Playback settings structure is incorrect');
   settingsTabs[0].click();
-  await waitFor(() => document.querySelectorAll('.appearance-segment').length === 3);
-  const cards = document.querySelectorAll<HTMLButtonElement>('.appearance-segment');
+  // Tone buttons share .appearance-segment; only the mode group is under test here.
+  const modeSegments = '[aria-labelledby=appearance-mode-label] .appearance-segment';
+  await waitFor(() => document.querySelectorAll(modeSegments).length === 3);
+  const cards = document.querySelectorAll<HTMLButtonElement>(modeSegments);
   const toggle = document.querySelector<HTMLButtonElement>('.appearance-switch')!;
   if (toggle.getAttribute('aria-checked') === 'true') {
     toggle.click();
