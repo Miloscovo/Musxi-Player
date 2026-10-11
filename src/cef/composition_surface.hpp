@@ -4,6 +4,7 @@
 #include <dcomp.h>
 #include <wrl/client.h>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <vector>
 
@@ -36,7 +37,10 @@ public:
     bool present(HWND window) {
         if(view_.empty() || IsIconic(window))return true;
         RECT rect{};GetClientRect(window,&rect);
-        if(rect.right!=width_ || rect.bottom!=height_)return true;
+        // CEF sizes frames from rounded DIPs, so fractional scales (150%) can
+        // differ from the client by a pixel or two. Only skip stale resize frames.
+        const int slack=MulDiv(2,GetDpiForWindow(window),96);
+        if(std::abs(rect.right-width_)>slack || std::abs(rect.bottom-height_)>slack)return true;
         if(!composition_ && !initialize(window))return false;
         if(!bitmap_) {
             if(FAILED(composition_->CreateSurface(width_,height_,DXGI_FORMAT_B8G8R8A8_UNORM,DXGI_ALPHA_MODE_PREMULTIPLIED,&bitmap_)) ||
