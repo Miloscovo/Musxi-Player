@@ -98,3 +98,10 @@ test('lyrics replies are validated before reaching the UI', () => {
     { lines: [{ timeMs: -1, text: 'x' }] }, { lines: [{ timeMs: 1 }] }, { lines: 'x' }, { id: 7 }])
     assert.throws(() => parseLyrics({ ...reply, ...bad }), { code: 502 });
 });
+
+test('account membership accepts legacy snapshots and validates expiry before rendering',()=>{
+  const account={platform:'netease',name:'网易云音乐',connected:true,user:'Fixture',error:''};
+  assert.equal(parseLibraryState({...snapshot,accounts:[account]}).accounts?.[0].membership,undefined);
+  assert.deepEqual(parseLibraryState({...snapshot,accounts:[{...account,membership:{name:'黑胶 VIP',expiresAt:1800000000000}}]}).accounts?.[0].membership,{name:'黑胶 VIP',expiresAt:1800000000000});
+  for(const expiresAt of [NaN,-1,'tomorrow',253402300800000])assert.throws(()=>parseLibraryState({...snapshot,accounts:[{...account,membership:{name:'VIP',expiresAt}}]}),{code:502});
+});

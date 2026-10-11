@@ -44,12 +44,18 @@ class NeteaseAdapter {
     case 'song_update':{this.auth();const t=this.tracks.get(r.id);if(!t)throw Error('歌曲已失效');const lists=await this.sync();let p;if(r.kind==='favorite'){await this.api('like',{id:t.serviceId,like:String(r.enabled)});p=lists.find(p=>p.favorite && p.editable);const liked=await this.api('likelist',{uid:this.profile.id});if((liked.ids || []).map(String).includes(t.serviceId)!==r.enabled)throw Error('操作已提交，暂未确认收藏结果，请稍后同步');}else {p=this.lists.get(r.playlistId);if(!p?.editable)throw Error('目标歌单不可编辑');await this.api('playlist_tracks',{op:'add',pid:p.serviceId,tracks:t.serviceId});}if(!p)throw Error('未找到对应歌单，请重新同步');const result=await this.playlist(p.id);if(r.kind==='add' && !result.tracks.some(row=>row.id===t.id))throw Error('操作已提交，暂未确认添加结果');return {...result,playlists:await this.sync(),message:r.kind==='favorite'?(r.enabled?'已收藏':'已取消收藏'):'已添加到歌单'};}
     case 'logout':this.cookie='';this.profile=null;this.key='';this.lists.clear();return {connected:false};
     case 'avatar':{this.auth();const b=await this.api('login_status');return {url:b.data?.profile?.avatarUrl || ''};}
+    case 'membership':{
+      this.auth();const b=await this.api('vip_info',{uid:this.profile.id});
+      const options=[['redplus','超级黑胶 VIP'],['associator','黑胶 VIP'],['musicPackage','音乐包']];
+      for(const [key,name] of options){const expiresAt=b.data?.[key]?.expireTime;if(Number.isFinite(expiresAt) && expiresAt>Date.now() && expiresAt<=253402300799999)return {name,expiresAt};}
+      return {name:options.every(([key])=>Number.isFinite(b.data?.[key]?.expireTime) && b.data[key].expireTime<=253402300799999)?'非会员':'会员状态暂不可用'};
+    }
     default:throw Error('不支持的网易云操作');
   }}
 }
 function liveNetease(){
   const root=path.join(__dirname,'vendor/NeteaseCloudMusicApi-2aab9957dfd5231e5b192aecdb177f93ace4c92e');
-  const allowed=new Set(['login_qr_key','login_qr_create','login_qr_check','login_status','user_playlist','playlist_detail','song_detail','cloudsearch','song_url_v1','like','likelist','playlist_tracks']);
+  const allowed=new Set(['login_qr_key','login_qr_create','login_qr_check','login_status','user_playlist','playlist_detail','song_detail','cloudsearch','song_url_v1','like','likelist','playlist_tracks','vip_info']);
   let ready;
   async function initialize(){
     const anonymous=path.join(require('node:os').tmpdir(),'anonymous_token');
@@ -68,6 +74,8 @@ function liveNetease(){
     else {const anonymous=path.join(require('node:os').tmpdir(),'anonymous_token');try{await fs.writeFile(anonymous,'',{flag:'wx'});}catch(error){if(error.code!=='EEXIST')throw error;}}
     const {cookieToJson}=require(path.join(root,'util/index.js'));
     const request=require(path.join(root,'util/request.js'));
+    if(name==='vip_info')return request('/api/music-vip-membership/front/vip/info',{userId:params.uid || ''},
+      require(path.join(root,'util/option.js'))({...params,cookie:cookieToJson(params.cookie || '')},'weapi'));
     return require(path.join(root,'module',name+'.js'))({...params,unblock:'false',cookie:cookieToJson(params.cookie || '')},request);
   });
 }

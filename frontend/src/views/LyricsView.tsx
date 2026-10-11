@@ -21,7 +21,7 @@ export default function LyricsView({ trackId, now, positionMs, canSeek, onSeek, 
   useEffect(() => {
     function keyboard(event: KeyboardEvent) {
       // Popovers and dialogs handle their own Escape first.
-      if (event.key !== 'Escape' || document.querySelector('[role=dialog]')) return;
+      if (event.key !== 'Escape' || event.defaultPrevented || document.querySelector('[role=dialog]')) return;
       event.preventDefault(); onClose();
     }
     window.addEventListener('keydown', keyboard);

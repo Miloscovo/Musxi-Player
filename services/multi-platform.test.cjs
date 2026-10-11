@@ -143,3 +143,16 @@ test('default quality falls down on each source and preserves platform fallback'
  assert.deepEqual(seen,[['netease','flac'],['netease','320'],['netease','128'],['kugou','flac'],['kugou','320'],['kugou','128']]);
  await assert.rejects(manager.run({op:'audio',id:'one',defaultQuality:'bad'}),/无效默认音质/);
 });
+
+test('membership is platform scoped and image failures never erase it or sign out',async()=>{
+  const {manager,adapters}=fixture();await manager.run({op:'init',session:{platform:'multi',accounts:{kugou:{},netease:{},qq:{}}}});
+  for(const platform of ['kugou','netease','qq'])adapters[platform].run=async r=>{
+    if(r.op==='membership'){if(platform==='qq')throw Error('private response');return {name:platform==='kugou'?'非会员':'黑胶 VIP',...(platform==='netease'?{expiresAt:1800000000000}:{})};}
+    throw Error('picture unavailable');
+  };
+  let result=await manager.run({op:'avatar'});
+  assert.deepEqual(result.accounts.map(a=>a.membership),[{name:'非会员'},{name:'黑胶 VIP',expiresAt:1800000000000},{name:'会员状态暂不可用'}]);
+  assert.ok(result.accounts.every(a=>a.connected));assert.ok(!JSON.stringify(result).includes('private response'));
+  adapters.netease.run=async()=>({});result=await manager.run({op:'logout',platform:'netease'});
+  assert.equal(result.accounts.find(a=>a.platform==='netease').membership,undefined);
+});

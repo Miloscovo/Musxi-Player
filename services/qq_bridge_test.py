@@ -7,6 +7,7 @@ from types import SimpleNamespace as S
 from unittest.mock import AsyncMock
 from qq_bridge import Adapter, Credential, QRCodeLoginEvents, PublicError
 from qqmusic_api.core.response import snapshot_payload
+from qqmusic_api.models.user import UserVipInfoResponse
 from niquests.cookies import RequestsCookieJar
 
 class CookieSnapshotTests(unittest.TestCase):
@@ -45,5 +46,28 @@ class QQTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(PublicError): await self.a.run({'op':'tracks','id':'qq:1'})
         self.a.client.song.get_song_urls=AsyncMock(return_value=S(data=[S(result=1,purl='')]))
         with self.assertRaises(PublicError): await self.a.audio(S(mid='song',file=S(media_mid='media'),type=0),'128')
+
+    async def test_membership_requires_login_and_distinguishes_missing_fields(self):
+        with self.assertRaises(PublicError): await self.a.run({'op':'membership'})
+        self.a.profile={'id':'synthetic'}
+        self.a.client.user.get_vip_info=AsyncMock(return_value=UserVipInfoResponse.model_validate({}))
+        with self.assertRaises(PublicError): await self.a.run({'op':'membership'})
+        self.a.client.user.get_vip_info=AsyncMock(return_value=UserVipInfoResponse.model_validate({'svip':0}))
+        with self.assertRaises(PublicError): await self.a.run({'op':'membership'})
+        self.a.client.user.get_vip_info=AsyncMock(return_value=UserVipInfoResponse.model_validate({'identity':{'vip':0,'HugeVip':0},'svip':0}))
+        self.assertEqual(await self.a.run({'op':'membership'}),{'name':'非会员'})
+
+    async def test_membership_names_and_expiry_units(self):
+        self.a.profile={'id':'synthetic'}
+        for payload, expected in [
+            ({'svip':1,'userinfo':{'expire':1800000000}}, {'name':'超级会员','expiresAt':1800000000000}),
+            ({'identity':{'HugeVip':1,'HugeVipEnd':'2028-01-01'}}, {'name':'豪华绿钻','expiresAt':1830268800000}),
+            ({'identity':{'vip':1},'userinfo':{'expire':1800000000000}}, {'name':'绿钻会员','expiresAt':1800000000000}),
+            ({'identity':{'HugeVip':1,'HugeVipEnd':'20280101'}}, {'name':'豪华绿钻','expiresAt':1830268800000}),
+            ({'identity':{'HugeVip':1,'HugeVipEnd':'invalid'}}, {'name':'豪华绿钻'}),
+        ]:
+            with self.subTest(payload=payload):
+                self.a.client.user.get_vip_info=AsyncMock(return_value=UserVipInfoResponse.model_validate(payload))
+                self.assertEqual(await self.a.run({'op':'membership'}),expected)
 
 if __name__=='__main__': unittest.main()

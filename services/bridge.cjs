@@ -87,7 +87,7 @@ function responseShape(value, depth = 0) {
 function playlist(item) {
   const id = text(item.listid);
   if (!id) throw new Error('歌单缺少标识，无法完整同步');
-  return { id, editable: Number(item.is_edit)===1, favorite: Number(item.is_def)===2, cover: cover(item), name: text(item.name) || '未命名歌单', count: Number(item.count ?? item.songcount ?? item.song_count ?? 0), globalId: text(item.global_collection_id), owner: text(item.list_create_userid) };
+  return { id, editable: Number(item.is_edit)===1, favorite: Number(item.is_def)===2, automaticCover: item.is_custom_pic===0 || item.is_custom_pic==='0', cover: cover(item), name: text(item.name) || '未命名歌单', count: Number(item.count ?? item.songcount ?? item.song_count ?? 0), globalId: text(item.global_collection_id), owner: text(item.list_create_userid) };
 }
 function track(item) {
   // Responses vary between cloud-list generations; preserve IDs for playback.
@@ -154,6 +154,18 @@ class Adapter {
   auth() { if (!this.cookie.token || !this.cookie.userid) throw new Error('请先扫码登录酷狗概念版'); }
   async refreshPlaylists() {
     this.auth();const list=await this.pages('user_playlist', {}, ['info','lists'], playlist);
+    for(const p of list.filter(p=>p.editable && (!p.cover || p.automaticCover) && p.count>0)) {
+      try {
+        if(p.favorite) {
+          const first=(await this.playlistTracks(p))[0];
+          if(first?.cover)p.cover=first.cover;
+        } else {
+          const body=await this.api('playlist_track_all_new',{listid:p.id,page:1,pagesize:1});
+          const first=arrayAt(body.data,['info','songs','lists'])[0];
+          if(first && cover(first))p.cover=cover(first);
+        }
+      } catch { /* Missing artwork must not prevent playlist synchronization. */ }
+    }
     this.knownPlaylists=new Map(list.map(p=>[p.id,p]));return list;
   }
   async playlistTracks(p) {
@@ -267,6 +279,18 @@ class Adapter {
         }));
         return { images };
       }
+      case 'membership': {
+        this.auth();const data=(await this.api('user_vip_detail')).data;
+        const active=vipState(data);
+        const result={name:active===true?'酷狗 VIP':active===false?'非会员':'会员状态暂不可用'};
+        const entitlement=data?.busi_vip?.find(v=>v.busi_type==='concept' && vipFlag(v.is_vip)===1) || data;
+        const end=entitlement?.vip_end_time;
+        if(active===true && typeof end==='string' && /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(end)){
+          const expiresAt=Date.parse(end.replace(' ','T')+'+08:00');
+          if(Number.isFinite(expiresAt) && expiresAt>Date.now() && expiresAt<=253402300799999)result.expiresAt=expiresAt;
+        }
+        return result;
+      }
       case 'avatar': {
         this.auth();
         const body = await this.api('user_detail');
@@ -355,8 +379,7 @@ class Adapter {
       }
       case 'sync': {
         this.auth();
-        const list = await this.pages('user_playlist', {}, ['info', 'lists'], playlist);
-        this.knownPlaylists = new Map(list.map(p => [p.id, p]));
+        const list = await this.refreshPlaylists();
         return { playlists: list, profile: this.profile, syncedAt: new Date().toISOString(), session: this.session() };
       }
       case 'tracks': {

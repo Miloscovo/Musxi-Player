@@ -48,7 +48,9 @@ When adding a new production dependency:
 
 ## AI collaboration attribution for future commits
 
-- For new commits containing development work actually assisted by OpenAI Codex, explicitly record that AI contribution in the commit message.
-- Preserve the actual developer's Git Author identity. Do not rewrite existing commit history or apply this policy retroactively.
-- Prefer a standard `Co-authored-by` trailer only when a Codex-associated email address has been verified. Do not invent or use unverified OpenAI email addresses or GitHub identities, and do not present Codex as an independent human contributor.
-- If no verified Codex-associated email is available, add the exact line `AI-assisted-by: OpenAI Codex` to the commit body.
+- For future commits that OpenAI Codex helps create and that contain substantive Codex-assisted development, append exactly one `Co-authored-by: Codex <codex@openai.com>` trailer, as explicitly requested by the project owner. Do not add it to commits without such assistance.
+- Keep the trailer at the end of the commit message, with one blank line between the body and trailer block. Preserve other contributors' trailers; do not duplicate the Codex trailer if it is already present.
+- If native Codex attribution supplies a different Codex trailer, normalize it to the exact project-owner-requested trailer before creating the new commit. Do not also add the former `AI-assisted-by: OpenAI Codex` fallback.
+- Preserve the actual developer's Git `user.name`, `user.email`, Author, and Committer. Do not rewrite existing commits, amend pushed history, or force-push to apply this policy retroactively.
+- Before creating a qualifying commit, check its prepared message with `git interpret-trailers --parse` and confirm the exact Codex trailer appears once. After creating it, inspect `git log -1 --format=fuller` and the message to verify the primary identities remain unchanged and the trailer is present once.
+- This is AI collaboration attribution, not a claim that Codex is an independent human contributor. The requested email's association with a GitHub account must be verified separately; do not claim that contributor-list visibility is guaranteed.

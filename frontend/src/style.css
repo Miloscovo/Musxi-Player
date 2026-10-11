@@ -117,6 +117,11 @@ main.app-shell { --sidebar-width:clamp(190px,15.5vw,240px); overflow:hidden; bor
 .playlist-grid .playlist { column-gap:32px }
 .playlist:hover { background:var(--hover-surface) }
 :root:is([data-theme=light],[data-theme=glass-light]) .playlist { --hover-surface:color-mix(in srgb,var(--app-soft) 50%,#fff) }
+:root:is([data-theme=light],[data-theme=glass-light])[data-tone=blue],
+:root:is([data-theme=light],[data-theme=glass-light])[data-tone=blue] .playlist { --hover-surface:#e3edfa }
+:root:is([data-theme=light],[data-theme=glass-light])[data-tone=blue] :is(.playlist,.song.track-row):has(>.cover.placeholder) { --hover-surface:var(--app-soft) }
+:root:is([data-theme=light],[data-theme=glass-light])[data-tone=blue] .cover.placeholder { background:#e3edfa }
+:root:is([data-theme=light],[data-theme=glass-light]):is([data-tone=green],[data-tone=pink],[data-tone=red]) .song.track-row>.cover.placeholder { background:color-mix(in srgb,var(--app-soft) 90%,var(--accent)) }
 .playlist .cover { width:96px; height:96px; border-radius:12px; font-size:32px }
 .playlist .playlist-heart { width:44px; height:44px }
 .playlist-info { display:flex; flex:1; min-width:0; flex-direction:column; justify-content:center; gap:8px; text-align:left }
@@ -137,8 +142,8 @@ main.app-shell { --sidebar-width:clamp(190px,15.5vw,240px); overflow:hidden; bor
 .song-scroll { flex:1; min-height:0; overflow:auto; overflow-anchor:none; scrollbar-gutter:stable; margin-right:-34px; padding-right:25px }
 .song-scroll::-webkit-scrollbar { width:9px }
 .song-scroll::-webkit-scrollbar-thumb { background:transparent; border-radius:8px; min-height:80px }
-.song-scroll.scrollbar-visible::-webkit-scrollbar-thumb { background:#80948a66 }
-.song-scroll.scrollbar-visible:hover::-webkit-scrollbar-thumb { background:#80948aaa }
+.song-scroll.scrollbar-visible::-webkit-scrollbar-thumb { background:color-mix(in srgb,var(--accent) 40%,transparent) }
+.song-scroll.scrollbar-visible:hover::-webkit-scrollbar-thumb { background:color-mix(in srgb,var(--accent) 67%,transparent) }
 .song.track-row { min-height:61px; padding-top:5px; padding-bottom:5px; border-bottom:0; border-radius:0 }
 .song.track-row:hover { background:var(--hover-surface) }
 .library-shell:is([data-theme=dark],[data-theme=glass]) .song.track-row:hover { background:var(--hover-surface) }
@@ -338,7 +343,7 @@ html,body,#app,main.app-shell { background:transparent!important }
 .message-alert { max-width:100%; padding:12px 16px; border:1px solid var(--line); border-radius:10px; background:var(--surface-alpha); color:var(--ink); font-size:14px; line-height:1.5; box-shadow:0 4px 16px #0002; pointer-events:auto }
 .message-alert[data-variant=destructive] { color:#c44e4e }
 .message-alert-description { overflow-wrap:anywhere }
-.queue-panel { z-index:70; display:flex; flex-direction:column; width:min(300px,calc(100vw - 24px)); height:380px; max-height:var(--radix-popover-content-available-height); padding:10px; border:1px solid var(--line); border-radius:12px; background:var(--surface-alpha); color:var(--ink); box-shadow:0 6px 24px #0003; outline:none; font-family:inherit }
+.queue-panel { -webkit-app-region:no-drag; z-index:70; display:flex; flex-direction:column; width:min(300px,calc(100vw - 24px)); height:380px; max-height:var(--radix-popover-content-available-height); padding:10px; border:1px solid var(--line); border-radius:12px; background:var(--surface-alpha); color:var(--ink); box-shadow:0 6px 24px #0003; outline:none; font-family:inherit }
 .queue-panel-header { display:flex; align-items:center; gap:8px; flex-shrink:0; padding:4px 6px 8px; border-bottom:1px solid var(--line) }
 .queue-panel-header h2 { margin:0; font-size:18px; font-weight:700 }
 .queue-panel-list { flex:1; min-height:0; overflow:auto; padding:0; margin:0; list-style:none }
@@ -378,6 +383,9 @@ html,body,#app,main.app-shell { background:transparent!important }
 .account-qr-body { min-height:100px; text-align:center; margin:20px 0; }
 .account-user-avatar { width:80px; height:80px; margin:12px auto 0; background:var(--side); overflow:hidden; }
 .account-user-avatar img { display:block; width:100%; height:100%; object-fit:cover; }
+.account-dialog .account-qr-body:has(.account-user-avatar) { margin-bottom:12px; }
+.account-membership { display:flex; flex-direction:column; align-items:center; gap:4px; margin:0 0 20px; font-size:14px; text-align:center; }
+.account-membership small { color:var(--muted); font-size:12px; }
 .account-qr-body .qr { border-radius:8px; background:#fff; padding:8px; }
 .account-dialog-actions { display:flex; justify-content:space-between; gap:12px; margin-top:20px; }
 :root .account-dialog-actions button[data-variant=destructive]:enabled:hover { background:color-mix(in srgb,#c42b36 90%,#fff); color:#fff; }
@@ -418,13 +426,14 @@ html,body,#app,main.app-shell { background:transparent!important }
 .lyrics-close:hover { background:var(--hover-surface) }
 .lyrics-close svg { width:26px; height:26px; fill:none; stroke:currentColor; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round }
 .lyrics-track { display:flex; flex-direction:column; align-items:center; min-width:0; text-align:center }
+.lyrics-close,.lyrics-track,.lyrics-lines { -webkit-app-region:no-drag }
 .lyrics-track .cover { width:min(100%,320px); height:auto; aspect-ratio:1; border-radius:18px; box-shadow:0 18px 40px #0002; font-size:72px }
 .lyrics-title { display:flex; flex-direction:column; align-items:inherit; min-width:0; max-width:100% }
 .lyrics-track h2 { max-width:100%; margin:28px 0 6px; overflow:hidden; font-size:22px; text-overflow:ellipsis; white-space:nowrap }
 .lyrics-track p { margin:0; color:var(--muted) }
 .lyrics-origin { margin-top:14px; padding:2px 8px; border:1px solid var(--line); border-radius:6px; color:var(--muted); font-size:12px }
 .lyrics-lines,.lyrics-message { align-self:stretch; height:100%; min-height:0; margin:0 }
-.lyrics-lines { overflow:auto; padding:0; list-style:none; scrollbar-width:none; mask-image:linear-gradient(transparent,#000 18%,#000 82%,transparent) }
+.lyrics-lines { position:relative; overflow:auto; padding:0; list-style:none; scrollbar-width:none; mask-image:linear-gradient(transparent,#000 18%,#000 82%,transparent) }
 .lyrics-lines li { margin:2px 0 }
 /* Let the first and last lines scroll to the vertical center. */
 .lyrics-lines::before,.lyrics-lines::after { display:block; height:45%; content:"" }

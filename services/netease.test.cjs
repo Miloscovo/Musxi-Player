@@ -15,3 +15,16 @@ test('avatar uses the bundled login status endpoint and preserves authentication
 });
 test('QR confirmation protects session, and unliking uses the literal false string',async()=>{let cookie='',like;const adapter=new NeteaseAdapter(async(name,p)=>{cookie=p.cookie;const body={login_qr_key:{code:200,data:{unikey:'key'}},login_qr_create:{code:200,data:{qrimg:'data:image/png;base64,test'}},login_qr_check:{code:803,cookie:'private-cookie'},login_status:{data:{profile:{userId:7,nickname:'Account'}}},user_playlist:{code:200,playlist:[{id:9,name:'Liked',creator:{userId:7},specialType:5}],more:false},likelist:{code:200,ids:[]},playlist_detail:{code:200,playlist:{trackIds:[]}}}[name];if(name==='like'){like=p.like;return {body:{body:{code:200}}};}return {body};});await adapter.run({op:'qr'});const login=await adapter.run({op:'poll'});assert.equal(login.status,'connected');assert.equal(login.session.cookie,'private-cookie');adapter.song({id:1,name:'Song'});await adapter.run({op:'song_update',id:'netease:1',kind:'favorite',enabled:false});assert.equal(like,'false');assert.equal(cookie,'private-cookie');});
 test('quality list excludes trial and fallback qualities; errors hide service responses',async()=>{const adapter=new NeteaseAdapter(async(name,p)=>{if(name==='song_url_v1')return {body:{code:200,data:[p.level==='standard'?{url:'https://example.com/a',br:128000}:p.level==='lossless'?{url:'https://example.com/b',type:'flac',freeTrialInfo:{}}:{url:'https://example.com/a',br:128000}]}};throw Error('token=secret');});adapter.profile={id:'7'};adapter.song({id:1,name:'Song'});assert.deepEqual((await adapter.run({op:'qualities',id:'netease:1'})).options.map(q=>q.id),['128']);await assert.rejects(adapter.api('login_status'),error=>!error.message.includes('secret'));await assert.rejects(adapter.run({op:'audio',id:'netease:1',quality:'320'}),/暂无权限/);});
+
+test('membership distinguishes active packages, expired memberships and missing data',async()=>{
+  let data={};const adapter=new NeteaseAdapter(async name=>{assert.equal(name,'vip_info');return {body:{code:200,data}};});adapter.profile={id:'7'};
+  assert.deepEqual(await adapter.run({op:'membership'}),{name:'会员状态暂不可用'});
+  data={associator:{expireTime:0},musicPackage:{expireTime:0},redplus:{expireTime:0}};
+  assert.deepEqual(await adapter.run({op:'membership'}),{name:'非会员'});
+  const expiresAt=Date.now()+86400000;data.associator.expireTime=expiresAt;
+  assert.deepEqual(await adapter.run({op:'membership'}),{name:'黑胶 VIP',expiresAt});
+  data.redplus.expireTime=expiresAt;
+  assert.deepEqual(await adapter.run({op:'membership'}),{name:'超级黑胶 VIP',expiresAt});
+  data.associator.expireTime=1;data.redplus.expireTime=1;data.musicPackage.expireTime=expiresAt;
+  assert.deepEqual(await adapter.run({op:'membership'}),{name:'音乐包',expiresAt});
+});

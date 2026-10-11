@@ -17,7 +17,7 @@ function mergeTracks(tracks,groups=new Map()) {
 class MultiPlatform {
   constructor(adapters) { this.adapters=adapters; this.active='kugou'; this.sessions={}; this.accounts={}; this.playlists={}; this.favoriteKeys={}; this.searchKeywords=''; this.searchGroups=new Map(); }
   close() { for(const adapter of Object.values(this.adapters))adapter.stop?.('接口已关闭'); }
-  accountState() { return PLATFORMS.map(platform=>({platform,name:NAMES[platform],connected:!!this.accounts[platform]?.connected,user:this.accounts[platform]?.profile?.name || '',error:this.accounts[platform]?.error || '',avatar:this.accounts[platform]?.connected ? this.accounts[platform]?.avatar || '' : ''})); }
+  accountState() { return PLATFORMS.map(platform=>({platform,name:NAMES[platform],connected:!!this.accounts[platform]?.connected,user:this.accounts[platform]?.profile?.name || '',error:this.accounts[platform]?.error || '',avatar:this.accounts[platform]?.connected ? this.accounts[platform]?.avatar || '' : '',...(this.accounts[platform]?.connected && this.accounts[platform]?.membership ? {membership:this.accounts[platform].membership}: {})})); }
   allPlaylists() { return PLATFORMS.flatMap(platform=>(this.playlists[platform] || []).map(row=>({...row,platform}))); }
   decorate(result) {
     const favoritesCount=new Set(PLATFORMS.filter(p=>this.accounts[p]?.connected).flatMap(p=>[...(this.favoriteKeys[p] || [])])).size;
@@ -107,6 +107,10 @@ class MultiPlatform {
     if(op==='covers')return this.adapters.kugou.run(request);
     if(op==='avatar') {
       await Promise.all(PLATFORMS.filter(p=>this.accounts[p]?.connected).map(async platform=>{
+        try {
+          const membership=await this.adapters[platform].run({op:'membership'});
+          this.accounts[platform].membership=typeof membership.name==='string'?membership:{name:'会员状态暂不可用'};
+        } catch {this.accounts[platform].membership={name:'会员状态暂不可用'};}
         try {
           const result=await this.adapters[platform].run(request);
           const image=result.url ? (await this.adapters.kugou.run({op:'covers',urls:[result.url]})).images?.[0]?.image : result.image;
