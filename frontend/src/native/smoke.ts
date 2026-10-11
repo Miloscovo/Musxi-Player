@@ -354,8 +354,10 @@ export async function verifyWebPage() {
   if (document.querySelector('.settings-content h2') || document.querySelectorAll('#default-audio-quality option').length !== 3)
     throw new Error('Playback settings structure is incorrect');
   settingsTabs[0].click();
-  await waitFor(() => document.querySelectorAll('.appearance-mode:not(.appearance-tone) .appearance-segment').length === 3);
-  const cards = document.querySelectorAll<HTMLButtonElement>('.appearance-mode:not(.appearance-tone) .appearance-segment');
+  // Tone buttons share .appearance-segment; only the mode group is under test here.
+  const modeSegments = '[aria-labelledby=appearance-mode-label] .appearance-segment';
+  await waitFor(() => document.querySelectorAll(modeSegments).length === 3);
+  const cards = document.querySelectorAll<HTMLButtonElement>(modeSegments);
   const toggle = document.querySelector<HTMLButtonElement>('.appearance-switch')!;
   if (toggle.getAttribute('aria-checked') === 'true') {
     toggle.click();
@@ -503,6 +505,21 @@ export async function verifyWebPage() {
     throw new Error('Native state changed across reload');
   await native.player.setVolume(previous.originalVolume);
   await waitFor(() => document.querySelector('#volume')?.textContent === `${previous.originalVolume}%`);
+  const lyricsToggle=document.querySelector<HTMLButtonElement>('.lyrics-toggle');
+  if(!lyricsToggle)throw new Error('Lyrics toggle is missing');
+  lyricsToggle.click();
+  await waitFor(()=>!!document.querySelector('.lyrics-page'));
+  const lyricsClose=document.querySelector<HTMLButtonElement>('.lyrics-close')!;
+  if(document.activeElement!==lyricsClose || !document.querySelector('.library-layer')?.hasAttribute('inert'))
+    throw new Error('Lyrics page did not move focus or disable the covered library');
+  for(const control of Array.from(document.querySelectorAll('.lyrics-close,.lyrics-track,.lyrics-lines')))
+    if(getComputedStyle(control).getPropertyValue('-webkit-app-region').trim()!=='no-drag')
+      throw new Error('Lyrics controls overlap native draggable regions');
+  const handledEscape=new KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true});
+  handledEscape.preventDefault();lyricsClose.dispatchEvent(handledEscape);
+  if(!document.querySelector('.lyrics-page'))throw new Error('Handled Escape closed the lyrics page');
+  lyricsClose.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}));
+  await waitFor(()=>!document.querySelector('.lyrics-page') && !document.querySelector('.library-layer')?.hasAttribute('inert'));
   const host = window as unknown as CefTransport;
   // test.complete intentionally has a test-only, non-v1 reply in the existing fixture.
   await new Promise<void>((resolve, reject) => host.cefQuery?.({

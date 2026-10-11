@@ -25,6 +25,7 @@ public class TrayCheck {
  [DllImport("gdi32.dll")] public static extern bool PtInRegion(IntPtr region,int x,int y);
  [DllImport("gdi32.dll")] public static extern bool DeleteObject(IntPtr value);
  [DllImport("user32.dll")] public static extern uint GetDpiForWindow(IntPtr window);
+ [DllImport("user32.dll")] public static extern IntPtr SetThreadDpiAwarenessContext(IntPtr context);
  [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr window,uint msg,IntPtr wp,IntPtr lp);
  public struct Rect {public int left,top,right,bottom;}
  public struct Point {public int x,y;}
@@ -92,6 +93,9 @@ function Open-Menu {
  Start-Sleep -Milliseconds 700
  return $script:content
 }
+# PowerShell is DPI-unaware; without this, window and cursor coordinates are
+# virtualized on scaled displays and the physical-pixel menu checks fail.
+[void][TrayCheck]::SetThreadDpiAwarenessContext([IntPtr](-4))
 $app=Start-Process -FilePath (Resolve-Path -LiteralPath $HostPath).Path -ArgumentList '--test-app' -WindowStyle Hidden -PassThru
 $window=[IntPtr]::Zero
 $originalCursor=New-Object TrayCheck+Point;[void][TrayCheck]::GetCursorPos([ref]$originalCursor)
