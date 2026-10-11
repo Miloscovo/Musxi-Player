@@ -209,7 +209,7 @@ main.app-shell { --sidebar-width:clamp(190px,15.5vw,240px); overflow:hidden; bor
 .player-track,.player-side { display:flex; align-items:center; min-width:0 }
 .player-track { gap:20px }
 .player-side { justify-content:flex-end; gap:26px }
-.player-track>.cover { width:78px; height:78px; border-radius:11px }
+.player-track .cover { width:78px; height:78px; border-radius:11px }
 .player .track { width:auto; min-width:0 }
 .player h2 { margin:0 0 6px; font-family:inherit; font-size:18px; font-weight:700 }
 .player .track p { color:var(--muted); font-family:inherit; font-size:15px; font-weight:700; opacity:1 }
@@ -247,7 +247,7 @@ input.seek-bar::-webkit-slider-thumb { background:var(--accent) }
   .song .song-actions { grid-column:6; grid-row:1 / 3 }
   .player,:root[data-theme=dark] .player,:root[data-theme=glass] .player { gap:12px; padding-inline:18px }
   .player-track { gap:12px }
-  .player-track>.cover { width:60px; height:60px }
+  .player-track .cover { width:60px; height:60px }
   .player-side { gap:12px }
   .volume-control { width:min(155px,100%) }
   .play-controls { gap:5px }
@@ -262,7 +262,7 @@ input.seek-bar::-webkit-slider-thumb { background:var(--accent) }
   .page-heading h1 { font-size:27px }
   .collection-search { width:min(300px,42vw) }
   .player,:root[data-theme=dark] .player,:root[data-theme=glass] .player { min-height:88px; gap:7px; padding:10px 12px }
-  .player-track>.cover { width:52px; height:52px }
+  .player-track .cover { width:52px; height:52px }
   .player h2 { font-size:14px }
   .player .track p { font-size:12px }
   .play-controls { gap:3px }
@@ -283,7 +283,7 @@ input.seek-bar::-webkit-slider-thumb { background:var(--accent) }
   .header-actions { margin-left:0 }
   .collection-search { width:min(380px,calc(100vw - 170px)) }
   .volume-control { display:none }
-  .player-track>.cover { width:42px; height:42px }
+  .player-track .cover { width:42px; height:42px }
 }
 
 /* CEF windowless rendering composites these backgrounds with the desktop.
@@ -403,3 +403,45 @@ html,body,#app,main.app-shell { background:transparent!important }
 .platform-avatar:hover { box-shadow:0 0 0 3px var(--hover-surface); }
 .platform-avatar img { display:block; width:100%; height:100%; object-fit:cover; }
 @media(max-width:1100px) { .sidebar-accounts { margin-inline:4px; } .sidebar-account { grid-template-columns:28px minmax(0,1fr) 28px; gap:6px; } .sidebar-account .account-platform-icon,.platform-avatar { width:28px; height:28px; } .sidebar-account strong { font-size:13px; } }
+/* Full-screen lyrics page: covers the library above the player dock. */
+.app-body { position:relative; display:flex; flex:1; min-height:0 }
+.library-layer { display:flex; flex:1; min-width:0; min-height:0 }
+/* Isolate only while covered: sticky headers stay under the lyrics page, but
+   the sidebar rail must otherwise stay above the window drag bar. */
+.library-layer[inert] { isolation:isolate }
+.lyrics-toggle { position:relative; flex:none; padding:0; border-radius:11px; background:transparent; line-height:0 }
+.lyrics-toggle svg { position:absolute; inset:0; margin:auto; width:30px; height:30px; padding:4px; border-radius:50%; background:#0008; fill:none; stroke:#fff; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; opacity:0; transition:opacity .15s }
+.lyrics-toggle:is(:hover,:focus-visible) svg { opacity:1 }
+.lyrics-page { position:absolute; inset:0; z-index:4; display:grid; grid-template-columns:minmax(220px,38%) minmax(0,1fr); grid-template-rows:minmax(0,1fr); align-items:center; gap:clamp(24px,5vw,72px); padding:56px clamp(24px,6vw,96px) 24px; background:var(--surface); color:var(--ink); animation:lyrics-in .2s ease-out }
+@keyframes lyrics-in { from { opacity:0; transform:translateY(24px) } }
+.lyrics-close { position:absolute; left:20px; top:40px; display:grid; place-items:center; width:40px; height:40px; padding:0; border-radius:10px; background:transparent; color:var(--ink) }
+.lyrics-close:hover { background:var(--hover-surface) }
+.lyrics-close svg { width:26px; height:26px; fill:none; stroke:currentColor; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round }
+.lyrics-track { display:flex; flex-direction:column; align-items:center; min-width:0; text-align:center }
+.lyrics-track .cover { width:min(100%,320px); height:auto; aspect-ratio:1; border-radius:18px; box-shadow:0 18px 40px #0002; font-size:72px }
+.lyrics-title { display:flex; flex-direction:column; align-items:inherit; min-width:0; max-width:100% }
+.lyrics-track h2 { max-width:100%; margin:28px 0 6px; overflow:hidden; font-size:22px; text-overflow:ellipsis; white-space:nowrap }
+.lyrics-track p { margin:0; color:var(--muted) }
+.lyrics-origin { margin-top:14px; padding:2px 8px; border:1px solid var(--line); border-radius:6px; color:var(--muted); font-size:12px }
+.lyrics-lines,.lyrics-message { align-self:stretch; height:100%; min-height:0; margin:0 }
+.lyrics-lines { overflow:auto; padding:0; list-style:none; scrollbar-width:none; mask-image:linear-gradient(transparent,#000 18%,#000 82%,transparent) }
+.lyrics-lines li { margin:2px 0 }
+/* Let the first and last lines scroll to the vertical center. */
+.lyrics-lines::before,.lyrics-lines::after { display:block; height:45%; content:"" }
+.lyrics-lines :is(button,span) { display:block; width:100%; padding:10px 14px; border-radius:10px; background:transparent; color:var(--muted); font:inherit; font-size:20px; line-height:1.5; text-align:left; overflow-wrap:anywhere }
+.lyrics-lines.synced button:enabled:hover { background:var(--hover-surface); color:var(--ink); cursor:pointer }
+.lyrics-lines.synced button:disabled { cursor:default; opacity:1 }
+.lyrics-lines li[aria-current=true] button { color:var(--accent); font-weight:700 }
+.lyrics-lines:not(.synced) span { color:var(--ink) }
+.lyrics-message { display:grid; place-items:center; color:var(--muted); font-size:18px }
+@media (max-width:800px) {
+  .lyrics-page { grid-template-columns:1fr; grid-template-rows:auto minmax(0,1fr); gap:16px; padding-top:64px }
+  .lyrics-track { flex-direction:row; gap:14px; text-align:left }
+  .lyrics-title { align-items:flex-start }
+  .lyrics-track .cover { width:64px; border-radius:10px; font-size:28px }
+  .lyrics-track h2 { margin:0; font-size:17px }
+  .lyrics-origin { display:none }
+  .lyrics-close { top:16px; left:10px }
+  .lyrics-lines :is(button,span) { font-size:17px }
+}
+@media (prefers-reduced-motion:reduce) { .lyrics-page { animation:none } .lyrics-toggle svg { transition:none } }
