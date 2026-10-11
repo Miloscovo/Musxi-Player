@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import sys
+from datetime import datetime, timedelta, timezone
 
 from qqmusic_api import Client, Credential
 from qqmusic_api.models.login import QRLoginType, QRCodeLoginEvents
@@ -33,6 +34,45 @@ class Adapter:
     async def identify(self):
         info = await self.client.user.get_homepage(self.client.credential.encrypt_uin)
         self.profile = {'id':str(self.client.credential.musicid), 'name':info.base_info.name, 'avatar':info.base_info.avatar}
+
+    async def membership(self):
+        info = await self.client.user.get_vip_info()
+        identity = info.identity
+        flags = [('huge_vip', '豪华绿钻', 'huge_vip_end'), ('vip', '绿钻会员', None),
+                 ('group_vip_flag', '家庭会员', 'group_vip_end'), ('cp_lover_flag', '情侣会员', 'cp_lover_end'),
+                 ('child_vip', '儿童会员', None), ('exp_vip', '体验会员', None), ('ad_vip_flag', '广告会员', None),
+                 ('twelve', '十二平台会员', 'twelve_end'), ('eight', '八平台会员', 'eight_end')]
+        if not ({'svip', 'star', 'ystar'} & info.model_fields_set or
+                {field for field, _, _ in flags} & identity.model_fields_set):
+            raise PublicError('QQ 会员状态暂不可用')
+        name, end = '非会员', None
+        if info.svip > 0:
+            name = '超级会员'
+        elif info.star > 0 or info.ystar > 0:
+            name, end = '星级会员', info.star_end or info.ystar_end
+        else:
+            for field, label, date_field in flags:
+                if getattr(identity, field) > 0:
+                    name, end = label, getattr(identity, date_field) if date_field else None
+                    break
+        if name == '非会员' and not {'vip', 'huge_vip'} <= identity.model_fields_set:
+            raise PublicError('QQ 会员状态暂不可用')
+        result = {'name':name}
+        if name != '非会员':
+            end = end or info.userinfo.expire
+            if end:
+                try:
+                    raw = str(end).strip()
+                    if raw.isdigit() and len(raw) in (10, 13):
+                        result['expiresAt'] = int(raw) * (1000 if len(raw) == 10 else 1)
+                    else:
+                        date = datetime.strptime(raw, '%Y%m%d') if raw.isdigit() and len(raw) == 8 else datetime.fromisoformat(raw)
+                        result['expiresAt'] = int(date.replace(tzinfo=date.tzinfo or timezone(timedelta(hours=8))).timestamp()*1000)
+                except (ValueError, OverflowError):
+                    pass
+        if 'expiresAt' in result and not 0 < result['expiresAt'] <= 253402300799999:
+            del result['expiresAt']
+        return result
 
     def song(self, song):
         row = {'id':'qq:'+song.mid, 'serviceId':song.mid, 'platform':'qq', 'mediaMid':song.file.media_mid,
@@ -123,6 +163,7 @@ class Adapter:
         if op=='sync': return {'playlists':await self.sync(), 'session':self.session()}
         if op=='tracks': return await self.tracks(r['id'])
         if op=='avatar': return {'url':self.profile.get('avatar','')}
+        if op=='membership': return await self.membership()
         song = await self.detail(r['id'])
         if op=='audio': return await self.audio(song, r.get('quality','128'))
         if op=='qualities':

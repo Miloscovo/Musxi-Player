@@ -101,7 +101,9 @@ public:
         POINT origin{};
         if(!browser->GetHost()->IsWindowRenderingDisabled())MapWindowPoints(browser->GetHost()->GetWindowHandle(),testWindow_,&origin,1);
         const int dpi=GetDpiForWindow(testWindow_);
-        for(const auto& item:regions) {
+        // Page changes can reorder CEF regions; no-drag controls must win every overlap.
+        for(const int draggable:{1,0}) for(const auto& item:regions) {
+            if(item.draggable!=draggable)continue;
             const auto& r=item.bounds;
             auto part=CreateRectRgn(origin.x+MulDiv(r.x,dpi,96),origin.y+MulDiv(r.y,dpi,96),
                 origin.x+MulDiv(r.x+r.width,dpi,96),origin.y+MulDiv(r.y+r.height,dpi,96));

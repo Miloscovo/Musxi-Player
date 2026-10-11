@@ -43,3 +43,17 @@ test('unknown membership or receipt schema never initiates a claim',async()=>{
 test('logged-out user cannot claim',async()=>{
   const {a,state}=fixture();delete a.cookie.token;await assert.rejects(a.run({op:'vip_auto'}),/先扫码/);assert.equal(state.writes,0);
 });
+
+test('membership reads entitlement without claiming and retains unknown states',async()=>{
+  const {a,state}=fixture();
+  assert.deepEqual(await a.run({op:'membership'}),{name:'非会员'});
+  state.vip=true;assert.deepEqual(await a.run({op:'membership'}),{name:'酷狗 VIP'});
+  state.statusUnknown=true;assert.deepEqual(await a.run({op:'membership'}),{name:'会员状态暂不可用'});
+  assert.equal(state.writes,0);
+});
+
+test('membership expiry belongs to active concept entitlement and uses China time',async()=>{
+  const a=new Adapter(async()=>({body:{status:1,error_code:0,data:{is_vip:0,vip_end_time:'2099-01-01 00:00:00',busi_vip:[{busi_type:'music',is_vip:1,vip_end_time:'2099-01-01 00:00:00'},{busi_type:'concept',is_vip:1,vip_end_time:'2028-01-01 00:00:00'}]}}}));
+  a.cookie.token='fixture';a.cookie.userid='123';
+  assert.deepEqual(await a.run({op:'membership'}),{name:'酷狗 VIP',expiresAt:1830268800000});
+});

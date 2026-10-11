@@ -264,6 +264,8 @@ export async function verifyWebPage() {
     fixture.querySelector<HTMLButtonElement>('[aria-label="添加当前歌曲到歌单"]')!.click();
     await waitFor(() => !!document.querySelector('.player-action-menu'), 'Player add menu did not open');
     const addMenu=document.querySelector<HTMLElement>('.player-action-menu')!;
+    if(getComputedStyle(addMenu).getPropertyValue('-webkit-app-region')!=='no-drag')
+      throw new Error('Player menu does not exclude overlapping window drag regions');
     if(addMenu.dataset.side!=='top')throw new Error('Player add menu is not above its trigger');
     if(addMenu.getBoundingClientRect().bottom-addMenu.lastElementChild!.getBoundingClientRect().bottom>12)
       throw new Error('Player add menu has excess blank space below its contents');
@@ -312,14 +314,19 @@ export async function verifyWebPage() {
     if(JSON.stringify(Array.from(fixture.querySelectorAll('.song-platform-tag')).map(tag=>tag.textContent))!==JSON.stringify(['网易云','酷狗','QQ']))throw new Error('Recent history did not display all supported platforms');
     const avatar='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aT9sAAAAASUVORK5CYII=';
     for(const platform of ['netease','qq','kugou'] as const) {
-      fixtureLibrary.state={...fixtureLibrary.state!,avatar:'',accounts:[{platform,name:platform,connected:true,user:'Avatar fixture',error:'',avatar}]};
+      fixtureLibrary.state={...fixtureLibrary.state!,avatar:'',accounts:[{platform,name:platform,connected:true,user:'Avatar fixture',error:'',avatar,membership:{name:'VIP fixture',expiresAt:1800000000000}}]};
       root.render(createElement(AccountDialog,{key:platform,open:true,onOpenChange:()=>{},initialPlatform:platform,library:fixtureLibrary}));
       await waitFor(()=>document.querySelector<HTMLImageElement>('.account-user-avatar img')?.src===avatar);
       const box=document.querySelector<HTMLElement>('.account-user-avatar')!.getBoundingClientRect();
       if(box.width!==80 || box.height!==80)throw new Error('Account avatar is not an 80px square');
+      await waitFor(()=>document.querySelector('.account-membership')?.textContent?.includes('到期')===true);
+      const membershipBox=document.querySelector('.account-membership')!.getBoundingClientRect();
+      if(membershipBox.top<box.bottom || Math.abs((membershipBox.left+membershipBox.right)/2-(box.left+box.right)/2)>1)
+        throw new Error('Account membership is not centered below its avatar');
       fixtureLibrary.state={...fixtureLibrary.state!,accounts:[{platform,name:platform,connected:true,user:'Avatar fixture',error:'',avatar:''}]};
       root.render(createElement(AccountDialog,{key:platform,open:true,onOpenChange:()=>{},initialPlatform:platform,library:fixtureLibrary}));
       await waitFor(()=>!!document.querySelector('.account-user-avatar') && !document.querySelector('.account-user-avatar img'));
+      if(document.querySelector('.account-membership')?.textContent!=='会员状态暂不可用')throw new Error('Unknown membership became a nonmember');
     }
     const renderMessages = (text: string) => root.render(createElement('section', { className: 'player',
       style: { position: 'absolute', bottom: 0, left: 0, right: 0 } },
@@ -347,8 +354,8 @@ export async function verifyWebPage() {
   if (document.querySelector('.settings-content h2') || document.querySelectorAll('#default-audio-quality option').length !== 3)
     throw new Error('Playback settings structure is incorrect');
   settingsTabs[0].click();
-  await waitFor(() => document.querySelectorAll('.appearance-segment').length === 3);
-  const cards = document.querySelectorAll<HTMLButtonElement>('.appearance-segment');
+  await waitFor(() => document.querySelectorAll('.appearance-mode:not(.appearance-tone) .appearance-segment').length === 3);
+  const cards = document.querySelectorAll<HTMLButtonElement>('.appearance-mode:not(.appearance-tone) .appearance-segment');
   const toggle = document.querySelector<HTMLButtonElement>('.appearance-switch')!;
   if (toggle.getAttribute('aria-checked') === 'true') {
     toggle.click();

@@ -174,3 +174,45 @@ test('real song_url bitRate field enables standard and high-quality choices', as
   assert.deepEqual((await a.run({op:'qualities',id:'song'})).options.map(option=>option.id),['128','320','flac']);
   assert.equal((await a.run({op:'audio',id:'song',quality:'320'})).quality,'320');
 });
+
+test('own playlists without artwork use their first song cover without replacing custom covers or failing sync',async()=>{
+  const requests=[];const a=new Adapter(async(name,params)=>{
+    requests.push([name,params]);
+    if(name==='user_playlist')return response({total:5,info:[
+      {listid:1,is_edit:1,count:201},
+      {listid:2,is_edit:1,count:2,pic:'https://imge.kugou.com/custom.jpg'},
+      {listid:3,is_edit:1,count:0},
+      {listid:4,is_edit:1,count:2},
+      {listid:5,is_edit:0,count:2},
+    ]});
+    assert.equal(name,'playlist_track_all_new');assert.equal(params.page,1);assert.equal(params.pagesize,1);
+    if(params.listid==='4')throw Error('private response');
+    assert.equal(params.listid,'1');return response({info:[{trans_param:{union_cover:'http://imge.kugou.com/{size}/album.jpg'}}]});
+  });
+  a.cookie={userid:'fixture',token:'fixture'};
+  const result=await a.run({op:'sync'});
+  assert.deepEqual(result.playlists.map(p=>p.cover),['https://imge.kugou.com/200/album.jpg','https://imge.kugou.com/custom.jpg','','','']);
+  assert.deepEqual(requests.filter(([name])=>name==='playlist_track_all_new').map(([,params])=>params.listid),['1','4']);
+  assert.equal(a.knownPlaylists.get('1').cover,result.playlists[0].cover);
+});
+
+test('automatic covers follow first visible song while manual covers and failed reads are preserved',async()=>{
+  const a=new Adapter(async(name,p)=>{
+    if(name==='user_playlist')return response({total:4,info:[
+      {listid:1,is_edit:1,count:3,is_custom_pic:0,pic:'https://imge.kugou.com/automatic-first.jpg'},
+      {listid:2,is_edit:1,count:3,is_custom_pic:1,pic:'https://imge.kugou.com/manual.jpg'},
+      {listid:3,is_edit:1,count:3,is_def:2,is_custom_pic:'0',pic:'https://imge.kugou.com/automatic-first.jpg'},
+      {listid:4,is_edit:1,count:3,is_custom_pic:0,pic:'https://imge.kugou.com/fallback.jpg'},
+    ]});
+    if(p.listid==='4')throw Error('unavailable');
+    if(p.listid==='1'){assert.equal(p.page,1);assert.equal(p.pagesize,1);return response({info:[{cover:'https://imge.kugou.com/first.jpg'}]});}
+    assert.equal(p.listid,'3');assert.equal(p.pagesize,100);
+    return response({count:3,info:[
+      {fileid:1,collecttime:10,cover:'https://imge.kugou.com/oldest.jpg'},
+      {fileid:2,collecttime:30,cover:'https://imge.kugou.com/newest.jpg'},
+      {fileid:3,collecttime:20,cover:'https://imge.kugou.com/middle.jpg'},
+    ]});
+  });a.cookie={userid:'fixture',token:'fixture'};
+  const result=await a.run({op:'sync'});
+  assert.deepEqual(result.playlists.map(p=>p.cover),['https://imge.kugou.com/first.jpg','https://imge.kugou.com/manual.jpg','https://imge.kugou.com/newest.jpg','https://imge.kugou.com/fallback.jpg']);
+});

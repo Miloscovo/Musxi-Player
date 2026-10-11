@@ -22,7 +22,7 @@ export function parsePlaybackSettings(value: unknown): PlaybackSettings {
 export interface LibraryState {
   favoritesCount?: number;
   recent?:Track[];
-  accounts?: {platform: MusicPlatform;name:string;connected:boolean;user:string;error:string;avatar?:string}[];
+  accounts?: {platform: MusicPlatform;name:string;connected:boolean;user:string;error:string;avatar?:string;membership?:{name:string;expiresAt?:number}}[];
   loginPlatform?: MusicPlatform;
   connected: boolean; busy: boolean; user: string; status: string; notice: string; qr: string; avatar: string;
   playlists: Track[]; localPlaylists?: Track[]; tracks: Track[]; trackCount: number; playlistId: string; playlistName: string;
@@ -104,6 +104,7 @@ export function parseLibraryState(value: unknown): LibraryState {
   if(v.accounts !== undefined) {
     if(!Array.isArray(v.accounts))throw new NativeError(502,'Invalid accounts');
     for(const value of v.accounts){const account=object(value);fields(account,['name','user','error'],'string');fields(account,['connected'],'boolean');if(account.avatar!==undefined)fields(account,['avatar'],'string');if(!['kugou','netease','qq'].includes(account.platform as string))throw new NativeError(502,'Invalid account platform');}
+    for(const value of v.accounts){const account=object(value);if(account.membership!==undefined){const membership=object(account.membership);fields(membership,['name'],'string');if(membership.expiresAt!==undefined && (typeof membership.expiresAt!=='number' || !Number.isFinite(membership.expiresAt) || membership.expiresAt<=0 || membership.expiresAt>253402300799999))throw new NativeError(502,'Invalid membership expiry');}}
   }
   if(v.loginPlatform !== undefined && !['kugou','netease','qq'].includes(v.loginPlatform as string))throw new NativeError(502,'Invalid login platform');
   const now = object(v.now); fields(now, ['name', 'artist', 'cover'], 'string');
