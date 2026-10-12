@@ -72,8 +72,11 @@ void saveMatch(const fs::path& directory,const MatchJson& identity,const MatchJs
 void removeMatch(const fs::path& directory,const MatchJson& identity) {
     const auto path=matchPath(directory,identity);
     if(!fs::exists(path))return;
-    std::ifstream in(path);const auto record=MatchJson::parse(in);in.close();
-    if(record.at("identity").at("path")!=identity.at("path"))throw std::runtime_error("歌词记录冲突");
+    std::ifstream in(path);if(!in)throw std::runtime_error("无法读取歌词记录");
+    const auto record=MatchJson::parse(in,nullptr,false);in.close();
+    if(record.is_object() && record.contains("identity") && record["identity"].is_object() &&
+        record["identity"].contains("path") && record["identity"]["path"].is_string() &&
+        record["identity"]["path"]!=identity.at("path"))throw std::runtime_error("歌词记录冲突");
     fs::remove(path);
 }
 Lyrics matchLyrics(const MatchJson& selection) {

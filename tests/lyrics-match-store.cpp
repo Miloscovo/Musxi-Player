@@ -27,6 +27,16 @@ int main() {
         require(!readMatch(directory,fileIdentity(audio)),"replacement inherited lyrics");
         rejected=false;try{saveMatch(directory,identity,selection);}catch(...){rejected=true;}require(rejected,"stale file identity saved");
         removeMatch(directory,fileIdentity(audio));require(!readMatch(directory,identity),"restore auto did not delete binding");
+        const auto current=fileIdentity(audio);saveMatch(directory,current,selection);
+        const auto recordPath=fs::directory_iterator(directory)->path();
+        {std::ofstream out(recordPath);out<<"{truncated";}
+        require(!readMatch(directory,current),"corrupt binding was read");
+        removeMatch(directory,current);require(!fs::exists(recordPath),"corrupt binding could not be reset");
+        saveMatch(directory,current,selection);
+        auto other=current;other["path"]="another-song.mp3";
+        {std::ofstream out(recordPath);out<<MatchJson{{"identity",other}}.dump();}
+        rejected=false;try{removeMatch(directory,current);}catch(...){rejected=true;}
+        require(rejected && fs::exists(recordPath),"reset removed another song's record");
         fs::remove_all(root);std::cout<<"Match storage passed\n";return 0;
     }catch(const std::exception& e){fs::remove_all(root);std::cerr<<e.what()<<'\n';return 1;}
 }
