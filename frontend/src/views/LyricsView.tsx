@@ -1,17 +1,20 @@
-import { useEffect, useLayoutEffect, useRef } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import LyricsMatchDialog from '../components/LyricsMatchDialog';
 import CoverImage from '../components/CoverImage';
 import { Button } from '../components/ui/button';
 import { useLyrics } from '../composables/useLyrics';
 import { activeLyricLine } from '../composables/lyrics';
 import type { LibraryState } from '../native/library';
 
-const origins: Record<string, string> = { 'lrc-file': '本地歌词文件', embedded: '内嵌歌词', online: '在线歌词', cache: '在线歌词' };
+const origins: Record<string, string> = { 'lrc-file': '本地歌词文件', embedded: '内嵌歌词', online: '在线歌词', cache: '在线歌词', matched: '指定歌词' };
 
 export default function LyricsView({ trackId, now, positionMs, canSeek, onSeek, onClose }: {
   trackId: string; now?: LibraryState['now']; positionMs: number; canSeek: boolean;
   onSeek: (positionMs: number) => void; onClose: () => void;
 }) {
   const { lyrics, loading, failed, retry } = useLyrics(trackId, true);
+  const [matching,setMatching]=useState(false);
+  useEffect(()=>{setMatching(false);},[trackId]);
   const list = useRef<HTMLOListElement>(null); const closeButton = useRef<HTMLButtonElement>(null);
   const userScroll = useRef(0);
   const synced = lyrics?.kind === 'synced';
@@ -44,7 +47,8 @@ export default function LyricsView({ trackId, now, positionMs, canSeek, onSeek, 
       <CoverImage url={now?.cover || ''} />
       <div className="lyrics-title"><h2 title={now?.name}>{now?.name || '尚未选择歌曲'}</h2>
         <p>{now?.artist}</p>
-        {lyrics && origins[lyrics.origin] && <span className="lyrics-origin">{origins[lyrics.origin]}</span>}</div>
+        {lyrics && origins[lyrics.origin] && <span className="lyrics-origin">{origins[lyrics.origin]}</span>}
+        {trackId.startsWith('local:') && <Button variant="secondary" size="sm" onClick={()=>setMatching(true)}>{lyrics?.kind==='none'?'搜索歌词':'选择 / 替换歌词'}</Button>}</div>
     </div>
     {message ? <div className="lyrics-message" role="status"><p>{message}</p>
       {failed && <Button variant="ghost" onClick={retry}>重试</Button>}</div> :
@@ -54,5 +58,6 @@ export default function LyricsView({ trackId, now, positionMs, canSeek, onSeek, 
             {line.text || '♪'}</Button> : <span>{line.text || ' '}</span>}
         </li>)}
       </ol>}
+    {matching && <LyricsMatchDialog key={trackId} id={trackId} positionMs={positionMs} canSeek={canSeek} onSeek={onSeek} onClose={()=>setMatching(false)} onSaved={retry}/>}
   </section>;
 }

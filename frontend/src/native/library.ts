@@ -60,7 +60,8 @@ export type LyricsSource = 'search' | 'library' | 'queue' | 'local' | 'recent';
 export interface LyricsLine { timeMs: number; text: string }
 export interface Lyrics {
   status: 'pending' | 'ready'; source: LyricsSource; id: string;
-  platform: MusicPlatform | 'local' | ''; origin: 'lrc-file' | 'embedded' | 'online' | 'cache' | '';
+  platform: MusicPlatform | 'local' | ''; origin: 'lrc-file' | 'embedded' | 'online' | 'cache' | 'matched' | '';
+  offsetMs?: number;
   kind: 'synced' | 'plain' | 'none'; lines: LyricsLine[];
 }
 const object = (value: unknown): Record<string, unknown> => {
@@ -131,7 +132,8 @@ export function parseLyrics(value: unknown): Lyrics {
   if (!['pending', 'ready'].includes(v.status as string)) throw new NativeError(502, 'Invalid lyrics status');
   if (!['search', 'library', 'queue', 'local', 'recent'].includes(v.source as string)) throw new NativeError(502, 'Invalid lyrics source');
   if (!['', 'local', 'kugou', 'netease', 'qq'].includes(v.platform as string)) throw new NativeError(502, 'Invalid lyrics platform');
-  if (!['', 'lrc-file', 'embedded', 'online', 'cache'].includes(v.origin as string)) throw new NativeError(502, 'Invalid lyrics origin');
+  if (!['', 'lrc-file', 'embedded', 'online', 'cache', 'matched'].includes(v.origin as string)) throw new NativeError(502, 'Invalid lyrics origin');
+  if (v.offsetMs !== undefined && (!Number.isInteger(v.offsetMs) || Math.abs(v.offsetMs as number)>600000)) throw new NativeError(502, 'Invalid lyrics offset');
   if (!['synced', 'plain', 'none'].includes(v.kind as string)) throw new NativeError(502, 'Invalid lyrics kind');
   if (!Array.isArray(v.lines) || v.lines.length > 5000) throw new NativeError(502, 'Invalid lyrics lines');
   for (const entry of v.lines) { const line = object(entry); fields(line, ['timeMs'], 'number'); fields(line, ['text'], 'string'); }

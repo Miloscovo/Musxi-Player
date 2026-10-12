@@ -202,6 +202,15 @@ std::string FfmpegDecoder::embeddedLyrics(const std::wstring& path,const std::at
 const DecodedAudioInfo& FfmpegDecoder::info() const {
     if(!impl_)fail("No audio file",AVERROR(EINVAL));return impl_->info;
 }
+LocalSongTags FfmpegDecoder::songTags(const std::wstring& path,const std::atomic_bool* cancelled) {
+    Impl s;s.cancelled=cancelled;s.initialize(path,{});
+    const auto find=[&](const char* key)->std::string {
+        auto entry=av_dict_get(s.format->metadata,key,nullptr,0);
+        if(!entry)entry=av_dict_get(s.format->streams[s.stream]->metadata,key,nullptr,0);
+        return entry?std::string(entry->value).substr(0,4096):std::string{};
+    };
+    return {find("title"),find("artist"),find("album")};
+}
 PcmBlock FfmpegDecoder::read(std::uint32_t maxFrames) {
     if(!impl_ || !maxFrames || maxFrames>65536)fail("Invalid read",AVERROR(EINVAL));
     auto& s=*impl_;
