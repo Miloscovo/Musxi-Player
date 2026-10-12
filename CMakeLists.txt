@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(MusxiPlayer VERSION 0.3.0 LANGUAGES CXX RC)
+project(MusxiPlayer VERSION 0.4.0 LANGUAGES CXX RC)
 if(NOT WIN32)
   message(FATAL_ERROR "Musxi Player requires Windows 10 or newer")
 endif()

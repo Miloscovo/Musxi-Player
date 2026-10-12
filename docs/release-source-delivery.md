@@ -1,5 +1,13 @@
 # Musxi fixed FFmpeg source delivery
 
+## v0.4.0
+
+The v0.4.0 installer retains the audited CEF and both FFmpeg binary sets used
+by v0.3.0. The fixed third-party source directions below continue to apply.
+Application source, three-platform adapters and lyrics matching are available
+at the v0.4.0 tag; installed `release-source-record.json` identifies the exact
+clean application commit. Default Release uploads contain only the installer.
+
 ## v0.3.0
 
 The v0.3.0 installer uses the same audited CEF and two FFmpeg binary sets as
