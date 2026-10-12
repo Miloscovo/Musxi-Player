@@ -180,8 +180,7 @@ int main() try {
     require(invoke("library.lyrics",{{"source","nowhere"},{"id","0"}}).code==400,"lyrics accepted unknown source");
     require(invoke("library.lyrics",{{"source","library"},{"id","missing"}}).code==404,"lyrics accepted unknown song");
     cloudTracks=Json::array({{{"id","netease:lyric"},{"name","Online"}}});
-    auto online=Json::parse(invoke("library.lyrics",{{"source","library"},{"id","netease:lyric"}}).json);
-    require(online["status"]=="ready" && online["kind"]=="none" && online["platform"]=="netease" && online["id"]=="netease:lyric","online lyrics placeholder");
+    require(invoke("library.lyrics",{{"source","library"},{"id","netease:lyric"}}).code==400,"invalid online recording ID accepted");
     const auto lyricsFolder=cloud::dataDir()/(L"lyrics-check-"+std::to_wstring(GetCurrentProcessId()));
     fs::create_directories(lyricsFolder);
     {std::ofstream audio(lyricsFolder/L"歌曲.mp3",std::ios::binary);audio<<"not audio";}

@@ -32,6 +32,13 @@ class NeteaseAdapter {
   async playlist(id){const p=this.lists.get(id);if(!p)throw Error('请先同步网易云歌单');const detail=await this.api('playlist_detail',{id:p.serviceId});const ids=detail.playlist?.trackIds;if(!Array.isArray(ids))throw Error('网易云歌单数据无效');if(ids.length>10000)throw Error('歌单超过当前歌曲上限');const rows=[];for(let i=0;i<ids.length;i+=100){const b=await this.api('song_detail',{ids:ids.slice(i,i+100).map(row=>row.id).join(',')});if(!Array.isArray(b.songs))throw Error('歌曲数据无效');rows.push(...b.songs.map(row=>this.song(row)));}return {playlist:p,tracks:rows};}
   async audioInfo(track,quality){const level=QUALITIES.find(q=>q.id===quality);if(!level)throw Error('无效音质');const b=await this.api('song_url_v1',{id:track.serviceId,level:level.level});const d=b.data?.[0];if(!d?.url || d.freeTrialInfo)throw Error('此账号暂无该歌曲完整播放权限');const actual=d.type==='flac' || ['lossless','hires','jyeffect','sky','jymaster'].includes(d.level)?'flac':Number(d.br)>=320000?'320':'128';return {url:d.url,quality:actual};}
   async run(r){switch(r.op){
+    case 'lyrics':{
+      if(!/^netease:[0-9]+$/.test(r.id))throw Error('歌曲标识无效');
+      this.cookie=r.session?.cookie || '';
+      const b=await this.api('lyric',{id:r.id.slice(8)});
+      if(b.nolyric===true || b.uncollected===true)return {outcome:'none'};
+      return require('./lyrics-result.cjs').foundLyrics(b.lrc?.lyric);
+    }
     case 'init':for(const row of r.tracks || [])if(row.id?.startsWith('netease:'))this.tracks.set(row.id,{...row,serviceId:row.id.slice(8),platform:'netease'});if(r.session?.cookie){this.cookie=r.session.cookie;try{const b=await this.api('login_status');const p=b.data?.profile;if(p?.userId)this.profile={id:String(p.userId),name:p.nickname};}catch{this.profile=null;}}return {connected:!!this.profile,profile:this.profile,session:this.session()};
     case 'qr':{const key=await this.api('login_qr_key');this.key=key.data?.unikey;if(!this.key)throw Error('未收到网易云二维码');const b=await this.api('login_qr_create',{key:this.key,qrimg:true});return {image:b.data?.qrimg || '',status:'waiting'};}
     case 'poll':{if(!this.key)throw Error('请重新生成二维码');const b=await this.api('login_qr_check',{key:this.key});if(![800,801,802,803].includes(b.code))throw Error('扫码状态无效，请刷新二维码');if(b.code===800)return {status:'expired'};if(b.code===803){if(typeof b.cookie!=='string' || !b.cookie)throw Error('未收到登录凭证，请重新扫码');this.cookie=b.cookie;const status=await this.api('login_status');const p=status.data?.profile;if(!p?.userId)throw Error('网易云账号验证失败');this.profile={id:String(p.userId),name:p.nickname};this.key='';return {status:'connected',profile:this.profile,session:this.session()};}return {status:b.code===802?'confirm':'waiting'};}
@@ -55,7 +62,7 @@ class NeteaseAdapter {
 }
 function liveNetease(){
   const root=path.join(__dirname,'vendor/NeteaseCloudMusicApi-2aab9957dfd5231e5b192aecdb177f93ace4c92e');
-  const allowed=new Set(['login_qr_key','login_qr_create','login_qr_check','login_status','user_playlist','playlist_detail','song_detail','cloudsearch','song_url_v1','like','likelist','playlist_tracks','vip_info']);
+  const allowed=new Set(['login_qr_key','login_qr_create','login_qr_check','login_status','user_playlist','playlist_detail','song_detail','cloudsearch','song_url_v1','like','likelist','playlist_tracks','vip_info','lyric']);
   let ready;
   async function initialize(){
     const anonymous=path.join(require('node:os').tmpdir(),'anonymous_token');

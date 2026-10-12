@@ -3,6 +3,7 @@ import asyncio
 import base64
 import json
 import os
+import re
 from pathlib import Path
 import sys
 from datetime import datetime, timedelta, timezone
@@ -135,6 +136,20 @@ class Adapter:
 
     async def run(self, r):
         op = r['op']
+        if op=='lyrics':
+            if not re.fullmatch(r'qq:[A-Za-z0-9]+', r.get('id', '')):
+                raise PublicError('歌曲标识无效')
+            saved = r.get('session') or {}
+            self.client.credential = Credential.model_validate(saved['credential']) if saved.get('credential') else Credential()
+            # 0.8.1 decrypts the response model; qrc=False requests line-level LRC.
+            result = await self.client.lyric.get_lyric(r['id'][3:], qrc=False, trans=False, roma=False)
+            text = result.lyric
+            if not isinstance(text, str) or len(text.encode('utf-8'))>1024*1024 or '\0' in text:
+                raise PublicError('歌词内容无效')
+            if not text.strip(): return {'outcome':'none'}
+            # The SDK suppresses decrypt errors; never display/cache leftover ciphertext.
+            if re.fullmatch(r'[0-9a-fA-F]+', text.strip()): raise PublicError('歌词解码失败')
+            return {'outcome':'found', 'format':'lrc', 'text':text}
         if op=='init':
             saved = r.get('session') or {}
             if saved.get('credential'):

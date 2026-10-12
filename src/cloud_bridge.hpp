@@ -75,13 +75,13 @@ class Bridge {
 public:
     ~Bridge() { stop(); }
     bool running() const { return process.load() != nullptr; }
-    bool start(std::wstring& error) {
+    bool start(std::wstring& error,const wchar_t* serviceName=L"bridge.cjs") {
         if (running()) return true;
         stopping = false;
         wchar_t exe[32768]{}; GetModuleFileNameW(nullptr, exe, 32768);
         auto base = std::filesystem::path(exe).parent_path();
-        auto service = base / L"services" / L"bridge.cjs";
-        if (!std::filesystem::exists(service)) service = base.parent_path() / L"services" / L"bridge.cjs";
+        auto service = base / L"services" / serviceName;
+        if (!std::filesystem::exists(service)) service = base.parent_path() / L"services" / serviceName;
         if (!std::filesystem::exists(service)) { error = L"缺少酷狗接口服务，请运行 setup-cloud.ps1"; return false; }
         auto node = base / L"runtime" / L"node.exe";
         if (!std::filesystem::exists(node)) {
@@ -117,12 +117,12 @@ public:
         ResumeThread(pi.hThread);
         CloseHandle(pi.hThread); process = pi.hProcess; return true;
     }
-    Json call(const Json& request) {
+    Json call(const Json& request,ULONGLONG timeoutMs=120000) {
         try {
             auto line = request.dump() + "\n"; DWORD wrote = 0;
             if (stopping || !WriteFile(input, line.data(), (DWORD)line.size(), &wrote, nullptr) || wrote != line.size()) throw std::runtime_error("pipe");
             SecureZeroMemory(line.data(), line.size());
-            std::string result; auto deadline = GetTickCount64() + 120000;
+            std::string result; auto deadline = GetTickCount64() + timeoutMs;
             while (!stopping && GetTickCount64() < deadline) {
                 DWORD available = 0;
                 if (!PeekNamedPipe(output, nullptr, 0, nullptr, &available, nullptr)) throw std::runtime_error("pipe");

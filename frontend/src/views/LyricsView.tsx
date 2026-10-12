@@ -11,7 +11,7 @@ export default function LyricsView({ trackId, now, positionMs, canSeek, onSeek, 
   trackId: string; now?: LibraryState['now']; positionMs: number; canSeek: boolean;
   onSeek: (positionMs: number) => void; onClose: () => void;
 }) {
-  const { lyrics, loading, failed } = useLyrics(trackId, true);
+  const { lyrics, loading, failed, retry } = useLyrics(trackId, true);
   const list = useRef<HTMLOListElement>(null); const closeButton = useRef<HTMLButtonElement>(null);
   const userScroll = useRef(0);
   const synced = lyrics?.kind === 'synced';
@@ -46,7 +46,8 @@ export default function LyricsView({ trackId, now, positionMs, canSeek, onSeek, 
         <p>{now?.artist}</p>
         {lyrics && origins[lyrics.origin] && <span className="lyrics-origin">{origins[lyrics.origin]}</span>}</div>
     </div>
-    {message ? <p className="lyrics-message" role="status">{message}</p> :
+    {message ? <div className="lyrics-message" role="status"><p>{message}</p>
+      {failed && <Button variant="ghost" onClick={retry}>重试</Button>}</div> :
       <ol ref={list} className={`lyrics-lines${synced ? ' synced' : ''}`} onWheel={markScrolled} onPointerDown={markScrolled} onKeyDown={markScrolled}>
         {lines.map((line, index) => <li key={index} aria-current={index === active ? 'true' : undefined}>
           {synced ? <Button variant="unstyled" disabled={!canSeek} onClick={() => { userScroll.current = 0; onSeek(line.timeMs); }}>

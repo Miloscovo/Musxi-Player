@@ -30,6 +30,7 @@
 #include "../audio/wasapi_player.hpp"
 #include "../cloud_bridge.hpp"
 #include "../lyrics/lyrics.hpp"
+#include "../lyrics/cache.hpp"
 #include "../cxx17_guard.hpp"
 namespace fs=std::filesystem;
 namespace {
@@ -406,6 +407,7 @@ void cloudTick() {
                 }
                 cloudLoginAfterInit=false;
             } else if(op=="logout") {
+                cancelLyrics();
                 cloudPolling=false;clearQr();cloudPlaylists=data.at("playlists");
                 cloudUser=cloudText(data["profile"],"name");
                 const auto platform=data.value("platform","");
