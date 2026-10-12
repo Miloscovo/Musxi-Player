@@ -37,3 +37,12 @@ test('independent lyrics service creates only requested adapter and never initia
 test('raw lyric transport rejects empty, oversized and NUL content',()=>{
   for(const text of [null,'','  ','x\0y','x'.repeat(1024*1024+1)])assert.throws(()=>foundLyrics(text));
 });
+test('matching search uses only selected platform and retains recording candidates',async()=>{
+  const calls=[];const tracks=[{id:'qq:studio',name:'Song',album:'Studio'},{id:'qq:live',name:'Song',album:'Live'}];
+  const service=new LyricsService(platform=>({run:async request=>{calls.push([platform,request]);return {tracks,hasMore:true};}}));
+  const response=await service.run({op:'lyrics_search',platform:'qq',keywords:'Song',page:2});
+  assert.deepEqual(response,{tracks,hasMore:true});assert.equal(calls.length,1);assert.equal(calls[0][0],'qq');
+  assert.equal(calls[0][1].op,'search');assert.equal(calls[0][1].page,2);
+  for(const query of [{platform:'other'},{keywords:''},{keywords:'x'.repeat(121)},{page:0},{page:1.5}])
+    await assert.rejects(service.run({op:'lyrics_search',platform:'qq',keywords:'Song',page:1,...query}));
+});

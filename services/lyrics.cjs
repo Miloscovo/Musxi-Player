@@ -4,6 +4,16 @@ const readline=require('node:readline');
 class LyricsService {
   constructor(create) {this.create=create;this.adapters=new Map();}
   async run(request) {
+    if(request.op==='lyrics_search') {
+      const platform=request.platform;
+      if(!['kugou','netease','qq'].includes(platform) || typeof request.keywords!=='string' ||
+        !request.keywords.trim() || request.keywords.length>120 || !Number.isInteger(request.page) || request.page<1 || request.page>10)
+        throw Error('无效歌词搜索');
+      if(!this.adapters.has(platform))this.adapters.set(platform,this.create(platform));
+      const result=await this.adapters.get(platform).run({...request,op:'search'});
+      if(!Array.isArray(result.tracks))throw Error('歌曲搜索结果无效');
+      return {tracks:result.tracks.slice(0,30),hasMore:!!result.hasMore};
+    }
     if(request.op!=='lyrics' || !['kugou','netease','qq'].includes(request.platform) ||
       typeof request.id!=='string' || request.id.length>1024)throw Error('无效歌词请求');
     const expected=request.id.startsWith('netease:')?'netease':request.id.startsWith('qq:')?'qq':'kugou';

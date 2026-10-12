@@ -4,8 +4,9 @@
 line-level lyrics format. The native Application resolves trusted track metadata;
 services never receive a caller-selected download URL. Online lyrics use the
 actual recording's platform ID (KuGou hash, NetEase numeric ID, or QQ MID), not a
-merged title or playlist-row ID. Local tracks still use sidecar LRC then embedded
-tags; this feature does not search online for unidentified local audio.
+merged title or playlist-row ID. Local tracks use an explicitly saved match, then
+sidecar LRC and embedded tags. User-confirmed search for unidentified local audio
+is described in [Local lyrics matching](local-lyrics-match.md).
 
 ## Request ownership
 

@@ -31,6 +31,7 @@
 #include "../cloud_bridge.hpp"
 #include "../lyrics/lyrics.hpp"
 #include "../lyrics/cache.hpp"
+#include "../lyrics/match.hpp"
 #include "../cxx17_guard.hpp"
 namespace fs=std::filesystem;
 namespace {
@@ -225,6 +226,7 @@ musxi::PlayerService& playerService() {
 #include "local_music.inc"
 #include "playback_history.inc"
 #include "lyrics.inc"
+#include "lyrics_match.inc"
 void advancePlayback() {
     if(playbackOrder=="repeat-one" && opened && !cloudQueue.empty()) {
         auto result=audioBackend().seek(0);
@@ -407,6 +409,7 @@ void cloudTick() {
                 }
                 cloudLoginAfterInit=false;
             } else if(op=="logout") {
+                cancelMatch();
                 cancelLyrics();
                 cloudPolling=false;clearQr();cloudPlaylists=data.at("playlists");
                 cloudUser=cloudText(data["profile"],"name");
@@ -559,7 +562,7 @@ LRESULT CALLBACK wndProc(HWND hwnd,UINT message,WPARAM wp,LPARAM lp){
     case WM_CREATE: SetTimer(hwnd,Tick,150,nullptr);return 0;
     case WM_TIMER:
         if(wp==HostTick){if(hostHooks.tick)hostHooks.tick();return 0;}
-        localTick();lyricsTick();cloudTick();coverTick();pollAudio();playerService().publish();
+        localTick();lyricsTick();matchTick();cloudTick();coverTick();pollAudio();playerService().publish();
         if(hostHooks.connectCloud && GetTickCount64()>=playbackSaveAt) {
             savePlaybackHistory(cloud::dataDir()/L"playback-history.json");playbackSaveAt=GetTickCount64()+5000;
         }
@@ -570,7 +573,7 @@ LRESULT CALLBACK wndProc(HWND hwnd,UINT message,WPARAM wp,LPARAM lp){
     case WM_DESTROY:
         applicationClosing=true;
         if(hostHooks.connectCloud)savePlaybackHistory(cloud::dataDir()/L"playback-history.json");
-        localCancelled=true;if(localScan.valid()){try{localScan.get();}catch(...){}}stopLyrics();applicationWindow=nullptr;
+        localCancelled=true;if(localScan.valid()){try{localScan.get();}catch(...){}}stopMatch();stopLyrics();applicationWindow=nullptr;
         KillTimer(hwnd,HostTick);KillTimer(hwnd,Tick);cloudStop();closeAudio();
         audioBackendStorage().reset();collectAudioCaches(true);PostQuitMessage(0);return 0;
     }

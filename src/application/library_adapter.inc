@@ -189,6 +189,7 @@ LibraryReply applicationLibrary(const std::string& name,const std::string& param
             if(webWantedCovers.size()<256 || webWantedCovers.count(url)) webWantedCovers[url]=GetTickCount64()+30000;
             return reply("");
         }
+        if(name=="library.lyricsMatch")return reply(requestMatch(p));
         if(name=="library.lyrics") {
             if(p.size()!=2)return {400,"无效歌词参数",{}};
             const auto source=requiredText(p,"source"),id=requiredText(p,"id");

@@ -32,6 +32,13 @@ std::string lyricsText(std::string bytes) {
     return {};
 }
 Json readLocalLyrics(const fs::path& audio,const std::string& source,const std::string& id) {
+    try {
+        const auto selected=musxi::lyrics::readMatch(cloud::dataDir()/L"lyrics-matches",musxi::lyrics::fileIdentity(audio));
+        if(selected) {
+            auto reply=lyricsReply(source,id,"local","matched",musxi::lyrics::matchLyrics(*selected));
+            reply["offsetMs"]=selected->at("offsetMs");return reply;
+        }
+    }catch(...) {} // Missing files still follow the existing local lookup path.
     std::optional<std::string> sidecar,embedded;
     auto file=audio;file.replace_extension(L".lrc");std::error_code error;
     if(fs::is_regular_file(file,error) && fs::file_size(file,error)<=MaxLyricsFile && !error) {

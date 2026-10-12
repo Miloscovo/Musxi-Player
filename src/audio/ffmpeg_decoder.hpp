@@ -18,6 +18,7 @@ struct DecodedAudioInfo {
     int sourceSampleRate=0,sourceChannels=0;
     PcmFormat output;
 };
+struct LocalSongTags { std::string title,artist,album; };
 struct PcmBlock {
     std::vector<float> samples; // Interleaved, frames * output.channels.
     std::int64_t startFrame=0; // Media position in output sample-rate units.
@@ -44,6 +45,7 @@ public:
     void seek(std::int64_t positionMs);
     // Raw container/stream lyrics tag (LYRICS, lyrics-xxx, UNSYNCEDLYRICS); empty when absent.
     static std::string embeddedLyrics(const std::wstring& localPath,const std::atomic_bool* cancelled=nullptr);
+    static LocalSongTags songTags(const std::wstring& localPath,const std::atomic_bool* cancelled=nullptr);
 private:
     struct Impl;
     std::unique_ptr<Impl> impl_;

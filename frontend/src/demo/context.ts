@@ -2,6 +2,7 @@ import type { CefTransport } from '../native/transport.ts';
 import { platformNames, type Track, type PlaybackOrder, type AudioQuality, type MusicPlatform } from '../native/library.ts';
 import { NativeError } from '../native/types.ts';
 import { createDemoLibrary, createDemoPlayer, demoPlaylistSongs, demoSongs } from './data.ts';
+import { createDemoLyricsMatch } from './lyricsMatch.ts';
 
 export function isDemoMode(host: CefTransport = globalThis as CefTransport, search = globalThis.location?.search || '') {
   const query = new URLSearchParams(search);
@@ -24,6 +25,7 @@ export function createDemoTransport(): CefTransport {
   const queue = () => library.queue!;
   const fail = (message: string, code = 409): never => { throw new NativeError(code, message); };
   const track = (id: string) => songs.find(song => song.id === id) || fail('演示歌曲不存在', 404);
+  const lyricsMatch=createDemoLyricsMatch(track);
   function favoriteRows(): Track[] {
     return songs.flatMap(song => {
       const platforms = (['netease','kugou','qq'] as MusicPlatform[]).filter(platform =>
@@ -108,7 +110,9 @@ export function createDemoTransport(): CefTransport {
       return library;
     }
     if (command === 'library.image') return '';
+    if (command === 'library.lyricsMatch') return lyricsMatch.run(p);
     if (command === 'library.lyrics') {
+      const selected=lyricsMatch.lyrics(String(p.id));if(selected)return {...selected,source:p.source};
       const song = track(String(p.id));
       // Synthetic lines every eight seconds; same shape as the native reply.
       const lines = Array.from({ length: Math.min(40, Math.floor(song.duration / 8000)) }, (_, i) => ({ timeMs: i * 8000, text: `${song.name} · 演示歌词第 ${i + 1} 行` }));
