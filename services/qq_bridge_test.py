@@ -22,6 +22,19 @@ class CookieSnapshotTests(unittest.TestCase):
         self.assertEqual(payload.text,'login-state')
 
 class QQTests(unittest.IsolatedAsyncioTestCase):
+    async def test_lyrics_without_login_or_song_detail(self):
+        self.a.client.lyric=S(get_lyric=AsyncMock(return_value=S(lyric='[00:01.00]Original')))
+        request={'op':'lyrics','id':'qq:abc123'}
+        self.assertEqual(await self.a.run(request),{'outcome':'found','format':'lrc','text':'[00:01.00]Original'})
+        self.a.client.lyric.get_lyric.assert_awaited_once_with('abc123',qrc=False,trans=False,roma=False)
+        self.a.client.lyric.get_lyric.return_value=S(lyric='')
+        self.assertEqual(await self.a.run(request),{'outcome':'none'})
+        for text in ['abc123ff', 'x\0y', 'x'*(1024*1024+1)]:
+            self.a.client.lyric.get_lyric.return_value=S(lyric=text)
+            with self.assertRaises(PublicError): await self.a.run(request)
+        self.a.client.lyric.get_lyric.side_effect=RuntimeError('network')
+        with self.assertRaises(RuntimeError): await self.a.run(request)
+
     async def asyncSetUp(self):
         self.a=Adapter()
         await self.a.client.close()

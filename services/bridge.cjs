@@ -5,7 +5,7 @@ const crypto = require('node:crypto');
 const fs = require('node:fs/promises');
 const readline = require('node:readline');
 const VENDOR = path.join(__dirname, 'vendor', 'KuGouMusicApi-a5a98013cce79fe0ae2ad65fc84b68176ebcfc1e');
-const ALLOWED = new Set(['login_qr_key', 'login_qr_create', 'login_qr_check', 'user_detail', 'user_playlist', 'playlist_track_all_new', 'song_url', 'search', 'playlist_tracks_add', 'playlist_tracks_del', 'user_vip_detail', 'youth_month_vip_record', 'youth_day_vip']);
+const ALLOWED = new Set(['login_qr_key', 'login_qr_create', 'login_qr_check', 'user_detail', 'user_playlist', 'playlist_track_all_new', 'song_url', 'search', 'playlist_tracks_add', 'playlist_tracks_del', 'user_vip_detail', 'youth_month_vip_record', 'youth_day_vip', 'search_lyric', 'lyric']);
 const QUALITIES = [{id:'128',name:'标准 · 128 kbps'}, {id:'320',name:'高品质 · 320 kbps'}, {id:'flac',name:'无损 · FLAC'}];
 function confirmedQuality(data, id) {
   const bitrate=Number(data.bitRate ?? data.bitrate ?? data.bit_rate ?? 0);
@@ -200,6 +200,20 @@ class Adapter {
   }
   async run(request) {
     switch (request.op) {
+      case 'lyrics': {
+        const t=request.track;
+        if(!t || !/^[a-f0-9]{32}$/i.test(t.hash))throw Error('歌曲缺少有效标识');
+        this.cookie={...(request.session?.cookie || {})};
+        const found=await this.api('search_lyric',{hash:t.hash,album_audio_id:t.audioId || 0,duration:t.duration || 0});
+        if(!Array.isArray(found.candidates))throw Error('歌词搜索结果无效');
+        if(!found.candidates.length)return {outcome:'none'};
+        // Hash-scoped search only; never broaden to a title search or another platform.
+        const candidate=found.candidates.find(c=>c.id && typeof c.accesskey==='string' && c.accesskey &&
+          (!c.hash || String(c.hash).toLowerCase()===t.hash.toLowerCase()));
+        if(!candidate)throw Error('未找到匹配的歌词版本');
+        const body=await this.api('lyric',{id:candidate.id,accesskey:candidate.accesskey,fmt:'lrc',decode:true});
+        return require('./lyrics-result.cjs').foundLyrics(body.decodeContent);
+      }
       case 'vip_auto': {
         this.auth();
         try {
@@ -461,4 +475,4 @@ async function main() {
   } } finally { adapter.close(); }
 }
 if (require.main === module) main().catch(() => { process.exitCode = 1; });
-module.exports = { Adapter, playlist, track };
+module.exports = { Adapter, playlist, track, liveCaller };

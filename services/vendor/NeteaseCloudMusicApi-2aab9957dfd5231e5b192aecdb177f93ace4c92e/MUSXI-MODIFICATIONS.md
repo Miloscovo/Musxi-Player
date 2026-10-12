@@ -2,3 +2,5 @@ Pinned upstream: https://github.com/NeteaseCloudMusicApiEnhanced/api-enhanced/tr
 Only required API modules, their utility dependency closure and IP data are redistributed. song_url_v1.js removes the unblock import and branch; no alternate sources are supported. Remaining source files retain upstream code except the changes listed below. HTTP server, app and main entry points, unused checkToken modules and unrelated utilities are omitted.
 
 util/request.js removes unused checkToken and proxy integrations and rejects either option. Musxi never loads main/server/app or alternate-source modules.
+
+2026-10-12: Include module/lyric.js unchanged from the pinned commit above for original line lyrics. Its utility dependency closure and MIT license are already included.
