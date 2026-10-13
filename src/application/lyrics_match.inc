@@ -95,6 +95,7 @@ Json requestMatch(const Json& params) {
         const auto index=std::stoul(key);if(index>=matchCandidates.size())throw std::invalid_argument("候选已过期");
         const auto& track=matchCandidates[index];
         request={{"op","lyrics"},{"id",track.at("id")},{"platform",track.at("platform")},{"track",track},{"profileDir",profile.u8string()}};
+        if(track.at("platform")=="kugou")request["includeTranslation"]=true;
         const auto saved=cloud::readSession();const auto platform=track.at("platform").get<std::string>();
         request["session"]=saved.is_object()?(saved.value("platform","")=="multi"?saved.value("accounts",Json::object()).value(platform,Json(nullptr)):
             platform=="kugou"?saved:Json(nullptr)):Json(nullptr);

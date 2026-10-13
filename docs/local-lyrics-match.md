@@ -68,10 +68,12 @@ sidecar lyrics, changed catalog IDs and stale sessions. Frontend tests cover
 client contracts, polling and the demo workflow. Service tests verify platform
 isolation, version preservation and input bounds.
 
-## PR5: platform translations
+## PR5 / PR5b: platform translations
 
 Platform-provided original/translation pairs have a shared display toggle. NetEase
-uses `tlyric`; QQ requests `trans=True`; KuGou translations are deferred to PR5b.
+uses `tlyric`; QQ requests `trans=True`; KuGou extracts Chinese translations from
+version-1 KRC `language` metadata. KuGou previews request both formats for the
+same selected candidate; if KRC is unavailable, the LRC preview still works.
 C++ aligns translations to original timestamps. Missing translations leave the
 original usable. See [Lyrics translations](lyrics-translation.md).
 
@@ -79,3 +81,7 @@ Cache and explicit-match snapshots preserve both raw texts from the same
 recording, with backward-compatible reading of PR4 snapshots. The user's timing
 offset applies to the combined original/translation timeline. AI translation,
 romanization and word-by-word highlighting are outside PR5.
+
+Old KuGou bindings can gain translations in the background. The new KRC original
+must match the saved original's row texts and timings; a same-time different-text
+version is rejected. This preserves both the user's selected text and offset.

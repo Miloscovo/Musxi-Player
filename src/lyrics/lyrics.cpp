@@ -1,4 +1,5 @@
 #include "lyrics.hpp"
+#include "krc.hpp"
 #include "../cxx17_guard.hpp"
 #include <algorithm>
 #include <cctype>
@@ -158,6 +159,31 @@ bool translationText(const std::string& text,const std::string& original) {
 }
 }
 Lyrics parse(std::string_view text) {auto result=parseUnclamped(text);clamp(result);return result;}
+bool sameOriginal(std::string_view first,std::string_view second) {
+    const auto a=parseUnclamped(first),b=parseUnclamped(second);
+    if(a.kind!=Kind::Synced || b.kind!=Kind::Synced || a.lines.size()!=b.lines.size())return false;
+    for(std::size_t i=0;i<a.lines.size();++i)
+        if(a.lines[i].text!=b.lines[i].text || std::abs(a.lines[i].timeMs-b.lines[i].timeMs)>TranslationWindowMs)return false;
+    return true;
+}
+bool retimeKrc(KrcLyrics& krc,std::string_view target) {
+    if(!sameOriginal(target,krc.original))return false;
+    if(krc.state!=Translation::Available)return true;
+    const auto original=parseUnclamped(target),translated=parseUnclamped(krc.translation);
+    if(translated.lines.size()!=original.lines.size())return false;
+    const auto offset=std::max<std::int64_t>(0,-original.lines.front().timeMs);
+    std::string text="[offset:"+std::to_string(offset)+"]\n";
+    for(std::size_t i=0;i<original.lines.size();++i) {
+        const auto ms=original.lines[i].timeMs+offset;
+        if(ms>=60000000)return false;
+        // Explicit placeholders retain every nonempty original's matching slot.
+        const auto content=original.lines[i].text.empty()?std::string{}:
+            translated.lines[i].text.empty()?std::string{"//"}:translated.lines[i].text;
+        text+='['+std::to_string(ms/60000)+':'+std::to_string(ms/1000%60)+'.'+
+            (ms%1000<100?"0":"")+(ms%1000<10?"0":"")+std::to_string(ms%1000)+']'+content+'\n';
+    }
+    krc.translation=std::move(text);return true;
+}
 Translated parse(std::string_view originalText,std::string_view translationText_,std::int64_t shiftMs) {
     Translated result{parseUnclamped(originalText)};
     auto& lines=result.lyrics.lines;

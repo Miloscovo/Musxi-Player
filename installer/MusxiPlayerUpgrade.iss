@@ -50,6 +50,7 @@ Source: "..\services\multi-platform.cjs"; DestDir: "{app}\services"; Flags: igno
 Source: "..\services\netease.cjs"; DestDir: "{app}\services"; Flags: ignoreversion
 Source: "..\services\lyrics.cjs"; DestDir: "{app}\services"; Flags: ignoreversion
 Source: "..\services\lyrics-result.cjs"; DestDir: "{app}\services"; Flags: ignoreversion
+Source: "..\services\krc.cjs"; DestDir: "{app}\services"; Flags: ignoreversion
 Source: "..\services\qq.cjs"; DestDir: "{app}\services"; Flags: ignoreversion
 Source: "..\services\qq_bridge.py"; DestDir: "{app}\services"; Flags: ignoreversion
 Source: "..\services\python-runtime.json"; DestDir: "{app}\services"; Flags: ignoreversion

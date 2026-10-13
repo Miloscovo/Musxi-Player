@@ -2,6 +2,55 @@
 const test=require('node:test');const assert=require('node:assert/strict');
 const {Adapter}=require('./bridge.cjs');const {NeteaseAdapter}=require('./netease.cjs');
 const {LyricsService}=require('./lyrics.cjs');const {foundLyrics}=require('./lyrics-result.cjs');
+const {decodeKrc}=require('./krc.cjs');const {deflateSync}=require('node:zlib');
+function encodedKrc(text) {
+  const key=Buffer.from([64,71,97,119,94,50,116,71,81,54,49,45,206,210,110,105]);
+  const compressed=deflateSync(text);for(let i=0;i<compressed.length;i++)compressed[i]^=key[i%16];
+  return Buffer.concat([Buffer.from('krc1'),compressed]).toString('base64');
+}
+test('KRC decoding validates header, encoding, UTF-8 and inflation limit',()=>{
+  const original='[1000,1000]<0,1000,0>原文';
+  assert.equal(decodeKrc(encodedKrc(original)),original);
+  for(const content of [null,'???','a'.repeat(1400000),Buffer.from('nope').toString('base64'),
+    encodedKrc('x'.repeat(1024*1024+1)),encodedKrc('x\0y'),encodedKrc(Buffer.from([0xff,0xfe]))])
+    assert.throws(()=>decodeKrc(content));
+  const damaged=Buffer.from(encodedKrc(original),'base64');damaged[4]^=0xff;
+  assert.throws(()=>decodeKrc(damaged.toString('base64')));
+});
+test('Kugou translation refresh downloads only KRC of the hash-scoped candidate',async()=>{
+  const calls=[],raw='[1000,1000]<0,1000,0>Hello';
+  const a=new Adapter(async(name,params)=>{calls.push([name,params]);return {body:name==='search_lyric'?
+    {candidates:[{id:2,accesskey:'synthetic'}]}:{content:encodedKrc(raw)}};});
+  const result=await a.run({op:'lyrics',track:{hash:'a'.repeat(32)},translationOnly:true});
+  assert.deepEqual(result,{outcome:'found',format:'krc',text:raw});
+  assert.deepEqual(calls.map(x=>x[0]),['search_lyric','lyric']);assert.equal(calls[1][1].fmt,'krc');
+  assert.equal(calls[1][1].decode,false);
+});
+test('Kugou preview KRC uses the same candidate and damaged KRC keeps LRC',async()=>{
+  const valid=encodedKrc('[1000,1000]Hello');
+  for(const content of [valid,'bad',undefined]) {
+    const calls=[];
+    const a=new Adapter(async(name,params)=>{calls.push(params);return {body:name==='search_lyric'?
+      {candidates:[{id:2,accesskey:'synthetic'}]}:params.fmt==='lrc'?{decodeContent:'[00:01]Hello'}:{content}};});
+    const result=await a.run({op:'lyrics',track:{hash:'a'.repeat(32)},includeTranslation:true});
+    assert.equal(result.text,'[00:01]Hello');assert.equal(result.translationState,'unknown');
+    assert.equal(result.krc,content===valid?'[1000,1000]Hello':undefined);
+    assert.deepEqual(calls.slice(1).map(x=>[x.id,x.accesskey]),[[2,'synthetic'],[2,'synthetic']]);
+  }
+});
+test('Kugou stalled optional KRC does not lose a valid preview original',async()=>{
+  const a=new Adapter(async(name,params)=>({body:name==='search_lyric'?{candidates:[{id:2,accesskey:'synthetic'}]}:
+    params.fmt==='lrc'?{decodeContent:'[00:01]Hello'}:await new Promise(()=>{})}));
+  const started=Date.now();
+  const result=await a.run({op:'lyrics',track:{hash:'a'.repeat(32)},includeTranslation:true});
+  assert.equal(result.text,'[00:01]Hello');assert.ok(Date.now()-started<5500);
+});
+test('lyrics service validates internal translation flags',async()=>{
+  const service=new LyricsService(()=>({run:async()=>({outcome:'none'})}));
+  for(const flags of [{translationOnly:'yes'},{includeTranslation:1},{translationOnly:true},{includeTranslation:true}])
+    await assert.rejects(service.run({op:'lyrics',platform:'qq',id:'qq:123',...flags}));
+  assert.deepEqual(await service.run({op:'lyrics',platform:'kugou',id:'fixture',translationOnly:true}),{outcome:'none'});
+});
 test('Kugou lyrics use recording metadata without search/login initialization',async()=>{
   const calls=[];const hash='a'.repeat(32);
   const a=new Adapter(async(name,params)=>{calls.push([name,params]);return {body:name==='search_lyric'?
