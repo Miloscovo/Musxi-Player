@@ -16,11 +16,13 @@ adapter. Each request carries that platform's saved session snapshot and recordi
 metadata; it does not perform login validation, playlist synchronization, or
 account mutations. Services return decoded original LRC and optional platform
 translations or explicit absence; the C++ lyrics library owns parsing and caching.
-[Lyrics translations](lyrics-translation.md) describes NetEase/QQ alignment,
+[Lyrics translations](lyrics-translation.md) describes NetEase/QQ/KRC alignment,
 background refresh and upgrade compatibility. Word highlighting is not requested.
 
 The native network budget is 15 seconds for the whole service call, including QQ
-child startup or both KuGou calls. The UI polls pending results for up to 20 seconds,
+child startup or KuGou's search/download steps. KuGou original LRC and background
+KRC translation have independent calls; previews optionally fetch both formats
+within the same budget. The UI polls pending results for up to 20 seconds,
 shows failures separately from absence, and offers retry. Changing the requested
 song, changing the playing song during a lookup, logout, and application shutdown
 cancel old work. Generation checks discard stale responses, including A → B → A.

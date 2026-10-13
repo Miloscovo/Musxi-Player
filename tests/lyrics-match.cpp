@@ -35,6 +35,15 @@ int main() {
         lyricsCancelled=false;
         auto lyrics=readLocalLyrics(audio,"local","local:991");
         require(lyrics["origin"]=="matched" && lyrics["lines"][0]["timeMs"]==2500,"selection did not override sidecar");
+        require(matchBridge.start(error,L"lyrics-bridge.cjs"),"Kugou search fixture restart");
+        state=finish(requestMatch({{"action","search"},{"id","local:991"},{"session",session},{"platform","kugou"},{"keywords","Fixture"},{"page",1}}));
+        require(state["candidates"].size()==1 && state["candidates"][0]["platform"]=="kugou","Kugou search candidate missing");
+        require(matchBridge.start(error,L"lyrics-bridge.cjs"),"Kugou preview fixture restart");
+        state=finish(requestMatch({{"action","preview"},{"id","local:991"},{"session",session},{"candidate","0"}}));
+        require(state["preview"]["translation"]=="available" && state["preview"]["lines"][0]["translation"]=="IPC 夹具","Kugou KRC preview translation missing");
+        state=finish(requestMatch({{"action","save"},{"id","local:991"},{"session",session},{"offsetMs",1500}}));
+        lyricsCancelled=false;lyrics=readLocalLyrics(audio,"local","local:991");
+        require(lyrics["translation"]=="available" && lyrics["lines"][0]["timeMs"]==2500 && lyrics["lines"][0]["translation"]=="IPC 夹具","Kugou preview translation did not persist with offset");
         // Restore using a new session, including a changed catalog ID for the same file.
         cancelMatch();localTracks[0]["id"]="local:992";
         auto begin=requestMatch({{"action","begin"},{"id","local:992"}});

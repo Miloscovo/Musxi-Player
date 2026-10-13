@@ -37,6 +37,11 @@ int main() {
         require(findLyricsTrack("qq:actual")->at("name")=="Actual","lyrics used stale list record");
         auto malformed=lyricsEntry({{"outcome","found"},{"format","lrc"},{"text","[00:01]Original"},{"translationState",23}},std::nullopt);
         require(malformed.text=="[00:01]Original" && malformed.translationState==musxi::lyrics::Translation::Unknown,"malformed translation rejected original");
+        // Independent KRC metadata failures and a same-time different original are not absence.
+        auto damagedKrc=lyricsEntry({{"outcome","found"},{"format","lrc"},{"text","[00:01]Original"},{"krc","[language:bad]\n[1000,1000]Original"}},std::nullopt);
+        require(damagedKrc.text=="[00:01]Original" && damagedKrc.translationState==musxi::lyrics::Translation::Unknown,"damaged KRC lost original");
+        damagedKrc=lyricsEntry({{"outcome","found"},{"format","lrc"},{"text","[00:01]Original"},{"krc","[1000,1000]Different"}},std::nullopt);
+        require(damagedKrc.translationState==musxi::lyrics::Translation::Unknown,"different KRC original cached as no translation");
         // A translation cannot survive actual playback changes or a later generation.
         lyricsCancelled=false;lyricsTrackId="netease:123";lyricsPlaybackId=audioTrackId;
         lyricsResult=lyricsReply("queue",lyricsTrackId,"netease","cache",musxi::lyrics::parse("[00:01]Shown"));
@@ -133,6 +138,48 @@ int main() {
         const auto kept=musxi::lyrics::readMatch(matches,identity);
         require(kept && kept->value("translationState","unknown")=="unknown" && kept->at("text")==snapshot("netease:790")["text"],
             "newer server original silently replaced the user's choice");
+        cancelLyrics();translationAttempted.clear();
+        // KuGou now uses the same nonblocking refresh flow, including legacy snapshots.
+        const std::string hash(32,'a'),kugouKey="kugou:"+hash;
+        const std::string kugouOriginal="[00:01.00]IPC fixture\n[00:02.00]Second line";
+        const auto kugouPoll=[&](const std::string& recording,const std::function<bool(const Json&)>& done) {
+            Json value;const auto until=GetTickCount64()+8000;
+            do {Sleep(10);value=requestLyrics("queue",recording);} while(!done(value) && GetTickCount64()<until);
+            return value;
+        };
+        for(const auto* mode:{"fixture:kugou","fixture:kugou-different","fixture:kugou-none","fixture:kugou-damaged"}) {
+            cancelLyrics();translationAttempted.clear();
+            musxi::lyrics::CacheEntry original;original.text=kugouOriginal;
+            require(musxi::lyrics::writeCache(profileCache,kugouKey,original,lyricsNow()),"seed Kugou cache");
+            currentPlaybackTrack={{"id",mode},{"hash",hash},{"name","Kugou fixture"}};audioTrackId=mode;
+            const auto firstKugou=kugouPoll(mode,[](const Json& v){return v["status"]=="ready";});
+            require(firstKugou["origin"]=="cache" && firstKugou["translation"]=="unknown" && firstKugou.value("translationPending",false),"Kugou original waited for KRC");
+            const auto completed=kugouPoll(mode,[](const Json& v){return v["status"]=="ready" && !v.value("translationPending",false);});
+            const auto stored=musxi::lyrics::readCache(profileCache,kugouKey,lyricsNow());
+            require(stored && stored->text==kugouOriginal,"KRC replaced cached original");
+            const std::string expected=std::string(mode)=="fixture:kugou"?"available":std::string(mode)=="fixture:kugou-none"?"none":"unknown";
+            require(completed["translation"]==expected && musxi::lyrics::translationName(stored->translationState)==expected,"Kugou refresh state incorrect");
+            if(expected=="available")require(completed["lines"][0]["translation"]=="IPC 夹具","Kugou translation not displayed");
+            // Persisted local bindings keep the selected text and offset, even on same-time mismatch.
+            cancelLyrics();translationAttempted.clear();
+            Json selected={{"text",kugouOriginal},{"offsetMs",500},{"platform","kugou"},
+                {"track",{{"id",mode},{"hash",hash},{"name","Chosen"}}}};
+            musxi::lyrics::saveMatch(matches,identity,selected);audioTrackId="local:5";
+            const auto localFirst=local([](const Json& v){return v["status"]=="ready";});
+            require(localFirst["translation"]=="unknown" && localFirst.value("translationPending",false) && localFirst.value("translationRetryable",false),"Kugou snapshot not refreshable");
+            const auto localFilled=local([](const Json& v){return v["status"]=="ready" && !v.value("translationPending",false);});
+            const auto localStored=musxi::lyrics::readMatch(matches,identity);
+            require(localFilled["translation"]==expected && localStored && localStored->at("text")==selected["text"] && localStored->at("offsetMs")==500,"Kugou snapshot replaced choice or wrong state");
+            if(expected=="available")require(localFilled["lines"][0]["timeMs"]==1500 && localFilled["lines"][0]["translation"]=="IPC 夹具","Kugou snapshot translation offset wrong");
+        }
+        cancelLyrics();translationAttempted.clear();
+        lyricsCancelled=false;
+        require(lyricsBridge.start(error,L"lyrics-bridge.cjs"),"Kugou fresh IPC start");
+        const Json kugouRequest={{"op","lyrics"},{"source","queue"},{"id","fixture:kugou"},{"platform","kugou"},{"track",{{"hash",hash}}}};
+        musxi::lyrics::removeCache(profileCache,kugouKey);
+        const auto freshKugou=readOnlineLyrics(kugouRequest,profileCache,kugouKey,true);
+        require(freshKugou["origin"]=="online" && freshKugou.value("translationRefresh",false),"fresh Kugou LRC did not schedule background KRC");
+        lyricsBridge.stop();musxi::lyrics::removeCache(profileCache,kugouKey);
         cancelLyrics();musxi::lyrics::removeMatch(matches,identity);fs::remove_all(root);
         musxi::lyrics::removeCache(profileCache,"netease:789");
         require(!musxi::lyrics::readCache(profileCache,"netease:789",lyricsNow()),"test cache entry left behind");

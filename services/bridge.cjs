@@ -204,15 +204,32 @@ class Adapter {
         const t=request.track;
         if(!t || !/^[a-f0-9]{32}$/i.test(t.hash))throw Error('歌曲缺少有效标识');
         this.cookie={...(request.session?.cookie || {})};
-        const found=await this.api('search_lyric',{hash:t.hash,album_audio_id:t.audioId || 0,duration:t.duration || 0});
+        // All steps share a deadline shorter than the native bridge's 15 seconds.
+        const until=Date.now()+13500;
+        const call=async(name,params,limit=13500)=>{
+          const remaining=Math.min(limit,until-Date.now());
+          if(remaining<=0)throw Error('歌词请求超时');
+          let timer;
+          try {return await Promise.race([this.api(name,params),new Promise((_,reject)=>{
+            timer=setTimeout(()=>reject(Error('歌词请求超时')),remaining);
+          })]);}finally{clearTimeout(timer);}
+        };
+        const found=await call('search_lyric',{hash:t.hash,album_audio_id:t.audioId || 0,duration:t.duration || 0});
         if(!Array.isArray(found.candidates))throw Error('歌词搜索结果无效');
         if(!found.candidates.length)return {outcome:'none'};
         // Hash-scoped search only; never broaden to a title search or another platform.
         const candidate=found.candidates.find(c=>c.id && typeof c.accesskey==='string' && c.accesskey &&
           (!c.hash || String(c.hash).toLowerCase()===t.hash.toLowerCase()));
         if(!candidate)throw Error('未找到匹配的歌词版本');
-        const body=await this.api('lyric',{id:candidate.id,accesskey:candidate.accesskey,fmt:'lrc',decode:true});
-        return require('./lyrics-result.cjs').foundLyrics(body.decodeContent);
+        const download={id:candidate.id,accesskey:candidate.accesskey};
+        const krc=async(limit)=>require('./krc.cjs').decodeKrc((await call('lyric',{...download,fmt:'krc',decode:false},limit)).content);
+        if(request.translationOnly===true)return {outcome:'found',format:'krc',text:await krc()};
+        const body=await call('lyric',{...download,fmt:'lrc',decode:true});
+        const result=require('./lyrics-result.cjs').foundLyrics(body.decodeContent);
+        // Matching previews may include translations of this exact candidate.
+        // KRC damage or timeout never discards a valid LRC original.
+        if(request.includeTranslation===true)try {result.krc=await krc(4000);}catch{}
+        return result;
       }
       case 'vip_auto': {
         this.auth();

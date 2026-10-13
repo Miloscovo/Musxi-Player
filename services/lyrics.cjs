@@ -18,6 +18,9 @@ class LyricsService {
       typeof request.id!=='string' || request.id.length>1024)throw Error('无效歌词请求');
     const expected=request.id.startsWith('netease:')?'netease':request.id.startsWith('qq:')?'qq':'kugou';
     if(expected!==request.platform)throw Error('歌词平台不匹配');
+    for(const field of ['translationOnly','includeTranslation'])
+      if(request[field]!==undefined && (typeof request[field]!=='boolean' || (request[field] && expected!=='kugou')))
+        throw Error('无效翻译请求');
     if(!this.adapters.has(expected))this.adapters.set(expected,this.create(expected));
     return this.adapters.get(expected).run(request);
   }

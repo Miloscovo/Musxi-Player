@@ -30,6 +30,7 @@
 #include "../audio/wasapi_player.hpp"
 #include "../cloud_bridge.hpp"
 #include "../lyrics/lyrics.hpp"
+#include "../lyrics/krc.hpp"
 #include "../lyrics/cache.hpp"
 #include "../lyrics/match.hpp"
 #include "../cxx17_guard.hpp"
