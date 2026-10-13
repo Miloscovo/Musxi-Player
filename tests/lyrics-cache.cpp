@@ -33,6 +33,30 @@ int main() {
         require(!readCache(directory,key,now),"mismatched key accepted");
         for(const auto& file:fs::directory_iterator(directory)){std::ofstream out(file.path());out<<"broken";}
         require(!readCache(directory,key,now),"corrupt cache accepted");
+        // v0.4 wrote version 1 without translation fields: still readable, translation unknown.
+        {std::ofstream out(fs::directory_iterator(directory)->path());
+         out<<nlohmann::json{{"version",1},{"key",key},{"format","lrc"},{"savedAt",now},{"none",false},{"text","[00:01.00]Hello"}}.dump();}
+        value=readCache(directory,key,now+1);
+        require(value && value->fresh && value->translationState==Translation::Unknown && !value->translationFresh,"v0.4 cache lost on upgrade");
+        CacheEntry translated;translated.text="[00:01.00]Hello\n[00:02.00]World";translated.translationState=Translation::Available;
+        translated.translation="[00:01.00]你好\n[00:02.00]世界";
+        require(writeCache(directory,key,translated,now),"translated cache write");
+        value=readCache(directory,key,now+31*86400);
+        require(value && value->translation==translated.translation && value->translationFresh,"translation not persisted");
+        const auto stored=fs::directory_iterator(directory)->path();
+        nlohmann::json damaged;{std::ifstream in(stored);in>>damaged;}
+        damaged["translation"]=23;{std::ofstream out(stored);out<<damaged;}
+        value=readCache(directory,key,now+1);
+        require(value && value->text==translated.text && value->translationState==Translation::Unknown,"damaged translation discarded cached original");
+        CacheEntry none;none.text=translated.text;none.translationState=Translation::None;
+        require(writeCache(directory,key,none,now),"none translation write");
+        require(readCache(directory,key,now+86400)->translationFresh && !readCache(directory,key,now+8*86400)->translationFresh,"translation recheck period");
+        CacheEntry mismatch=translated;mismatch.translation="[00:09.00]别的版本\n[00:12.00]不对齐";
+        require(!writeCache(directory,key,mismatch,now),"misaligned translation cached as available");
+        CacheEntry stray=none;stray.translation="[00:01.00]你好";
+        require(!writeCache(directory,key,stray,now),"translation text without available state");
+        require(judgeTranslation(translated.text,"[00:01.00]你好\n[00:02.00]世界\n[00:30.00]多余")==Translation::None,"two of three rows accepted");
+        require(judgeTranslation(translated.text,"[00:01.00]你好\n[00:02.00]世界")==Translation::Available,"aligned translation rejected");
         for(int i=0;i<260;++i)require(writeCache(directory,"qq:"+std::to_string(i),{"",true},now),"bounded cache write");
         std::size_t count=0;for(const auto& file:fs::directory_iterator(directory))if(file.path().extension()==".json")++count;
         require(count<=256,"cache entry cap");

@@ -115,8 +115,13 @@ export function createDemoTransport(): CefTransport {
       const selected=lyricsMatch.lyrics(String(p.id));if(selected)return {...selected,source:p.source};
       const song = track(String(p.id));
       // Synthetic lines every eight seconds; same shape as the native reply.
-      const lines = Array.from({ length: Math.min(40, Math.floor(song.duration / 8000)) }, (_, i) => ({ timeMs: i * 8000, text: `${song.name} · 演示歌词第 ${i + 1} 行` }));
-      return { status: 'ready', source: p.source, id: song.id, platform: song.id.startsWith('local:') ? 'local' : 'kugou', origin: lines.length ? 'lrc-file' : '', kind: lines.length ? 'synced' : 'none', lines };
+      // Even-numbered demo songs carry a translation on most lines, like platform lyrics.
+      const translated = Number(song.id.replace(/\D/g, '')) % 2 === 0;
+      const lines = Array.from({ length: Math.min(40, Math.floor(song.duration / 8000)) }, (_, i) => ({ timeMs: i * 8000,
+        text: translated ? `${song.name} · Demo lyric line ${i + 1}` : `${song.name} · 演示歌词第 ${i + 1} 行`,
+        ...(translated && i % 7 !== 3 ? { translation: `演示译文第 ${i + 1} 行` } : {}) }));
+      return { status: 'ready', source: p.source, id: song.id, platform: song.id.startsWith('local:') ? 'local' : 'kugou', origin: lines.length ? 'lrc-file' : '',
+        kind: lines.length ? 'synced' : 'none', lines, translation: translated && lines.length ? 'available' : 'none' };
     }
     switch (command) {
       case 'library.search': {

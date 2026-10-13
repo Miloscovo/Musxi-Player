@@ -37,6 +37,29 @@ int main() {
         {std::ofstream out(recordPath);out<<MatchJson{{"identity",other}}.dump();}
         rejected=false;try{removeMatch(directory,current);}catch(...){rejected=true;}
         require(rejected && fs::exists(recordPath),"reset removed another song's record");
+        fs::remove(recordPath);
+        // v0.4 snapshots (version 1, no translation fields) stay valid after the upgrade.
+        {std::ofstream out(recordPath);out<<MatchJson{{"version",1},{"identity",current},{"selection",selection}}.dump();}
+        require(readMatch(directory,current)==selection,"v0.4 snapshot lost on upgrade");
+        auto translated=selection;translated["translationState"]="available";translated["translation"]="[offset:500]\n[00:01]一\n[00:02]二";
+        saveMatch(directory,current,translated);
+        require(!updateMatch(directory,current,selection,translated),"stale translation replaced a new choice");
+        require(readMatch(directory,current)==translated,"stale update changed snapshot");
+        auto damaged=translated;damaged["translation"]=23;
+        {std::ofstream out(recordPath);out<<MatchJson{{"version",2},{"identity",current},{"selection",damaged}}.dump();}
+        require(readMatch(directory,current)==selection,"damaged translation discarded confirmed original");
+        saveMatch(directory,current,translated);
+        auto adjusted=translated;adjusted["offsetMs"]=2000;
+        require(updateMatch(directory,current,translated,adjusted),"matching translation update rejected");
+        saveMatch(directory,current,translated);
+        lines=matchLyrics(translated);
+        require(lines.lines[0].timeMs==1500 && lines.lines[0].translation=="一" && lines.lines[1].translation=="二","snapshot translation or shared offset");
+        auto wrong=translated;wrong["translation"]="[00:30]别的版本";
+        rejected=false;try{saveMatch(directory,current,wrong);}catch(...){rejected=true;}require(rejected,"misaligned snapshot translation saved");
+        auto stray=selection;stray["translationState"]="none";stray["translation"]="[00:01]一";
+        rejected=false;try{saveMatch(directory,current,stray);}catch(...){rejected=true;}require(rejected,"translation text with none state saved");
+        removeMatch(directory,current);
+        require(!updateMatch(directory,current,translated,adjusted) && !readMatch(directory,current),"translation restored a removed binding");
         fs::remove_all(root);std::cout<<"Match storage passed\n";return 0;
     }catch(const std::exception& e){fs::remove_all(root);std::cerr<<e.what()<<'\n';return 1;}
 }

@@ -22,7 +22,12 @@ test('Netease preserves original lyrics and distinguishes absence from network f
   let body={code:200,lrc:{lyric:'[00:01]Original'},tlyric:{lyric:'Translation'}};
   const a=new NeteaseAdapter(async(name,p)=>{assert.equal(name,'lyric');assert.equal(p.id,'123');return {body};});
   const request={op:'lyrics',id:'netease:123'};
-  assert.equal((await a.run(request)).text,'[00:01]Original');
+  assert.deepEqual(await a.run(request),{outcome:'found',format:'lrc',text:'[00:01]Original',translationState:'available',translation:'Translation'});
+  // Real NetEase payloads send an empty tlyric for untranslated songs; a missing field is also absence.
+  for(const tlyric of [{lyric:''},{},undefined]) {
+    body={code:200,lrc:{lyric:'[00:01]Original'},tlyric};const result=await a.run(request);
+    assert.equal(result.translationState,'none');assert.equal(result.translation,undefined);
+  }
   for(const field of ['nolyric','uncollected']){body={code:200,[field]:true};assert.deepEqual(await a.run(request),{outcome:'none'});}
   for(const b of [{code:500},{code:200},{code:200,lrc:{lyric:''}}]){body=b;await assert.rejects(a.run(request));}
   await assert.rejects(a.run({...request,id:'qq:123'}));
@@ -36,6 +41,14 @@ test('independent lyrics service creates only requested adapter and never initia
 });
 test('raw lyric transport rejects empty, oversized and NUL content',()=>{
   for(const text of [null,'','  ','x\0y','x'.repeat(1024*1024+1)])assert.throws(()=>foundLyrics(text));
+});
+test('damaged translation keeps the original and stays retryable',()=>{
+  for(const translation of ['x\0y','x'.repeat(1024*1024+1),'abc123ff',42]) {
+    const result=foundLyrics('[00:01]Original',translation);
+    assert.equal(result.text,'[00:01]Original');assert.equal(result.translationState,'unknown');assert.equal(result.translation,undefined);
+  }
+  assert.equal(foundLyrics('[00:01]Original').translationState,'unknown');
+  assert.equal(foundLyrics('[00:01]Original',null).translationState,'none');
 });
 test('matching search uses only selected platform and retains recording candidates',async()=>{
   const calls=[];const tracks=[{id:'qq:studio',name:'Song',album:'Studio'},{id:'qq:live',name:'Song',album:'Live'}];

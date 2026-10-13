@@ -21,7 +21,7 @@ void matchTick() {
     if(matchOperation=="begin") {matchIdentity=result.at("identity");matchSelection=result.at("selection");}
     if(matchOperation=="search") {matchCandidates=result.at("tracks");matchHasMore=result.at("hasMore");matchSelection=nullptr;}
     if(matchOperation=="preview")matchSelection=result.at("selection");
-    if(matchOperation=="save" || matchOperation=="reset") {matchSelection=result.at("selection");cancelLyrics();}
+    if(matchOperation=="save" || matchOperation=="reset") {matchSelection=result.at("selection");translationAttempted.erase(matchLocalId);cancelLyrics();}
 }
 void stopMatch() {
     cancelMatch();if(matchFuture.valid())try{matchFuture.get();}catch(...){}
@@ -30,7 +30,8 @@ void stopMatch() {
 Json matchPreview(const Json& selection,const std::string& id) {
     if(!selection.is_object())return nullptr;
     auto result=lyricsReply("local",id,"local","matched",musxi::lyrics::matchLyrics(selection));
-    result["offsetMs"]=selection.at("offsetMs");return result;
+    result["offsetMs"]=selection.at("offsetMs");
+    result["translation"]=translationReply(selection.value("translationState","unknown"),result);return result;
 }
 Json matchPublic() {
     Json result={{"status",matchFuture.valid()?"pending":"ready"},{"session",matchSession},{"job",matchJob},{"id",matchLocalId}};
@@ -147,7 +148,10 @@ Json requestMatch(const Json& params) {
             if(data.at("outcome")!="found" || data.at("format")!="lrc")throw std::runtime_error("歌词格式无效");
             auto text=data.at("text").get<std::string>();
             if(text.size()>musxi::lyrics::MaxOnlineLyricsBytes || !musxi::lyrics::normalizeText(text))throw std::runtime_error("歌词内容无效");
-            selection={{"text",text},{"offsetMs",0},{"platform",request.at("platform")},{"track",request.at("track")}};
+            // The snapshot keeps the translation of this exact version alongside its original.
+            musxi::lyrics::CacheEntry entry;entry.text=text;attachTranslation(entry,data);
+            selection={{"text",text},{"offsetMs",0},{"platform",request.at("platform")},{"track",request.at("track")},
+                {"translationState",musxi::lyrics::translationName(entry.translationState)},{"translation",entry.translation}};
             (void)musxi::lyrics::matchLyrics(selection);
             return {{"selection",selection}};
         }catch(const std::exception& error){return {{"error",error.what()}};}

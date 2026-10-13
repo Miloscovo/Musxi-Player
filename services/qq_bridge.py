@@ -142,14 +142,21 @@ class Adapter:
             saved = r.get('session') or {}
             self.client.credential = Credential.model_validate(saved['credential']) if saved.get('credential') else Credential()
             # 0.8.1 decrypts the response model; qrc=False requests line-level LRC.
-            result = await self.client.lyric.get_lyric(r['id'][3:], qrc=False, trans=False, roma=False)
+            result = await self.client.lyric.get_lyric(r['id'][3:], qrc=False, trans=True, roma=False)
             text = result.lyric
             if not isinstance(text, str) or len(text.encode('utf-8'))>1024*1024 or '\0' in text:
                 raise PublicError('歌词内容无效')
             if not text.strip(): return {'outcome':'none'}
             # The SDK suppresses decrypt errors; never display/cache leftover ciphertext.
             if re.fullmatch(r'[0-9a-fA-F]+', text.strip()): raise PublicError('歌词解码失败')
-            return {'outcome':'found', 'format':'lrc', 'text':text}
+            found = {'outcome':'found', 'format':'lrc', 'text':text, 'translationState':'unknown'}
+            trans = getattr(result, 'trans', None)
+            if trans is None or (isinstance(trans, str) and not trans.strip()): found['translationState'] = 'none'
+            # A damaged translation keeps the original usable and stays unknown for a later retry.
+            elif isinstance(trans, str) and len(trans.encode('utf-8'))<=1024*1024 and '\0' not in trans and \
+                    not re.fullmatch(r'[0-9a-fA-F]+', trans.strip()):
+                found['translationState'] = 'available'; found['translation'] = trans
+            return found
         if op=='init':
             saved = r.get('session') or {}
             if saved.get('credential'):

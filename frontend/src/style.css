@@ -487,3 +487,19 @@ html,body,#app,main.app-shell { background:transparent!important }
   .lyrics-match-preview ol { height:200px }
   .lyrics-match-search { flex-wrap:wrap }
 }
+/* Platform translations: one row per original line, translation below it.
+   The row stays a single button so clicking either line seeks the original time. */
+.lyrics-lines.dual button,.lyrics-match-preview ol.dual button { display:flex; flex-direction:column; align-items:flex-start; gap:2px }
+.lyrics-lines.dual li { margin:6px 0 }
+.lyrics-lines small,.lyrics-match-preview li small { display:block; color:var(--muted); font-size:.78em; font-weight:400; line-height:1.4; opacity:.9 }
+.lyrics-lines li[aria-current=true] small { color:color-mix(in srgb,var(--accent) 75%,var(--muted)) }
+.lyrics-translation-toggle { display:inline-flex; align-items:center; gap:8px; margin-top:14px; padding:4px 2px; border-radius:6px; background:transparent; color:var(--muted); font:inherit; font-size:13px }
+.lyrics-translation-toggle span { position:relative; flex:none; width:30px; height:18px; border-radius:9px; background:color-mix(in srgb,var(--muted) 30%,var(--search)); transition:background-color .18s ease-out }
+.lyrics-translation-toggle span::after { position:absolute; left:3px; top:3px; width:12px; height:12px; border-radius:50%; background:#fff; box-shadow:0 1px 2px #0003; transition:transform .18s ease-out; content:"" }
+.lyrics-translation-toggle[aria-checked=true] span { background:var(--switch-accent) }
+.lyrics-translation-toggle[aria-checked=true] span::after { transform:translateX(12px) }
+.lyrics-translation-toggle:hover { color:var(--ink) }
+.lyrics-translation-status { margin-top:14px; color:var(--muted); font-size:12px }
+.lyrics-match-preview .lyrics-translation-toggle { align-self:flex-start; margin-top:0 }
+@media (max-width:800px) { .lyrics-translation-toggle,.lyrics-translation-status { margin-top:6px } }
+@media (prefers-reduced-motion:reduce) { .lyrics-translation-toggle span,.lyrics-translation-toggle span::after { transition:none } }

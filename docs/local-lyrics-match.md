@@ -38,7 +38,7 @@ in-memory lyric result so the page reloads immediately.
 
 ## Binding and offset
 
-`<profile>/lyrics-matches/` stores version-1 JSON snapshots independently of the
+`<profile>/lyrics-matches/` stores versioned JSON snapshots independently of the
 evictable online cache. Each contains canonical file path, byte size, modification
 time, trusted platform/recording metadata, normalized original UTF-8 text and user
 offset. Windows path comparison is case-normalized. Hashed filenames are checked
@@ -68,14 +68,14 @@ sidecar lyrics, changed catalog IDs and stale sessions. Frontend tests cover
 client contracts, polling and the demo workflow. Service tests verify platform
 isolation, version preservation and input bounds.
 
-## Planned PR5: platform translations
+## PR5: platform translations
 
-Add platform-provided original/translation pairs with a display toggle. NetEase
-uses `tlyric`; QQ requests `trans=True`; KuGou's translation carrier needs further
-investigation. C++ will align translation timestamps to original lyrics rather
-than pair by line number. Missing translations leave the original usable.
+Platform-provided original/translation pairs have a shared display toggle. NetEase
+uses `tlyric`; QQ requests `trans=True`; KuGou translations are deferred to PR5b.
+C++ aligns translations to original timestamps. Missing translations leave the
+original usable. See [Lyrics translations](lyrics-translation.md).
 
-Cache and explicit-match snapshots should preserve both raw texts from the same
+Cache and explicit-match snapshots preserve both raw texts from the same
 recording, with backward-compatible reading of PR4 snapshots. The user's timing
 offset applies to the combined original/translation timeline. AI translation,
-romanization and word-by-word highlighting are outside this PR5 proposal.
+romanization and word-by-word highlighting are outside PR5.

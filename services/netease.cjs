@@ -37,7 +37,7 @@ class NeteaseAdapter {
       this.cookie=r.session?.cookie || '';
       const b=await this.api('lyric',{id:r.id.slice(8)});
       if(b.nolyric===true || b.uncollected===true)return {outcome:'none'};
-      return require('./lyrics-result.cjs').foundLyrics(b.lrc?.lyric);
+      return require('./lyrics-result.cjs').foundLyrics(b.lrc?.lyric,b.tlyric?.lyric ?? null);
     }
     case 'init':for(const row of r.tracks || [])if(row.id?.startsWith('netease:'))this.tracks.set(row.id,{...row,serviceId:row.id.slice(8),platform:'netease'});if(r.session?.cookie){this.cookie=r.session.cookie;try{const b=await this.api('login_status');const p=b.data?.profile;if(p?.userId)this.profile={id:String(p.userId),name:p.nickname};}catch{this.profile=null;}}return {connected:!!this.profile,profile:this.profile,session:this.session()};
     case 'qr':{const key=await this.api('login_qr_key');this.key=key.data?.unikey;if(!this.key)throw Error('未收到网易云二维码');const b=await this.api('login_qr_create',{key:this.key,qrimg:true});return {image:b.data?.qrimg || '',status:'waiting'};}
