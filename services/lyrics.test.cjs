@@ -11,6 +11,9 @@ function encodedKrc(text) {
 test('KRC decoding validates header, encoding, UTF-8 and inflation limit',()=>{
   const original='[1000,1000]<0,1000,0>原文';
   assert.equal(decodeKrc(encodedKrc(original)),original);
+  const forged=Buffer.from(encodedKrc(original),'base64');
+  for(let i=0;i<4;i++)forged[i]|=0x80;
+  assert.throws(()=>decodeKrc(forged.toString('base64')));
   for(const content of [null,'???','a'.repeat(1400000),Buffer.from('nope').toString('base64'),
     encodedKrc('x'.repeat(1024*1024+1)),encodedKrc('x\0y'),encodedKrc(Buffer.from([0xff,0xfe]))])
     assert.throws(()=>decodeKrc(content));

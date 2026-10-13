@@ -9,7 +9,7 @@ function decodeKrc(content) {
     content.length%4 || !/^[A-Za-z0-9+/]*={0,2}$/.test(content))throw Error('KRC 内容无效');
   const bytes=Buffer.from(content,'base64');
   if(bytes.toString('base64')!==content)throw Error('KRC 编码无效');
-  if(bytes.length<=4 || bytes.length>MAX_BYTES || bytes.subarray(0,4).toString('ascii')!=='krc1')throw Error('KRC 文件头无效');
+  if(bytes.length<=4 || bytes.length>MAX_BYTES || !bytes.subarray(0,4).equals(Buffer.from('krc1')))throw Error('KRC 文件头无效');
   const compressed=Buffer.from(bytes.subarray(4));
   for(let i=0;i<compressed.length;i++)compressed[i]^=KEY[i%KEY.length];
   // Bound during inflation, before allocating the complete decoded lyrics.
