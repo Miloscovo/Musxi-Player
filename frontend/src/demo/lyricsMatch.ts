@@ -19,7 +19,8 @@ export function createDemoLyricsMatch(track:(id:string)=>Track) {
       original=null;state={...state,preview:null,selectedName:'',platform:'',candidates:Number(p.page)===1?[{key:'0',name:String(p.keywords),artist:'演示歌手',album:'演示录音室版',duration:song.duration,platform:p.platform as MusicPlatform}]:[]};
     }else if(p.action==='preview') {
       const candidate=state.candidates?.find(c=>c.key===p.candidate);if(!candidate)throw Error('候选已过期');
-      original={status:'ready',source:'local',id,platform:'local',origin:'matched',offsetMs:0,kind:'synced',lines:Array.from({length:30},(_,i)=>({timeMs:8000*i,text:`匹配演示歌词 · 第 ${i+1} 行`}))};
+      original={status:'ready',source:'local',id,platform:'local',origin:'matched',offsetMs:0,kind:'synced',translation:'available',
+        lines:Array.from({length:30},(_,i)=>({timeMs:8000*i,text:`Matched demo lyric · line ${i+1}`,...(i%5!==2?{translation:`匹配演示译文 · 第 ${i+1} 行`}:{})}))};
       state={...state,selectedName:candidate.name,platform:candidate.platform,preview:original};
     }else if(p.action==='adjust' || p.action==='save') {
       const offset=Number(p.offsetMs);if(!original || !Number.isInteger(offset) || Math.abs(offset)>600000)throw Error('时间校正无效');

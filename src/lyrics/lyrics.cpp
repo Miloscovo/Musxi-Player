@@ -2,6 +2,7 @@
 #include "../cxx17_guard.hpp"
 #include <algorithm>
 #include <cctype>
+#include <cstdlib>
 #include <optional>
 
 namespace musxi::lyrics {
@@ -109,7 +110,10 @@ bool normalizeText(std::string& bytes) {
     }
     return validUtf8(bytes);
 }
-Lyrics parse(std::string_view text) {
+namespace {
+// Synced times keep the [offset:] shift but may still be negative so that
+// translation alignment does not see several early lines collapsed onto 0.
+Lyrics parseUnclamped(std::string_view text) {
     std::vector<Line> timed;std::vector<std::string> plain;std::int64_t offset=0;
     for(std::size_t start=0;start<text.size() && timed.size()<MaxLines;) {
         auto end=text.find('\n',start);if(end==std::string_view::npos)end=text.size();
@@ -135,7 +139,7 @@ Lyrics parse(std::string_view text) {
     Lyrics result;
     if(std::any_of(timed.begin(),timed.end(),[](const Line& line){return !line.text.empty();})) {
         // A positive LRC offset shows lyrics earlier.
-        for(auto& line:timed)line.timeMs=std::max<std::int64_t>(0,line.timeMs-offset);
+        for(auto& line:timed)line.timeMs-=offset;
         std::stable_sort(timed.begin(),timed.end(),[](const Line& a,const Line& b){return a.timeMs<b.timeMs;});
         result.kind=Kind::Synced;result.lines=std::move(timed);
     } else if(!plain.empty()) {
@@ -143,6 +147,44 @@ Lyrics parse(std::string_view text) {
         for(auto& row:plain)result.lines.push_back({0,std::move(row)});
     }
     return result;
+}
+void clamp(Lyrics& lyrics) {for(auto& line:lyrics.lines)line.timeMs=std::max<std::int64_t>(0,line.timeMs);}
+// Platform translations share the original timestamps (exact in NetEase/QQ
+// samples); the window only absorbs 2- vs 3-digit fraction rounding.
+constexpr std::int64_t TranslationWindowMs=100;
+// QQ writes "//" for lines it does not translate; credits are often copied verbatim.
+bool translationText(const std::string& text,const std::string& original) {
+    return !text.empty() && text!="//" && text!=original;
+}
+}
+Lyrics parse(std::string_view text) {auto result=parseUnclamped(text);clamp(result);return result;}
+Translated parse(std::string_view originalText,std::string_view translationText_,std::int64_t shiftMs) {
+    Translated result{parseUnclamped(originalText)};
+    auto& lines=result.lyrics.lines;
+    const auto translation=parseUnclamped(translationText_);
+    if(result.lyrics.kind==Kind::Synced && translation.kind==Kind::Synced) {
+        // Both lists are time-sorted; equal timestamps pair in their file order.
+        std::size_t first=0;
+        std::vector<bool> consumed(lines.size(),false);
+        for(const auto& row:translation.lines) {
+            if(row.text.empty())continue;
+            const bool candidate=row.text!="//";
+            if(candidate)++result.candidates;
+            while(first<lines.size() && lines[first].timeMs<row.timeMs-TranslationWindowMs)++first;
+            std::size_t best=lines.size();std::int64_t distance=TranslationWindowMs+1;
+            for(auto i=first;i<lines.size() && lines[i].timeMs<=row.timeMs+TranslationWindowMs;++i) {
+                const auto gap=std::abs(lines[i].timeMs-row.timeMs);
+                if(!lines[i].text.empty() && !consumed[i] && gap<distance) {best=i;distance=gap;}
+            }
+            if(best==lines.size())continue;
+            consumed[best]=true;
+            if(!candidate)continue;
+            if(translationText(row.text,lines[best].text)) {lines[best].translation=row.text;++result.matched;}
+            else --result.candidates; // A copied credit line is not a missed translation.
+        }
+    }
+    if(result.lyrics.kind==Kind::Synced)for(auto& line:lines)line.timeMs+=shiftMs;
+    clamp(result.lyrics);return result;
 }
 Selected chooseLocal(const std::string* sidecar,const std::string* embedded) {
     if(sidecar) {auto parsed=parse(*sidecar);if(parsed.kind!=Kind::None)return {Origin::File,std::move(parsed)};}

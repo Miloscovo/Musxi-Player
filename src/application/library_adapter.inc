@@ -191,12 +191,12 @@ LibraryReply applicationLibrary(const std::string& name,const std::string& param
         }
         if(name=="library.lyricsMatch")return reply(requestMatch(p));
         if(name=="library.lyrics") {
-            if(p.size()!=2)return {400,"无效歌词参数",{}};
+            if(p.size()!=2 && !(p.size()==3 && p.contains("retryTranslation") && p["retryTranslation"].is_boolean()))return {400,"无效歌词参数",{}};
             const auto source=requiredText(p,"source"),id=requiredText(p,"id");
             if(source!="search" && source!="library" && source!="queue" && source!="local" && source!="recent")return {400,"无效列表",{}};
             if(id.rfind("local:",0)==0) {if(!findLocalTrack(id))return {404,"本地歌曲不存在",{}};}
             else if(!knownTrack(id))return {404,"歌曲不存在",{}};
-            return reply(requestLyrics(source,id));
+            return reply(requestLyrics(source,id,p.value("retryTranslation",false)));
         }
         if(name=="library.cancel") {
             if(!p.empty()) return {400,"无效取消参数",{}};

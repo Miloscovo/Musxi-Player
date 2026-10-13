@@ -14,9 +14,10 @@ The Application has one lyrics future and a dedicated `cloud::Bridge` running
 `services/lyrics.cjs`. This process lazily creates only the requested platform
 adapter. Each request carries that platform's saved session snapshot and recording
 metadata; it does not perform login validation, playlist synchronization, or
-account mutations. Services return decoded original LRC text or explicit absence;
-the C++ lyrics library owns parsing and caching. Translation and word highlighting
-are not requested.
+account mutations. Services return decoded original LRC and optional platform
+translations or explicit absence; the C++ lyrics library owns parsing and caching.
+[Lyrics translations](lyrics-translation.md) describes NetEase/QQ alignment,
+background refresh and upgrade compatibility. Word highlighting is not requested.
 
 The native network budget is 15 seconds for the whole service call, including QQ
 child startup or both KuGou calls. The UI polls pending results for up to 20 seconds,

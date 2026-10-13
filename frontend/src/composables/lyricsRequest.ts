@@ -15,3 +15,19 @@ export async function loadLyricsRequest(request: () => Promise<Lyrics>, id: stri
   signal.throwIfAborted();
   throw new Error('歌词请求已取消');
 }
+
+// Polls a shown result until its background translation lookup settles. Every
+// ready reply is delivered (lines may gain translations); other songs' replies
+// and a reply that reverts to pending end the refresh without touching the page.
+export async function refreshTranslation(request: () => Promise<Lyrics>, id: string, signal: AbortSignal,
+  wait: () => Promise<void>, deliver: (value: Lyrics) => void, now: () => number = Date.now, timeoutMs = 20000) {
+  const deadline = now() + timeoutMs;
+  while (!signal.aborted && now() < deadline) {
+    await wait();
+    if (signal.aborted || now()>=deadline) return;
+    const value = await request();
+    if (signal.aborted || value.id !== id || value.status !== 'ready') return;
+    deliver(value);
+    if (!value.translationPending) return;
+  }
+}
