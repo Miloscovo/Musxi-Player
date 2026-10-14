@@ -5,6 +5,7 @@ import json
 import os
 import re
 from pathlib import Path
+from urllib.parse import urlsplit, unquote
 import sys
 from datetime import datetime, timedelta, timezone
 
@@ -119,10 +120,14 @@ class Adapter:
         return self.songs[id]
 
     async def audio(self, song, quality):
-        filetype = {'128':SongFileType.MP3_128, '320':SongFileType.MP3_320, 'flac':SongFileType.FLAC}[quality]
+        filetype = {'128':SongFileType.MP3_128, '320':SongFileType.MP3_320, 'flac':SongFileType.FLAC}.get(quality)
+        if filetype is None: raise PublicError('无效音质')
         result = await self.client.song.get_song_urls([SongFileInfo(mid=song.mid, media_mid=song.file.media_mid, song_type=song.type)], file_type=filetype)
         entry = result.data[0] if result.data else None
         if not entry or entry.result != 0 or not entry.purl: raise PublicError('此账号暂无该音质播放权限')
+        expected = filetype.s + (song.file.media_mid or song.mid + song.mid) + filetype.e
+        if entry.filename != expected or Path(unquote(urlsplit(entry.purl).path)).name != expected or entry.ekey:
+            raise PublicError('所选音质未返回可验证的原始文件，已保留当前播放')
         dispatch = await self.client.song.get_cdn_dispatch()
         if not dispatch.sip: raise PublicError('QQ 音频服务器地址不可用')
         return {'url':dispatch.sip[0]+entry.purl, 'track':self.song(song), 'quality':quality}
@@ -189,13 +194,14 @@ class Adapter:
         song = await self.detail(r['id'])
         if op=='audio': return await self.audio(song, r.get('quality','128'))
         if op=='qualities':
-            options=[]
-            for quality, name in [('128','标准 · 128 kbps'),('320','高品质 · 320 kbps'),('flac','无损 · FLAC')]:
+            async def probe(quality, name):
                 try:
                     await self.audio(song, quality)
-                    options.append({'id':quality,'name':name})
-                except Exception: pass
-            return {'id':r['id'],'options':options}
+                    return {'id':quality,'name':name}
+                except Exception: return None
+            options = await asyncio.gather(*(probe(quality, name) for quality, name in [
+                ('128','标准 · 128 kbps'),('320','高品质 · 320 kbps'),('flac','无损 · FLAC')]))
+            return {'id':r['id'],'options':[option for option in options if option]}
         if op=='song_menu':
             lists=await self.sync()
             return {'id':r['id'], 'liked':await self.liked(song), 'canFavorite':True, 'playlists':[p for p in lists if p['editable']]}

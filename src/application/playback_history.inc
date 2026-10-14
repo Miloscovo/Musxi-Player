@@ -111,9 +111,12 @@ bool restorePlaybackHistory(const fs::path& file) {
         if(!savedRecent.is_array() || savedRecent.size()>500)throw std::runtime_error("Invalid recent playback record");
         Json recent=Json::array();ids.clear();
         for(auto row=savedRecent.rbegin();row!=savedRecent.rend();++row) {auto track=playbackTrack(*row);if(!ids.insert(track.at("id").get<std::string>()).second)throw std::runtime_error("Duplicate recent ID");prependRecentTrack(recent,track);}
-        const auto mode=saved.at("mode").get<std::string>(),quality=saved.at("quality").get<std::string>();
+        const auto mode=saved.at("mode").get<std::string>();
+        auto quality=saved.at("quality").get<std::string>();
+        // Removed tiers must not discard the saved queue, progress or recent history.
+        if(quality=="netease:jymaster" || quality=="netease:jyeffect" || quality=="qq:master" || quality=="qq:atmos2" || quality=="kugou:viper_clear" || quality=="kugou:viper_tape")quality.clear();
         if(mode!="sequential" && mode!="random" && mode!="repeat-one")throw std::runtime_error("Invalid playback mode");
-        if(!quality.empty() && quality!="128" && quality!="320" && quality!="flac")throw std::runtime_error("Invalid playback quality");
+        if(!quality.empty() && !validAudioQuality(quality))throw std::runtime_error("Invalid playback quality");
         const auto position=saved.at("positionMs").get<std::int64_t>();
         const auto volume=saved.at("volume").get<int>();
         if(position<0 || position>UINT32_MAX || volume<0 || volume>100)throw std::runtime_error("Invalid playback position");

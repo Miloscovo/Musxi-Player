@@ -48,7 +48,7 @@ input.seek-bar{position:absolute;left:0;top:-5px;width:100%;height:10px;margin:0
 }
 :root[data-tone=blue] { --tone-light:#3171c4; --tone-dark:#9dc6f7; --tone-soft-light:#f1f6fd; --tone-soft-dark:#283c56 }
 :root[data-tone=pink] { --tone-light:#ff69b4; --tone-dark:#ff8fc7; --tone-soft-light:#ffe8f3; --tone-soft-dark:#4b263b; --accent-fill:#ff69b4 }
-:root[data-tone=red] { --tone-light:#c23e43; --tone-dark:#f29a9e; --tone-soft-light:#fbe8e9; --tone-soft-dark:#452b2e }
+:root[data-tone=red] { --tone-light:#c23e43; --tone-dark:var(--tone-light); --tone-soft-light:#fbe8e9; --tone-soft-dark:#452b2e }
 :root[data-tone]:not([data-tone=green]) { --accent:var(--tone-light); --app-soft:var(--tone-soft-light); --soft:var(--app-soft); --appearance-selected:var(--app-soft); --appearance-ink:var(--accent); --switch-accent:var(--accent) }
 :root:is([data-theme=dark],[data-theme=glass])[data-tone]:not([data-tone=green]) { --accent:var(--tone-dark); --app-soft:var(--tone-soft-dark) }
 :root[data-tone=pink] { --switch-accent:var(--accent-fill) }
@@ -213,6 +213,7 @@ main.app-shell { --sidebar-width:clamp(190px,15.5vw,240px); overflow:hidden; bor
 .player-track,.play-controls,.player-side { zoom:.82 }
 .player-track,.player-side { display:flex; align-items:center; min-width:0 }
 .player-track { gap:20px }
+.player-track[inert] { visibility:hidden }
 .player-side { justify-content:flex-end; gap:26px }
 .player-track .cover { width:78px; height:78px; border-radius:11px }
 .player .track { width:auto; min-width:0 }
@@ -232,8 +233,10 @@ main.app-shell { --sidebar-width:clamp(190px,15.5vw,240px); overflow:hidden; bor
 .volume-control .volume-button { padding:0; background:transparent; color:inherit; }
 .volume-button svg { display:block; width:100%; height:100%; }
 .volume-control input { width:100%; min-width:65px; height:18px; margin:0; appearance:none; background:transparent }
+.volume-control input:enabled { cursor:pointer }
 .volume-control input::-webkit-slider-runnable-track { height:6px; border-radius:6px; background:linear-gradient(to right,var(--accent-fill) var(--volume),#cbd6d9 var(--volume)) }
-.volume-control input::-webkit-slider-thumb { width:18px; height:18px; margin-top:-6px; appearance:none; border-radius:50%; background:var(--accent) }
+/* A minimal invisible width preserves native slider dragging. */
+.volume-control input::-webkit-slider-thumb { width:1px; height:18px; margin-top:-6px; appearance:none; opacity:0 }
 .queue-control { width:42px; height:46px; padding:4px; background:transparent; color:var(--ink) }
 input.seek-bar::-webkit-slider-runnable-track { background:linear-gradient(to right,var(--accent-fill) var(--progress),#9caaa944 var(--progress)) }
 input.seek-bar::-webkit-slider-thumb { background:var(--accent) }

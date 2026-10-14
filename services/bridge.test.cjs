@@ -163,6 +163,7 @@ test('quality menu only lists entitled and confirmed audio; fallback is not adve
   assert.equal(JSON.stringify(result).includes('https://'),false);
   await assert.rejects(a.run({op:'audio',id:'song',quality:'320'}),/该音质暂时不可用/);
   await assert.rejects(a.run({op:'audio',id:'song',quality:'unknown'}),/无效音质/);
+  for(const quality of ['kugou:viper_clear','kugou:viper_tape'])await assert.rejects(a.run({op:'audio',id:'song',quality}),/无效音质/);
   a.call=async()=>response({url:['https://example.com/lossless.flac'],extName:'flac',bitrate:900000});
   assert.deepEqual((await a.run({op:'qualities',id:'song'})).options.map(option=>option.id),['flac']);
   assert.equal((await a.run({op:'audio',id:'song',quality:'flac'})).quality,'flac');
@@ -173,6 +174,74 @@ test('real song_url bitRate field enables standard and high-quality choices', as
   a.knownTracks.set('song',{id:'song',hash:'a'.repeat(32)});
   assert.deepEqual((await a.run({op:'qualities',id:'song'})).options.map(option=>option.id),['128','320','flac']);
   assert.equal((await a.run({op:'audio',id:'song',quality:'320'})).quality,'320');
+});
+
+test('VIP basic qualities use authorized variant URLs after old failures or silent downgrades',async()=>{
+  const base='a'.repeat(32),hashes={'320':'b'.repeat(32),flac:'c'.repeat(32)};let oldFails=true;
+  const calls=[];const a=authenticated(async(name,p)=>{
+    calls.push([name,p]);
+    if(name==='privilege_lite')return response([{hash:base,quality:'128',relate_goods:Object.entries(hashes).map(([quality,hash])=>({quality,hash,album_audio_id:9,info:{tracker_type:'full'}}))}]);
+    if(name==='song_url'){
+      if(oldFails && p.quality!==128)return {body:{status:2}};
+      return response({hash:base,url:['https://example.test/standard.mp3'],bitRate:128000,extName:'mp3'});
+    }
+    if(name==='user_verify')return response({valid:1,auth:'fixture-user-auth'});
+    if(name==='song_auth'){assert.equal(p.cookie.auth,'fixture-user-auth');return response({auth:'fixture-song-auth',open_time:123});}
+    if(name==='song_url_auth'){
+      assert.equal(p.hash,hashes[String(p.quality)]);assert.equal(p.album_audio_id,9);
+      assert.equal(p.auth,'fixture-song-auth');assert.equal(p.open_time,123);
+      return response({hash:p.hash,url:['https://example.test/audio'],bitRate:p.quality===320?320000:900000,extName:p.quality===320?'mp3':'flac'});
+    }
+    throw Error('Unexpected request');
+  });a.knownTracks.set('song',{id:'song',hash:base});
+  assert.deepEqual((await a.run({op:'qualities',id:'song'})).options.map(q=>q.id),['128','320','flac']);
+  for(const quality of ['320','flac'])assert.equal((await a.run({op:'audio',id:'song',quality})).quality,quality);
+  oldFails=false;
+  assert.equal((await a.run({op:'audio',id:'song',quality:'flac'})).quality,'flac');
+  calls.length=0;await a.run({op:'audio',id:'song',quality:'128'});
+  assert.deepEqual(calls.map(([name])=>name),['song_url']);
+});
+
+test('authorized basic audio rejects invalid login, downgrades, trial and mismatched variants',async()=>{
+  const base='a'.repeat(32),variant='b'.repeat(32);let valid=1;
+  let data={hash:variant,url:['https://example.test/audio'],bitRate:320000,extName:'mp3'};
+  const a=authenticated(async(name)=>{
+    if(name==='privilege_lite')return response([{hash:base,quality:'128',relate_goods:[{hash:variant,quality:'320'}]}]);
+    if(name==='song_url')return response({url:[]});
+    if(name==='user_verify')return response({valid,auth:'fixture-user-auth'});
+    if(name==='song_auth'){assert.equal(valid,1);return response({auth:'fixture-song-auth',open_time:123});}
+    if(name==='song_url_auth')return response(data);
+    throw Error('Unexpected request');
+  });a.knownTracks.set('song',{id:'song',hash:base});
+  const good=data;
+  for(const bad of [{...good,bitRate:128000},{...good,is_free_part:1},{...good,freeTrialInfo:{}},{...good,hash_offset:{end_ms:30000}},{...good,hash:base}]){
+    data=bad;await assert.rejects(a.run({op:'audio',id:'song',quality:'320'}),/暂时不可用/);
+    assert.deepEqual((await a.run({op:'qualities',id:'song'})).options,[]);
+  }
+  data=good;valid=0;await assert.rejects(a.run({op:'audio',id:'song',quality:'320'}),/暂时不可用/);
+});
+
+test('basic menu accepts the returned quality variant instead of comparing it with the input song hash',async()=>{
+  const base='a'.repeat(32),standard='b'.repeat(32),high='c'.repeat(32);let originalFails=false;
+  const calls=[];const a=authenticated(async(name,p)=>{
+    calls.push([name,p.hash]);
+    if(name==='privilege_lite')return response([{hash:base,quality:'128',relate_goods:[{hash:standard,quality:'128'},{hash:high,quality:'320'}]}]);
+    if(name==='song_url') {
+      if(originalFails && p.hash===base)return response({hash:base,extName:'flac',url:['https://example.test/wrong-tier']});
+      if(p.quality===128)return response({hash:standard,extName:'mp3',bitRate:128000,url:['https://example.test/standard']});
+      if(p.quality===320)return response({hash:high,extName:'mp3',bitRate:320000,url:['https://example.test/high']});
+      return response({url:[]});
+    }
+    throw Error('Authorization not needed for available variants');
+  });a.knownTracks.set('song',{id:'song',hash:base});
+  assert.deepEqual((await a.run({op:'qualities',id:'song'})).options.map(q=>q.id),['128','320']);
+  for(const quality of ['128','320'])assert.equal((await a.run({op:'audio',id:'song',quality})).quality,quality);
+  originalFails=true;
+  for(const quality of ['128','320']){
+    calls.length=0;assert.equal((await a.run({op:'audio',id:'song',quality})).quality,quality);
+    assert.ok(calls.some(([name,hash])=>name==='song_url' && hash===(quality==='128'?standard:high)));
+    assert.ok(!calls.some(([name])=>name==='user_verify'));
+  }
 });
 
 test('own playlists without artwork use their first song cover without replacing custom covers or failing sync',async()=>{

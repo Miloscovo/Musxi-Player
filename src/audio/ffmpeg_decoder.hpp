@@ -16,6 +16,8 @@ struct PcmFormat {
 struct DecodedAudioInfo {
     std::int64_t durationMs=-1; // Unknown is distinct from an empty stream.
     int sourceSampleRate=0,sourceChannels=0;
+    // Zero for floating/unknown sources or after SRC/channel mixing.
+    int exactIntegerBits=0;
     PcmFormat output;
 };
 struct LocalSongTags { std::string title,artist,album; };

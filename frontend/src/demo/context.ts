@@ -98,7 +98,7 @@ export function createDemoTransport(): CefTransport {
     }
     if (command === 'library.getPlaybackSettings') return playbackSettings;
     if (command === 'library.setPlaybackSettings') {
-      if (!['128','320','flac'].includes(p.defaultQuality as string) || (p.outputDevice !== '' && p.outputDevice !== 'demo-output')) fail('无效播放设置', 400);
+      if (!['128','320','flac','best'].includes(p.defaultQuality as string) || (p.outputDevice !== '' && p.outputDevice !== 'demo-output')) fail('无效播放设置', 400);
       playbackSettings = { ...playbackSettings, defaultQuality: String(p.defaultQuality), outputDevice: String(p.outputDevice) };
       return playbackSettings;
     }

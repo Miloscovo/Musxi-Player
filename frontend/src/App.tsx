@@ -113,7 +113,7 @@ export default function App() {
         style={{ '--progress': `${state.durationMs ? (seekDraft ?? state.positionMs) / state.durationMs * 100 : 0}%` } as CSSProperties}
         disabled={!connected || !state.opened || !state.durationMs}
         onInput={event => setSeekDraft(Number(event.currentTarget.value))} aria-label="歌曲进度" />}
-      <div className="player-track"><Button variant="unstyled" className="lyrics-toggle" aria-expanded={lyricsOpen}
+      <div className="player-track" inert={lyricsOpen}><Button variant="unstyled" className="lyrics-toggle" aria-expanded={lyricsOpen}
           aria-label={lyricsOpen ? '收起歌词页' : '展开歌词页'} title={lyricsOpen ? '收起歌词' : '查看歌词'} onClick={() => setLyricsOpen(open => !open)}>
           <CoverImage url={currentTrack?.cover || ''} />
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d={lyricsOpen ? 'm6 9 6 6 6-6' : 'm6 15 6-6 6 6'}/></svg>

@@ -283,7 +283,7 @@ export async function verifyWebPage() {
     await waitFor(() => actions.includes('order:repeat-one'), 'Playback order did not dispatch');
     await waitFor(() => !document.querySelector('.player-action-menu'));
     await new Promise(resolve=>setTimeout(resolve,50));
-    fixtureLibrary.state={...fixtureLibrary.state!,qualities:{id:song.id,current:'128',options:[{id:'128',name:'标准 · 128 kbps'},{id:'320',name:'高品质 · 320 kbps'}]}};
+    fixtureLibrary.state={...fixtureLibrary.state!,qualities:{id:song.id,current:'128',options:[{id:'128',name:'标准 · 128 kbps'},{id:'320',name:'高品质 · 320 kbps'},{id:'netease:hires',name:'Hi-Res'}]}};
     renderPlayerActions(song.id);
     await new Promise(resolve=>setTimeout(resolve,25));
     fixture.querySelector<HTMLButtonElement>('[aria-label="音质选择"]')!.click();
@@ -291,8 +291,8 @@ export async function verifyWebPage() {
     const qualityMenu=document.querySelector<HTMLElement>('.player-action-menu')!;
     if(qualityMenu.dataset.side!=='top' || qualityMenu.getBoundingClientRect().bottom-qualityMenu.lastElementChild!.getBoundingClientRect().bottom>12)
       throw new Error('Quality menu is not compact and above the trigger');
-    qualityMenu.querySelectorAll<HTMLButtonElement>('button')[1].click();
-    await waitFor(() => actions.includes(`quality:${song.id}:320`));
+    qualityMenu.querySelectorAll<HTMLButtonElement>('button')[2].click();
+    await waitFor(() => actions.includes(`quality:${song.id}:netease:hires`));
     await waitFor(() => !document.querySelector('.player-action-menu'));
     await new Promise(resolve=>setTimeout(resolve,50));
     renderPlayerActions('local:fixture');
@@ -351,7 +351,7 @@ export async function verifyWebPage() {
     || document.querySelector('.settings-content h2')) throw new Error('Settings tabs or removed subtitle are incorrect');
   settingsTabs[1].click();
   await waitFor(() => !!document.querySelector('#audio-output-device'), 'Playback settings did not load');
-  if (document.querySelector('.settings-content h2') || document.querySelectorAll('#default-audio-quality option').length !== 3)
+  if (document.querySelector('.settings-content h2') || document.querySelectorAll('#default-audio-quality option').length !== 4)
     throw new Error('Playback settings structure is incorrect');
   settingsTabs[0].click();
   // Tone buttons share .appearance-segment; only the mode group is under test here.
@@ -507,11 +507,18 @@ export async function verifyWebPage() {
   await waitFor(() => document.querySelector('#volume')?.textContent === `${previous.originalVolume}%`);
   const lyricsToggle=document.querySelector<HTMLButtonElement>('.lyrics-toggle');
   if(!lyricsToggle)throw new Error('Lyrics toggle is missing');
+  const playerTrack=document.querySelector<HTMLElement>('.player-track')!;
+  const controls=document.querySelector<HTMLElement>('.play-controls')!;
+  const controlsBefore=controls.getBoundingClientRect();
   lyricsToggle.click();
   await waitFor(()=>!!document.querySelector('.lyrics-page'));
   const lyricsClose=document.querySelector<HTMLButtonElement>('.lyrics-close')!;
   if(document.activeElement!==lyricsClose || !document.querySelector('.library-layer')?.hasAttribute('inert'))
     throw new Error('Lyrics page did not move focus or disable the covered library');
+  const controlsAfter=controls.getBoundingClientRect();
+  if(!playerTrack.hasAttribute('inert') || getComputedStyle(playerTrack).visibility!=='hidden' ||
+    Math.abs(controlsBefore.x-controlsAfter.x)>1 || Math.abs(controlsBefore.y-controlsAfter.y)>1)
+    throw new Error('Lyrics page did not hide track metadata while preserving player controls');
   for(const control of Array.from(document.querySelectorAll('.lyrics-close,.lyrics-track,.lyrics-lines')))
     if(getComputedStyle(control).getPropertyValue('-webkit-app-region').trim()!=='no-drag')
       throw new Error('Lyrics controls overlap native draggable regions');
@@ -520,6 +527,8 @@ export async function verifyWebPage() {
   if(!document.querySelector('.lyrics-page'))throw new Error('Handled Escape closed the lyrics page');
   lyricsClose.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}));
   await waitFor(()=>!document.querySelector('.lyrics-page') && !document.querySelector('.library-layer')?.hasAttribute('inert'));
+  if(playerTrack.hasAttribute('inert') || getComputedStyle(playerTrack).visibility!=='visible')
+    throw new Error('Closing lyrics did not restore player track metadata');
   const host = window as unknown as CefTransport;
   // test.complete intentionally has a test-only, non-v1 reply in the existing fixture.
   await new Promise<void>((resolve, reject) => host.cefQuery?.({

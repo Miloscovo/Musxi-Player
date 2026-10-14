@@ -40,8 +40,8 @@ class MultiPlatform {
   }
   async audioWithDefault(platform,request) {
     if(request.defaultQuality===undefined || request.quality!==undefined)return this.call(platform,request);
-    const qualities=['flac','320','128'];
-    const start=qualities.indexOf(request.defaultQuality);
+    const qualities=request.defaultQuality==='best'?([...({netease:['netease:hires'],qq:[],kugou:['kugou:high']}[platform]),'flac','320','128']):['flac','320','128'];
+    const start=request.defaultQuality==='best'?0:qualities.indexOf(request.defaultQuality);
     if(start<0)throw Error('无效默认音质');
     for(const quality of qualities.slice(start)) {
       try {return await this.call(platform,{...request,defaultQuality:undefined,quality});}

@@ -156,3 +156,11 @@ test('membership is platform scoped and image failures never erase it or sign ou
   adapters.netease.run=async()=>({});result=await manager.run({op:'logout',platform:'netease'});
   assert.equal(result.accounts.find(a=>a.platform==='netease').membership,undefined);
 });
+
+test('highest available prioritizes verified original advanced tiers and falls back',async()=>{
+ for(const [platform,expected] of [['netease',['netease:hires','flac','320']],['qq',['flac','320']],['kugou',['kugou:high','flac','320']]]){
+  const seen=[];const manager=new MultiPlatform({[platform]:{async run(r){seen.push(r.quality);if(r.quality!=='320')throw Error('Unavailable');return {quality:r.quality};}}});
+  assert.equal((await manager.audioWithDefault(platform,{op:'audio',defaultQuality:'best'})).quality,'320');
+  assert.deepEqual(seen,expected);
+ }
+});

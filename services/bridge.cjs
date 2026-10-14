@@ -4,9 +4,10 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const fs = require('node:fs/promises');
 const readline = require('node:readline');
+const {inspectAudio}=require('./kugou-audio.cjs');
 const VENDOR = path.join(__dirname, 'vendor', 'KuGouMusicApi-a5a98013cce79fe0ae2ad65fc84b68176ebcfc1e');
-const ALLOWED = new Set(['login_qr_key', 'login_qr_create', 'login_qr_check', 'user_detail', 'user_playlist', 'playlist_track_all_new', 'song_url', 'search', 'playlist_tracks_add', 'playlist_tracks_del', 'user_vip_detail', 'youth_month_vip_record', 'youth_day_vip', 'search_lyric', 'lyric']);
-const QUALITIES = [{id:'128',name:'标准 · 128 kbps'}, {id:'320',name:'高品质 · 320 kbps'}, {id:'flac',name:'无损 · FLAC'}];
+const ALLOWED = new Set(['login_qr_key', 'login_qr_create', 'login_qr_check', 'user_detail', 'user_playlist', 'playlist_track_all_new', 'song_url', 'privilege_lite', 'user_verify', 'song_auth', 'song_url_auth', 'search', 'playlist_tracks_add', 'playlist_tracks_del', 'user_vip_detail', 'youth_month_vip_record', 'youth_day_vip', 'search_lyric', 'lyric']);
+const QUALITIES = [{id:'128',name:'标准 · 128 kbps'}, {id:'320',name:'高品质 · 320 kbps'}, {id:'flac',name:'无损 · FLAC'}, {id:'kugou:high',name:'Hi-Res'}];
 function confirmedQuality(data, id) {
   const bitrate=Number(data.bitRate ?? data.bitrate ?? data.bit_rate ?? 0);
   const format=String(data.extName ?? data.extname ?? data.ext_name ?? '').toLowerCase();
@@ -152,6 +153,76 @@ class Adapter {
     return body;
   }
   auth() { if (!this.cookie.token || !this.cookie.userid) throw new Error('请先扫码登录酷狗概念版'); }
+  async advancedVariants(track) {
+    const body=await this.api('privilege_lite',{hash:track.hash,album_id:track.albumId || ''});
+    if(!Array.isArray(body.data))throw Error('高级音质信息暂不可用');
+    // Keep variants tied to this song, rather than accepting unrelated response rows.
+    const row=body.data.find(row=>String(row.hash).toLowerCase()===track.hash.toLowerCase());
+    if(!row)throw Error('高级音质信息与当前歌曲不匹配');
+    return [row,...(Array.isArray(row.relate_goods)?row.relate_goods:[])];
+  }
+  async authorizedAudio(params) {
+    const verify=await this.api('user_verify');
+    if(Number(verify.data?.valid)!==1 || typeof verify.data.auth!=='string' || !verify.data.auth)throw Error('播放登录验证失败');
+    this.cookie.auth=verify.data.auth;
+    const authorization=await this.api('song_auth',params);
+    if(typeof authorization.data?.auth!=='string' || !authorization.data.auth)throw Error('播放授权暂不可用');
+    return this.api('song_url_auth',{...params,auth:authorization.data.auth,open_time:authorization.data.open_time});
+  }
+  async basicAudio(track,quality,variants) {
+    let responseReceived=false,original;
+    const params={hash:track.hash,album_id:track.albumId,album_audio_id:track.audioId,quality:quality==='flac'?'flac':Number(quality)};
+    const playable=(data,hash)=>audioUrl(data) && confirmedQuality(data,quality) &&
+      (!data.hash || String(data.hash).toLowerCase()===hash) && !data.freeTrialInfo &&
+      !(Number(data.is_free_part || data.IsFreePart)>0) && !(data.hash_offset?.end_ms>0);
+    try {
+      const body=await this.api('song_url',params),data=body.data || body;
+      original=data;
+      responseReceived=true;
+      if(playable(data,track.hash))return data;
+    } catch { /* An older endpoint may reject a valid account entitlement. */ }
+    try {
+      variants ||= await this.advancedVariants(track);
+      const matches=row=>String(row.quality)===quality && /^[a-f0-9]{32}$/i.test(row.hash || '');
+      // The parent row can reuse the input hash even when labeled as standard.
+      const variant=variants.slice(1).find(matches) || variants.find(matches);
+      if(variant?.info?.tracker_type==='none')throw Error();
+      if(variant)Object.assign(params,{hash:variant.hash.toLowerCase(),album_id:variant.album_id || track.albumId,album_audio_id:variant.album_audio_id || track.audioId});
+      if(original && playable(original,params.hash))return original;
+      if(params.hash!==track.hash)try {
+        const body=await this.api('song_url',params),data=body.data || body;
+        responseReceived=true;
+        if(playable(data,params.hash))return data;
+      } catch { /* Try current authorization if the precise variant is rejected. */ }
+      const body=await this.authorizedAudio(params),data=body.data || body;
+      responseReceived=true;
+      if(String(data.hash).toLowerCase()===params.hash && playable(data,params.hash))return data;
+    } catch { /* Never expose account credentials or private service errors. */ }
+    if(responseReceived)return null;
+    throw Error('该音质暂时不可用，已保留当前播放');
+  }
+  async advancedAudio(track,quality,variants) {
+    variants ||= await this.advancedVariants(track);
+    const requested=quality.slice('kugou:'.length);
+    const variant=variants.find(row=>row.quality===requested && /^[a-f0-9]{32}$/i.test(row.hash || ''));
+    if(!variant || variant.info?.tracker_type==='none' || variants.some(row=>row.quality!==requested && String(row.hash).toLowerCase()===variant.hash.toLowerCase()))
+      throw Error('该歌曲没有可确认的高级档位，已保留当前播放');
+    const params={hash:variant.hash.toLowerCase(),album_id:variant.album_id || track.albumId,album_audio_id:variant.album_audio_id || track.audioId,quality:requested};
+    let message='该高级音质暂无完整播放权限，已保留当前播放';
+    for(const authorized of [false,true])try {
+      let body;
+      if(authorized) body=await this.authorizedAudio(params);
+      else body=await this.api('song_url',params);
+      const data=body.data || body;
+      if(!audioUrl(data) || String(data.hash).toLowerCase()!==params.hash || data.freeTrialInfo || Number(data.is_free_part || data.IsFreePart)>0 || data.hash_offset?.end_ms>0)continue;
+      let info;
+      try{info=await inspectAudio(audioUrl(data));}catch{message='该高级音质为加密或暂不支持的音频格式，已保留当前播放';continue;}
+      if(requested==='high' && (!info.rate || info.bits<=16 && info.rate<=48000))continue;
+      if(info.duration && track.duration>0 && Math.abs(info.duration-track.duration)>Math.max(5000,track.duration*0.05))continue;
+      return {data,extension:info.extension};
+    } catch { /* Authenticated failures never expose the private service response. */ }
+    throw Error(message);
+  }
   async refreshPlaylists() {
     this.auth();const list=await this.pages('user_playlist', {}, ['info','lists'], playlist);
     for(const p of list.filter(p=>p.editable && (!p.cover || p.automaticCover) && p.count>0)) {
@@ -422,11 +493,11 @@ class Adapter {
       case 'qualities': {
         this.auth();const t=this.knownTracks.get(text(request.id));
         if(!t || !/^[a-f0-9]{32}$/.test(t.hash))throw Error('此歌曲暂时没有可播放的音频标识');
+        let variants=[];try{variants=await this.advancedVariants(t);}catch{}
         const results=await Promise.all(QUALITIES.map(async option=>{
           try {
-            const body=await this.api('song_url',{hash:t.hash,album_id:t.albumId,album_audio_id:t.audioId,quality:option.id==='flac'?'flac':Number(option.id)});
-            const data=body.data || body;
-            return {option:audioUrl(data) && confirmedQuality(data,option.id)?option:null};
+            if(option.id.startsWith('kugou:')){await this.advancedAudio(t,option.id,variants);return {option};}
+            return {option:await this.basicAudio(t,option.id,variants)?option:null};
           } catch(error) {return {error};}
         }));
         if(results.every(result=>result.error))throw results[0].error;
@@ -437,20 +508,25 @@ class Adapter {
         if (!t || !/^[a-f0-9]{32}$/.test(t.hash)) throw new Error('此歌曲暂时没有可播放的音频标识');
         const quality=request.quality===undefined?'128':String(request.quality);
         if(!QUALITIES.some(option=>option.id===quality))throw Error('无效音质');
-        const body = await this.api('song_url', { hash: t.hash, album_id: t.albumId, album_audio_id: t.audioId, quality: quality==='flac'?'flac':Number(quality) });
-        const data = body.data || body;
-        if(request.quality!==undefined && !confirmedQuality(data,quality))throw Error('该音质暂时不可用，已保留当前播放');
+        const advanced=quality.startsWith('kugou:')?await this.advancedAudio(t,quality):null;
+        let data=advanced?.data;
+        if(!advanced)try{data=await this.basicAudio(t,quality);if(!data)throw Error('该音质暂时不可用，已保留当前播放');}catch(error){
+          if(request.quality!==undefined)throw error;
+          throw Error('此账号暂时无法播放该歌曲，可能需要会员或歌曲已下架');
+        }
+        const confirmed=!!advanced || confirmedQuality(data,quality);
+        if(request.quality!==undefined && !confirmed)throw Error('该音质暂时不可用，已保留当前播放');
         t.cover = cover(data) || t.cover;
         const value = Array.isArray(data.url) ? data.url[0] : data.url;
         if (!value) throw new Error('此账号暂时无法播放该歌曲，可能需要会员或歌曲已下架');
         const url = new URL(value);
         if (!['http:', 'https:'].includes(url.protocol)) throw new Error('音频地址无效');
         // Audio comes only from the account-authorized URL returned by upstream.
-        if (!request.cacheDir) return { url: url.href, track: t, quality:confirmedQuality(data,quality)?quality:'' };
+        if (!request.cacheDir) return { url: url.href, track: t, quality:confirmed?quality:'' };
         // Fetch only the playback URL provided for this account. No alternate sources.
         const dir = path.resolve(request.cacheDir);
         await fs.mkdir(dir, { recursive: true });
-        const file = path.join(dir, crypto.randomBytes(16).toString('hex') + (quality==='flac'?'.flac':'.mp3'));
+        const file = path.join(dir, crypto.randomBytes(16).toString('hex') + (advanced?.extension || (quality==='flac'?'.flac':'.mp3')));
         let handle;
         try {
           const response = await fetch(url, { signal: AbortSignal.timeout(75000) });
@@ -459,12 +535,12 @@ class Adapter {
           let size = 0;
           for await (const chunk of response.body) {
             size += chunk.length;
-            if (size > 128 * 1024 * 1024) throw new Error('音频文件超过当前播放缓存上限');
+            if (size > 512 * 1024 * 1024) throw new Error('音频文件超过当前播放缓存上限');
             await handle.write(chunk);
           }
           if (size < 128) throw new Error('音频内容为空');
           await handle.close(); handle = null;
-          return { path: file, track: t, quality:confirmedQuality(data,quality)?quality:'' };
+          return { path: file, track: t, quality:confirmed?quality:'' };
         } catch {
           if (handle) await handle.close();
           await fs.unlink(file).catch(() => {});

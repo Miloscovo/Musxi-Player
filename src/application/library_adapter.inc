@@ -86,7 +86,7 @@ LibraryReply applicationLibrary(const std::string& name,const std::string& param
             Json request={{"op","qualities"},{"id",id}};
             if(name=="library.setQuality") {
                 const auto quality=requiredText(p,"quality");
-                if(quality!="128" && quality!="320" && quality!="flac")return {400,"无效音质",{}};
+                if(!validAudioQuality(quality))return {400,"无效音质",{}};
                 if(libraryQualities.value("id","")!=id || !libraryQualities.contains("options") ||
                     std::none_of(libraryQualities["options"].begin(),libraryQualities["options"].end(),[&](const Json& option){return option.value("id","")==quality;}))return {409,"请选择已确认可用的音质",{}};
                 const auto dir=cloud::dataDir()/L"cloud-cache"/std::to_wstring(GetCurrentProcessId());

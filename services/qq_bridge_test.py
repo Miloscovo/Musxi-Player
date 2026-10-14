@@ -66,6 +66,20 @@ class QQTests(unittest.IsolatedAsyncioTestCase):
         await self.a.run({'op':'logout'})
         self.assertIsNone(self.a.profile)
 
+    async def test_lossless_requires_exact_unencrypted_filename(self):
+        song=S(mid='song',file=S(media_mid='media'),type=0)
+        self.a.song=lambda value: {'id':'qq:song'}
+        entry=S(result=0,purl='F000media.flac?vkey=synthetic',filename='F000media.flac',ekey='')
+        self.a.client.song.get_song_urls=AsyncMock(return_value=S(data=[entry]))
+        self.a.client.song.get_cdn_dispatch=AsyncMock(return_value=S(sip=['https://example.test/']))
+        self.assertEqual((await self.a.audio(song,'flac'))['quality'],'flac')
+        for quality in ['qq:master','qq:atmos2']:
+            with self.assertRaises(PublicError): await self.a.audio(song,quality)
+        for field, bad in [('filename','AI00media.flac'),('purl','AI00media.flac'),('ekey','encrypted')]:
+            previous=getattr(entry,field);setattr(entry,field,bad)
+            with self.assertRaises(PublicError): await self.a.audio(song,'flac')
+            setattr(entry,field,previous)
+
     async def test_no_auth_or_missing_entitlement_never_produces_audio(self):
         with self.assertRaises(PublicError): await self.a.run({'op':'tracks','id':'qq:1'})
         self.a.client.song.get_song_urls=AsyncMock(return_value=S(data=[S(result=1,purl='')]))

@@ -63,6 +63,13 @@ if(BUILD_TESTING AND MUSXI_ENABLE_FFMPEG)
     add_executable(audio-decoder tests/audio-decoder.cpp)
     musxi_standard(audio-decoder 17)
     target_link_libraries(audio-decoder PRIVATE music_audio_decoder)
+    add_executable(audio-fidelity tests/audio-fidelity.cpp)
+    musxi_standard(audio-fidelity 17)
+    target_link_libraries(audio-fidelity PRIVATE music_audio_decoder)
+    add_custom_command(TARGET audio-fidelity POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_if_different
+      ${FFmpeg_RUNTIME_FILES} "$<TARGET_FILE_DIR:audio-fidelity>" COMMAND_EXPAND_LISTS)
+    add_test(NAME audio-fidelity COMMAND audio-fidelity "${CMAKE_BINARY_DIR}/audio-fidelity-fixtures")
+    set_tests_properties(audio-fidelity PROPERTIES TIMEOUT 60)
     add_custom_command(TARGET audio-decoder POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_if_different
       ${FFmpeg_RUNTIME_FILES} "$<TARGET_FILE_DIR:audio-decoder>" COMMAND_EXPAND_LISTS)
     set(MUSXI_FFMPEG_FIXTURE_TOOL "${FFMPEG_ROOT}/bin/ffmpeg.exe" CACHE FILEPATH "Development-only FFmpeg CLI with audio encoders for test fixtures")

@@ -105,3 +105,12 @@ test('account membership accepts legacy snapshots and validates expiry before re
   assert.deepEqual(parseLibraryState({...snapshot,accounts:[{...account,membership:{name:'黑胶 VIP',expiresAt:1800000000000}}]}).accounts?.[0].membership,{name:'黑胶 VIP',expiresAt:1800000000000});
   for(const expiresAt of [NaN,-1,'tomorrow',253402300800000])assert.throws(()=>parseLibraryState({...snapshot,accounts:[{...account,membership:{name:'VIP',expiresAt}}]}),{code:502});
 });
+
+test('advanced quality IDs survive native snapshots without accepting unknown tiers',()=>{
+ const options=['netease:hires','kugou:high'].map(id=>({id,name:id}));
+ const state={...snapshot,qualities:{id:'song',current:'netease:hires',options}};
+ assert.deepEqual(parseLibraryState(state).qualities,state.qualities);
+ assert.throws(()=>parseLibraryState({...state,qualities:{...state.qualities,options:[{id:'qq:nac',name:'Unsupported'}]}}));
+ for(const id of ['netease:jymaster','netease:jyeffect','qq:master','qq:atmos2','kugou:viper_clear','kugou:viper_tape'])
+  assert.throws(()=>parseLibraryState({...state,qualities:{...state.qualities,options:[{id,name:'Removed'}]}}));
+});

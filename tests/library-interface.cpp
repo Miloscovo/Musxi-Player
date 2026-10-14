@@ -35,6 +35,11 @@ int main() try {
     {std::ofstream file(settingsFile);file<<"{\"defaultQuality\":\"invalid\",\"outputDevice\":\"bad\"}";}
     loadPlaybackSettings(settingsFile);
     require(defaultAudioQuality=="flac" && preferredOutputDevice=="saved-output","invalid settings replaced valid preferences");
+    require(savePlaybackSettings(settingsFile,"best","saved-output"),"highest quality settings save failed");
+    loadPlaybackSettings(settingsFile);
+    require(defaultAudioQuality=="best","highest quality setting lost after restart");
+    for(const auto quality:{"netease:hires","kugou:high"})require(validAudioQuality(quality),"advanced quality rejected");
+    require(!validAudioQuality("qq:nac") && !validDefaultQuality("qq:master"),"unsupported quality accepted");
     fs::remove(settingsFile);defaultAudioQuality="128";preferredOutputDevice.clear();
     cloudTracks=Json::array();
     for(int i=0;i<63;++i) cloudTracks.push_back({{"id",std::to_string(i)},{"name","song"},{"token","PRIVATE"},{"path","PRIVATE"}});
@@ -160,9 +165,16 @@ int main() try {
     recordRecentTrack({{"id","qq:505"},{"name","Replay"},{"sources",Json::array({{{"id","netease:same"}},{{"id","original"}},{{"id","qq:505"}}})}});
     require(recentTracks.size()==500 && recentTracks[0]["id"]=="qq:505","recent limit or move-to-front failed");
     const auto recentFile=cloud::dataDir()/L"recent-history-test.json";
-    switched->state.opened=false;cloudTempPath.clear();
+    switched->state.opened=false;cloudTempPath.clear();currentQuality="netease:hires";
     require(savePlaybackHistory(recentFile),"recent persistence save failed");recentTracks=Json::array();
     require(restorePlaybackHistory(recentFile) && recentTracks.size()==500 && recentTracks[0]["id"]=="qq:505","recent restart restore failed");
+    require(currentQuality=="netease:hires","advanced quality lost after restart");
+    Json retired;{std::ifstream stream(recentFile);stream>>retired;}
+    for(const auto quality:{"netease:jymaster","netease:jyeffect","qq:master","qq:atmos2","kugou:viper_clear","kugou:viper_tape"}) {
+        require(!validAudioQuality(quality),"removed quality still accepted");
+        retired["quality"]=quality;{std::ofstream stream(recentFile);stream<<retired;}
+        require(restorePlaybackHistory(recentFile) && currentQuality.empty() && recentTracks.size()==500,"removed quality discarded saved history");
+    }
     require(Json::parse(invoke("library.getState").json)["recent"][0]["platforms"]==Json::array({"netease","kugou","qq"}),"recent restart lost multi-platform tags");
     Json duplicated;{std::ifstream stream(recentFile);stream>>duplicated;}
     auto duplicate=duplicated["recent"][0];duplicate["id"]="netease:older";duplicate.erase("sources");
