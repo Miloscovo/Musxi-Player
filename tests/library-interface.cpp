@@ -117,6 +117,28 @@ int main() try {
     require(audioTrackId=="original" && currentQuality=="320" && switched->state.positionMs==42000 && !switched->state.requestedPlaying,"decoder failure did not restore original source");
     require(cloudQueue[0]["id"]=="original" && libraryOperationStatus=="failed","rollback lost queue or error status");
     pollAudio();
+    {
+        // Natural end in random order: the next song is unplayable. It must be
+        // located by the request, skipped after the notice, and not retried.
+        std::vector<std::string> requested;
+        cloudRequestOverride=[&](const Json& request) {
+            requested.push_back(request.value("id",""));
+            return request.value("id","")=="locked"?Json{{"ok",false},{"error","需要购买或会员权限"}}:
+                Json{{"ok",true},{"data",{{"path","next-cache"},{"track",{{"id",request.value("id","")},{"name","Next"}}}}}};
+        };
+        platformRollback={};libraryQualityChange=libraryPlatformChange=false;unplayableStreak=0;unplayableIndex=-1;
+        cloudQueue=Json::array({{{"id","played"}},{{"id","locked"}},{{"id","free"}}});
+        cloudCurrent=0;libraryPlayTrackId="played";libraryOperationKind="audio";libraryOperationStatus="completed";
+        const auto order=playbackOrder;playbackOrder="sequential";
+        skip(1);cloudTick(); // What advancePlayback() does when "played" ends.
+        require(requested==std::vector<std::string>{"locked"},"auto-advance did not request the next song");
+        require(unplayableIndex==1 && unplayableSkipAt!=0,"unplayable song was not located by its request");
+        require(utf8(toast).find("3 秒后播放下一首")!=std::string::npos,"skip notice missing");
+        unplayableSkipAt=1;cloudTick();cloudTick();
+        require(requested.size()==2 && requested[1]=="free","auto-skip retried the unplayable song instead of moving on");
+        playbackOrder=order;cloudRequestOverride=nullptr;
+        if(cloudFuture.valid())cloudFuture.get();
+    }
     cloud::testProfile=true;
     Json aggregate={{"playlist",{{"id","musxi:cloud-favorites"},{"name","云端收藏整合"}}},{"playlists",Json::array({{{"id","qq:liked"},{"editable",true}}})}};
     aggregate["tracks"]=Json::array({{{"id","merged"},{"name","Song"},{"platforms",Json::array({"netease","qq"})},{"sources",Json::array({{{"id","netease:song"}},{{"id","qq:song"}}})}}});

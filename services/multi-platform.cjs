@@ -43,11 +43,13 @@ class MultiPlatform {
     const qualities=['flac','320','128'];
     const start=qualities.indexOf(request.defaultQuality);
     if(start<0)throw Error('无效默认音质');
+    let rights=false;
     for(const quality of qualities.slice(start)) {
       try {return await this.call(platform,{...request,defaultQuality:undefined,quality});}
-      catch { /* Try a lower quality without exposing private service errors. */ }
+      catch(error) {rights=rights || error?.rights===true; /* Try a lower quality without exposing private service errors. */}
     }
-    throw Error('该平台没有可播放的音质');
+    // Every quality refused for rights reasons is a permission problem, not a quality problem.
+    throw rights?Object.assign(Error(`此歌曲在${NAMES[platform]}需要购买或会员权限，暂时无法播放`),{rights:true}):Error('该平台没有可播放的音质');
   }
   async readFavorites(platform) {
     const tracks=[];
@@ -160,7 +162,7 @@ class MultiPlatform {
           const result=await this.audioWithDefault(platform,{...request,id:source.id,sources:undefined});
           if(!result.track || (!result.path && !result.url))continue;
           return this.decorate({...result,requestedId:request.id,platform,track:{...result.track,platform,sources:request.sources}});
-        } catch { /* Try the next signed-in platform without exposing private service errors. */ }
+        } catch(error) {if(request.sources.length===1)throw error; /* Otherwise try the next signed-in platform. */}
       }
       throw Error('这些平台均无法播放该歌曲，请检查登录状态或播放权限');
     }

@@ -10,6 +10,7 @@ import QueuePanel from '../components/QueuePanel';
 import PlayerActions from '../components/PlayerActions';
 import { AccountDialog } from '../components/AccountDialog';
 import type { useLibrary } from '../composables/useLibrary';
+import { verifyDesktopWindow } from './desktopSmoke';
 
 async function waitFor(check: () => boolean, message = 'Event/UI update timed out') {
   const end = Date.now() + 3000;
@@ -21,6 +22,7 @@ async function waitFor(check: () => boolean, message = 'Event/UI update timed ou
 
 // Invoked only by the real CEF --cef-smoke run (cloud startup is disabled).
 export async function verifyWebPage() {
+  if (new URLSearchParams(location.search).has('desktopSmoke')) { await verifyDesktopWindow(); return; }
   const library = await native.library.getState();
   if (!Array.isArray(library.playlists) || library.connected) throw new Error('Unexpected offline library state');
   await waitFor(() => !!document.querySelector('.library-shell'));

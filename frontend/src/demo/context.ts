@@ -14,6 +14,8 @@ export function createDemoTransport(): CefTransport {
   const library = createDemoLibrary();
   library.recent=[];
   let player = { ...createDemoPlayer() };
+  const desktopListeners = new Map<number, (text: string) => void>();
+  const desktop = { enabled: false, visible: false, locked: false, dual: true, panel: false, hover: false, fontSize: 30, color: 'theme' };
   const songs = demoSongs();
   const lists = new Map(library.playlists.map(list => [list.id, demoPlaylistSongs(list.id)]));
   const platformLikes = new Map<MusicPlatform,Set<string>>();
@@ -81,6 +83,13 @@ export function createDemoTransport(): CefTransport {
     return song;
   }
   function run(command: string, p: Record<string, any>): unknown {
+    // The browser demo cannot open a native floating window; it keeps and pushes preferences.
+    if (command.startsWith('desktopLyrics.')) {
+      if (command === 'desktopLyrics.setVisible') desktop.enabled = true; // Lets screenshots show the dock toggle.
+      Object.assign(desktop, p);
+      for (const send of desktopListeners.values()) send(JSON.stringify({ version: 1, event: 'desktopLyrics.changed', state: desktop }));
+      return { ...desktop };
+    }
     if (command.startsWith('window.')) return { enabled: false, maximized: false };
     if (command === 'player.getState') return player;
     if (command.startsWith('player.')) {
@@ -225,10 +234,11 @@ export function createDemoTransport(): CefTransport {
         const { version, command, params } = JSON.parse(query.request);
         if (version !== 1) fail('无效协议版本', 400);
         if (command === 'player.subscribe' && query.persistent) { listeners.set(id, query.onSuccess); emit(); }
+        else if (command === 'desktopLyrics.subscribe') { desktopListeners.set(id, query.onSuccess); query.onSuccess(JSON.stringify({ version: 1, event: 'desktopLyrics.changed', state: desktop })); }
         else query.onSuccess(JSON.stringify({ version: 1, result: run(command, params || {}) }));
       } catch (error) { query.onFailure(error instanceof NativeError ? error.code : 400, error instanceof Error ? error.message : '演示请求失败'); }
       return id;
     },
-    cefQueryCancel(id) { listeners.delete(id); emit(); }
+    cefQueryCancel(id) { listeners.delete(id); desktopListeners.delete(id); emit(); }
   };
 }

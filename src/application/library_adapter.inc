@@ -278,7 +278,8 @@ LibraryReply applicationLibrary(const std::string& name,const std::string& param
                 if(p.size()!=1 || !p.contains("delta") || !p["delta"].is_number_integer()) return {400,"无效切歌参数",{}};
                 const int delta=p["delta"].get<int>();if(delta!=1 && delta!=-1) return {400,"无效方向",{}};
                 if(cloudQueue.empty()) return {409,"播放队列为空",{}};
-                int base=cloudCurrent;
+                // After an unplayable song, continue from it rather than retrying it.
+                int base=unplayableIndex>=0?unplayableIndex:cloudCurrent;
                 if(libraryOperationStatus=="pending" && libraryOperationKind=="audio")
                     for(int i=0;i<(int)cloudQueue.size();++i)if(cloudQueue[i].value("id","")==libraryPlayTrackId){base=i;break;}
                 const int index=nextQueueIndex(delta,base);
@@ -305,7 +306,8 @@ LibraryReply applicationLibrary(const std::string& name,const std::string& param
             libraryPlayPaused=false;
             libraryOperationStatus="pending";libraryOperationError.clear();libraryPlayGeneration=-1;
             libraryPlayTrackId=next.value("id","");
-            libraryNextPlay=next;cloudAutoNext=false;
+            libraryNextPlay=next;cloudAutoNext=false;unplayableSkipAt=0; // The user's choice replaces the auto-skip.
+            if(name=="library.play")unplayableStreak=0,unplayableIndex=-1;
             return reply({{"id",std::to_string(libraryOperationId)}});
         }
         if(cloudBusy() || !libraryNextPlay.is_null()) return {409,"正在处理请求，请稍后重试",{}};

@@ -144,6 +144,8 @@ class Adapter {
     }
     const body = res.body;
     if (body?.ssaCode) throw new Error('账号需要在官方客户端完成安全验证，请验证后重新扫码');
+    if (name === 'search_lyric' && Number(body?.status) === 404 && Array.isArray(body.candidates) && !body.candidates.length)
+      throw Object.assign(failure(body), { notFound: true });
     if (!body || (body.status !== undefined && ![1, 200].includes(Number(body.status))) || (body.error_code && Number(body.error_code) !== 0)) throw failure(body);
     for (const entry of res.cookie || []) {
       const pair = entry.split(';')[0]; const at = pair.indexOf('=');
@@ -214,7 +216,11 @@ class Adapter {
             timer=setTimeout(()=>reject(Error('歌词请求超时')),remaining);
           })]);}finally{clearTimeout(timer);}
         };
-        const found=await call('search_lyric',{hash:t.hash,album_audio_id:t.audioId || 0,duration:t.duration || 0});
+        let found;
+        // KuGou answers status 404 with an empty candidate list when a song has no lyrics
+        // (instrumentals, many remixes); that is "no lyrics", not a failed request.
+        try {found=await call('search_lyric',{hash:t.hash,album_audio_id:t.audioId || 0,duration:t.duration || 0});}
+        catch(error) {if(error.notFound)return {outcome:'none'};throw error;}
         if(!Array.isArray(found.candidates))throw Error('歌词搜索结果无效');
         if(!found.candidates.length)return {outcome:'none'};
         // Hash-scoped search only; never broaden to a title search or another platform.
@@ -442,7 +448,8 @@ class Adapter {
         if(request.quality!==undefined && !confirmedQuality(data,quality))throw Error('该音质暂时不可用，已保留当前播放');
         t.cover = cover(data) || t.cover;
         const value = Array.isArray(data.url) ? data.url[0] : data.url;
-        if (!value) throw new Error('此账号暂时无法播放该歌曲，可能需要会员或歌曲已下架');
+        // status 2/3 without a URL: the account lacks the rights (purchase, membership or region).
+        if (!value) throw Object.assign(new Error('此歌曲在酷狗需要购买或会员权限，暂时无法播放'),{rights:true});
         const url = new URL(value);
         if (!['http:', 'https:'].includes(url.protocol)) throw new Error('音频地址无效');
         // Audio comes only from the account-authorized URL returned by upstream.

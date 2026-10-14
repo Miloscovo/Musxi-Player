@@ -44,7 +44,8 @@ export default function LyricsView({ trackId, now, positionMs, canSeek, onSeek, 
     // Showing or hiding translations changes row heights; re-centre the current line.
   }, [active, lines, dual]);
   const markScrolled = () => { userScroll.current = Date.now(); };
-  const message = !trackId ? '尚未播放歌曲' : loading ? '正在加载歌词…' : failed ? '歌词加载失败' : !lines.length ? '暂无歌词' : '';
+  const message = !trackId ? '尚未播放歌曲' : loading ? '正在加载歌词…' : failed ? '歌词加载失败，请检查网络后重试' :
+    !lines.length ? (lyrics?.platform && lyrics.platform !== 'local' ? '这首歌在平台上暂无歌词' : '暂无歌词') : '';
   return <section className="lyrics-page" aria-label="歌词">
     <Button variant="unstyled" ref={closeButton} className="lyrics-close" aria-label="收起歌词页" title="收起" onClick={onClose}>
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
@@ -57,7 +58,8 @@ export default function LyricsView({ trackId, now, positionMs, canSeek, onSeek, 
         {trackId.startsWith('local:') && <Button variant="secondary" size="sm" onClick={()=>setMatching(true)}>{lyrics?.kind==='none'?'搜索歌词':'选择 / 替换歌词'}</Button>}
         {translated ? <Button variant="unstyled" className="lyrics-translation-toggle" role="switch" aria-checked={showTranslation}
           onClick={()=>setShowTranslation(!showTranslation)}><span aria-hidden="true"/>显示翻译</Button> :
-          translating && <span className="lyrics-translation-status" role="status">正在获取翻译…</span>}</div>
+          translating ? <span className="lyrics-translation-status" role="status">正在获取翻译…</span> :
+          synced && lyrics?.translation==='none' && <span className="lyrics-translation-status">该版本暂无翻译</span>}</div>
         {lyrics?.translation==='unknown' && !translating && lines.length>0 &&
           (lyrics.platform==='netease' || lyrics.platform==='qq' || lyrics.translationRetryable) &&
           <Button variant="ghost" size="sm" onClick={retryTranslation}>重试获取翻译</Button>}

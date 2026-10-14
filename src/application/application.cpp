@@ -15,6 +15,7 @@
 #include <cmath>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iomanip>
 #include <map>
 #include <memory>
@@ -41,6 +42,12 @@ bool applicationClosing=false;
 constexpr UINT_PTR HostTick=0xCEF, Tick=1;
 bool opened=false,playing=false,cloudConnected=false,cloudPolling=false,cloudInitialized=false;
 bool cloudLoginAfterInit=false,cloudAutoNext=false;
+// Auto-skip after an unplayable song: due time, songs failed in a row, and the
+// queue index of the failed song so the next skip continues from it.
+ULONGLONG unplayableSkipAt=0;int unplayableStreak=0,unplayableIndex=-1;
+// The song an audio request is actually for. Auto-advance goes through skip(),
+// which does not update libraryPlayTrackId, so failures are located by this.
+std::string audioRequestId;
 int cloudCurrent=-1;
 int cloudGeneration=0,requestGeneration=0,searchPage=1,searchTotal=0;
 ULONGLONG toastUntil=0,cloudNextPoll=0,cloudPollDeadline=0;
@@ -195,7 +202,7 @@ int nextQueueIndex(int delta,int current=-2) {
 }
 void skip(int delta) {
     if(skipLocal(delta))return;
-    if(!cloudQueue.empty())cloudPlay(nextQueueIndex(delta),true);
+    if(!cloudQueue.empty())cloudPlay(nextQueueIndex(delta,unplayableIndex>=0?unplayableIndex:-2),true);
 }
 musxi::PlayerResult seekMilliseconds(std::uint32_t milliseconds) {
     auto result=audioBackend().seek(milliseconds);syncAudioView();
@@ -318,8 +325,14 @@ void coverTick() {
     std::wstring error;if(!coverBridge.start(error)) return;
     coverFuture=std::async(std::launch::async,[urls=std::move(urls)] {return coverBridge.call({{"op","covers"},{"urls",urls}});});
 }
+// Tests replace the service process; production leaves this empty.
+std::function<Json(const Json&)> cloudRequestOverride;
 void cloudRequest(Json request) {
     if(cloudBusy()) return;
+    if(cloudRequestOverride) {
+        cloudOperation=request.value("op","");requestGeneration=cloudGeneration;
+        std::promise<Json> reply;cloudFuture=reply.get_future();reply.set_value(cloudRequestOverride(request));return;
+    }
     std::wstring error;
     if(!cloudBridge.start(error)) {cloudStatus=error;notice(error);return;}
     cloudOperation=request.value("op","");requestGeneration=cloudGeneration;
@@ -378,6 +391,7 @@ void cloudPlay(int index, bool useQueue, bool search) {
     try {
         // Session-specific directory avoids interfering with another running player.
         auto dir=cloud::dataDir()/L"cloud-cache"/std::to_wstring(GetCurrentProcessId());
+        audioRequestId=list[index].value("id","");
         cloudRequest({{"op","audio"},{"id",list[index].value("id","")},{"index",index},{"cacheDir",dir.u8string()},{"sources",list[index].value("sources",Json::array())},{"defaultQuality",defaultAudioQuality}});
         // Index is kept on the UI thread, outside the adapter's response schema.
     } catch(...) {notice(L"无法创建本机播放缓存");}
@@ -389,6 +403,17 @@ void cloudTick() {
         if(!result.value("ok",false)) {
             if(op=="audio")libraryPlatformChange=false;
             cloudStatus=cloudText(result,"error","请求失败");
+            // An unplayable queue song (rights, membership, removed) moves on after a
+            // short notice instead of leaving playback stuck; one lap of the queue at most.
+            if(op=="audio" && requestGeneration==cloudGeneration && !libraryQualityChange && !cloudQueue.empty()) {
+                const auto failed=audioRequestId;unplayableIndex=-1;
+                for(int i=0;i<(int)cloudQueue.size();++i)if(cloudQueue[i].value("id","")==failed){unplayableIndex=i;break;}
+                if(unplayableIndex>=0 && ++unplayableStreak<(int)cloudQueue.size() && playbackOrder!="repeat-one") {
+                    unplayableSkipAt=GetTickCount64()+3000;cloudStatus+=L"，3 秒后播放下一首";
+                    // The notice already reports it; a failed operation would show it again.
+                    if(libraryOperationStatus=="pending" && libraryOperationKind=="audio")libraryOperationStatus="cancelled";
+                } else {unplayableSkipAt=0;unplayableStreak=0;unplayableIndex=-1;}
+            }
             if(op!="avatar" && op!="vip_auto") {cloudPolling=false;notice(cloudStatus);}
             if(result.value("fatal",false)) {cloudBridge.stop();cloudInitialized=false;cloudConnected=false;}
             else if(op=="sync" && cloudConnected) cloudRequest({{"op","avatar"}});
@@ -492,7 +517,8 @@ void cloudTick() {
                             const auto seekResult=audioBackend().seek(previousAudio.positionMs);
                             if(!seekResult)notice(L"已切换，但无法恢复播放位置");
                         }
-                        cloudAutoNext=false;cloudNowTitle=cloudText(data["track"],"name");cloudNowArtist=cloudText(data["track"],"artist");cloudNowCover=data["track"].value("cover","");
+                        cloudAutoNext=false;unplayableSkipAt=0;unplayableStreak=0;unplayableIndex=-1;
+                        cloudNowTitle=cloudText(data["track"],"name");cloudNowArtist=cloudText(data["track"],"artist");cloudNowCover=data["track"].value("cover","");
                         auto id=data["track"].value("id","");
                         for(int i=0;i<(int)cloudQueue.size();++i) if(cloudQueue[i].value("id","")==id) {cloudCurrent=i;break;}
                         cloudStatus=(audioBackend().snapshot().pending?L"正在加载 · ":playing?L"正在播放 · ":L"已暂停 · ")+cloudNowTitle;
@@ -530,6 +556,15 @@ void cloudTick() {
         } else {libraryOperationStatus="failed";libraryOperationError="歌曲已不在当前列表中，请刷新后重试";}
     }
     if(cloudAutoNext && !cloudBusy()) {cloudAutoNext=false;advancePlayback();}
+    if(unplayableSkipAt && GetTickCount64()>=unplayableSkipAt && !cloudBusy() && libraryNextPlay.is_null()) {
+        unplayableSkipAt=0;
+        if(unplayableIndex>=0 && unplayableIndex<(int)cloudQueue.size()) {
+            const int index=nextQueueIndex(1,unplayableIndex);
+            ++libraryOperationId;libraryOperationKind="audio";libraryOperationStatus="pending";libraryOperationError.clear();
+            libraryPlayPaused=false;libraryPlayTrackId=cloudQueue[index].value("id","");
+            libraryNextPlay={{"source","queue"},{"id",libraryPlayTrackId}};
+        }
+    }
 }
 void accountLogout() {
     libraryNowMenu=Json::object();

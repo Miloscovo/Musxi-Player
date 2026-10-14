@@ -111,3 +111,14 @@ test('matching search uses only selected platform and retains recording candidat
   for(const query of [{platform:'other'},{keywords:''},{keywords:'x'.repeat(121)},{page:0},{page:1.5}])
     await assert.rejects(service.run({op:'lyrics_search',platform:'qq',keywords:'Song',page:1,...query}));
 });
+
+test('KuGou 404 with no candidates is a song without lyrics, other errors still fail',async()=>{
+  const {Adapter}=require('./bridge.cjs');
+  const track={id:'2:1',hash:'0123456789abcdef0123456789abcdef',name:'Instrumental',artist:'Artist'};
+  const empty=new Adapter(async()=>({body:{status:404,errcode:404,candidates:[]}}));
+  assert.deepEqual(await empty.run({op:'lyrics',track,session:{}}),{outcome:'none'});
+  const broken=new Adapter(async()=>({body:{status:500,errcode:500,candidates:[]}}));
+  await assert.rejects(broken.run({op:'lyrics',track,session:{}}),/酷狗接口返回错误/);
+  const odd=new Adapter(async()=>({body:{status:404,errcode:404}}));
+  await assert.rejects(odd.run({op:'lyrics',track,session:{}}),/酷狗接口返回错误/);
+});

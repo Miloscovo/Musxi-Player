@@ -138,6 +138,8 @@ if(BUILD_TESTING AND MUSXI_ENABLE_FFMPEG)
       COMMAND "$<TARGET_FILE_DIR:cef_host>/MusxiPlayerWeb.exe" --cef-smoke)
     set_tests_properties(cef-app-smoke PROPERTIES TIMEOUT 35 RUN_SERIAL TRUE)
     if(MUSXI_BUILD_VUE_UI)
+      add_test(NAME cef-desktop-smoke COMMAND "$<TARGET_FILE_DIR:cef_host>/MusxiPlayerWeb.exe" --test-app --cef-desktop-smoke)
+      set_tests_properties(cef-desktop-smoke PROPERTIES TIMEOUT 35 RUN_SERIAL TRUE)
       add_test(NAME cef-tray COMMAND "${MUSXI_POWERSHELL}" -NoProfile -ExecutionPolicy Bypass
         -File "${CMAKE_SOURCE_DIR}/tests/cef-tray.ps1" -HostPath "$<TARGET_FILE_DIR:cef_host>/MusxiPlayerWeb.exe")
       set_tests_properties(cef-tray PROPERTIES TIMEOUT 60 RUN_SERIAL TRUE)

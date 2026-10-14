@@ -134,6 +134,15 @@ test('default quality falls down without changing explicit per-song selection',a
  await assert.rejects(manager.run({op:'audio',id:'one',quality:'flac',defaultQuality:'128'}),/Unavailable/);
  assert.deepEqual(seen,['flac']);
 });
+test('a song refused at every quality reports missing rights instead of missing qualities',async()=>{
+ const refuse=async()=>{throw Object.assign(Error('rights'),{rights:true});};
+ const manager=new MultiPlatform({kugou:{run:refuse}});
+ await assert.rejects(manager.run({op:'audio',id:'one',defaultQuality:'flac'}),/酷狗概念版需要购买或会员权限/);
+ const mixed=new MultiPlatform({kugou:{async run(r){if(r.quality==='flac')throw Object.assign(Error('rights'),{rights:true});throw Error('network');}}});
+ await assert.rejects(mixed.run({op:'audio',id:'one',defaultQuality:'flac'}),/需要购买或会员权限/);
+ const plain=new MultiPlatform({kugou:{async run(){throw Error('network');}}});
+ await assert.rejects(plain.run({op:'audio',id:'one',defaultQuality:'flac'}),/该平台没有可播放的音质/);
+});
 test('default quality falls down on each source and preserves platform fallback',async()=>{
  const seen=[];
  const manager=new MultiPlatform(Object.fromEntries(['netease','kugou'].map(p=>[p,{async run(r){seen.push([p,r.quality]);if(p==='netease' || r.quality!=='128')throw Error('Unavailable');return {track:{id:'one'},path:'fixture',quality:r.quality};}}])));
