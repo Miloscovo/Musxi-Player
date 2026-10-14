@@ -13,13 +13,17 @@
 #include <string>
 #include <imm.h>
 #include "composition_surface.hpp"
+#include "../../third_party/json.hpp"
+#include <fstream>
+#include <climits>
+#include <map>
 
 namespace {
 std::wstring pagePath;
 HWND nativeWindow=nullptr;
 HWND testWindow=nullptr;
 HWND recoveryText=nullptr,retryButton=nullptr,exitButton=nullptr;
-bool smoke=false,createFailed=false,testApp=false,preview=false;
+bool smoke=false,createFailed=false,testApp=false,preview=false,hostClosing=false,desktopSmoke=false;
 COLORREF frameColor=RGB(255,255,255);
 ULONGLONG startTick=0;
 CompositionSurface surface;
@@ -81,7 +85,7 @@ void trayMenu(HWND) {
     GetMonitorInfoW(MonitorFromPoint(p,MONITOR_DEFAULTTONEAREST),&monitor);
     // Match the shadcn menu itself, without a visible backing-window margin.
     const int dpi=GetDpiForWindow(testWindow);
-    const int width=MulDiv(208,dpi,96),height=MulDiv(84,dpi,96);
+    const int width=MulDiv(208,dpi,96),height=MulDiv(156,dpi,96);
     p.x=std::clamp(p.x,monitor.rcWork.left,monitor.rcWork.right-width);
     p.y=std::clamp(p.y-height-MulDiv(4,dpi,96),monitor.rcWork.top,monitor.rcWork.bottom-height);
     WNDCLASSW wc{};wc.lpfnWndProc=trayProc;wc.hInstance=GetModuleHandleW(nullptr);
@@ -134,11 +138,63 @@ LRESULT hostHitTest(HWND hwnd,LPARAM lp) {
     auto region=static_cast<HRGN>(GetPropW(hwnd,musxi::cef_adapter::DragRegionProperty));
     return region && PtInRegion(region,p.x,p.y)?HTCAPTION:HTCLIENT;
 }
+#include "desktop_lyrics.inc"
+// Main window placement, remembered across launches in the native profile.
+std::filesystem::path mainSettingsPath;
+RECT mainBounds{};bool mainMaximized=false;
+void loadMainWindow(const std::filesystem::path& profile) {
+    mainSettingsPath=profile/L"window.json";
+    if(smoke)return;
+    try {
+        if(!std::filesystem::is_regular_file(mainSettingsPath) || std::filesystem::file_size(mainSettingsPath)>1024)return;
+        std::ifstream file(mainSettingsPath,std::ios::binary);const auto data=DesktopJson::parse(file);
+        if(data.at("version")!=1)return;
+        const auto x=data.at("x").get<std::int64_t>(),y=data.at("y").get<std::int64_t>();
+        const auto width=data.at("width").get<std::int64_t>(),height=data.at("height").get<std::int64_t>();
+        if(x < -1000000 || x > 1000000 || y < -1000000 || y > 1000000 || width<1 || width>100000 || height<1 || height>100000)return;
+        mainBounds={static_cast<LONG>(x),static_cast<LONG>(y),static_cast<LONG>(x+width),static_cast<LONG>(y+height)};
+        mainMaximized=data.at("maximized").get<bool>();
+    }catch(...) {mainBounds={};mainMaximized=false;}
+}
+void saveMainWindow() {
+    if(smoke || !testWindow || mainSettingsPath.empty())return;
+    WINDOWPLACEMENT placement{sizeof(placement)};
+    if(!GetWindowPlacement(testWindow,&placement))return;
+    // rcNormalPosition is in workspace coordinates; store screen coordinates.
+    MONITORINFO monitor{sizeof(monitor)};GetMonitorInfoW(MonitorFromWindow(testWindow,MONITOR_DEFAULTTONEAREST),&monitor);
+    auto r=placement.rcNormalPosition;OffsetRect(&r,monitor.rcWork.left-monitor.rcMonitor.left,monitor.rcWork.top-monitor.rcMonitor.top);
+    try {
+        const auto data=DesktopJson{{"version",1},{"x",r.left},{"y",r.top},{"width",r.right-r.left},{"height",r.bottom-r.top},
+            {"maximized",placement.showCmd==SW_SHOWMAXIMIZED || IsZoomed(testWindow)}}.dump();
+        auto temporary=mainSettingsPath;temporary+=L".tmp";
+        {std::ofstream file(temporary,std::ios::binary|std::ios::trunc);file<<data;file.close();if(!file)return;}
+        MoveFileExW(temporary.c_str(),mainSettingsPath.c_str(),MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH);
+    }catch(...) {}
+}
+// A saved placement is clamped to the nearest work area. Otherwise the default
+// is scaled for the monitor's DPI: physical 1360x850 is only ~567 DIP tall at 150%.
+RECT initialMainBounds() {
+    const bool saved=mainBounds.right-mainBounds.left>0 && mainBounds.bottom-mainBounds.top>0;
+    POINT anchor{};if(saved)anchor={mainBounds.left,mainBounds.top};else GetCursorPos(&anchor);
+    const auto handle=saved?MonitorFromRect(&mainBounds,MONITOR_DEFAULTTONEAREST):MonitorFromPoint(anchor,MONITOR_DEFAULTTOPRIMARY);
+    MONITORINFO monitor{sizeof(monitor)};if(!GetMonitorInfoW(handle,&monitor))return {CW_USEDEFAULT,CW_USEDEFAULT,1360,850};
+    // Per-monitor DPI without linking Shcore: the process is per-monitor aware,
+    // so the system DPI is a close start and WM_DPICHANGED fixes the rest.
+    const UINT dpiX=GetDpiForSystem();
+    const auto& work=monitor.rcWork;const int availableWidth=work.right-work.left,availableHeight=work.bottom-work.top;
+    const int minWidth=MulDiv(800,dpiX,96),minHeight=MulDiv(560,dpiX,96);
+    int width=saved?mainBounds.right-mainBounds.left:std::min(MulDiv(1440,dpiX,96),availableWidth*4/5);
+    int height=saved?mainBounds.bottom-mainBounds.top:std::min(MulDiv(940,dpiX,96),availableHeight*22/25);
+    width=std::min(std::max(width,minWidth),availableWidth);height=std::min(std::max(height,minHeight),availableHeight);
+    const int x=saved?std::clamp<int>(mainBounds.left,work.left,work.right-width):work.left+(availableWidth-width)/2;
+    const int y=saved?std::clamp<int>(mainBounds.top,work.top,work.bottom-height):work.top+(availableHeight-height)/2;
+    return {x,y,x+width,y+height};
+}
 LRESULT CALLBACK testProc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp) {
     const auto browser=musxi::cef_adapter::browserHost();
     if(msg==TaskbarCreated && trayAdded) {
         trayAdded=false;
-        if(!addTray(hwnd))showFromTray(hwnd);
+        if(!addTray(hwnd)){lockDesktopLyrics(false);saveDesktopSettings();publishDesktop();showFromTray(hwnd);}
         return 0;
     }
     switch(msg) {
@@ -263,7 +319,7 @@ void ready(void* window) {
     }
     // Match Chromium's UTF-8 escaping before using an exact navigation/IPC allowlist.
     CefURLParts parts;
-    if(!CefParseURL(CefString(buffer).ToString()+(smoke?"?smoke=1":""),parts)) {
+    if(!CefParseURL(CefString(buffer).ToString()+(desktopSmoke?"?smoke=1&desktopSmoke=1":smoke?"?smoke=1":""),parts)) {
         createFailed=true;PostMessageW(nativeWindow,WM_CLOSE,0,0);return;
     }
     const auto url=CefString(&parts.spec).ToString();
@@ -273,15 +329,9 @@ void ready(void* window) {
         WNDCLASSW wc{};wc.style=CS_DBLCLKS;wc.lpfnWndProc=testProc;wc.hInstance=GetModuleHandleW(nullptr);
         wc.lpszClassName=L"MusxiPlayerTestHost";wc.hCursor=LoadCursorW(nullptr,IDC_ARROW);
         wc.hbrBackground=nullptr;RegisterClassW(&wc);
-        RECT work{};int x=CW_USEDEFAULT,y=CW_USEDEFAULT,width=1360,height=850;
-        if(SystemParametersInfoW(SPI_GETWORKAREA,0,&work,0)) {
-            const int availableWidth=work.right-work.left,availableHeight=work.bottom-work.top;
-            if(availableWidth<width)width=availableWidth;
-            if(availableHeight<height)height=availableHeight;
-            x=work.left+(availableWidth-width)/2;y=work.top+(availableHeight-height)/2;
-        }
+        const auto bounds=initialMainBounds();
         testWindow=CreateWindowExW(WS_EX_NOREDIRECTIONBITMAP,wc.lpszClassName,L"Musxi Player 测试版",WS_POPUP|WS_THICKFRAME|WS_MINIMIZEBOX|WS_MAXIMIZEBOX|WS_SYSMENU|WS_CLIPCHILDREN,
-            x,y,width,height,nullptr,nullptr,wc.hInstance,nullptr);
+            bounds.left,bounds.top,bounds.right-bounds.left,bounds.bottom-bounds.top,nullptr,nullptr,wc.hInstance,nullptr);
         if(!testWindow){createFailed=true;PostMessageW(nativeWindow,WM_CLOSE,0,0);return;}
         SetWindowPos(testWindow,nullptr,0,0,0,0,SWP_NOMOVE|SWP_NOSIZE|SWP_NOZORDER|SWP_FRAMECHANGED);
         info.SetAsWindowless(testWindow);
@@ -297,17 +347,19 @@ void ready(void* window) {
     if(browser && !preview) {
         SendMessageW(testWindow,WM_SIZE,0,0);
         if(!smoke) {
-            ShowWindow(testWindow,SW_SHOW);
+            ShowWindow(testWindow,mainMaximized?SW_SHOWMAXIMIZED:SW_SHOW);
             addTray(testWindow);
         }
     }
     startTick=GetTickCount64();
+    if(browser && !preview && desktopVisible && !showDesktopLyrics())desktopVisible=false;
 }
 void tick() {
     CefDoMessageLoopWork();
     if(smoke && GetTickCount64()-startTick>20000)PostMessageW(nativeWindow,WM_CLOSE,0,0);
 }
 bool canClose() {
+    if(!hostClosing){saveDesktopSettings();saveMainWindow();hostClosing=true;}
     if(!musxi::cef_adapter::closeBrowsers())return false;
     // The windowless browser is gone. Remove its frozen surface before blocking
     // native cleanup and CefShutdown, rather than leaving a dead window visible.
@@ -325,7 +377,8 @@ int run(HINSTANCE instance,int show,void* sandbox) {
     preview=command->HasSwitch("cef-preview");
     if(!preview)SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     pagePath=(directory/(preview?L"ui":L"ui-vue")/L"index.html").wstring();
-    smoke=command->HasSwitch("cef-smoke");
+    desktopSmoke=command->HasSwitch("cef-desktop-smoke");
+    smoke=command->HasSwitch("cef-smoke") || desktopSmoke;
     if(smoke && command->HasSwitch("cef-smoke-unicode"))pagePath=(directory/L"测试 空格"/L"index.html").wstring();
     if(!std::filesystem::exists(pagePath))return 2;
     CefSettings settings;
@@ -335,6 +388,7 @@ int run(HINSTANCE instance,int show,void* sandbox) {
     if(FAILED(SHGetFolderPathW(nullptr,CSIDL_LOCAL_APPDATA,nullptr,0,local)))return 2;
     const auto data=std::filesystem::path(local)/(preview?L"MusxiPlayer-Preview":testApp?L"MusxiPlayer-Test":L"MusxiPlayer");
     std::error_code ec;std::filesystem::create_directories(data,ec);if(ec)return 2;
+    if(!preview){loadDesktopSettings(data);loadMainWindow(data);}
     CefString(&settings.root_cache_path)=(data/(smoke?L"cef-smoke-cache":L"cef-cache")).wstring();
     CefString(&settings.log_file)=(data/L"cef.log").wstring();
     settings.log_severity=LOGSEVERITY_WARNING;
@@ -354,6 +408,68 @@ int run(HINSTANCE instance,int show,void* sandbox) {
 }
 }
 namespace musxi::cef_adapter {
+void presentDesktopLyrics(const void* pixels,int width,int height) {paintDesktopLyrics(pixels,width,height);}
+std::string desktopLyricsDiagnostics() {
+    bool painted=false,transparent=false;
+    if(desktopBits) {
+        const auto pixels=static_cast<const unsigned char*>(desktopBits);
+        for(std::size_t i=3;i<static_cast<std::size_t>(desktopPixelWidth)*desktopPixelHeight*4;i+=4) {
+            if(pixels[i])painted=true;else transparent=true;
+        }
+    }
+    const auto style=desktopWindow?GetWindowLongPtrW(desktopWindow,GWL_EXSTYLE):0;
+    return DesktopJson{{"exists",desktopWindow!=nullptr},{"painted",painted},{"transparent",transparent},
+        {"noActivate",bool(style&WS_EX_NOACTIVATE)},{"toolWindow",bool(style&WS_EX_TOOLWINDOW)},
+        {"topmost",bool(style&WS_EX_TOPMOST)},{"clickThrough",bool(style&WS_EX_TRANSPARENT)}}.dump();
+}
+void desktopLyricsClosed() {
+    if(!hostClosing)saveDesktopSettings();
+    clearDesktopPixels();
+    if(desktopWindow){DestroyWindow(desktopWindow);desktopWindow=nullptr;}
+    if(desktopVisible && !desktopClosing && !hostClosing){desktopVisible=false;saveDesktopSettings();}
+    desktopClosing=false;desktopPanel=desktopHover=false;
+    if(!hostClosing)publishDesktop();
+}
+std::string desktopLyricsState() {return desktopStateJson();}
+// One setter per field; each takes exactly {field: value}.
+musxi::LibraryReply desktopLyricsCommand(const std::string& command,const std::string& params) {
+    try {
+        const auto data=DesktopJson::parse(params);
+        if(!data.is_object())return {400,"无效桌面歌词参数",{}};
+        if(command=="desktopLyrics.getState") {if(!data.empty())return {400,"无效桌面歌词参数",{}};return {0,{},desktopStateJson()};}
+        if(!testWindow)return {409,"当前窗口不支持桌面歌词",{}};
+        static const std::map<std::string,std::string> fields{{"desktopLyrics.setVisible","visible"},{"desktopLyrics.setLocked","locked"},
+            {"desktopLyrics.setDual","dual"},{"desktopLyrics.setPanel","panel"},{"desktopLyrics.setFontSize","fontSize"},{"desktopLyrics.setColor","color"}};
+        const auto found=fields.find(command);
+        if(found==fields.end())return {404,"未知桌面歌词操作",{}};
+        const auto& field=found->second;
+        if(data.size()!=1 || !data.contains(field))return {400,"无效桌面歌词参数",{}};
+        const auto& value=data.at(field);
+        if(field=="fontSize") {
+            if(!value.is_number_integer() || value.get<int>()<18 || value.get<int>()>48)return {400,"无效桌面歌词参数",{}};
+            desktopFontSize=value.get<int>();
+        } else if(field=="color") {
+            if(!value.is_string() || !desktopColorValid(value.get<std::string>()))return {400,"无效桌面歌词参数",{}};
+            desktopColor=value.get<std::string>();
+        } else {
+            if(!value.is_boolean())return {400,"无效桌面歌词参数",{}};
+            const bool on=value.get<bool>();
+            if(field=="visible") {
+                if(on) {if(!showDesktopLyrics())return {500,"无法打开桌面歌词，请稍后重试",{}};desktopVisible=true;}
+                else {desktopVisible=false;desktopPanel=false;saveDesktopSettings();desktopClosing=desktopWindow!=nullptr;closeDesktopLyricsBrowser();}
+            } else if(field=="locked") {
+                if(on && !addTray(testWindow))return {500,"托盘不可用，暂时无法锁定桌面歌词",{}};
+                lockDesktopLyrics(on);
+            } else if(field=="panel") {
+                if(on && (desktopLocked || !desktopWindow))return {409,"桌面歌词已锁定",{}};
+                desktopPanel=on;desktopInsideTick=GetTickCount64();
+            } else desktopDual=on;
+        }
+        if(field!="panel")saveDesktopSettings();
+        publishDesktop();
+        return {0,{},desktopStateJson()};
+    }catch(...){return {400,"无效桌面歌词参数",{}};}
+}
 bool minimizeToTray() {return testWindow && hideToTray(testWindow);}
 void toggleTrayWindow() {if(testWindow){if(IsWindowVisible(testWindow))hideToTray(testWindow);else showFromTray(testWindow);}}
 void dismissTrayMenu() {if(trayWindow)PostMessageW(trayWindow,WM_CLOSE,0,0);}

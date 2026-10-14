@@ -12,6 +12,9 @@ public class TrayCheck {
  [DllImport("user32.dll",CharSet=CharSet.Unicode)] public static extern int GetClassName(IntPtr window,StringBuilder name,int length);
  [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr window);
  [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr window);
+ [DllImport("user32.dll")] public static extern IntPtr GetWindowLongPtr(IntPtr window,int index);
+ [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+ [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr window,IntPtr after,int x,int y,int width,int height,uint flags);
  [DllImport("shell32.dll")] public static extern int Shell_NotifyIconGetRect(ref IconIdentifier identifier,out Rect rect);
  public struct IconIdentifier {public uint size;public IntPtr window;public uint id;public Guid guid;}
  [DllImport("user32.dll")] public static extern bool GetClientRect(IntPtr window,out Rect rect);
@@ -71,6 +74,7 @@ function Click-Menu([IntPtr]$target,[int]$y) {
  Click-At $target ([int](80*$scale)) ([int]($y*$scale))
 }
 function Open-Menu {
+ Wait-For { (Find-TestWindow 'MusxiTrayMenu' $true) -eq [IntPtr]::Zero } 'Previous tray menu did not finish closing'
  $point=New-Object TrayCheck+Point;[void][TrayCheck]::GetCursorPos([ref]$point)
  [void][TrayCheck]::PostMessage($window,0x802C,[IntPtr]::Zero,[IntPtr]0x1007B)
  Wait-For { (Find-TestWindow 'MusxiTrayMenu') -ne [IntPtr]::Zero } 'Tray menu did not open'
@@ -78,11 +82,11 @@ function Open-Menu {
  $bounds=New-Object TrayCheck+Rect;[void][TrayCheck]::GetWindowRect($panel,[ref]$bounds)
  $scale=[TrayCheck]::GetDpiForWindow($panel)/96.0
  if($bounds.bottom -gt $point.y -or ($bounds.right-$bounds.left) -ne [int](208*$scale) -or
-   ($bounds.bottom-$bounds.top) -ne [int](84*$scale)) {throw 'Tray menu has a backing-window margin or is below the pointer'}
+   ($bounds.bottom-$bounds.top) -ne [int](156*$scale)) {throw 'Tray menu has a backing-window margin or is below the pointer'}
  $region=[TrayCheck]::CreateRectRgn(0,0,0,0)
  try {
-  if([TrayCheck]::GetWindowRgn($panel,$region) -eq 0 -or [TrayCheck]::PtInRegion($region,0,0) -or
-    -not [TrayCheck]::PtInRegion($region,20,20)) {throw 'Tray backing-window corners are visible'}
+  $kind=[TrayCheck]::GetWindowRgn($panel,$region);$corner=[TrayCheck]::PtInRegion($region,0,0);$inside=[TrayCheck]::PtInRegion($region,20,20)
+  if($kind -eq 0 -or $corner -or -not $inside) {throw "Tray region incorrect: kind=$kind corner=$corner inside=$inside"}
  } finally {[void][TrayCheck]::DeleteObject($region)}
  Wait-For {
   [void][TrayCheck]::EnumChildWindows($panel,{param($child,$unused)
@@ -96,12 +100,38 @@ function Open-Menu {
 # PowerShell is DPI-unaware; without this, window and cursor coordinates are
 # virtualized on scaled displays and the physical-pixel menu checks fail.
 [void][TrayCheck]::SetThreadDpiAwarenessContext([IntPtr](-4))
-$app=Start-Process -FilePath (Resolve-Path -LiteralPath $HostPath).Path -ArgumentList '--test-app' -WindowStyle Hidden -PassThru
+$hostExe=(Resolve-Path -LiteralPath $HostPath).Path
+$preferences=Join-Path $env:LOCALAPPDATA 'MusxiPlayer-Test\desktop-lyrics.json'
+$savedPreferences=if(Test-Path -LiteralPath $preferences){[IO.File]::ReadAllBytes($preferences)}else{$null}
+$mainPreferences=Join-Path $env:LOCALAPPDATA 'MusxiPlayer-Test\window.json'
+$savedMainPreferences=if(Test-Path -LiteralPath $mainPreferences){[IO.File]::ReadAllBytes($mainPreferences)}else{$null}
+[IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($preferences)) | Out-Null
+[IO.File]::WriteAllText($preferences,'{"version":1,"visible":false,"locked":false,"dual":true,"x":-2147483648,"y":-2147483648,"width":640,"height":200}')
+[IO.File]::WriteAllText($mainPreferences,'{"version":1,"x":2147483647,"y":0,"width":2147483647,"height":850,"maximized":false}')
+$app=Start-Process -FilePath $hostExe -ArgumentList '--test-app' -WindowStyle Hidden -PassThru
 $window=[IntPtr]::Zero
 $originalCursor=New-Object TrayCheck+Point;[void][TrayCheck]::GetCursorPos([ref]$originalCursor)
 try {
  Wait-For { (Find-TestWindow 'MusxiPlayerTestHost') -ne [IntPtr]::Zero } 'No test window (close an existing test instance before running)'
  $window=Find-TestWindow 'MusxiPlayerTestHost';Start-Sleep -Seconds 2
+ [void][TrayCheck]::SetCursorPos(300,300)
+ if((Find-TestWindow 'MusxiDesktopLyrics') -ne [IntPtr]::Zero) {
+  $content=Open-Menu;Click-Menu $content 60
+  Wait-For { (Find-TestWindow 'MusxiDesktopLyrics' $true) -eq [IntPtr]::Zero } 'Existing desktop lyrics did not close'
+ }
+ $content=Open-Menu;Click-Menu $content 60
+ Wait-For { (Find-TestWindow 'MusxiDesktopLyrics') -ne [IntPtr]::Zero } 'Tray desktop open failed'
+ $desktop=Find-TestWindow 'MusxiDesktopLyrics'
+ $style=[TrayCheck]::GetWindowLongPtr($desktop,-20).ToInt64()
+ if(($style -band 0x08080088) -ne 0x08080088){throw 'Desktop layered/tool/topmost/noactivate style missing'}
+ $content=Open-Menu;Click-Menu $content 96
+ Wait-For { ([TrayCheck]::GetWindowLongPtr($desktop,-20).ToInt64() -band 0x20) -ne 0 } 'Tray desktop lock failed'
+ $content=Open-Menu;Click-Menu $content 96
+ Wait-For { ([TrayCheck]::GetWindowLongPtr($desktop,-20).ToInt64() -band 0x20) -eq 0 } 'Tray desktop unlock failed'
+ $focus=[TrayCheck]::GetForegroundWindow();$dpi=[TrayCheck]::GetDpiForWindow($desktop)/96.0
+ [void][TrayCheck]::SetWindowPos($desktop,[IntPtr]::Zero,80,120,[int](480*$dpi),[int](180*$dpi),0x14)
+ Start-Sleep -Milliseconds 300
+ if([TrayCheck]::GetForegroundWindow() -ne $focus){throw 'Desktop resize stole focus'}
  $icon=New-Object TrayCheck+IconIdentifier
  $icon.size=[Runtime.InteropServices.Marshal]::SizeOf($icon);$icon.window=$window;$icon.id=1
  Wait-For {
@@ -115,6 +145,7 @@ try {
  Wait-For { -not [TrayCheck]::IsWindowVisible($window) } 'Shadcn minimize did not hide the window'
  Start-Sleep -Milliseconds 500
  if($app.HasExited){throw 'Tray minimize terminated the application'}
+ if(-not [TrayCheck]::IsWindowVisible($desktop)){throw 'Main hide also hid desktop lyrics'}
  $monitor=New-Object TrayCheck+MonitorInfo;$monitor.size=[Runtime.InteropServices.Marshal]::SizeOf($monitor)
  [void][TrayCheck]::GetMonitorInfo([TrayCheck]::MonitorFromPoint($originalCursor,2),[ref]$monitor)
  [void][TrayCheck]::SetCursorPos(($monitor.work.left+300),($monitor.work.top+300))
@@ -132,13 +163,48 @@ try {
  Wait-For { [TrayCheck]::IsIconic($window) } 'Normal minimize no longer uses taskbar'
  [void][TrayCheck]::PostMessage($window,0x802C,[IntPtr]::Zero,[IntPtr]0x10203)
  Wait-For { -not [TrayCheck]::IsIconic($window) } 'Tray restore left window minimized'
+ [void][TrayCheck]::PostMessage($desktop,0x10,[IntPtr]::Zero,[IntPtr]::Zero)
+ Wait-For { (Find-TestWindow 'MusxiDesktopLyrics' $true) -eq [IntPtr]::Zero } 'Desktop-only close failed'
+ if($app.HasExited){throw 'Closing desktop terminated main player'}
  $content=Open-Menu;Click-Menu $content 60
+ Wait-For { (Find-TestWindow 'MusxiDesktopLyrics') -ne [IntPtr]::Zero } 'Desktop reopen failed'
+ $desktop=Find-TestWindow 'MusxiDesktopLyrics'
+ $content=Open-Menu;Click-Menu $content 96
+ Wait-For { ([TrayCheck]::GetWindowLongPtr($desktop,-20).ToInt64() -band 0x20) -ne 0 } 'Desktop did not lock before exit'
+ $content=Open-Menu;Click-Menu $content 132
  if(-not $app.WaitForExit(10000) -or $app.ExitCode -ne 0){throw 'Shadcn tray exit did not complete cleanly'}
- Write-Output 'PASS: shadcn close/cancel/minimize, background lifetime, shadcn tray show/hide/exit, double click and taskbar minimize'
+ $settings=Get-Content -LiteralPath $preferences -Raw | ConvertFrom-Json
+ if(-not $settings.visible -or -not $settings.locked -or $settings.width -ne 480 -or $settings.height -ne 180) {
+  throw "Desktop exit did not preserve visibility, lock and DIP size: $($settings | ConvertTo-Json -Compress)"
+ }
+ # Simulate a removed monitor and extreme coordinates; restoration must clamp.
+ $settings.x=[int]::MaxValue;$settings.y=[int]::MaxValue
+ [IO.File]::WriteAllText($preferences,($settings | ConvertTo-Json))
+ $app=Start-Process -FilePath $hostExe -ArgumentList '--test-app' -WindowStyle Hidden -PassThru
+ Wait-For { (Find-TestWindow 'MusxiPlayerTestHost') -ne [IntPtr]::Zero } 'Restart main window failed'
+ $window=Find-TestWindow 'MusxiPlayerTestHost'
+ Wait-For { (Find-TestWindow 'MusxiDesktopLyrics') -ne [IntPtr]::Zero } 'Desktop preference did not restore'
+ $desktop=Find-TestWindow 'MusxiDesktopLyrics';$bounds=New-Object TrayCheck+Rect
+ [void][TrayCheck]::GetWindowRect($desktop,[ref]$bounds)
+ $point=New-Object TrayCheck+Point;$point.x=$bounds.left;$point.y=$bounds.top
+ [void][TrayCheck]::GetMonitorInfo([TrayCheck]::MonitorFromPoint($point,2),[ref]$monitor)
+ if($bounds.left -lt $monitor.work.left -or $bounds.top -lt $monitor.work.top -or $bounds.right -gt $monitor.work.right -or $bounds.bottom -gt $monitor.work.bottom) {
+  throw 'Restored desktop is outside the work area'
+ }
+ if(([TrayCheck]::GetWindowLongPtr($desktop,-20).ToInt64() -band 0x20) -eq 0){throw 'Restored desktop did not retain click-through'}
+ $content=Open-Menu;Click-Menu $content 132
+ if(-not $app.WaitForExit(10000) -or $app.ExitCode -ne 0){throw 'Restarted player exit failed'}
+ Write-Output 'PASS: main/tray lifecycle, desktop lock/unlock/independent close/resize, focus, preference restore and offscreen clamp'
 } finally {
  [void][TrayCheck]::SetCursorPos($originalCursor.x,$originalCursor.y)
  if(-not $app.HasExited -and $window -ne [IntPtr]::Zero) {
   [void][TrayCheck]::PostMessage($window,0x10,[IntPtr]::Zero,[IntPtr]::Zero)
   [void]$app.WaitForExit(10000)
+ }
+ if($app.HasExited) {
+  if($null -ne $savedPreferences){[IO.File]::WriteAllBytes($preferences,$savedPreferences)}
+  elseif(Test-Path -LiteralPath $preferences){Remove-Item -LiteralPath $preferences}
+  if($null -ne $savedMainPreferences){[IO.File]::WriteAllBytes($mainPreferences,$savedMainPreferences)}
+  elseif(Test-Path -LiteralPath $mainPreferences){Remove-Item -LiteralPath $mainPreferences}
  }
 }

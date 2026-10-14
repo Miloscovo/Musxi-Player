@@ -18,6 +18,23 @@ test('cover batches deduplicate URLs and isolate unavailable images', async () =
   } finally {global.fetch=original;}
 });
 const response = data => ({ body: { status: 1, data }, cookie: [] });
+
+test('audio rights refusals survive authorization fallback without mislabeling network failures',async()=>{
+ const hash='a'.repeat(32);
+ for(const status of [2,3,500]) {
+  const adapter=new Adapter(async name=>{
+   if(name==='song_url' || name==='song_url_auth')return {body:{status,url:[]}};
+   if(name==='privilege_lite')return response([{hash}]);
+   if(name==='user_verify')return response({valid:1,auth:'fixture'});
+   if(name==='song_auth')return response({auth:'fixture'});
+   throw Error('network');
+  });
+  adapter.cookie={userid:'1',token:'fixture'};
+  adapter.knownTracks.set('track',{id:'track',hash});
+  await assert.rejects(adapter.run({op:'audio',id:'track',quality:'128'}),error=>
+   status===500?!error.rights:error.rights===true && /购买或会员权限/.test(error.message));
+ }
+});
 test('NetEase and QQ HTTP covers download over HTTPS but retain the requested cache key',async()=>{
   const original=global.fetch;const downloaded=[];
   global.fetch=async url=>{downloaded.push(url);return {ok:true,body:(async function*(){yield Buffer.from('fixture');})()};};

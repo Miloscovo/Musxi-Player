@@ -122,6 +122,62 @@ int main() try {
     require(audioTrackId=="original" && currentQuality=="320" && switched->state.positionMs==42000 && !switched->state.requestedPlaying,"decoder failure did not restore original source");
     require(cloudQueue[0]["id"]=="original" && libraryOperationStatus=="failed","rollback lost queue or error status");
     pollAudio();
+    {
+        // Natural end: the next song is unplayable. It must be
+        // located by the request, skipped after the notice, and not retried.
+        std::vector<std::string> requested;
+        cloudRequestOverride=[&](const Json& request) {
+            requested.push_back(request.value("id",""));
+            return request.value("id","")=="locked"?Json{{"ok",false},{"error","需要购买或会员权限"}}:
+                Json{{"ok",true},{"data",{{"path","next-cache"},{"track",{{"id",request.value("id","")},{"name","Next"}}}}}};
+        };
+        platformRollback={};libraryQualityChange=libraryPlatformChange=libraryPlayPaused=false;cancelUnplayableSkip();
+        cloudQueue=Json::array({{{"id","played"}},{{"id","locked"}},{{"id","free"}}});
+        cloudCurrent=0;libraryPlayTrackId="played";libraryOperationKind="audio";libraryOperationStatus="completed";
+        const auto order=playbackOrder;playbackOrder="sequential";
+        skip(1);cloudTick(); // What advancePlayback() does when "played" ends.
+        require(requested==std::vector<std::string>{"locked"},"auto-advance did not request the next song");
+        require(unplayableQueueIndex()==1 && unplayableSkipAt!=0,"unplayable song was not located by its request");
+        require(utf8(toast).find("3 秒后播放下一首")!=std::string::npos,"skip notice missing");
+        unplayableSkipAt=1;cloudTick();cloudTick();
+        require(requested.size()==2 && requested[1]=="free","auto-skip retried the unplayable song instead of moving on");
+        if(cloudFuture.valid())cloudFuture.get();
+        const auto failAgain=[&] {
+            if(cloudFuture.valid())cloudFuture.get();
+            cancelUnplayableSkip();requested.clear();libraryNextPlay=nullptr;
+            cloudQueue=Json::array({{{"id","played"}},{{"id","locked"}},{{"id","free"}}});
+            cloudCurrent=0;playbackOrder="sequential";libraryPlayPaused=false;
+            libraryOperationStatus="completed";libraryOperationKind="audio";
+            cloudPlay(1,true);cloudTick();require(unplayableSkipAt!=0,"failed song did not schedule skip");
+        };
+        failAgain();invoke("library.cancel");cloudTick();
+        require(!unplayableSkipAt && requested.size()==1,"cancel retained automatic skip");
+        failAgain();setPlaying(false);cloudTick();
+        require(!unplayableSkipAt && requested.size()==1,"pause retained automatic skip");
+        setPlaying(true);require(!libraryPlayPaused,"resume kept stale paused intent");
+        cloudPlay(1,true);cloudTick();require(unplayableSkipAt!=0,"resume disabled future failure skipping");
+        failAgain();invoke("library.setPlaybackOrder",{{"order","repeat-one"}});cloudTick();
+        require(!unplayableSkipAt && requested.size()==1,"single repeat retained automatic skip");
+        failAgain();invoke("library.queueRemove",{{"id","played"}});
+        unplayableSkipAt=1;cloudTick();cloudTick();
+        require(requested==std::vector<std::string>({"locked","free"}),"queue edit moved failed song to the wrong index");
+        failAgain();invoke("library.queueRemove",{{"id","locked"}});
+        require(!unplayableSkipAt,"removing failed song retained automatic skip");
+        failAgain();invoke("library.queueClear");require(!unplayableSkipAt,"queue clear retained automatic skip");
+        requested.clear();cloudQueue=Json::array({{{"id","a"}},{{"id","b"}},{{"id","c"}}});
+        playbackOrder="random";unplayableTrackId="b";unplayableTracks={"a","b"};
+        for(int n=0;n<20;++n)require(nextUnplayedQueueIndex()==2,"random skip retried a failed song");
+        cancelUnplayableSkip();
+        cloudRequestOverride=[&](const Json& request) {
+            requested.push_back(request.value("id",""));return Json{{"ok",false},{"error","no rights"}};
+        };
+        cloudPlay(0,true);cloudTick();
+        for(int n=0;n<4 && unplayableSkipAt;++n){unplayableSkipAt=1;cloudTick();cloudTick();cloudTick();}
+        require(requested.size()==3 && std::set<std::string>(requested.begin(),requested.end()).size()==3 && !unplayableSkipAt,
+            "random failure pass did not visit each song exactly once");
+        playbackOrder=order;cloudRequestOverride=nullptr;cancelUnplayableSkip();
+        if(cloudFuture.valid())cloudFuture.get();
+    }
     cloud::testProfile=true;
     Json aggregate={{"playlist",{{"id","musxi:cloud-favorites"},{"name","云端收藏整合"}}},{"playlists",Json::array({{{"id","qq:liked"},{"editable",true}}})}};
     aggregate["tracks"]=Json::array({{{"id","merged"},{"name","Song"},{"platforms",Json::array({"netease","qq"})},{"sources",Json::array({{{"id","netease:song"}},{{"id","qq:song"}}})}}});

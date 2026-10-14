@@ -507,3 +507,93 @@ html,body,#app,main.app-shell { background:transparent!important }
 .lyrics-match-preview .lyrics-translation-toggle { align-self:flex-start; margin-top:0 }
 @media (max-width:800px) { .lyrics-translation-toggle,.lyrics-translation-status { margin-top:6px } }
 @media (prefers-reduced-motion:reduce) { .lyrics-translation-toggle span,.lyrics-translation-toggle span::after { transition:none } }
+/* Progress row: elapsed, seek bar and total share one line at the top of the dock.
+   Padding moves 10px from the bottom to the top, so the dock keeps its height and
+   the times never touch the cover at any window size. */
+.player,:root[data-theme=dark] .player,:root[data-theme=glass] .player { padding-top:30px; padding-bottom:8px }
+.player { z-index:5 } /* Above .lyrics-page (z-index 4), which ends at the dock's top edge. */
+.player-progress { position:absolute; top:7px; left:25px; right:25px; display:flex; align-items:center; gap:12px; height:16px; z-index:2 }
+.player-time { flex:none; min-width:34px; color:var(--muted); font-size:11px; line-height:16px; font-variant-numeric:tabular-nums; letter-spacing:.2px }
+.player-time.elapsed { text-align:right }
+.player-time.total { height:16px; padding:0 2px; border:0; border-radius:4px; background:transparent; color:var(--muted); font:inherit; font-size:11px; text-align:left; cursor:pointer }
+.player-time.total:hover { color:var(--ink) }
+.seek-track { position:relative; flex:1; min-width:0; height:16px }
+.seek-track input.seek-bar { top:3px }
+.seek-bubble { position:absolute; bottom:calc(100% - 1px); padding:2px 6px; border-radius:5px; background:var(--ink); color:var(--surface);
+  font-size:11px; line-height:15px; font-variant-numeric:tabular-nums; white-space:nowrap; transform:translateX(-50%); pointer-events:none; box-shadow:0 2px 6px #0002 }
+@media (max-width:1100px) { .player-progress { left:18px; right:18px } }
+.desktop-lyrics-toggle { display:grid; place-items:center; width:42px; height:46px; padding:4px; background:transparent; color:var(--ink); opacity:.7 }
+.desktop-lyrics-toggle:hover { opacity:1 }
+/* A "词" badge: a glyph in a rounded frame, unlike the dock's line icons. */
+.desktop-lyrics-toggle svg { width:31px; height:31px; overflow:visible }
+.desktop-lyrics-toggle rect { fill:none; stroke:currentColor; stroke-width:1.9 }
+.desktop-lyrics-toggle text { fill:currentColor; font:700 10.5px "Microsoft YaHei UI","Microsoft YaHei",sans-serif }
+.desktop-lyrics-toggle[aria-pressed=true] { color:var(--accent); opacity:1 }
+.desktop-lyrics-toggle[aria-pressed=true] rect { fill:var(--accent); stroke:var(--accent) }
+.desktop-lyrics-toggle[aria-pressed=true] text { fill:var(--dock) }
+/* Desktop lyrics: text on a transparent window. The halo is a faint, tight
+   shadow that only separates glyph edges from busy wallpapers. */
+html:has(.desktop-lyrics),html:has(.desktop-lyrics) body,html:has(.desktop-lyrics) #app { height:100%; min-width:0!important; overflow:hidden; background:transparent!important }
+:root { --dl-accent:#34b98f } :root[data-tone=blue] { --dl-accent:#5b9ef0 } :root[data-tone=pink] { --dl-accent:#ff6fb5 } :root[data-tone=red] { --dl-accent:#ec5f65 }
+.desktop-lyrics {
+  --dl-ink:var(--dl-accent); --dl-sub:#fff; --dl-halo:0 0 1px #0000008c,0 1px 3px #00000047; --dl-panel:#161b1acc; --dl-panel-line:#ffffff1f; --dl-tool:#f2f5f4;
+  position:relative; display:flex; flex-direction:column; justify-content:center; width:100%; height:100%; max-width:none!important;
+  margin:0!important; padding:40px 24px 26px!important; border-radius:14px; background:transparent; color:var(--dl-ink);
+  font-family:"Segoe UI","Microsoft YaHei UI","Microsoft YaHei",sans-serif; -webkit-app-region:drag; transition:background-color .18s,box-shadow .18s
+}
+/* Fully transparent layered pixels pass clicks through; 2/255 keeps drag, resize and right click working between glyphs. */
+.desktop-lyrics:not([data-locked=true]) { background:#00000002 }
+.desktop-lyrics[data-color=light] { --dl-ink:#fff; --dl-sub:#f1f4f3 }
+.desktop-lyrics[data-color=dark] { --dl-ink:#18211e; --dl-sub:#2b3532; --dl-halo:0 0 1px #ffffffb3,0 1px 3px #ffffff66; --dl-panel:#f7f9f8db; --dl-panel-line:#0000001a; --dl-tool:#1f2a26 }
+.desktop-lyrics[data-panel=true] { background:var(--dl-panel); box-shadow:inset 0 0 0 1px var(--dl-panel-line) }
+.dl-lyrics { display:flex; flex-direction:column; align-items:center; gap:4px; min-width:0; text-align:center }
+.dl-lyrics p { display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2; overflow:hidden; overflow-wrap:anywhere; max-width:100%; margin:0; text-shadow:var(--dl-halo) }
+.dl-line { color:var(--dl-ink); font-size:var(--dl-size); font-weight:650; line-height:1.3; letter-spacing:.3px; animation:dl-in .22s ease-out }
+.dl-translation { color:var(--dl-sub); font-size:calc(var(--dl-size) * .6); font-weight:500; line-height:1.35; letter-spacing:.2px }
+.dl-status { color:var(--dl-sub); font-size:calc(var(--dl-size) * .58); font-weight:500; line-height:1.4; opacity:.82 }
+@keyframes dl-in { from { opacity:.25; transform:translateY(3px) } }
+/* Control capsule: a compact glass pill under the lyrics, deliberately unlike the
+   dock (solid rounded glyphs, one filled primary button, smaller scale). */
+.desktop-lyrics[data-panel=true] { padding-bottom:66px!important }
+.dl-capsule { position:absolute; bottom:10px; left:50%; display:flex; align-items:center; gap:2px; height:38px; padding:0 6px; border-radius:19px;
+  transform:translateX(-50%); background:var(--dl-capsule); color:var(--dl-tool); box-shadow:inset 0 0 0 1px var(--dl-panel-line),0 6px 18px #0000002e;
+  backdrop-filter:blur(14px) saturate(1.3); -webkit-app-region:no-drag; animation:dl-rise .18s ease-out }
+.desktop-lyrics { --dl-capsule:#1b2120e6 } .desktop-lyrics[data-color=dark] { --dl-capsule:#fbfcfcf0 }
+.dl-tip-anchor,.dl-color-anchor { position:relative; display:flex }
+.dl-tool { display:grid; place-items:center; min-width:30px; height:30px; padding:0 6px; border:0; border-radius:15px; background:transparent; color:inherit;
+  font:inherit; cursor:pointer; opacity:.86; transition:background-color .12s,opacity .12s }
+.dl-tool:hover { opacity:1; background:color-mix(in srgb,currentColor 12%,transparent) }
+.dl-tool:focus-visible,.dl-unlock:focus-visible,.dl-colors button:focus-visible { outline:2px solid var(--dl-accent); outline-offset:1px }
+.dl-tool[aria-pressed=true] { color:var(--dl-accent); opacity:1 }
+.dl-tool svg { width:17px; height:17px; fill:none; stroke:currentColor; stroke-width:2; stroke-linecap:round; stroke-linejoin:round }
+.dl-tool svg .fill { fill:currentColor; stroke:none }
+.dl-play { width:32px; height:32px; margin:0 2px; padding:0; background:var(--dl-accent); color:#fff; opacity:1 }
+.dl-play:hover { background:color-mix(in srgb,var(--dl-accent) 86%,#fff) }
+.dl-play svg { width:16px; height:16px }
+.dl-divider { width:1px; height:18px; margin:0 5px; background:var(--dl-panel-line) }
+.dl-text-icon { font-size:13px; font-weight:650; line-height:1 }
+.dl-size { display:flex; gap:2px; padding:0 4px }
+.dl-size-step { display:grid; place-items:center; width:18px; height:22px; border-radius:11px; font-size:15px; line-height:1 }
+.dl-size-step:hover { background:color-mix(in srgb,currentColor 14%,transparent) }
+.dl-size-value { min-width:40px; font-size:12px; font-weight:600; font-variant-numeric:tabular-nums; text-align:center }
+.dl-swatch { width:14px; height:14px; border-radius:50%; background:var(--dl-ink); box-shadow:0 0 0 1.5px var(--dl-capsule),0 0 0 3px color-mix(in srgb,currentColor 40%,transparent) }
+.dl-tip { position:absolute; bottom:calc(100% + 6px); left:50%; padding:3px 8px; border-radius:6px; background:#0f1312f0; color:#f2f5f4; font-size:11px; line-height:16px;
+  white-space:nowrap; transform:translateX(-50%); opacity:0; visibility:hidden; pointer-events:none; transition:opacity .12s }
+.dl-tip-anchor:hover .dl-tip { opacity:1; visibility:visible; transition-delay:.35s }
+.dl-colors { position:absolute; bottom:calc(100% + 6px); left:50%; display:flex; gap:2px; padding:4px; border-radius:12px; transform:translateX(-50%);
+  background:var(--dl-capsule); box-shadow:inset 0 0 0 1px var(--dl-panel-line),0 6px 18px #0003; animation:dl-fade .12s ease-out }
+.dl-colors::after { content:""; position:absolute; top:100%; left:0; right:0; height:8px } /* Hover bridge to the swatch button. */
+.dl-colors button { display:flex; align-items:center; gap:6px; height:28px; padding:0 9px 0 7px; border:0; border-radius:9px; background:transparent; color:var(--dl-tool);
+  font:500 12px/1 inherit; white-space:nowrap; cursor:pointer }
+.dl-colors button:hover { background:color-mix(in srgb,currentColor 12%,transparent) }
+.dl-colors button[aria-checked=true] { color:var(--dl-accent) }
+.dl-colors [data-swatch=theme] .dl-swatch { background:var(--dl-accent) } .dl-colors [data-swatch=light] .dl-swatch { background:#fff } .dl-colors [data-swatch=dark] .dl-swatch { background:#18211e }
+@keyframes dl-rise { from { opacity:0; transform:translate(-50%,4px) } }
+/* Must stay inside the native unlock hit box (88x38 DIP, top centre); see desktopUnlockAt. */
+.dl-unlock { position:absolute; top:8px; left:50%; display:flex; align-items:center; gap:5px; height:28px; padding:0 12px 0 10px; border:0; border-radius:14px;
+  transform:translateX(-50%); background:#161b1ad9; color:#f2f5f4; font:500 12px/1 inherit; cursor:pointer; box-shadow:0 2px 8px #0003; animation:dl-fade .16s ease-out; -webkit-app-region:no-drag }
+.dl-unlock:hover { background:#161b1a }
+.dl-unlock svg { width:15px; height:15px; fill:none; stroke:currentColor; stroke-width:1.9; stroke-linecap:round; stroke-linejoin:round }
+.dl-error { position:absolute; bottom:6px; left:0; right:0; color:var(--dl-sub); font-size:11px; text-align:center; text-shadow:var(--dl-halo) }
+@keyframes dl-fade { from { opacity:0 } }
+@media (prefers-reduced-motion:reduce) { .dl-line,.dl-capsule,.dl-colors,.dl-unlock { animation:none } .desktop-lyrics { transition:none } }

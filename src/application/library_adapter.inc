@@ -57,6 +57,7 @@ LibraryReply applicationLibrary(const std::string& name,const std::string& param
             const auto order=requiredText(p,"order");
             if(order!="sequential" && order!="random" && order!="repeat-one")return {400,"无效播放顺序",{}};
             playbackOrder=order;
+            if(order=="repeat-one")cancelUnplayableSkip();
             return reply({{"id",std::to_string(++libraryOperationId)}});
         }
         if(name=="library.setPlatform") {
@@ -69,6 +70,7 @@ LibraryReply applicationLibrary(const std::string& name,const std::string& param
             if(std::none_of(cloudAccounts.begin(),cloudAccounts.end(),[&](const Json& account){return account.value("platform","")==platform && account.value("connected",false);}))return {409,"请先登录目标平台",{}};
             if(!currentPlaybackTrack.is_object() || currentPlaybackTrack.value("id","")!=id)return {409,"当前歌曲信息不可用",{}};
             const auto dir=cloud::dataDir()/L"cloud-cache"/std::to_wstring(GetCurrentProcessId());
+            cancelUnplayableSkip();
             ++cloudGeneration;libraryPlayGeneration=cloudGeneration;libraryPlayTrackId=id;
             libraryPlayPaused=!audioBackend().snapshot().requestedPlaying;libraryQualityChange=true;libraryPlatformChange=true;cloudAutoNext=false;
             cloudRequest({{"op","audio"},{"id",id},{"platform",platform},{"track",currentPlaybackTrack},{"cacheDir",dir.u8string()}});
@@ -91,6 +93,7 @@ LibraryReply applicationLibrary(const std::string& name,const std::string& param
                     std::none_of(libraryQualities["options"].begin(),libraryQualities["options"].end(),[&](const Json& option){return option.value("id","")==quality;}))return {409,"请选择已确认可用的音质",{}};
                 const auto dir=cloud::dataDir()/L"cloud-cache"/std::to_wstring(GetCurrentProcessId());
                 if(!platformRollback.path.empty())return {409,"正在切换播放源，请稍后重试",{}};
+                cancelUnplayableSkip();
                 libraryPlatformChange=false;
                 request={{"op","audio"},{"id",id},{"quality",quality},{"cacheDir",dir.u8string()}};
                 ++cloudGeneration;libraryPlayGeneration=cloudGeneration;libraryPlayTrackId=id;
@@ -200,6 +203,7 @@ LibraryReply applicationLibrary(const std::string& name,const std::string& param
         }
         if(name=="library.cancel") {
             if(!p.empty()) return {400,"无效取消参数",{}};
+            cancelUnplayableSkip();
             if(libraryOperationStatus=="pending" && libraryOperationKind=="audio") {
                 if(!platformRollback.path.empty())restorePlatformSource();
                 else if(audioTrackId==libraryPlayTrackId && audioBackend().snapshot().pending)closeAudio();
@@ -233,7 +237,7 @@ LibraryReply applicationLibrary(const std::string& name,const std::string& param
                 if(!p.empty())return {400,"无效清空参数",{}};
             } else if(p.size()!=(name=="library.queueNext"?2:1))return {400,"无效队列参数",{}};
             if(!libraryNextPlay.is_null())return {409,"正在准备播放，请稍后重试",{}};
-            if(name=="library.queueClear") {cloudQueue=Json::array();cloudCurrent=-1;cloudAutoNext=false;}
+            if(name=="library.queueClear") {cloudQueue=Json::array();cloudCurrent=-1;cloudAutoNext=false;cancelUnplayableSkip();}
             else {
                 const auto id=requiredText(p,"id");
                 auto found=std::find_if(cloudQueue.begin(),cloudQueue.end(),[&](const Json& row){return row.value("id","")==id;});
@@ -241,6 +245,7 @@ LibraryReply applicationLibrary(const std::string& name,const std::string& param
                     if(found==cloudQueue.end())return {404,"歌曲不在播放列表中",{}};
                     const int index=(int)std::distance(cloudQueue.begin(),found);
                     cloudQueue.erase(found);if(index<=cloudCurrent)--cloudCurrent;
+                    if(id==unplayableTrackId)cancelUnplayableSkip();
                 } else {
                     const auto source=requiredText(p,"source");
                     if(source!="search" && source!="library" && source!="local" && source!="recent")return {400,"无效列表",{}};
@@ -278,7 +283,8 @@ LibraryReply applicationLibrary(const std::string& name,const std::string& param
                 if(p.size()!=1 || !p.contains("delta") || !p["delta"].is_number_integer()) return {400,"无效切歌参数",{}};
                 const int delta=p["delta"].get<int>();if(delta!=1 && delta!=-1) return {400,"无效方向",{}};
                 if(cloudQueue.empty()) return {409,"播放队列为空",{}};
-                int base=cloudCurrent;
+                // After an unplayable song, continue from it rather than retrying it.
+                int base=unplayableQueueIndex();if(base<0)base=cloudCurrent;
                 if(libraryOperationStatus=="pending" && libraryOperationKind=="audio")
                     for(int i=0;i<(int)cloudQueue.size();++i)if(cloudQueue[i].value("id","")==libraryPlayTrackId){base=i;break;}
                 const int index=nextQueueIndex(delta,base);
@@ -305,7 +311,7 @@ LibraryReply applicationLibrary(const std::string& name,const std::string& param
             libraryPlayPaused=false;
             libraryOperationStatus="pending";libraryOperationError.clear();libraryPlayGeneration=-1;
             libraryPlayTrackId=next.value("id","");
-            libraryNextPlay=next;cloudAutoNext=false;
+            libraryNextPlay=next;cloudAutoNext=false;cancelUnplayableSkip();
             return reply({{"id",std::to_string(libraryOperationId)}});
         }
         if(cloudBusy() || !libraryNextPlay.is_null()) return {409,"正在处理请求，请稍后重试",{}};

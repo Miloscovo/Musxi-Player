@@ -36,7 +36,10 @@ function liveCaller() {
     return require(path.join(VENDOR, 'module', name + '.js'))(params, request);
   };
 }
-function failure(body) {
+function failure(body,audio=false) {
+  const data=body?.data || body;
+  if(audio && data && [2,3].includes(Number(data.status ?? body?.status)) && !audioUrl(data))
+    return Object.assign(Error('此歌曲在酷狗需要购买或会员权限，暂时无法播放'),{rights:true});
   const code = body?.error_code ?? body?.code ?? 'unknown';
   return new Error(`酷狗接口返回错误（${String(code).replace(/[^\w-]/g, '').slice(0, 24)}），请重新扫码或稍后重试`);
 }
@@ -137,15 +140,18 @@ class Adapter {
   }
   session() { return { cookie: this.cookie, profile: this.profile, platform: 'lite' }; }
   async api(name, params = {}) {
+    const audio=name==='song_url' || name==='song_url_auth';
     let res;
     try { res = await this.call(name, { ...params, cookie: { ...this.cookie } }); }
     catch (error) {
-      if (error?.body) throw failure(error.body);
+      if (error?.body) throw failure(error.body,audio);
       throw new Error('无法连接酷狗服务，请检查网络后重试');
     }
     const body = res.body;
     if (body?.ssaCode) throw new Error('账号需要在官方客户端完成安全验证，请验证后重新扫码');
-    if (!body || (body.status !== undefined && ![1, 200].includes(Number(body.status))) || (body.error_code && Number(body.error_code) !== 0)) throw failure(body);
+    if (name === 'search_lyric' && Number(body?.status) === 404 && Array.isArray(body.candidates) && !body.candidates.length)
+      throw Object.assign(failure(body), { notFound: true });
+    if (!body || (body.status !== undefined && ![1, 200].includes(Number(body.status))) || (body.error_code && Number(body.error_code) !== 0)) throw failure(body,audio);
     for (const entry of res.cookie || []) {
       const pair = entry.split(';')[0]; const at = pair.indexOf('=');
       if (at > 0) this.cookie[pair.slice(0, at)] = pair.slice(at + 1);
@@ -170,7 +176,7 @@ class Adapter {
     return this.api('song_url_auth',{...params,auth:authorization.data.auth,open_time:authorization.data.open_time});
   }
   async basicAudio(track,quality,variants) {
-    let responseReceived=false,original;
+    let responseReceived=false,original,lastFailure;
     const params={hash:track.hash,album_id:track.albumId,album_audio_id:track.audioId,quality:quality==='flac'?'flac':Number(quality)};
     const playable=(data,hash)=>audioUrl(data) && confirmedQuality(data,quality) &&
       (!data.hash || String(data.hash).toLowerCase()===hash) && !data.freeTrialInfo &&
@@ -178,9 +184,9 @@ class Adapter {
     try {
       const body=await this.api('song_url',params),data=body.data || body;
       original=data;
-      responseReceived=true;
+      responseReceived=true;lastFailure=undefined;
       if(playable(data,track.hash))return data;
-    } catch { /* An older endpoint may reject a valid account entitlement. */ }
+    } catch(error) {lastFailure=error; /* An older endpoint may reject a valid account entitlement. */}
     try {
       variants ||= await this.advancedVariants(track);
       const matches=row=>String(row.quality)===quality && /^[a-f0-9]{32}$/i.test(row.hash || '');
@@ -191,13 +197,14 @@ class Adapter {
       if(original && playable(original,params.hash))return original;
       if(params.hash!==track.hash)try {
         const body=await this.api('song_url',params),data=body.data || body;
-        responseReceived=true;
+        responseReceived=true;lastFailure=undefined;
         if(playable(data,params.hash))return data;
       } catch { /* Try current authorization if the precise variant is rejected. */ }
       const body=await this.authorizedAudio(params),data=body.data || body;
-      responseReceived=true;
+      responseReceived=true;lastFailure=undefined;
       if(String(data.hash).toLowerCase()===params.hash && playable(data,params.hash))return data;
-    } catch { /* Never expose account credentials or private service errors. */ }
+    } catch(error) {lastFailure=error; /* Never expose account credentials or private service errors. */}
+    if(lastFailure?.rights)throw lastFailure;
     if(responseReceived)return null;
     throw Error('该音质暂时不可用，已保留当前播放');
   }
@@ -285,7 +292,11 @@ class Adapter {
             timer=setTimeout(()=>reject(Error('歌词请求超时')),remaining);
           })]);}finally{clearTimeout(timer);}
         };
-        const found=await call('search_lyric',{hash:t.hash,album_audio_id:t.audioId || 0,duration:t.duration || 0});
+        let found;
+        // KuGou answers status 404 with an empty candidate list when a song has no lyrics
+        // (instrumentals, many remixes); that is "no lyrics", not a failed request.
+        try {found=await call('search_lyric',{hash:t.hash,album_audio_id:t.audioId || 0,duration:t.duration || 0});}
+        catch(error) {if(error.notFound)return {outcome:'none'};throw error;}
         if(!Array.isArray(found.candidates))throw Error('歌词搜索结果无效');
         if(!found.candidates.length)return {outcome:'none'};
         // Hash-scoped search only; never broaden to a title search or another platform.
@@ -518,7 +529,7 @@ class Adapter {
         if(request.quality!==undefined && !confirmed)throw Error('该音质暂时不可用，已保留当前播放');
         t.cover = cover(data) || t.cover;
         const value = Array.isArray(data.url) ? data.url[0] : data.url;
-        if (!value) throw new Error('此账号暂时无法播放该歌曲，可能需要会员或歌曲已下架');
+        if (!value) throw Error('该音质暂时不可用，已保留当前播放');
         const url = new URL(value);
         if (!['http:', 'https:'].includes(url.protocol)) throw new Error('音频地址无效');
         // Audio comes only from the account-authorized URL returned by upstream.

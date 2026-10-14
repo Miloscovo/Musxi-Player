@@ -15,6 +15,7 @@
 #include <cmath>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iomanip>
 #include <map>
 #include <memory>
@@ -41,6 +42,14 @@ bool applicationClosing=false;
 constexpr UINT_PTR HostTick=0xCEF, Tick=1;
 bool opened=false,playing=false,cloudConnected=false,cloudPolling=false,cloudInitialized=false;
 bool cloudLoginAfterInit=false,cloudAutoNext=false;
+// IDs survive queue edits; a random pass must not retry already failed songs.
+ULONGLONG unplayableSkipAt=0;
+std::string unplayableTrackId;
+std::set<std::string> unplayableTracks;
+void cancelUnplayableSkip(){unplayableSkipAt=0;unplayableTrackId.clear();unplayableTracks.clear();}
+// The song an audio request is actually for. Auto-advance goes through skip(),
+// which does not update libraryPlayTrackId, so failures are located by this.
+std::string audioRequestId;
 int cloudCurrent=-1;
 int cloudGeneration=0,requestGeneration=0,searchPage=1,searchTotal=0;
 ULONGLONG toastUntil=0,cloudNextPoll=0,cloudPollDeadline=0;
@@ -171,7 +180,8 @@ bool restorePlatformSource() {
     return true;
 }
 musxi::PlayerResult setPlaying(bool requested) {
-    if(libraryOperationStatus=="pending" && libraryOperationKind=="audio")libraryPlayPaused=!requested;
+    if(!requested)cancelUnplayableSkip();
+    libraryPlayPaused=!requested;
     const bool retry=requested && audioBackend().snapshot().phase=="failed" &&
         libraryOperationKind=="audio" && libraryOperationStatus=="failed" && audioTrackId==libraryPlayTrackId;
     auto result=requested?audioBackend().resume():audioBackend().pause();syncAudioView();
@@ -193,11 +203,31 @@ int nextQueueIndex(int delta,int current=-2) {
     }
     return current<0?(delta>0?0:size-1):(current+delta+size)%size;
 }
+int unplayableQueueIndex() {
+    if(!unplayableTrackId.empty())for(int i=0;i<(int)cloudQueue.size();++i)
+        if(cloudQueue[i].value("id","")==unplayableTrackId)return i;
+    return -1;
+}
+int nextUnplayedQueueIndex() {
+    const int base=unplayableQueueIndex(),size=static_cast<int>(cloudQueue.size());
+    if(base<0 || playbackOrder=="repeat-one")return -1;
+    std::vector<int> candidates;
+    for(int step=1;step<=size;++step) {
+        const int index=(base+step)%size;
+        if(!unplayableTracks.count(cloudQueue[index].value("id","")))candidates.push_back(index);
+    }
+    if(candidates.empty())return -1;
+    if(playbackOrder!="random")return candidates.front();
+    static std::mt19937 random{std::random_device{}()};
+    return candidates[std::uniform_int_distribution<std::size_t>(0,candidates.size()-1)(random)];
+}
 void skip(int delta) {
     if(skipLocal(delta))return;
-    if(!cloudQueue.empty())cloudPlay(nextQueueIndex(delta),true);
+    const int failed=unplayableQueueIndex();
+    if(!cloudQueue.empty())cloudPlay(nextQueueIndex(delta,failed>=0?failed:-2),true);
 }
 musxi::PlayerResult seekMilliseconds(std::uint32_t milliseconds) {
+    cancelUnplayableSkip();
     auto result=audioBackend().seek(milliseconds);syncAudioView();
     if(!result && result.error!=musxi::AudioError::NotReady)notice(L"此音频暂不支持跳转到该位置");
     return playerResult(result);
@@ -318,8 +348,14 @@ void coverTick() {
     std::wstring error;if(!coverBridge.start(error)) return;
     coverFuture=std::async(std::launch::async,[urls=std::move(urls)] {return coverBridge.call({{"op","covers"},{"urls",urls}});});
 }
+// Tests replace the service process; production leaves this empty.
+std::function<Json(const Json&)> cloudRequestOverride;
 void cloudRequest(Json request) {
     if(cloudBusy()) return;
+    if(cloudRequestOverride) {
+        cloudOperation=request.value("op","");requestGeneration=cloudGeneration;
+        std::promise<Json> reply;cloudFuture=reply.get_future();reply.set_value(cloudRequestOverride(request));return;
+    }
     std::wstring error;
     if(!cloudBridge.start(error)) {cloudStatus=error;notice(error);return;}
     cloudOperation=request.value("op","");requestGeneration=cloudGeneration;
@@ -378,6 +414,7 @@ void cloudPlay(int index, bool useQueue, bool search) {
     try {
         // Session-specific directory avoids interfering with another running player.
         auto dir=cloud::dataDir()/L"cloud-cache"/std::to_wstring(GetCurrentProcessId());
+        audioRequestId=list[index].value("id","");
         cloudRequest({{"op","audio"},{"id",list[index].value("id","")},{"index",index},{"cacheDir",dir.u8string()},{"sources",list[index].value("sources",Json::array())},{"defaultQuality",defaultAudioQuality}});
         // Index is kept on the UI thread, outside the adapter's response schema.
     } catch(...) {notice(L"无法创建本机播放缓存");}
@@ -387,8 +424,19 @@ void cloudTick() {
         auto op=cloudOperation;Json result;bool applied=false;
         try {result=cloudFuture.get();} catch(...) {result={{"ok",false},{"error","本机接口请求失败"}};}
         if(!result.value("ok",false)) {
+            const bool platformChange=libraryPlatformChange;
             if(op=="audio")libraryPlatformChange=false;
             cloudStatus=cloudText(result,"error","请求失败");
+            // An unplayable queue song (rights, membership, removed) moves on after a
+            // short notice instead of leaving playback stuck; one lap of the queue at most.
+            if(op=="audio" && requestGeneration==cloudGeneration && !libraryQualityChange && !platformChange && !libraryPlayPaused && !cloudQueue.empty()) {
+                unplayableTrackId=audioRequestId;unplayableTracks.insert(audioRequestId);
+                if(nextUnplayedQueueIndex()>=0) {
+                    unplayableSkipAt=GetTickCount64()+3000;cloudStatus+=L"，3 秒后播放下一首";
+                    // The notice already reports it; a failed operation would show it again.
+                    if(libraryOperationStatus=="pending" && libraryOperationKind=="audio")libraryOperationStatus="cancelled";
+                } else cancelUnplayableSkip();
+            }
             if(op!="avatar" && op!="vip_auto") {cloudPolling=false;notice(cloudStatus);}
             if(result.value("fatal",false)) {cloudBridge.stop();cloudInitialized=false;cloudConnected=false;}
             else if(op=="sync" && cloudConnected) cloudRequest({{"op","avatar"}});
@@ -492,7 +540,8 @@ void cloudTick() {
                             const auto seekResult=audioBackend().seek(previousAudio.positionMs);
                             if(!seekResult)notice(L"已切换，但无法恢复播放位置");
                         }
-                        cloudAutoNext=false;cloudNowTitle=cloudText(data["track"],"name");cloudNowArtist=cloudText(data["track"],"artist");cloudNowCover=data["track"].value("cover","");
+                        cloudAutoNext=false;cancelUnplayableSkip();
+                        cloudNowTitle=cloudText(data["track"],"name");cloudNowArtist=cloudText(data["track"],"artist");cloudNowCover=data["track"].value("cover","");
                         auto id=data["track"].value("id","");
                         for(int i=0;i<(int)cloudQueue.size();++i) if(cloudQueue[i].value("id","")==id) {cloudCurrent=i;break;}
                         cloudStatus=(audioBackend().snapshot().pending?L"正在加载 · ":playing?L"正在播放 · ":L"已暂停 · ")+cloudNowTitle;
@@ -530,8 +579,18 @@ void cloudTick() {
         } else {libraryOperationStatus="failed";libraryOperationError="歌曲已不在当前列表中，请刷新后重试";}
     }
     if(cloudAutoNext && !cloudBusy()) {cloudAutoNext=false;advancePlayback();}
+    if(unplayableSkipAt && GetTickCount64()>=unplayableSkipAt && !cloudBusy() && libraryNextPlay.is_null()) {
+        unplayableSkipAt=0;
+        const int index=nextUnplayedQueueIndex();
+        if(index>=0 && cloudConnected) {
+            ++libraryOperationId;libraryOperationKind="audio";libraryOperationStatus="pending";libraryOperationError.clear();
+            libraryPlayPaused=false;libraryPlayTrackId=cloudQueue[index].value("id","");
+            libraryNextPlay={{"source","queue"},{"id",libraryPlayTrackId}};
+        } else cancelUnplayableSkip();
+    }
 }
 void accountLogout() {
+    cancelUnplayableSkip();
     libraryNowMenu=Json::object();
     libraryQualities=Json::object();currentQuality.clear();
     cloudStop();cloudInitialized=false;cloudConnected=false;cloudAutoNext=false;++cloudGeneration;

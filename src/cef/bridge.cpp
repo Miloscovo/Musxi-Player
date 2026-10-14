@@ -4,6 +4,9 @@
 #include "../application/application.hpp"
 #include "../../third_party/json.hpp"
 #include <map>
+#include <set>
+#include <vector>
+#include <algorithm>
 #include <iostream>
 #include <commctrl.h>
 #include <windowsx.h>
@@ -15,8 +18,13 @@ namespace {
 using Json=nlohmann::json;
 CefRefPtr<CefBrowser> activeBrowser;
 CefRefPtr<CefBrowser> trayBrowser;
+CefRefPtr<CefBrowser> lyricsBrowser;
+class Client;
+std::vector<Client*> eventClients;
+void dispatchPlayerEvents(const char* name,const PlayerState& state);
 bool shuttingDown=false;
 bool passed=false;
+Json desktopReport;
 LRESULT CALLBACK dragHitTest(HWND hwnd,UINT message,WPARAM wp,LPARAM lp,UINT_PTR id,DWORD_PTR parent) {
     if(message==WM_NCHITTEST) {
         auto host=reinterpret_cast<HWND>(parent);
@@ -54,8 +62,8 @@ class Client final : public CefClient, public CefLifeSpanHandler,
                      public CefRequestHandler, public CefDragHandler, public CefRenderHandler,
                      public CefDisplayHandler, public CefMessageRouterBrowserSide::Handler {
 public:
-    Client(std::string url,void* window,bool smoke,void* testWindow,bool tray=false)
-        :url_(std::move(url)),window_(static_cast<HWND>(window)),testWindow_(static_cast<HWND>(testWindow)),smoke_(smoke),tray_(tray) {
+    Client(std::string url,void* window,bool smoke,void* testWindow,bool tray=false,bool lyrics=false)
+        :url_(std::move(url)),window_(static_cast<HWND>(window)),testWindow_(static_cast<HWND>(testWindow)),smoke_(smoke),tray_(tray),lyrics_(lyrics) {
         router_=CefMessageRouterBrowserSide::Create(CefMessageRouterConfig());
         router_->AddHandler(this,false);
     }
@@ -85,14 +93,15 @@ public:
         info.rect=convert(monitor.rcMonitor);info.available_rect=convert(monitor.rcWork);info.depth=32;info.depth_per_component=8;return true;
     }
     void OnPaint(CefRefPtr<CefBrowser>,PaintElementType type,const RectList&,const void* pixels,int width,int height) override {
+        if(lyrics_) {if(type==PET_VIEW)presentDesktopLyrics(pixels,width,height);return;}
         presentBrowser(type==PET_POPUP,pixels,width,height);
     }
-    void OnPopupShow(CefRefPtr<CefBrowser>,bool show) override {browserPopup(show,popupBounds_);}
-    void OnPopupSize(CefRefPtr<CefBrowser>,const CefRect& bounds) override {popupBounds_=bounds;browserPopup(true,bounds);}
+    void OnPopupShow(CefRefPtr<CefBrowser>,bool show) override {if(!lyrics_)browserPopup(show,popupBounds_);}
+    void OnPopupSize(CefRefPtr<CefBrowser>,const CefRect& bounds) override {popupBounds_=bounds;if(!lyrics_)browserPopup(true,bounds);}
     bool OnCursorChange(CefRefPtr<CefBrowser>,CefCursorHandle cursor,cef_cursor_type_t,const CefCursorInfo&) override {
-        if(!testWindow_)return false;browserCursor(cursor);return true;
+        if(!testWindow_)return false;if(lyrics_){SetCursor(cursor);return true;}browserCursor(cursor);return true;
     }
-    void OnImeCompositionRangeChanged(CefRefPtr<CefBrowser>,const CefRange&,const RectList& bounds) override {browserImeBounds(bounds);}
+    void OnImeCompositionRangeChanged(CefRefPtr<CefBrowser>,const CefRange&,const RectList& bounds) override {if(!lyrics_)browserImeBounds(bounds);}
     void OnDraggableRegionsChanged(CefRefPtr<CefBrowser> browser,CefRefPtr<CefFrame> frame,
                                   const std::vector<CefDraggableRegion>& regions) override {
         if(!testWindow_ || !frame->IsMain() || frame->GetURL().ToString()!=url_)return;
@@ -116,11 +125,10 @@ public:
     }
     void OnAfterCreated(CefRefPtr<CefBrowser> browser) override {
         if(tray_){trayBrowser=browser;return;}
-        CEF_REQUIRE_UI_THREAD();activeBrowser=browser;
-        setApplicationPlayerEvents([this](const char* name,const PlayerState& state) {
-            const auto message=Json{{"version",1},{"event",name},{"state",stateJson(state)}}.dump();
-            for(const auto& entry:subscriptions_) entry.second->Success(message);
-        });
+        CEF_REQUIRE_UI_THREAD();
+        if(lyrics_)lyricsBrowser=browser;else activeBrowser=browser;
+        eventClients.push_back(this);
+        setApplicationPlayerEvents(dispatchPlayerEvents);
     }
     void OnBeforeClose(CefRefPtr<CefBrowser> browser) override {
         if(tray_) {
@@ -128,9 +136,13 @@ public:
             if(shuttingDown)PostMessageW(window_,WM_CLOSE,0,0);
             return;
         }
-        CEF_REQUIRE_UI_THREAD();setApplicationPlayerEvents({});
-        router_->OnBeforeClose(browser);subscriptions_.clear();activeBrowser=nullptr;
+        CEF_REQUIRE_UI_THREAD();
+        eventClients.erase(std::remove(eventClients.begin(),eventClients.end(),this),eventClients.end());
+        if(eventClients.empty())setApplicationPlayerEvents({});
+        router_->OnBeforeClose(browser);subscriptions_.clear();desktopSubscriptions_.clear();
+        if(lyrics_)lyricsBrowser=nullptr;else activeBrowser=nullptr;
         if(testWindow_)RemovePropW(testWindow_,DragRegionProperty);
+        if(lyrics_) {desktopLyricsClosed();if(shuttingDown)PostMessageW(window_,WM_CLOSE,0,0);return;}
         if(closing_ || smoke_ || testWindow_) PostMessageW(window_,WM_CLOSE,0,0);
     }
     bool OnBeforePopup(CefRefPtr<CefBrowser>,CefRefPtr<CefFrame>,int,
@@ -151,9 +163,10 @@ public:
     void OnRenderProcessTerminated(CefRefPtr<CefBrowser> b,TerminationStatus,
                                    int,const CefString&) override {
         if(tray_){b->GetHost()->CloseBrowser(true);return;}
-        router_->OnRenderProcessTerminated(b);subscriptions_.clear();
+        router_->OnRenderProcessTerminated(b);subscriptions_.clear();desktopSubscriptions_.clear();
         if(dragRegion_)SetRectRgn(dragRegion_,0,0,0,0);
         if(closing_)return;
+        if(lyrics_) {if(!recovered_){recovered_=true;b->Reload();}else b->GetHost()->CloseBrowser(true);return;}
         if(!recovered_) {recovered_=true;b->Reload();}
         else if(testWindow_)PostMessageW(testWindow_,RecoveryFailed,0,0);
         else if(MessageBoxW(window_,L"界面恢复失败，音乐仍由后台播放。是否重试？",L"Musxi Player",MB_RETRYCANCEL|MB_ICONERROR)==IDRETRY) {
@@ -161,7 +174,7 @@ public:
         }
     }
     void OnQueryCanceled(CefRefPtr<CefBrowser>,CefRefPtr<CefFrame>,int64_t id) override {
-        CEF_REQUIRE_UI_THREAD();subscriptions_.erase(id);
+        CEF_REQUIRE_UI_THREAD();subscriptions_.erase(id);desktopSubscriptions_.erase(id);
     }
     bool OnQuery(CefRefPtr<CefBrowser>,CefRefPtr<CefFrame> frame,int64_t id,
                  const CefString& request,bool persistent,CefRefPtr<Callback> callback) override {
@@ -179,6 +192,19 @@ public:
             }
             const auto command=q["command"].get<std::string>();
             const auto& params=q["params"];
+            if(command=="desktopLyrics.subscribe") { // The tray only needs the initial state.
+                if(!persistent || !params.empty() || desktopSubscriptions_.size()>=4) {callback->Failure(400,"Invalid subscription");return true;}
+                desktopSubscriptions_[id]=callback;
+                callback->Success(Json{{"version",1},{"event","desktopLyrics.changed"},{"state",Json::parse(desktopLyricsState())}}.dump());
+                return true;
+            }
+            if(command.rfind("desktopLyrics.",0)==0) {
+                if(persistent){callback->Failure(400,"Persistent desktop command not allowed");return true;}
+                const auto reply=desktopLyricsCommand(command,params.dump());
+                if(reply.code)callback->Failure(reply.code,reply.message);
+                else callback->Success(Json{{"version",1},{"result",Json::parse(reply.json)}}.dump());
+                return true;
+            }
             if(tray_) {
                 if(persistent || !params.empty()) {callback->Failure(400,"Invalid tray command");return true;}
                 if(command=="window.toggleVisibility")toggleTrayWindow();
@@ -197,6 +223,25 @@ public:
                 return true;
             }
             if(persistent) {callback->Failure(400,"Persistent command not allowed");return true;}
+            if(smoke_ && command=="test.desktopReport" && lyrics_) {
+                desktopReport=params;callback->Success(Json{{"version",1},{"result",true}}.dump());return true;
+            }
+            if(smoke_ && command=="test.desktop" && !lyrics_) {
+                auto diagnostics=Json::parse(desktopLyricsDiagnostics());diagnostics["page"]=desktopReport;
+                callback->Success(Json{{"version",1},{"result",diagnostics}}.dump());return true;
+            }
+            // The desktop page shows and controls the song that is playing. It
+            // cannot browse, edit the library or fetch other songs' lyrics.
+            if(lyrics_) {
+                static const std::set<std::string> allowed{"player.getState","player.pause","player.resume","library.getState","library.lyrics","library.skip"};
+                if(!allowed.count(command)) {callback->Failure(403,"Command unavailable in desktop lyrics");return true;}
+                if(command=="library.lyrics") {
+                    const auto state=applicationPlayerState();
+                    if(!state.opened || params.value("id",std::string{})!=state.trackId || params.contains("retryTranslation")) {
+                        callback->Failure(409,"Playing song changed");return true;
+                    }
+                }
+            }
             if(command.rfind("window.",0)==0) {
                 const bool theme=command=="window.setTheme";
                 if(theme) {
@@ -269,14 +314,29 @@ public:
         return true;
     }
     void requestClose() {closing_=true;if(activeBrowser)activeBrowser->GetHost()->CloseBrowser(false);}
+    void deliverPlayerEvent(const std::string& message) {
+        // A callback can cancel itself; iterate a copy of the subscription handles.
+        const auto entries=subscriptions_;for(const auto& entry:entries)entry.second->Success(message);
+    }
+    void deliverDesktopEvent(const std::string& message) {
+        const auto entries=desktopSubscriptions_;for(const auto& entry:entries)entry.second->Success(message);
+    }
 private:
-    std::string url_;HWND window_,testWindow_;bool smoke_,tray_,closing_=false,recovered_=false;
+    std::string url_;HWND window_,testWindow_;bool smoke_,tray_,lyrics_,closing_=false,recovered_=false;
     HRGN dragRegion_=nullptr;
     CefRect popupBounds_;
-    std::map<int64_t,CefRefPtr<Callback>> subscriptions_;
+    std::map<int64_t,CefRefPtr<Callback>> subscriptions_,desktopSubscriptions_;
     CefRefPtr<CefMessageRouterBrowserSide> router_;
     IMPLEMENT_REFCOUNTING(Client);
 };
+void dispatchPlayerEvents(const char* name,const PlayerState& state) {
+    const auto message=Json{{"version",1},{"event",name},{"state",stateJson(state)}}.dump();
+    for(auto* client:eventClients)client->deliverPlayerEvent(message);
+}
+}
+void publishDesktopLyrics(const std::string& state) {
+    const auto message=Json{{"version",1},{"event","desktopLyrics.changed"},{"state",Json::parse(state)}}.dump();
+    for(auto* client:eventClients)client->deliverDesktopEvent(message);
 }
 CefRefPtr<CefApp> makeApp() {return new App;}
 CefRefPtr<CefClient> makeClient(const std::string& url,void* window,bool smoke,void* testWindow) {
@@ -284,10 +344,14 @@ CefRefPtr<CefClient> makeClient(const std::string& url,void* window,bool smoke,v
 }
 bool closeBrowsers() {
     CEF_REQUIRE_UI_THREAD();
-    shuttingDown=true;closeTrayBrowser();
+    shuttingDown=true;closeTrayBrowser();closeDesktopLyricsBrowser();
     if(activeBrowser)static_cast<Client*>(activeBrowser->GetHost()->GetClient().get())->requestClose();
-    return !activeBrowser && !trayBrowser;
+    return !activeBrowser && !trayBrowser && !lyricsBrowser;
 }
+CefRefPtr<CefClient> makeDesktopLyricsClient(const std::string& url,void* window,void* lyricsWindow) {desktopReport=nullptr;return new Client(url,window,url.find("desktopSmoke=1")!=std::string::npos,lyricsWindow,false,true);}
+CefRefPtr<CefBrowserHost> desktopLyricsBrowserHost() {return lyricsBrowser?lyricsBrowser->GetHost():nullptr;}
+void closeDesktopLyricsBrowser() {if(lyricsBrowser)lyricsBrowser->GetHost()->CloseBrowser(true);}
+bool desktopLyricsBrowserReadyToClose() {return lyricsBrowser && lyricsBrowser->GetHost()->IsReadyToBeClosed();}
 CefRefPtr<CefClient> makeTrayClient(const std::string& url,void* window) {return new Client(url,window,false,nullptr,true);}
 void closeTrayBrowser() {if(trayBrowser)trayBrowser->GetHost()->CloseBrowser(false);}
 bool trayBrowserReadyToClose() {return trayBrowser && trayBrowser->GetHost()->IsReadyToBeClosed();}

@@ -11,9 +11,12 @@ import QueuePanel from './components/QueuePanel';
 import PlayerActions from './components/PlayerActions';
 import PlaybackPlatform from './components/PlaybackPlatform';
 import LyricsView from './views/LyricsView';
+import { playbackTimes, formatPlaybackTime } from './composables/playbackTime';
+import { useDesktopLyrics } from './composables/useDesktopLyrics';
 
 export default function App() {
   const shell = useWindow(); const library = useLibrary();
+  const desktop = useDesktopLyrics();
   const currentTrack = library.state?.now;
   const { state, error, loading, busy, connected, pause, resume, seek, setVolume } = usePlayerState();
   const [seekDraft, setSeekDraft] = useState<number | null>(null);
@@ -32,7 +35,9 @@ export default function App() {
     (/default output|output device/i.test(state.error || '') ? '输出设备已变化，重新播放将使用当前设备' : '播放失败，请重试') :
     state?.pending ? (state.phase === 'seeking' ? '正在跳转…' : '正在加载…') :
     !state ? '正在连接播放器' : !state.opened ? '等待一首好歌' : state.playing ? '正在播放' : '已暂停';
-  const time = (ms: number) => `${Math.floor(ms / 60000)}:${String(Math.floor(ms / 1000) % 60).padStart(2, '0')}`;
+  const times = playbackTimes(!!state?.opened, state?.durationMs ?? 0, seekDraft ?? state?.positionMs ?? 0);
+  const [showRemaining, setShowRemaining] = useState(false);
+  const [hoverSeek, setHoverSeek] = useState<{ x: number; ms: number } | null>(null);
   const hasState = !!state;
   const operation = library.state?.operation;
   const notice = library.state?.notice || '';
@@ -44,9 +49,9 @@ export default function App() {
     action: actionNotice,
     player: { text: error, error: true },
     playback: { text: playbackMessage, error: state?.phase === 'failed' },
-    window: { text: shell.error, error: true },
+    window: { text: shell.error || desktop.error, error: true },
     connection: { text: connected ? '' : '正在连接…' },
-  }), [library.error, operation?.status, operation?.error, operation?.id, notice, error, playbackMessage, state?.phase, shell.error, connected, actionNotice]);
+  }), [library.error, operation?.status, operation?.error, operation?.id, notice, error, playbackMessage, state?.phase, shell.error, desktop.error, connected, actionNotice]);
   useEffect(() => {
     const seekElement = seekInput.current; const volumeElement = volumeInput.current;
     async function seekChanged() {
@@ -108,11 +113,29 @@ export default function App() {
         canSeek={connected && !!state?.opened && !!state.durationMs} onSeek={positionMs => void seek(positionMs)} onClose={closeLyrics} />}
     </div>
     <section className="player" aria-label="播放器" aria-busy={loading}>
-      {state && <input ref={seekInput} className="seek-bar" type="range" min="0" max={Math.max(0, state.durationMs - 1)}
-        value={seekDraft ?? state.positionMs} title={time(seekDraft ?? state.positionMs)}
-        style={{ '--progress': `${state.durationMs ? (seekDraft ?? state.positionMs) / state.durationMs * 100 : 0}%` } as CSSProperties}
-        disabled={!connected || !state.opened || !state.durationMs}
-        onInput={event => setSeekDraft(Number(event.currentTarget.value))} aria-label="歌曲进度" />}
+      <div className="player-progress">
+        <span className="player-time elapsed" aria-label="已播放">{times.elapsed}</span>
+        <div className="seek-track">
+          {state && <input ref={seekInput} className="seek-bar" type="range" min="0" max={Math.max(0, state.durationMs - 1)}
+            value={seekDraft ?? state.positionMs} aria-valuetext={formatPlaybackTime(seekDraft ?? state.positionMs)}
+            style={{ '--progress': `${state.durationMs ? (seekDraft ?? state.positionMs) / state.durationMs * 100 : 0}%` } as CSSProperties}
+            disabled={!connected || !state.opened || !state.durationMs}
+            onPointerMove={event => {
+              // Hover bubble: time under the pointer (or the dragged value while seeking).
+              const box = event.currentTarget.getBoundingClientRect(); if (!state.durationMs || !box.width) return;
+              const ratio = Math.min(1, Math.max(0, (event.clientX - box.left) / box.width));
+              setHoverSeek({ x: ratio * 100, ms: seekDraft ?? ratio * state.durationMs });
+            }}
+            onPointerLeave={() => setHoverSeek(null)}
+            onInput={event => setSeekDraft(Number(event.currentTarget.value))} aria-label="歌曲进度" />}
+          {hoverSeek && state?.durationMs ? <span className="seek-bubble" aria-hidden="true"
+            style={{ left: `${seekDraft !== null ? seekDraft / state.durationMs * 100 : hoverSeek.x}%` }}>
+            {formatPlaybackTime(seekDraft ?? hoverSeek.ms)}</span> : null}
+        </div>
+        <Button variant="unstyled" className="player-time total" onClick={() => setShowRemaining(value => !value)}
+          title={showRemaining ? '点击显示总时长' : '点击显示剩余时长'} aria-label={showRemaining ? `剩余时长 ${times.remaining}` : `总时长 ${times.total}`}>
+          {showRemaining ? `-${times.remaining}` : times.total}</Button>
+      </div>
       <div className="player-track" inert={lyricsOpen}><Button variant="unstyled" className="lyrics-toggle" aria-expanded={lyricsOpen}
           aria-label={lyricsOpen ? '收起歌词页' : '展开歌词页'} title={lyricsOpen ? '收起歌词' : '查看歌词'} onClick={() => setLyricsOpen(open => !open)}>
           <CoverImage url={currentTrack?.cover || ''} />
@@ -130,7 +153,10 @@ export default function App() {
         </Button>
         <Button variant="unstyled" aria-label="下一首" onClick={() => library.skip(1)}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M17.5 5.5v13"/><path d="M5.5 5.5v13L16 12z"/></svg></Button>
       </PlayerActions>}
-      <div className="player-side">{state && <div className="volume-control">
+      <div className="player-side">{desktop.state.enabled && <Button variant="unstyled" className="desktop-lyrics-toggle" aria-label="桌面歌词"
+        aria-pressed={desktop.state.visible} title={desktop.state.visible ? '关闭桌面歌词' : '打开桌面歌词'} onClick={() => void desktop.setVisible(!desktop.state.visible)}>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2.8" y="4.5" width="18.4" height="15" rx="4"/><text x="12" y="16.1" textAnchor="middle">词</text></svg>
+      </Button>}{state && <div className="volume-control">
         <Button variant="unstyled" className="icon volume-button" aria-label={state.volumePercent===0 ? '取消静音' : '静音'} aria-pressed={state.volumePercent===0} disabled={busy || !connected}
           onClick={()=>{if(state.volumePercent>0)lastVolume.current=state.volumePercent;void setVolume(state.volumePercent===0 ? lastVolume.current : 0);}}>
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 9h4l5-4v14l-5-4H3z" fill="currentColor"/>

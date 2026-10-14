@@ -2,10 +2,21 @@
 #include "include/cef_app.h"
 #include "include/cef_client.h"
 #include "include/cef_browser.h"
+namespace musxi { struct LibraryReply; }
 namespace musxi::cef_adapter {
 CefRefPtr<CefApp> makeApp();
 CefRefPtr<CefClient> makeClient(const std::string& trustedUrl, void* nativeWindow, bool smokeTest, void* testWindow=nullptr);
 CefRefPtr<CefClient> makeTrayClient(const std::string& trustedUrl, void* nativeWindow);
+CefRefPtr<CefClient> makeDesktopLyricsClient(const std::string& trustedUrl,void* nativeWindow,void* lyricsWindow);
+CefRefPtr<CefBrowserHost> desktopLyricsBrowserHost();
+void closeDesktopLyricsBrowser();
+bool desktopLyricsBrowserReadyToClose();
+void desktopLyricsClosed();
+void presentDesktopLyrics(const void* pixels,int width,int height);
+std::string desktopLyricsDiagnostics();
+std::string desktopLyricsState();
+void publishDesktopLyrics(const std::string& state);
+musxi::LibraryReply desktopLyricsCommand(const std::string& command,const std::string& params);
 void closeTrayBrowser();
 bool trayBrowserReadyToClose();
 void trayMenuClosed();
