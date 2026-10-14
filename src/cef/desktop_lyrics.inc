@@ -54,7 +54,7 @@ void loadDesktopSettings(const std::filesystem::path& profile) {
         desktopX=data.at("x").get<int>();desktopY=data.at("y").get<int>();
         if(desktopX!=INT_MIN)desktopX=std::clamp(desktopX,-1000000,1000000);
         if(desktopY!=INT_MIN)desktopY=std::clamp(desktopY,-1000000,1000000);
-        desktopWidth=std::clamp(data.at("width").get<int>(),320,1600);desktopHeight=std::clamp(data.at("height").get<int>(),120,500);
+        desktopWidth=std::clamp(data.at("width").get<int>(),480,1600);desktopHeight=std::clamp(data.at("height").get<int>(),120,500);
     }catch(...) {
         desktopVisible=false;desktopLocked=false;desktopDual=true;desktopFontSize=30;desktopColor="theme";
         desktopX=desktopY=INT_MIN;desktopWidth=680;desktopHeight=180;
@@ -145,7 +145,7 @@ LRESULT CALLBACK desktopProc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp) {
     case WM_SIZE:if(browser)browser->WasResized();return 0;
     case WM_GETMINMAXINFO: {
         const auto dpi=GetDpiForWindow(hwnd);auto info=reinterpret_cast<MINMAXINFO*>(lp);
-        info->ptMinTrackSize={MulDiv(320,dpi,96),MulDiv(120,dpi,96)};
+        info->ptMinTrackSize={MulDiv(480,dpi,96),MulDiv(120,dpi,96)};
         info->ptMaxTrackSize={MulDiv(1600,dpi,96),MulDiv(500,dpi,96)};return 0;
     }
     case WM_DPICHANGED:

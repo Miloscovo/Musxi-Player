@@ -4,11 +4,13 @@ export type MusicPlatform = 'kugou' | 'netease' | 'qq';
 export const platformNames: Record<MusicPlatform,string> = {kugou:'酷狗概念版',netease:'网易云音乐',qq:'QQ 音乐'};
 export interface Track { platform?: MusicPlatform | ''; platforms?:MusicPlatform[]; favorite?:boolean; id: string; name: string; artist: string; album?: string; cover: string; duration: number; count: number; editable: boolean }
 export type PlaybackOrder = 'sequential' | 'random' | 'repeat-one';
-export type AudioQuality = '128' | '320' | 'flac';
-export interface PlaybackSettings { defaultQuality: AudioQuality; outputDevice: string; devices: { id: string; name: string }[] }
+export const audioQualities = ['128','320','flac','netease:hires','kugou:high'] as const;
+export type AudioQuality = typeof audioQualities[number];
+export type DefaultAudioQuality = '128' | '320' | 'flac' | 'best';
+export interface PlaybackSettings { defaultQuality: DefaultAudioQuality; outputDevice: string; devices: { id: string; name: string }[] }
 export function parsePlaybackSettings(value: unknown): PlaybackSettings {
   const v = object(value);
-  if (!['128','320','flac'].includes(v.defaultQuality as string) || typeof v.outputDevice !== 'string' || v.outputDevice.length > 1024
+  if (!['128','320','flac','best'].includes(v.defaultQuality as string) || typeof v.outputDevice !== 'string' || v.outputDevice.length > 1024
     || !Array.isArray(v.devices) || v.devices.length > 256) throw new NativeError(502, 'Invalid playback settings');
   const ids = new Set<string>();
   for (const device of v.devices) {
@@ -102,7 +104,7 @@ export function parseLibraryState(value: unknown): LibraryState {
     if(!Array.isArray(quality.options))throw new NativeError(502,'Invalid audio qualities');
     for(const entry of quality.options) {
       const option=object(entry);fields(option,['id','name'],'string');
-      if(!['128','320','flac'].includes(option.id as string))throw new NativeError(502,'Invalid audio quality');
+      if(!audioQualities.some(id=>id===option.id))throw new NativeError(502,'Invalid audio quality');
     }
   }
   if(v.accounts !== undefined) {

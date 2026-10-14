@@ -11,6 +11,7 @@ glyph edges readable on any wallpaper without an outline.
 - **Right click** the lyrics to show or hide the control capsule; it hides by
   itself 2.5 s after the pointer leaves the window.
 - **Drag** anywhere on the lyrics to move the window; drag the edges to resize.
+  The minimum width is 480 DIP so the complete control capsule stays clickable.
 - The capsule holds previous / play-pause / next, translation, font size,
   color, lock and close. Every control has a tooltip. Scroll the wheel over the
   size control (`Aa 30`) to change it in 2 px steps; hover the color swatch for
@@ -48,6 +49,10 @@ or request other songs' lyrics. `desktop-lyrics.json` in the profile stores
 placement, visibility, lock, dual, font size and color; `window.json` stores
 the main window's placement. The default main window size is derived from the
 monitor's DPI and work area.
+
+Playback failures advance after three seconds, unless paused, cancelled or set
+to repeat-one. Queue edits are tracked by song ID; random playback tries each
+failed song at most once per pass. Manual playback replaces the pending skip.
 
 ## Playback time
 

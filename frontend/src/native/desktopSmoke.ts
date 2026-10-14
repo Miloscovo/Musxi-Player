@@ -5,12 +5,26 @@ import { request, type CefTransport } from './transport';
 // its DOM to native; the main page then reads the report plus window styles.
 export function reportDesktopPage() {
   const host = window as unknown as CefTransport;
+  // Exercise the native minimum width even when the smoke host starts wider.
+  const root = document.querySelector<HTMLElement>('.desktop-lyrics');
+  const controlsFit = () => {
+    const width = root?.style.width ?? '';
+    if (root) root.style.width = '480px';
+    const bounds = root?.getBoundingClientRect();
+    const fits = Array.from(document.querySelectorAll<HTMLElement>('.dl-capsule button')).every(button => {
+      const box = button.getBoundingClientRect();
+      return !!bounds && box.left >= bounds.left && box.right <= bounds.right;
+    });
+    if (root) root.style.width = width;
+    return fits;
+  };
   const send = () => void request(host, 'test.desktopReport', {
     text: document.querySelector('.dl-lyrics')?.textContent ?? '',
     panel: !!document.querySelector('.dl-capsule'), unlock: !!document.querySelector('.dl-unlock'),
     color: document.querySelector<HTMLElement>('.desktop-lyrics')?.dataset.color ?? '',
     size: document.querySelector<HTMLElement>('.desktop-lyrics')?.style.getPropertyValue('--dl-size') ?? '',
     tone: document.documentElement.dataset.tone ?? '',
+    controlsFit: controlsFit(),
   }).catch(() => {});
   send(); const timer = setInterval(send, 100);
   return () => clearInterval(timer);
@@ -35,6 +49,7 @@ export async function verifyDesktopWindow() {
   if (view.page.panel) throw new Error('Desktop panel visible by default');
   await native.desktopLyrics.setPanel(true);
   await wait(value => value.page?.panel, 'panel');
+  if (!(await probe()).page?.controlsFit) throw new Error('Desktop controls clipped at minimum width');
   if (!pushed.includes(true)) throw new Error('Desktop state was not pushed to the main page');
   await native.desktopLyrics.setFontSize(40); await native.desktopLyrics.setColor('dark');
   await wait(value => value.page?.size === '40px' && value.page?.color === 'dark', 'font/color');

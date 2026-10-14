@@ -154,7 +154,7 @@ Json localVisibleTracks() {
 void playLocal(int index) {
     if(index<0 || index>=static_cast<int>(localTracks.size()))return;
     if(!closeAudio()){notice(L"无法释放上一首歌曲，请重试");return;}
-    ++cloudGeneration;++libraryOperationId;libraryNextPlay=nullptr;cloudAutoNext=false;cloudCurrent=-1;unplayableSkipAt=0;unplayableStreak=0;unplayableIndex=-1;libraryQualityChange=false;currentQuality.clear();
+    ++cloudGeneration;++libraryOperationId;libraryNextPlay=nullptr;cloudAutoNext=false;cloudCurrent=-1;cancelUnplayableSkip();libraryQualityChange=false;currentQuality.clear();
     for(int i=0;i<(int)cloudQueue.size();++i)if(cloudQueue[i].value("id","")==localTracks[index].value("id","")){cloudCurrent=i;break;}
     localActive=true;localCurrent=index;const auto& row=localTracks[index];
     currentPlaybackTrack=row;

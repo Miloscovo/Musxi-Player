@@ -130,8 +130,22 @@ struct FfmpegDecoder::Impl {
             if(!resampler) {
                 inputRate=decoded->sample_rate;inputFormat=decoded->format;
                 check(av_channel_layout_copy(&inputLayout,&decoded->ch_layout),"Input layout");
+                const auto packed=av_get_packed_sample_fmt(static_cast<AVSampleFormat>(inputFormat));
+                const int width=packed==AV_SAMPLE_FMT_U8?8:packed==AV_SAMPLE_FMT_S16?16:packed==AV_SAMPLE_FMT_S32?32:0;
+                const int precision=codec->bits_per_raw_sample>0 && codec->bits_per_raw_sample<=width?codec->bits_per_raw_sample:width;
+                const bool defaultMonoStereo=inputLayout.order==AV_CHANNEL_ORDER_UNSPEC && inputLayout.nb_channels<=2 &&
+                    outputLayout.order==AV_CHANNEL_ORDER_NATIVE && outputLayout.u.mask==(inputLayout.nb_channels==1?AV_CH_LAYOUT_MONO:AV_CH_LAYOUT_STEREO);
+                if(inputRate==info.output.sampleRate && (!av_channel_layout_compare(&inputLayout,&outputLayout) || defaultMonoStereo) && precision<=24)
+                    info.exactIntegerBits=precision;
                 check(swr_alloc_set_opts2(&resampler,&outputLayout,AV_SAMPLE_FMT_FLT,info.output.sampleRate,
                     &inputLayout,static_cast<AVSampleFormat>(inputFormat),inputRate,0,nullptr),"Create resampler");
+                if(inputLayout.nb_channels>outputLayout.nb_channels)
+                    check(av_opt_set_double(resampler,"rematrix_maxval",1.,0),"Downmix headroom");
+                if(inputRate!=info.output.sampleRate) {
+                    // Measured near-Nyquist rejection without changing the same-rate path.
+                    check(av_opt_set_int(resampler,"filter_size",128,0),"SRC filter size");
+                    check(av_opt_set_sample_fmt(resampler,"internal_sample_fmt",AV_SAMPLE_FMT_DBLP,0),"SRC precision");
+                }
                 check(swr_init(resampler),"Initialize resampler");
             } else if(inputRate!=decoded->sample_rate || inputFormat!=decoded->format ||
                       av_channel_layout_compare(&inputLayout,&decoded->ch_layout))

@@ -149,8 +149,10 @@ void loadMainWindow(const std::filesystem::path& profile) {
         if(!std::filesystem::is_regular_file(mainSettingsPath) || std::filesystem::file_size(mainSettingsPath)>1024)return;
         std::ifstream file(mainSettingsPath,std::ios::binary);const auto data=DesktopJson::parse(file);
         if(data.at("version")!=1)return;
-        mainBounds={data.at("x").get<int>(),data.at("y").get<int>(),0,0};
-        mainBounds.right=mainBounds.left+data.at("width").get<int>();mainBounds.bottom=mainBounds.top+data.at("height").get<int>();
+        const auto x=data.at("x").get<std::int64_t>(),y=data.at("y").get<std::int64_t>();
+        const auto width=data.at("width").get<std::int64_t>(),height=data.at("height").get<std::int64_t>();
+        if(x < -1000000 || x > 1000000 || y < -1000000 || y > 1000000 || width<1 || width>100000 || height<1 || height>100000)return;
+        mainBounds={static_cast<LONG>(x),static_cast<LONG>(y),static_cast<LONG>(x+width),static_cast<LONG>(y+height)};
         mainMaximized=data.at("maximized").get<bool>();
     }catch(...) {mainBounds={};mainMaximized=false;}
 }

@@ -9,8 +9,8 @@ test('playback settings validate replies and demo changes survive page navigatio
  for(const bad of [{...settings,defaultQuality:'bad'},{...settings,outputDevice:4},{...settings,devices:[{id:'',name:'Bad'}]},{...settings,devices:[settings.devices[0],settings.devices[0]]}])assert.throws(()=>parsePlaybackSettings(bad));
  const client=createNativeClient(createDemoTransport());
  assert.equal((await client.library.getPlaybackSettings()).defaultQuality,'128');
- const saved=await client.library.setPlaybackSettings({defaultQuality:'flac',outputDevice:'demo-output'});
- assert.equal(saved.defaultQuality,'flac');assert.equal(saved.outputDevice,'demo-output');
+ const saved=await client.library.setPlaybackSettings({defaultQuality:'best',outputDevice:'demo-output'});
+ assert.equal(saved.defaultQuality,'best');assert.equal(saved.outputDevice,'demo-output');
  assert.deepEqual(await client.library.getPlaybackSettings(),saved);
  await assert.rejects(client.library.setPlaybackSettings({defaultQuality:'128',outputDevice:'bad'}));
  assert.deepEqual(await client.library.getPlaybackSettings(),saved);

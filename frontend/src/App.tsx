@@ -136,7 +136,7 @@ export default function App() {
           title={showRemaining ? '点击显示总时长' : '点击显示剩余时长'} aria-label={showRemaining ? `剩余时长 ${times.remaining}` : `总时长 ${times.total}`}>
           {showRemaining ? `-${times.remaining}` : times.total}</Button>
       </div>
-      <div className="player-track"><Button variant="unstyled" className="lyrics-toggle" aria-expanded={lyricsOpen}
+      <div className="player-track" inert={lyricsOpen}><Button variant="unstyled" className="lyrics-toggle" aria-expanded={lyricsOpen}
           aria-label={lyricsOpen ? '收起歌词页' : '展开歌词页'} title={lyricsOpen ? '收起歌词' : '查看歌词'} onClick={() => setLyricsOpen(open => !open)}>
           <CoverImage url={currentTrack?.cover || ''} />
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d={lyricsOpen ? 'm6 9 6 6 6-6' : 'm6 15 6-6 6 6'}/></svg>

@@ -40,13 +40,13 @@ class MultiPlatform {
   }
   async audioWithDefault(platform,request) {
     if(request.defaultQuality===undefined || request.quality!==undefined)return this.call(platform,request);
-    const qualities=['flac','320','128'];
-    const start=qualities.indexOf(request.defaultQuality);
+    const qualities=request.defaultQuality==='best'?([...({netease:['netease:hires'],qq:[],kugou:['kugou:high']}[platform]),'flac','320','128']):['flac','320','128'];
+    const start=request.defaultQuality==='best'?0:qualities.indexOf(request.defaultQuality);
     if(start<0)throw Error('无效默认音质');
-    let rights=false;
+    let rights=true;
     for(const quality of qualities.slice(start)) {
       try {return await this.call(platform,{...request,defaultQuality:undefined,quality});}
-      catch(error) {rights=rights || error?.rights===true; /* Try a lower quality without exposing private service errors. */}
+      catch(error) {rights=rights && error?.rights===true; /* Try a lower quality without exposing private service errors. */}
     }
     // Every quality refused for rights reasons is a permission problem, not a quality problem.
     throw rights?Object.assign(Error(`此歌曲在${NAMES[platform]}需要购买或会员权限，暂时无法播放`),{rights:true}):Error('该平台没有可播放的音质');

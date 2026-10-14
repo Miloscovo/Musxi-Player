@@ -35,6 +35,11 @@ int main() try {
     {std::ofstream file(settingsFile);file<<"{\"defaultQuality\":\"invalid\",\"outputDevice\":\"bad\"}";}
     loadPlaybackSettings(settingsFile);
     require(defaultAudioQuality=="flac" && preferredOutputDevice=="saved-output","invalid settings replaced valid preferences");
+    require(savePlaybackSettings(settingsFile,"best","saved-output"),"highest quality settings save failed");
+    loadPlaybackSettings(settingsFile);
+    require(defaultAudioQuality=="best","highest quality setting lost after restart");
+    for(const auto quality:{"netease:hires","kugou:high"})require(validAudioQuality(quality),"advanced quality rejected");
+    require(!validAudioQuality("qq:nac") && !validDefaultQuality("qq:master"),"unsupported quality accepted");
     fs::remove(settingsFile);defaultAudioQuality="128";preferredOutputDevice.clear();
     cloudTracks=Json::array();
     for(int i=0;i<63;++i) cloudTracks.push_back({{"id",std::to_string(i)},{"name","song"},{"token","PRIVATE"},{"path","PRIVATE"}});
@@ -118,7 +123,7 @@ int main() try {
     require(cloudQueue[0]["id"]=="original" && libraryOperationStatus=="failed","rollback lost queue or error status");
     pollAudio();
     {
-        // Natural end in random order: the next song is unplayable. It must be
+        // Natural end: the next song is unplayable. It must be
         // located by the request, skipped after the notice, and not retried.
         std::vector<std::string> requested;
         cloudRequestOverride=[&](const Json& request) {
@@ -126,17 +131,51 @@ int main() try {
             return request.value("id","")=="locked"?Json{{"ok",false},{"error","需要购买或会员权限"}}:
                 Json{{"ok",true},{"data",{{"path","next-cache"},{"track",{{"id",request.value("id","")},{"name","Next"}}}}}};
         };
-        platformRollback={};libraryQualityChange=libraryPlatformChange=false;unplayableStreak=0;unplayableIndex=-1;
+        platformRollback={};libraryQualityChange=libraryPlatformChange=libraryPlayPaused=false;cancelUnplayableSkip();
         cloudQueue=Json::array({{{"id","played"}},{{"id","locked"}},{{"id","free"}}});
         cloudCurrent=0;libraryPlayTrackId="played";libraryOperationKind="audio";libraryOperationStatus="completed";
         const auto order=playbackOrder;playbackOrder="sequential";
         skip(1);cloudTick(); // What advancePlayback() does when "played" ends.
         require(requested==std::vector<std::string>{"locked"},"auto-advance did not request the next song");
-        require(unplayableIndex==1 && unplayableSkipAt!=0,"unplayable song was not located by its request");
+        require(unplayableQueueIndex()==1 && unplayableSkipAt!=0,"unplayable song was not located by its request");
         require(utf8(toast).find("3 秒后播放下一首")!=std::string::npos,"skip notice missing");
         unplayableSkipAt=1;cloudTick();cloudTick();
         require(requested.size()==2 && requested[1]=="free","auto-skip retried the unplayable song instead of moving on");
-        playbackOrder=order;cloudRequestOverride=nullptr;
+        if(cloudFuture.valid())cloudFuture.get();
+        const auto failAgain=[&] {
+            if(cloudFuture.valid())cloudFuture.get();
+            cancelUnplayableSkip();requested.clear();libraryNextPlay=nullptr;
+            cloudQueue=Json::array({{{"id","played"}},{{"id","locked"}},{{"id","free"}}});
+            cloudCurrent=0;playbackOrder="sequential";libraryPlayPaused=false;
+            libraryOperationStatus="completed";libraryOperationKind="audio";
+            cloudPlay(1,true);cloudTick();require(unplayableSkipAt!=0,"failed song did not schedule skip");
+        };
+        failAgain();invoke("library.cancel");cloudTick();
+        require(!unplayableSkipAt && requested.size()==1,"cancel retained automatic skip");
+        failAgain();setPlaying(false);cloudTick();
+        require(!unplayableSkipAt && requested.size()==1,"pause retained automatic skip");
+        setPlaying(true);require(!libraryPlayPaused,"resume kept stale paused intent");
+        cloudPlay(1,true);cloudTick();require(unplayableSkipAt!=0,"resume disabled future failure skipping");
+        failAgain();invoke("library.setPlaybackOrder",{{"order","repeat-one"}});cloudTick();
+        require(!unplayableSkipAt && requested.size()==1,"single repeat retained automatic skip");
+        failAgain();invoke("library.queueRemove",{{"id","played"}});
+        unplayableSkipAt=1;cloudTick();cloudTick();
+        require(requested==std::vector<std::string>({"locked","free"}),"queue edit moved failed song to the wrong index");
+        failAgain();invoke("library.queueRemove",{{"id","locked"}});
+        require(!unplayableSkipAt,"removing failed song retained automatic skip");
+        failAgain();invoke("library.queueClear");require(!unplayableSkipAt,"queue clear retained automatic skip");
+        requested.clear();cloudQueue=Json::array({{{"id","a"}},{{"id","b"}},{{"id","c"}}});
+        playbackOrder="random";unplayableTrackId="b";unplayableTracks={"a","b"};
+        for(int n=0;n<20;++n)require(nextUnplayedQueueIndex()==2,"random skip retried a failed song");
+        cancelUnplayableSkip();
+        cloudRequestOverride=[&](const Json& request) {
+            requested.push_back(request.value("id",""));return Json{{"ok",false},{"error","no rights"}};
+        };
+        cloudPlay(0,true);cloudTick();
+        for(int n=0;n<4 && unplayableSkipAt;++n){unplayableSkipAt=1;cloudTick();cloudTick();cloudTick();}
+        require(requested.size()==3 && std::set<std::string>(requested.begin(),requested.end()).size()==3 && !unplayableSkipAt,
+            "random failure pass did not visit each song exactly once");
+        playbackOrder=order;cloudRequestOverride=nullptr;cancelUnplayableSkip();
         if(cloudFuture.valid())cloudFuture.get();
     }
     cloud::testProfile=true;
@@ -182,9 +221,16 @@ int main() try {
     recordRecentTrack({{"id","qq:505"},{"name","Replay"},{"sources",Json::array({{{"id","netease:same"}},{{"id","original"}},{{"id","qq:505"}}})}});
     require(recentTracks.size()==500 && recentTracks[0]["id"]=="qq:505","recent limit or move-to-front failed");
     const auto recentFile=cloud::dataDir()/L"recent-history-test.json";
-    switched->state.opened=false;cloudTempPath.clear();
+    switched->state.opened=false;cloudTempPath.clear();currentQuality="netease:hires";
     require(savePlaybackHistory(recentFile),"recent persistence save failed");recentTracks=Json::array();
     require(restorePlaybackHistory(recentFile) && recentTracks.size()==500 && recentTracks[0]["id"]=="qq:505","recent restart restore failed");
+    require(currentQuality=="netease:hires","advanced quality lost after restart");
+    Json retired;{std::ifstream stream(recentFile);stream>>retired;}
+    for(const auto quality:{"netease:jymaster","netease:jyeffect","qq:master","qq:atmos2","kugou:viper_clear","kugou:viper_tape"}) {
+        require(!validAudioQuality(quality),"removed quality still accepted");
+        retired["quality"]=quality;{std::ofstream stream(recentFile);stream<<retired;}
+        require(restorePlaybackHistory(recentFile) && currentQuality.empty() && recentTracks.size()==500,"removed quality discarded saved history");
+    }
     require(Json::parse(invoke("library.getState").json)["recent"][0]["platforms"]==Json::array({"netease","kugou","qq"}),"recent restart lost multi-platform tags");
     Json duplicated;{std::ifstream stream(recentFile);stream>>duplicated;}
     auto duplicate=duplicated["recent"][0];duplicate["id"]="netease:older";duplicate.erase("sources");

@@ -139,7 +139,7 @@ test('a song refused at every quality reports missing rights instead of missing 
  const manager=new MultiPlatform({kugou:{run:refuse}});
  await assert.rejects(manager.run({op:'audio',id:'one',defaultQuality:'flac'}),/酷狗概念版需要购买或会员权限/);
  const mixed=new MultiPlatform({kugou:{async run(r){if(r.quality==='flac')throw Object.assign(Error('rights'),{rights:true});throw Error('network');}}});
- await assert.rejects(mixed.run({op:'audio',id:'one',defaultQuality:'flac'}),/需要购买或会员权限/);
+ await assert.rejects(mixed.run({op:'audio',id:'one',defaultQuality:'flac'}),/该平台没有可播放的音质/);
  const plain=new MultiPlatform({kugou:{async run(){throw Error('network');}}});
  await assert.rejects(plain.run({op:'audio',id:'one',defaultQuality:'flac'}),/该平台没有可播放的音质/);
 });
@@ -164,4 +164,12 @@ test('membership is platform scoped and image failures never erase it or sign ou
   assert.ok(result.accounts.every(a=>a.connected));assert.ok(!JSON.stringify(result).includes('private response'));
   adapters.netease.run=async()=>({});result=await manager.run({op:'logout',platform:'netease'});
   assert.equal(result.accounts.find(a=>a.platform==='netease').membership,undefined);
+});
+
+test('highest available prioritizes verified original advanced tiers and falls back',async()=>{
+ for(const [platform,expected] of [['netease',['netease:hires','flac','320']],['qq',['flac','320']],['kugou',['kugou:high','flac','320']]]){
+  const seen=[];const manager=new MultiPlatform({[platform]:{async run(r){seen.push(r.quality);if(r.quality!=='320')throw Error('Unavailable');return {quality:r.quality};}}});
+  assert.equal((await manager.audioWithDefault(platform,{op:'audio',defaultQuality:'best'})).quality,'320');
+  assert.deepEqual(seen,expected);
+ }
 });

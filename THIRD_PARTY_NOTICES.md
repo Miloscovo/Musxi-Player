@@ -349,3 +349,12 @@ The [recipient source-delivery proposal](docs/release-source-delivery.md) replac
 - JSON: version macros in `third_party/json.hpp` and its adjacent license file.
 - KuGouMusicApi: vendored commit directory, `package.json`, and `LICENSE`.
 - Packaging inclusion: `package.ps1` and `installer/MusxiPlayerUpgrade.iss`.
+
+## KuGou authorization source supplement (2026-10-13)
+
+The existing MIT KuGouMusicApi source includes three unchanged authorization
+modules (`user_verify.js`, `song_auth.js`, `song_url_auth.js`) from upstream commit
+`ec5e0fb9ea020d1f1c8dc4edc160011258070a24`. Copyright (c) 2023 MakcRe.
+The base dependency stays at its existing pinned revision. Source provenance and
+original MIT license are retained in the vendor folder and distributed with it:
+[modification notes](services/vendor/KuGouMusicApi-a5a98013cce79fe0ae2ad65fc84b68176ebcfc1e/MUSXI-MODIFICATIONS.md).

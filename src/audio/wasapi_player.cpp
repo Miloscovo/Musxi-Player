@@ -1,4 +1,5 @@
 #include "wasapi_player.hpp"
+#include "pcm_output.hpp"
 #include "../cxx17_guard.hpp"
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
@@ -67,6 +68,8 @@ struct WasapiPlayer::Impl {
     std::int64_t decodeErrorCode=0,decodedDuration=-1;
     std::vector<float> pcm;
     std::size_t head=0,count=0;
+    int exactIntegerBits=0;
+    PcmWriter pcmWriter;
     OutputSnapshot state;
     std::vector<OutputEvent> events;
     std::wstring path,deviceId,preferredDevice;
@@ -150,7 +153,7 @@ struct WasapiPlayer::Impl {
         state.outputDeviceId=deviceId;
         check(device->Activate(__uuidof(IAudioClient),CLSCTX_ALL,nullptr,reinterpret_cast<void**>(client.GetAddressOf())),"Activate WASAPI");
         CoMemory mix;check(client->GetMixFormat(reinterpret_cast<WAVEFORMATEX**>(&mix.value)),"Get device format");
-        const auto f=static_cast<WAVEFORMATEX*>(mix.value);
+        auto f=static_cast<WAVEFORMATEX*>(mix.value);
         bits=validBits=f->wBitsPerSample;floatDevice=f->wFormatTag==WAVE_FORMAT_IEEE_FLOAT;
         bool integer=f->wFormatTag==WAVE_FORMAT_PCM;
         std::uint64_t mask=0;
@@ -164,8 +167,31 @@ struct WasapiPlayer::Impl {
            f->nBlockAlign!=f->nChannels*(bits/8) ||
            !(floatDevice?bits==32:integer && (bits==16 || bits==24 || bits==32) && validBits>0 && validBits<=bits))
             throw OutputError("Unsupported device mix format",AUDCLNT_E_UNSUPPORTED_FORMAT);
+        WAVEFORMATEXTENSIBLE floating{};
+        const auto mixBits=bits,mixValidBits=validBits;
+        if(integer) {
+            floating.Format=*f;floating.Format.wFormatTag=WAVE_FORMAT_EXTENSIBLE;
+            floating.Format.cbSize=22;floating.Format.wBitsPerSample=32;
+            floating.Format.nBlockAlign=f->nChannels*4;
+            floating.Format.nAvgBytesPerSec=f->nSamplesPerSec*floating.Format.nBlockAlign;
+            floating.Samples.wValidBitsPerSample=32;floating.dwChannelMask=static_cast<DWORD>(mask);
+            floating.SubFormat=KSDATAFORMAT_SUBTYPE_IEEE_FLOAT;
+            CoMemory closest;
+            const auto supported=client->IsFormatSupported(AUDCLNT_SHAREMODE_SHARED,&floating.Format,
+                reinterpret_cast<WAVEFORMATEX**>(&closest.value));
+            if(supported==S_OK){f=&floating.Format;floatDevice=true;bits=validBits=32;}
+            else if(FAILED(supported) && supported!=AUDCLNT_E_UNSUPPORTED_FORMAT)check(supported,"Check shared float format");
+        }
         state.format={static_cast<int>(f->nSamplesPerSec),f->nChannels,mask};
-        check(client->Initialize(AUDCLNT_SHAREMODE_SHARED,AUDCLNT_STREAMFLAGS_EVENTCALLBACK,0,0,f,nullptr),"Initialize shared WASAPI");
+        auto initialized=client->Initialize(AUDCLNT_SHAREMODE_SHARED,AUDCLNT_STREAMFLAGS_EVENTCALLBACK,0,0,f,nullptr);
+        if(initialized==AUDCLNT_E_UNSUPPORTED_FORMAT && f==&floating.Format) {
+            // Some drivers accept the probe but reject initialization; retain the known mix fallback.
+            client.Reset();
+            check(device->Activate(__uuidof(IAudioClient),CLSCTX_ALL,nullptr,reinterpret_cast<void**>(client.GetAddressOf())),"Reactivate WASAPI");
+            f=static_cast<WAVEFORMATEX*>(mix.value);floatDevice=false;bits=mixBits;validBits=mixValidBits;
+            initialized=client->Initialize(AUDCLNT_SHAREMODE_SHARED,AUDCLNT_STREAMFLAGS_EVENTCALLBACK,0,0,f,nullptr);
+        }
+        check(initialized,"Initialize shared WASAPI");
         check(client->SetEventHandle(audioReady.value),"Set audio event");
         check(client->GetBufferSize(&endpointFrames),"Get endpoint buffer size");
         check(client->GetService(IID_PPV_ARGS(&render)),"Get render client");
@@ -184,7 +210,7 @@ struct WasapiPlayer::Impl {
     void startDecode(std::int64_t ms) {
         cancelDecode();
         state.metadataReady=false;
-        {std::lock_guard<std::mutex> lock(pcmMutex);head=count=0;ready=eof=false;decodeError.clear();decodeErrorCode=0;decodedDuration=state.durationMs;}
+        {std::lock_guard<std::mutex> lock(pcmMutex);head=count=0;exactIntegerBits=0;pcmWriter={};ready=eof=false;decodeError.clear();decodeErrorCode=0;decodedDuration=state.durationMs;}
         cancelled=false;
         const auto file=path;const auto format=state.format;
         decode=std::thread([this,file,format,ms]{
@@ -202,6 +228,7 @@ struct WasapiPlayer::Impl {
                         std::unique_lock<std::mutex> lock(pcmMutex);
                         space.wait(lock,[this]{return cancelled || count<pcm.size();});
                         if(cancelled)return;
+                        exactIntegerBits=decoder.info().exactIntegerBits;
                         const auto tail=(head+count)%pcm.size();
                         const auto size=std::min({block.samples.size()-at,pcm.size()-count,pcm.size()-tail});
                         std::copy_n(block.samples.data()+at,size,pcm.data()+tail);count+=size;at+=size;
@@ -270,17 +297,10 @@ struct WasapiPlayer::Impl {
         if(frames) {
             BYTE* data=nullptr;check(render->GetBuffer(frames,&data),"Acquire output buffer");
             const auto samples=static_cast<std::size_t>(frames)*state.format.channels;
-            for(std::size_t i=0;i<samples;++i) {
-                const float raw=pcm[(head+i)%pcm.size()];
-                const float sample=std::isfinite(raw)?raw:0.f;
-                if(floatDevice)std::memcpy(data+i*4,&sample,4);
-                else {
-                    const auto scale=std::int64_t(1)<<(validBits-1);
-                    const auto signedValue=std::clamp<std::int64_t>(static_cast<std::int64_t>(std::llround(std::clamp(double(sample),-1.,1.)*double(scale))),-scale,scale-1);
-                    const auto value=static_cast<std::uint32_t>(signedValue)<<(bits-validBits);
-                    for(unsigned b=0;b<static_cast<unsigned>(bits/8);++b)data[i*(bits/8)+b]=static_cast<BYTE>(value>>(b*8));
-                }
-            }
+            const bool dither=!exactIntegerBits || exactIntegerBits>validBits;
+            const auto first=std::min(samples,pcm.size()-head);
+            pcmWriter.write(data,pcm.data()+head,first,floatDevice,bits,validBits,dither);
+            if(first<samples)pcmWriter.write(data+first*(bits/8),pcm.data(),samples-first,floatDevice,bits,validBits,dither);
             check(render->ReleaseBuffer(frames,0),"Submit output buffer");
             head=(head+samples)%pcm.size();count-=samples;submitted+=frames;space.notify_one();
         }

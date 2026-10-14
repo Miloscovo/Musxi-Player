@@ -16,10 +16,13 @@ foreach(pair "mp3|libmp3lame" "flac|flac" "m4a|aac" "aac|aac" "ogg|libvorbis" "o
   run(-i "${OUT}/source.wav" -c:a "${encoder}" "${OUT}/source.${extension}")
 endforeach()
 foreach(extension wav mp3 flac m4a aac ogg opus wma)
-  run(-i "${OUT}/source.${extension}" -ar 48000 -ac 2 -c:a pcm_f32le -f f32le "${OUT}/${extension}.f32")
+  run(-i "${OUT}/source.${extension}" -af "aresample=48000:filter_size=128:tsf=dblp:osf=flt:ochl=stereo"
+      -c:a pcm_f32le -f f32le "${OUT}/${extension}.f32")
 endforeach()
-run(-i "${OUT}/source.wav" -ar 32000 -ac 1 -c:a pcm_f32le -f f32le "${OUT}/mono.f32")
-run(-i "${OUT}/source.wav" -ar 96000 -ac 6 -c:a pcm_f32le -f f32le "${OUT}/surround.f32")
+run(-i "${OUT}/source.wav" -af "aresample=32000:filter_size=128:tsf=dblp:osf=flt:ochl=mono:rematrix_maxval=1"
+    -c:a pcm_f32le -f f32le "${OUT}/mono.f32")
+run(-i "${OUT}/source.wav" -af "aresample=96000:filter_size=128:tsf=dblp:osf=flt:ochl=5.1"
+    -c:a pcm_f32le -f f32le "${OUT}/surround.f32")
 run(-f lavfi -i "anullsrc=r=44100:cl=stereo" -t 180 -c:a wmav2 "${OUT}/long.wma")
 # Embedded lyrics: Vorbis comment, ID3v2 USLT (lyrics-eng) and MP4 ©lyr.
 run(-i "${OUT}/source.wav" -t 1 -c:a flac -metadata "LYRICS=[00:00.50]Tagged line" -metadata "title=Tagged Song Live" -metadata "artist=Tagged Artist" -metadata "album=Tagged Album" "${OUT}/lyrics.flac")

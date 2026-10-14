@@ -28,3 +28,19 @@ test('membership distinguishes active packages, expired memberships and missing 
   data.associator.expireTime=1;data.redplus.expireTime=1;data.musicPackage.expireTime=expiresAt;
   assert.deepEqual(await adapter.run({op:'membership'}),{name:'音乐包',expiresAt});
 });
+
+test('advanced tiers require exact returned level, plain FLAC and full playback',async()=>{
+ let data;const adapter=new NeteaseAdapter(async()=>({body:{code:200,data:[data]}}));
+ adapter.profile={id:'synthetic'};const track=adapter.song({id:1,name:'Fixture'});
+ for(const quality of ['netease:jymaster','netease:jyeffect'])await assert.rejects(adapter.audioInfo(track,quality),/无效音质/);
+ for(const level of ['hires']){
+  data={url:'https://example.test/song.flac',type:'flac',level};
+  assert.equal((await adapter.audioInfo(track,`netease:${level}`)).quality,`netease:${level}`);
+  for(const bad of [{...data,level:'lossless'},{...data,level:undefined},{...data,type:'mp3',br:320000},{...data,freeTrialInfo:{}}]){
+   data=bad;await assert.rejects(adapter.run({op:'audio',id:track.id,quality:`netease:${level}`}),/权限/);
+   data={url:'https://example.test/song.flac',type:'flac',level};
+  }
+ }
+ data={url:'https://example.test/song',type:'nac',level:'hires'};
+ await assert.rejects(adapter.audioInfo(track,'netease:hires'),/格式/);
+});

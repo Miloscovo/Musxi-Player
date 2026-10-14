@@ -103,8 +103,11 @@ function Open-Menu {
 $hostExe=(Resolve-Path -LiteralPath $HostPath).Path
 $preferences=Join-Path $env:LOCALAPPDATA 'MusxiPlayer-Test\desktop-lyrics.json'
 $savedPreferences=if(Test-Path -LiteralPath $preferences){[IO.File]::ReadAllBytes($preferences)}else{$null}
+$mainPreferences=Join-Path $env:LOCALAPPDATA 'MusxiPlayer-Test\window.json'
+$savedMainPreferences=if(Test-Path -LiteralPath $mainPreferences){[IO.File]::ReadAllBytes($mainPreferences)}else{$null}
 [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($preferences)) | Out-Null
 [IO.File]::WriteAllText($preferences,'{"version":1,"visible":false,"locked":false,"dual":true,"x":-2147483648,"y":-2147483648,"width":640,"height":200}')
+[IO.File]::WriteAllText($mainPreferences,'{"version":1,"x":2147483647,"y":0,"width":2147483647,"height":850,"maximized":false}')
 $app=Start-Process -FilePath $hostExe -ArgumentList '--test-app' -WindowStyle Hidden -PassThru
 $window=[IntPtr]::Zero
 $originalCursor=New-Object TrayCheck+Point;[void][TrayCheck]::GetCursorPos([ref]$originalCursor)
@@ -126,7 +129,7 @@ try {
  $content=Open-Menu;Click-Menu $content 96
  Wait-For { ([TrayCheck]::GetWindowLongPtr($desktop,-20).ToInt64() -band 0x20) -eq 0 } 'Tray desktop unlock failed'
  $focus=[TrayCheck]::GetForegroundWindow();$dpi=[TrayCheck]::GetDpiForWindow($desktop)/96.0
- [void][TrayCheck]::SetWindowPos($desktop,[IntPtr]::Zero,80,120,[int](420*$dpi),[int](180*$dpi),0x14)
+ [void][TrayCheck]::SetWindowPos($desktop,[IntPtr]::Zero,80,120,[int](480*$dpi),[int](180*$dpi),0x14)
  Start-Sleep -Milliseconds 300
  if([TrayCheck]::GetForegroundWindow() -ne $focus){throw 'Desktop resize stole focus'}
  $icon=New-Object TrayCheck+IconIdentifier
@@ -171,7 +174,7 @@ try {
  $content=Open-Menu;Click-Menu $content 132
  if(-not $app.WaitForExit(10000) -or $app.ExitCode -ne 0){throw 'Shadcn tray exit did not complete cleanly'}
  $settings=Get-Content -LiteralPath $preferences -Raw | ConvertFrom-Json
- if(-not $settings.visible -or -not $settings.locked -or $settings.width -ne 420 -or $settings.height -ne 180) {
+ if(-not $settings.visible -or -not $settings.locked -or $settings.width -ne 480 -or $settings.height -ne 180) {
   throw "Desktop exit did not preserve visibility, lock and DIP size: $($settings | ConvertTo-Json -Compress)"
  }
  # Simulate a removed monitor and extreme coordinates; restoration must clamp.
@@ -201,5 +204,7 @@ try {
  if($app.HasExited) {
   if($null -ne $savedPreferences){[IO.File]::WriteAllBytes($preferences,$savedPreferences)}
   elseif(Test-Path -LiteralPath $preferences){Remove-Item -LiteralPath $preferences}
+  if($null -ne $savedMainPreferences){[IO.File]::WriteAllBytes($mainPreferences,$savedMainPreferences)}
+  elseif(Test-Path -LiteralPath $mainPreferences){Remove-Item -LiteralPath $mainPreferences}
  }
 }

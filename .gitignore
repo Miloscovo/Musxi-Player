@@ -30,3 +30,14 @@ __pycache__/
 # OS/editor noise
 .DS_Store
 Thumbs.db
+
+# Three MIT authorization modules supplement the pinned KuGou source.
+!/services/vendor/KuGouMusicApi-a5a98013cce79fe0ae2ad65fc84b68176ebcfc1e/
+/services/vendor/KuGouMusicApi-a5a98013cce79fe0ae2ad65fc84b68176ebcfc1e/*
+!/services/vendor/KuGouMusicApi-a5a98013cce79fe0ae2ad65fc84b68176ebcfc1e/LICENSE
+!/services/vendor/KuGouMusicApi-a5a98013cce79fe0ae2ad65fc84b68176ebcfc1e/MUSXI-MODIFICATIONS.md
+!/services/vendor/KuGouMusicApi-a5a98013cce79fe0ae2ad65fc84b68176ebcfc1e/module/
+/services/vendor/KuGouMusicApi-a5a98013cce79fe0ae2ad65fc84b68176ebcfc1e/module/*
+!/services/vendor/KuGouMusicApi-a5a98013cce79fe0ae2ad65fc84b68176ebcfc1e/module/user_verify.js
+!/services/vendor/KuGouMusicApi-a5a98013cce79fe0ae2ad65fc84b68176ebcfc1e/module/song_auth.js
+!/services/vendor/KuGouMusicApi-a5a98013cce79fe0ae2ad65fc84b68176ebcfc1e/module/song_url_auth.js

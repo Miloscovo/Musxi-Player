@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { native } from '../native/client';
-import type { AudioQuality, PlaybackSettings as Settings } from '../native/library';
+import type { DefaultAudioQuality, PlaybackSettings as Settings } from '../native/library';
 import { Button } from './ui/button';
 
 export default function PlaybackSettings() {
@@ -26,8 +26,8 @@ export default function PlaybackSettings() {
       <div className="playback-setting">
         <label htmlFor="default-audio-quality">默认音质</label>
         <select id="default-audio-quality" value={settings.defaultQuality} disabled={busy}
-          onChange={e => void update({ defaultQuality: e.currentTarget.value as AudioQuality, outputDevice: settings.outputDevice })}>
-          <option value="128">标准 · 128 kbps</option><option value="320">高品质 · 320 kbps</option><option value="flac">无损 · FLAC</option>
+          onChange={e => void update({ defaultQuality: e.currentTarget.value as DefaultAudioQuality, outputDevice: settings.outputDevice })}>
+          <option value="best">最高可用</option><option value="128">标准 · 128 kbps</option><option value="320">高品质 · 320 kbps</option><option value="flac">无损 · FLAC</option>
         </select>
         <p>用于新播放的在线歌曲，不可用时降级；本地歌曲使用原始音质。</p>
       </div>
