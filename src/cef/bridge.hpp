@@ -23,6 +23,8 @@ void trayMenuClosed();
 bool minimizeToTray();
 void toggleTrayWindow();
 void dismissTrayMenu();
+bool mainWindowCompact();
+bool setMainWindowCompact(bool compact,int height);
 bool closeBrowsers();
 bool smokePassed();
 bool browserReadyToClose();

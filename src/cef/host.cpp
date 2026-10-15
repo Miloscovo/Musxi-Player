@@ -142,6 +142,10 @@ LRESULT hostHitTest(HWND hwnd,LPARAM lp) {
 // Main window placement, remembered across launches in the native profile.
 std::filesystem::path mainSettingsPath;
 RECT mainBounds{};bool mainMaximized=false;
+bool mainCompact=false;
+int compactHeight=130;
+WINDOWPLACEMENT expandedPlacement{sizeof(WINDOWPLACEMENT)};
+POINT expandedWorkOffset{};
 void loadMainWindow(const std::filesystem::path& profile) {
     mainSettingsPath=profile/L"window.json";
     if(smoke)return;
@@ -160,12 +164,15 @@ void saveMainWindow() {
     if(smoke || !testWindow || mainSettingsPath.empty())return;
     WINDOWPLACEMENT placement{sizeof(placement)};
     if(!GetWindowPlacement(testWindow,&placement))return;
+    if(mainCompact)placement=expandedPlacement;
     // rcNormalPosition is in workspace coordinates; store screen coordinates.
     MONITORINFO monitor{sizeof(monitor)};GetMonitorInfoW(MonitorFromWindow(testWindow,MONITOR_DEFAULTTONEAREST),&monitor);
-    auto r=placement.rcNormalPosition;OffsetRect(&r,monitor.rcWork.left-monitor.rcMonitor.left,monitor.rcWork.top-monitor.rcMonitor.top);
+    auto r=placement.rcNormalPosition;
+    OffsetRect(&r,mainCompact?expandedWorkOffset.x:monitor.rcWork.left-monitor.rcMonitor.left,
+        mainCompact?expandedWorkOffset.y:monitor.rcWork.top-monitor.rcMonitor.top);
     try {
         const auto data=DesktopJson{{"version",1},{"x",r.left},{"y",r.top},{"width",r.right-r.left},{"height",r.bottom-r.top},
-            {"maximized",placement.showCmd==SW_SHOWMAXIMIZED || IsZoomed(testWindow)}}.dump();
+            {"maximized",placement.showCmd==SW_SHOWMAXIMIZED || (!mainCompact && IsZoomed(testWindow))}}.dump();
         auto temporary=mainSettingsPath;temporary+=L".tmp";
         {std::ofstream file(temporary,std::ios::binary|std::ios::trunc);file<<data;file.close();if(!file)return;}
         MoveFileExW(temporary.c_str(),mainSettingsPath.c_str(),MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH);
@@ -264,26 +271,45 @@ LRESULT CALLBACK testProc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp) {
             }
         }return 0;
     case WM_MOVE: if(browser)browser->NotifyMoveOrResizeStarted();break;
-    case WM_ENTERSIZEMOVE: SetTimer(hwnd,101,16,nullptr);return 0;
-    case WM_EXITSIZEMOVE: KillTimer(hwnd,101);return 0;
+    case WM_ENTERSIZEMOVE: surface.setResizing(true);SetTimer(hwnd,101,16,nullptr);return 0;
+    case WM_EXITSIZEMOVE: surface.setResizing(false);KillTimer(hwnd,101);if(browser)browser->WasResized();return 0;
     case WM_TIMER: if(wp==101){CefDoMessageLoopWork();return 0;}break;
     case WM_ERASEBKGND: {if(GetWindowLongPtrW(hwnd,GWL_EXSTYLE)&WS_EX_NOREDIRECTIONBITMAP)return 1;RECT r;GetClientRect(hwnd,&r);auto brush=CreateSolidBrush(frameColor);FillRect(reinterpret_cast<HDC>(wp),&r,brush);DeleteObject(brush);return 1;}
     case WM_APP+43: frameColor=wp?RGB(16,18,20):RGB(255,255,255);InvalidateRect(hwnd,nullptr,TRUE);return 0;
     case WM_NCCALCSIZE: return 0;
     case WM_NCPAINT: return 0;
     case WM_NCHITTEST: return hostHitTest(hwnd,lp);
+    case WM_NCLBUTTONDBLCLK: if(mainCompact && wp==HTCAPTION)return 0;break;
+    case WM_SYSCOMMAND:
+        if(mainCompact && (wp&0xfff0)==SC_MAXIMIZE)return 0;
+        if((wp&0xfff0)==SC_SIZE || (wp&0xfff0)==SC_MOVE) {
+            // Let Chromium complete resize frames inside Windows' sizing loop.
+            CefScopedSetNestableTasksAllowed allowTasks;
+            return DefWindowProcW(hwnd,msg,wp,lp);
+        }
+        break;
     case WM_GETMINMAXINFO: {
         auto m=reinterpret_cast<MINMAXINFO*>(lp);
-        m->ptMinTrackSize={MulDiv(800,GetDpiForWindow(hwnd),96),MulDiv(560,GetDpiForWindow(hwnd),96)};
+        const auto height=MulDiv(mainCompact?compactHeight:560,GetDpiForWindow(hwnd),96);
+        m->ptMinTrackSize={MulDiv(800,GetDpiForWindow(hwnd),96),height};
+        m->ptMaxTrackSize.y=mainCompact?height:GetSystemMetricsForDpi(SM_CYMAXTRACK,GetDpiForWindow(hwnd));
         MONITORINFO info{sizeof(info)};
         if(GetMonitorInfoW(MonitorFromWindow(hwnd,MONITOR_DEFAULTTONEAREST),&info)) {
             m->ptMaxPosition={info.rcWork.left-info.rcMonitor.left,info.rcWork.top-info.rcMonitor.top};
             m->ptMaxSize={info.rcWork.right-info.rcWork.left,info.rcWork.bottom-info.rcWork.top};
         }return 0;
     }
-    case WM_DPICHANGED: {auto r=reinterpret_cast<RECT*>(lp);SetWindowPos(hwnd,nullptr,r->left,r->top,r->right-r->left,r->bottom-r->top,SWP_NOZORDER);if(browser){browser->NotifyScreenInfoChanged();browser->WasResized();}return 0;}
+    case WM_DPICHANGED: {auto r=reinterpret_cast<RECT*>(lp);SetWindowPos(hwnd,nullptr,r->left,r->top,r->right-r->left,mainCompact?MulDiv(compactHeight,HIWORD(wp),96):r->bottom-r->top,SWP_NOZORDER);if(browser){browser->NotifyScreenInfoChanged();browser->WasResized();}return 0;}
     case WM_SIZE: {
-        if(browser){browser->WasHidden(wp==SIZE_MINIMIZED);if(wp!=SIZE_MINIMIZED)browser->WasResized();}return 0;
+        if(browser) {
+            browser->WasHidden(wp==SIZE_MINIMIZED);
+            if(wp!=SIZE_MINIMIZED) {
+                browser->WasResized();
+                // CEF holds subsequent resizes until a matching-size frame is painted.
+                browser->Invalidate(PET_VIEW);
+            }
+        }
+        return 0;
     }
     case musxi::cef_adapter::RecoveryFailed:
         surface.clear();
@@ -339,7 +365,7 @@ void ready(void* window) {
     info.runtime_style=CEF_RUNTIME_STYLE_ALLOY;
     if(preview)info.bounds=CefRect(160,120,960,680);
     CefBrowserSettings settings;
-    if(!preview){settings.background_color=0;settings.windowless_frame_rate=30;}
+    if(!preview){settings.background_color=0;settings.windowless_frame_rate=60;}
     auto browser=CefBrowserHost::CreateBrowserSync(info,
         musxi::cef_adapter::makeClient(url,window,smoke,testWindow),url,settings,nullptr,nullptr);
     if(!browser) {createFailed=true;PostMessageW(nativeWindow,WM_CLOSE,0,0);}
@@ -408,6 +434,31 @@ int run(HINSTANCE instance,int show,void* sandbox) {
 }
 }
 namespace musxi::cef_adapter {
+bool mainWindowCompact() {return mainCompact;}
+bool setMainWindowCompact(bool compact,int height) {
+    if(!testWindow)return false;
+    if(compact==mainCompact)return true;
+    if(compact) {
+        if(!GetWindowPlacement(testWindow,&expandedPlacement))return false;
+        RECT bounds{};if(!GetWindowRect(testWindow,&bounds))return false;
+        MONITORINFO monitor{sizeof(monitor)};
+        if(!GetMonitorInfoW(MonitorFromWindow(testWindow,MONITOR_DEFAULTTONEAREST),&monitor))return false;
+        expandedWorkOffset={monitor.rcWork.left-monitor.rcMonitor.left,monitor.rcWork.top-monitor.rcMonitor.top};
+        compactHeight=height;mainCompact=true;
+        ShowWindow(testWindow,SW_RESTORE);
+        const int pixels=MulDiv(compactHeight,GetDpiForWindow(testWindow),96);
+        if(!SetWindowPos(testWindow,nullptr,bounds.left,bounds.bottom-pixels,bounds.right-bounds.left,
+                pixels,SWP_NOZORDER|SWP_NOACTIVATE)) {
+            mainCompact=false;SetWindowPlacement(testWindow,&expandedPlacement);return false;
+        }
+    } else {
+        mainCompact=false;
+        if(!SetWindowPlacement(testWindow,&expandedPlacement)){mainCompact=true;return false;}
+    }
+    // Placement can report an intermediate restore size before maximizing.
+    if(auto browser=browserHost()){browser->NotifyScreenInfoChanged();browser->WasResized();}
+    return true;
+}
 void presentDesktopLyrics(const void* pixels,int width,int height) {paintDesktopLyrics(pixels,width,height);}
 std::string desktopLyricsDiagnostics() {
     bool painted=false,transparent=false;

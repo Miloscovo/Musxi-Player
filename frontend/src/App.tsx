@@ -25,6 +25,15 @@ export default function App() {
   useEffect(() => { if (state && state.volumePercent > 0) lastVolume.current = state.volumePercent; }, [state?.volumePercent]);
   const [closeOpen, setCloseOpen] = useState(false);
   const [lyricsOpen, setLyricsOpen] = useState(false);
+  const compact = !!shell.state.compact;
+  const playerElement = useRef<HTMLElement>(null);
+  const [compactBusy, setCompactBusy] = useState(false);
+  async function setCompact(value: boolean) {
+    if(compactBusy)return;
+    setCompactBusy(true);
+    try { await shell.setCompact(value, Math.ceil(playerElement.current?.getBoundingClientRect().height ?? 110) + 16); }
+    finally { setCompactBusy(false); }
+  }
   const closeLyrics = useCallback(() => setLyricsOpen(false), []);
   const [actionNotice, setActionNotice] = useState({ text: '', token: '0' });
   const showActionNotice = (text: string) => setActionNotice(previous => ({ text, token: String(Number(previous.token) + 1) }));
@@ -85,10 +94,10 @@ export default function App() {
     return () => window.removeEventListener('keydown', keyboard);
   }, [state, connected, wantsPlay, pause, resume, seek]);
 
-  return <main className="app-shell" onContextMenu={event => {
+  return <main className={`app-shell${compact ? ' compact-player' : ''}`} onContextMenu={event => {
     if ((event.target as Element).closest('button')) event.preventDefault();
   }}>
-    {shell.state.enabled && <div className="window-bar"><div className="window-buttons">
+    {shell.state.enabled && !compact && <div className="window-bar"><div className="window-buttons">
       <Button variant="unstyled" aria-label="最小化" onClick={shell.minimize}>─</Button>
       <Button variant="unstyled" className="window-maximize" aria-label={shell.state.maximized ? '还原' : '最大化'} onClick={shell.maximize}>
         <svg width="12" height="12" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round">
@@ -107,12 +116,18 @@ export default function App() {
         </DialogContent>
       </Dialog>
     </div></div>}
-    <div className="app-body">
+    <div className="app-body" hidden={compact}>
       <div className="library-layer" inert={lyricsOpen}><LibraryView library={library} theme={shell.theme} appearance={shell.appearance} onAppearance={shell.setAppearance} transparency={shell.transparency} onTransparency={shell.setTransparency} /></div>
       {lyricsOpen && <LyricsView trackId={state?.opened ? state.trackId : ''} now={currentTrack} positionMs={state?.positionMs ?? 0}
         canSeek={connected && !!state?.opened && !!state.durationMs} onSeek={positionMs => void seek(positionMs)} onClose={closeLyrics} />}
     </div>
-    <section className="player" aria-label="播放器" aria-busy={loading}>
+    <section ref={playerElement} className="player" aria-label="播放器" aria-busy={loading} onClickCapture={event => {
+      // Menus and lyrics need the full viewport rather than a clipped player strip.
+      if(compact && (event.target as Element).closest('[aria-haspopup],.lyrics-toggle'))void setCompact(false);
+    }}>
+      {shell.state.enabled && <Button variant="unstyled" className="player-rail" data-state={compact ? 'collapsed' : 'expanded'} disabled={compactBusy}
+        aria-label={compact ? '展开主界面' : '收起主界面'} aria-expanded={!compact}
+        title={compact ? '展开主界面' : '收起主界面'} onClick={() => void setCompact(!compact)} />}
       <div className="player-progress">
         <span className="player-time elapsed" aria-label="已播放">{times.elapsed}</span>
         <div className="seek-track">
@@ -136,7 +151,7 @@ export default function App() {
           title={showRemaining ? '点击显示总时长' : '点击显示剩余时长'} aria-label={showRemaining ? `剩余时长 ${times.remaining}` : `总时长 ${times.total}`}>
           {showRemaining ? `-${times.remaining}` : times.total}</Button>
       </div>
-      <div className="player-track" inert={lyricsOpen}><Button variant="unstyled" className="lyrics-toggle" aria-expanded={lyricsOpen}
+      <div className="player-track" inert={lyricsOpen && !compact}><Button variant="unstyled" className="lyrics-toggle" aria-expanded={lyricsOpen}
           aria-label={lyricsOpen ? '收起歌词页' : '展开歌词页'} title={lyricsOpen ? '收起歌词' : '查看歌词'} onClick={() => setLyricsOpen(open => !open)}>
           <CoverImage url={currentTrack?.cover || ''} />
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d={lyricsOpen ? 'm6 9 6 6 6-6' : 'm6 15 6-6 6 6'}/></svg>

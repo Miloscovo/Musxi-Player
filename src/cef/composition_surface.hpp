@@ -13,6 +13,7 @@
 class CompositionSurface {
     template<class T> using Ptr=Microsoft::WRL::ComPtr<T>;
 public:
+    void setResizing(bool resizing) {resizing_=resizing;}
     int alphaAt(int x,int y) const {
         if(x<0 || y<0 || x>=width_ || y>=height_ || view_.empty())return -1;
         return view_[(static_cast<size_t>(y)*width_+x)*4+3];
@@ -40,12 +41,13 @@ public:
         // CEF sizes frames from rounded DIPs, so fractional scales (150%) can
         // differ from the client by a pixel or two. Only skip stale resize frames.
         const int slack=MulDiv(2,GetDpiForWindow(window),96);
-        if(std::abs(rect.right-width_)>slack || std::abs(rect.bottom-height_)>slack)return true;
+        if(!resizing_ && (std::abs(rect.right-width_)>slack || std::abs(rect.bottom-height_)>slack))return true;
         if(!composition_ && !initialize(window))return false;
         if(!bitmap_) {
             if(FAILED(composition_->CreateSurface(width_,height_,DXGI_FORMAT_B8G8R8A8_UNORM,DXGI_ALPHA_MODE_PREMULTIPLIED,&bitmap_)) ||
                FAILED(visual_->SetContent(bitmap_.Get())))return false;
         }
+        // Present live resize frames at their original scale until CEF catches up.
         const std::uint8_t* pixels=view_.data();
         if(popupVisible_ && !popup_.empty()) {
             combined_=view_;
@@ -92,5 +94,6 @@ private:
     Ptr<IDCompositionDevice> composition_;Ptr<IDCompositionTarget> target_;
     Ptr<IDCompositionVisual> visual_;Ptr<IDCompositionSurface> bitmap_;
     int width_=0,height_=0,popupWidth_=0,popupHeight_=0;bool popupVisible_=false;RECT popupRect_{};
+    bool resizing_=false;
     std::vector<std::uint8_t> view_,popup_,combined_;
 };

@@ -13,6 +13,7 @@ public class TrayCheck {
  [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr window);
  [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr window);
  [DllImport("user32.dll")] public static extern IntPtr GetWindowLongPtr(IntPtr window,int index);
+ [DllImport("user32.dll")] public static extern IntPtr SendMessage(IntPtr window,uint msg,IntPtr wp,IntPtr lp);
  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
  [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr window,IntPtr after,int x,int y,int width,int height,uint flags);
  [DllImport("shell32.dll")] public static extern int Shell_NotifyIconGetRect(ref IconIdentifier identifier,out Rect rect);
@@ -114,6 +115,26 @@ $originalCursor=New-Object TrayCheck+Point;[void][TrayCheck]::GetCursorPos([ref]
 try {
  Wait-For { (Find-TestWindow 'MusxiPlayerTestHost') -ne [IntPtr]::Zero } 'No test window (close an existing test instance before running)'
  $window=Find-TestWindow 'MusxiPlayerTestHost';Start-Sleep -Seconds 2
+ # Keep CEF hit regions current throughout repeated grow/shrink updates.
+ $beforeResize=New-Object TrayCheck+Rect;[void][TrayCheck]::GetWindowRect($window,[ref]$beforeResize)
+ $resizeScale=[TrayCheck]::GetDpiForWindow($window)/96.0
+ [void][TrayCheck]::PostMessage($window,0x231,[IntPtr]::Zero,[IntPtr]::Zero)
+ try {
+  foreach($width in @(850,914,882,946,850)){
+   [void][TrayCheck]::SetWindowPos($window,[IntPtr]::Zero,40,40,[int]($width*$resizeScale),[int](560*$resizeScale),0x14)
+   Wait-For {
+    $sized=New-Object TrayCheck+Rect;[void][TrayCheck]::GetWindowRect($window,[ref]$sized)
+    $y=$sized.top+[int](15*$resizeScale)
+    $caption=[IntPtr](($y -shl 16) -bor ($sized.left+[int](($width-150)*$resizeScale)))
+    $button=[IntPtr](($y -shl 16) -bor ($sized.left+[int](($width-66)*$resizeScale)))
+    [TrayCheck]::SendMessage($window,0x84,[IntPtr]::Zero,$caption).ToInt32() -eq 2 -and
+     [TrayCheck]::SendMessage($window,0x84,[IntPtr]::Zero,$button).ToInt32() -eq 1
+   } 'CEF controls did not follow the viewport during repeated resize'
+  }
+ } finally {[void][TrayCheck]::PostMessage($window,0x232,[IntPtr]::Zero,[IntPtr]::Zero)}
+ [void][TrayCheck]::SetWindowPos($window,[IntPtr]::Zero,$beforeResize.left,$beforeResize.top,
+  $beforeResize.right-$beforeResize.left,$beforeResize.bottom-$beforeResize.top,0x14)
+ Start-Sleep -Milliseconds 400
  [void][TrayCheck]::SetCursorPos(300,300)
  if((Find-TestWindow 'MusxiDesktopLyrics') -ne [IntPtr]::Zero) {
   $content=Open-Menu;Click-Menu $content 60
@@ -171,6 +192,15 @@ try {
  $desktop=Find-TestWindow 'MusxiDesktopLyrics'
  $content=Open-Menu;Click-Menu $content 96
  Wait-For { ([TrayCheck]::GetWindowLongPtr($desktop,-20).ToInt64() -band 0x20) -ne 0 } 'Desktop did not lock before exit'
+ $expandedBounds=New-Object TrayCheck+Rect;[void][TrayCheck]::GetWindowRect($window,[ref]$expandedBounds)
+ $client=New-Object TrayCheck+Rect;[void][TrayCheck]::GetClientRect($window,[ref]$client)
+ $mainDpi=[TrayCheck]::GetDpiForWindow($window)/96.0
+ $dockHeight=if($client.right/$mainDpi -le 900){88}else{110}
+ Click-At $window ([int]($client.right/2)) ([int]($client.bottom-$dockHeight*$mainDpi))
+ Wait-For {
+  $compactBounds=New-Object TrayCheck+Rect;[void][TrayCheck]::GetWindowRect($window,[ref]$compactBounds)
+  ($compactBounds.bottom-$compactBounds.top)/$mainDpi -lt 200
+ } 'Player strip did not collapse before exit'
  $content=Open-Menu;Click-Menu $content 132
  if(-not $app.WaitForExit(10000) -or $app.ExitCode -ne 0){throw 'Shadcn tray exit did not complete cleanly'}
  $settings=Get-Content -LiteralPath $preferences -Raw | ConvertFrom-Json
@@ -183,6 +213,11 @@ try {
  $app=Start-Process -FilePath $hostExe -ArgumentList '--test-app' -WindowStyle Hidden -PassThru
  Wait-For { (Find-TestWindow 'MusxiPlayerTestHost') -ne [IntPtr]::Zero } 'Restart main window failed'
  $window=Find-TestWindow 'MusxiPlayerTestHost'
+ $restoredBounds=New-Object TrayCheck+Rect;[void][TrayCheck]::GetWindowRect($window,[ref]$restoredBounds)
+ if($restoredBounds.right-$restoredBounds.left -ne $expandedBounds.right-$expandedBounds.left -or
+    $restoredBounds.bottom-$restoredBounds.top -ne $expandedBounds.bottom-$expandedBounds.top) {
+  throw 'Exiting compact mode overwrote the full window startup dimensions'
+ }
  Wait-For { (Find-TestWindow 'MusxiDesktopLyrics') -ne [IntPtr]::Zero } 'Desktop preference did not restore'
  $desktop=Find-TestWindow 'MusxiDesktopLyrics';$bounds=New-Object TrayCheck+Rect
  [void][TrayCheck]::GetWindowRect($desktop,[ref]$bounds)

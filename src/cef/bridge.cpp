@@ -256,6 +256,14 @@ public:
                         // the windowless host; text and controls remain opaque.
                         RedrawWindow(testWindow_,nullptr,nullptr,RDW_INVALIDATE|RDW_ALLCHILDREN);
                     }
+                } else if(command=="window.setCompact") {
+                    if(params.size()!=2 || !params.contains("compact") || !params["compact"].is_boolean() ||
+                            !params.contains("height") || !params["height"].is_number_integer() || params["height"]<88 || params["height"]>200) {
+                        callback->Failure(400,"Invalid compact window parameters");return true;
+                    }
+                    if(!testWindow_ || !setMainWindowCompact(params["compact"].get<bool>(),params["height"].get<int>())) {
+                        callback->Failure(500,"无法调整窗口大小，请重试。");return true;
+                    }
                 } else {
                     if(!params.empty()){callback->Failure(400,"Unexpected window parameters");return true;}
                     if(command!="window.getState" && command!="window.minimize" && command!="window.maximize" && command!="window.close" && command!="window.minimizeToTray") {
@@ -268,13 +276,17 @@ public:
                         if(command=="window.close")PostMessageW(testWindow_,WM_CLOSE,0,0);
                     }
                 }
-                callback->Success(Json{{"version",1},{"result",{{"enabled",testWindow_!=nullptr},{"maximized",testWindow_ && IsZoomed(testWindow_)}}}}.dump());return true;
+                callback->Success(Json{{"version",1},{"result",{{"enabled",testWindow_!=nullptr},{"maximized",testWindow_ && IsZoomed(testWindow_)},{"compact",mainWindowCompact()}}}}.dump());return true;
             }
             if(command.rfind("library.",0)==0) {
                 const auto reply=applicationLibrary(command,params.dump());
                 if(reply.code) callback->Failure(reply.code,reply.message);
                 else callback->Success(Json{{"version",1},{"result",Json::parse(reply.json)}}.dump());
                 return true;
+            }
+            if(smoke_ && testWindow_ && command=="test.windowSize" && params.empty()) {
+                RECT bounds{};GetClientRect(testWindow_,&bounds);const auto dpi=GetDpiForWindow(testWindow_);
+                callback->Success(Json{{"version",1},{"result",{{"width",MulDiv(bounds.right,96,dpi)},{"height",MulDiv(bounds.bottom,96,dpi)}}}}.dump());return true;
             }
             if(smoke_ && command=="test.pixelAlpha") {
                 if(params.size()!=2 || !params.contains("x") || !params.contains("y") ||

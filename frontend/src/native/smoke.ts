@@ -11,12 +11,20 @@ import PlayerActions from '../components/PlayerActions';
 import { AccountDialog } from '../components/AccountDialog';
 import type { useLibrary } from '../composables/useLibrary';
 import { verifyDesktopWindow } from './desktopSmoke';
+import { observeLyricDragRegions } from '../composables/lyrics';
 
 async function waitFor(check: () => boolean, message = 'Event/UI update timed out') {
   const end = Date.now() + 3000;
   while (!check()) {
     if (Date.now() > end) throw new Error(message);
     await new Promise(resolve => setTimeout(resolve, 20));
+  }
+}
+
+function checkMenuDragRegions(open: boolean) {
+  for (const region of Array.from(document.querySelectorAll('.window-bar,.library-content>header,.sidebar'))) {
+    if (getComputedStyle(region).getPropertyValue('-webkit-app-region').trim() !== (open ? 'no-drag' : 'drag'))
+      throw new Error(`Menu ${open ? 'blocks outside clicks' : 'did not restore window dragging'}`);
   }
 }
 
@@ -129,6 +137,33 @@ export async function verifyWebPage() {
     checkPlaylistText(playlistCard);
     playlistCard.click();
     await waitFor(() => !!fixture.querySelector('.song.track-row'));
+    // Resizing a long playlist must retain row height and the current scroll anchor.
+    const fixtureState = fixtureLibrary.state!;
+    fixtureLibrary.state = { ...fixtureState, tracks: Array.from({ length: 1000 }, (_, index) => ({ ...song, id: index ? `resize-${index}` : song.id })), trackCount: 1000 };
+    root.render(createElement(LibraryView, { library: fixtureLibrary, theme: 'light' }));
+    await waitFor(() => fixture.querySelector('.song-list')!.getBoundingClientRect().height > 50000, 'Long resize fixture did not load');
+    const songViewport = fixture.querySelector<HTMLElement>('.song-scroll')!;
+    songViewport.scrollTop = 10000;
+    await new Promise(resolve => setTimeout(resolve, 80));
+    const anchor = fixture.querySelector('.song.track-row')!.getAttribute('data-index');
+    const rowHeight = fixture.querySelector('.song.track-row')!.getBoundingClientRect().height;
+    const fixtureWidth = fixture.getBoundingClientRect().width;
+    for (let step = 1; step <= 8; step++) {
+      fixture.style.right = 'auto'; fixture.style.width = `${fixtureWidth - step * 3}px`;
+      await new Promise(resolve => setTimeout(resolve, 32));
+      if (fixture.querySelector('.song.track-row')!.getAttribute('data-index') !== anchor
+        || fixture.querySelector('.song.track-row')!.getBoundingClientRect().height !== rowHeight
+        || songViewport.scrollTop !== 10000)
+        throw new Error('Width-only resize moved the playlist scroll anchor or changed row height');
+    }
+    fixture.style.width = ''; fixture.style.right = '40px';
+    fixtureLibrary.state = fixtureState;
+    root.render(null);
+    await waitFor(() => !fixture.querySelector('.library-shell'));
+    root.render(createElement(LibraryView, { library: fixtureLibrary, theme: 'light' }));
+    await waitFor(() => !!fixture.querySelector('.playlist'));
+    Array.from(fixture.querySelectorAll<HTMLButtonElement>('.playlist')).find(card => card.querySelector('strong')?.textContent === playlist.name)!.click();
+    await waitFor(() => fixture.querySelectorAll('.song.track-row').length === 1, 'Single-song fixture did not restore');
     const playlistPlay = fixture.querySelector<HTMLButtonElement>('[aria-label="播放歌单"]')!;
     const previousTheme = document.documentElement.getAttribute('data-theme');
     const buttonBackground=document.createElement('span');buttonBackground.style.background='var(--side)';fixture.append(buttonBackground);
@@ -175,8 +210,10 @@ export async function verifyWebPage() {
     rightClick();
     await waitFor(() => !!document.querySelector('[data-slot=context-menu-content]'));
     await new Promise(resolve => setTimeout(resolve, 25));
-    fixture.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerType: 'mouse', button: 0 }));
+    checkMenuDragRegions(true);
+    fixture.querySelector('.sidebar')!.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerType: 'mouse', button: 0 }));
     await waitFor(() => !document.querySelector('[data-slot=context-menu-content]'));
+    checkMenuDragRegions(false);
     Array.from(fixture.querySelectorAll<HTMLButtonElement>('.sidebar > button')).find(button => button.textContent?.trim() === '音乐库')!.click();
     await waitFor(() => !!fixture.querySelector('[aria-label="音乐库分类"]'));
     fixture.querySelector<HTMLButtonElement>('[aria-label="音乐库分类"] button:last-child')!.click();
@@ -262,6 +299,14 @@ export async function verifyWebPage() {
     favoriteOptions[0].click();
     await waitFor(() => actions.includes(`favorite:${song.id}:false`));
     await waitFor(()=>!document.querySelector('[aria-label="收藏平台"][data-slot=popover-content]'));
+    favorite.click();
+    await waitFor(()=>!!document.querySelector('[aria-label="收藏平台"][data-slot=popover-content]'));
+    await new Promise(resolve => setTimeout(resolve, 25));
+    checkMenuDragRegions(true);
+    document.querySelector('.window-bar')!.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerType: 'mouse', button: 0 }));
+    document.querySelector<HTMLElement>('.window-bar')!.click();
+    await waitFor(()=>!document.querySelector('[aria-label="收藏平台"][data-slot=popover-content]'));
+    checkMenuDragRegions(false);
     await new Promise<void>(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve())));
     fixture.querySelector<HTMLButtonElement>('[aria-label="添加当前歌曲到歌单"]')!.click();
     await waitFor(() => !!document.querySelector('.player-action-menu'), 'Player add menu did not open');
@@ -382,6 +427,46 @@ export async function verifyWebPage() {
   const state = await native.player.getState();
   const windowState = await native.window.getState();
   if (windowState.enabled) {
+    const settledWindowSize=async () => {
+      const size=await request(window as unknown as CefTransport,'test.windowSize',{}) as { width:number; height:number };
+      await waitFor(() => window.innerHeight===size.height && window.innerWidth===size.width, `CEF viewport did not match native ${size.width}x${size.height}`);
+      return size;
+    };
+    const expandedSize=await settledWindowSize();
+    const expandedHeight=expandedSize.height;
+    const expandedWidth=expandedSize.width;
+    const settingsPage=document.querySelector('.settings-content');
+    const rail=document.querySelector<HTMLElement>('.player-rail')!;
+    const railBounds=rail.getBoundingClientRect();
+    if(rail.children.length || getComputedStyle(rail).backgroundColor!=='rgba(0, 0, 0, 0)'
+      || getComputedStyle(rail).cursor!=='n-resize' || railBounds.width!==window.innerWidth
+      || document.elementFromPoint(railBounds.width/4,railBounds.top+8)!==rail)
+      throw new Error('Player collapse rail is visible, blocked or not across the dock edge');
+    const collapseWindow=async () => {
+      document.querySelector<HTMLButtonElement>('[aria-label="收起主界面"]')!.click();
+      await waitFor(() => !!document.querySelector('.compact-player') && window.innerHeight<200, `Window did not collapse (${window.innerHeight}px)`);
+      if(document.querySelector('.window-bar') || getComputedStyle(document.querySelector('.app-body')!).display!=='none'
+        || !document.querySelector('#playback') || document.querySelector('.settings-content')!==settingsPage)
+        throw new Error('Compact mode did not preserve the page or hide window controls');
+      const player=document.querySelector('.player')!.getBoundingClientRect();
+      const expand=document.querySelector('[aria-label="展开主界面"]')!.getBoundingClientRect();
+      if(player.bottom>window.innerHeight+1 || expand.top<0 || Math.abs(player.top-16)>1
+        || expand.width!==window.innerWidth || getComputedStyle(rail).cursor!=='s-resize')
+        throw new Error('Compact player or expand control is clipped');
+      if(!(await native.window.getState()).compact)throw new Error('Native window did not enter compact mode');
+    };
+    await collapseWindow();
+    document.querySelector<HTMLButtonElement>('[aria-label="播放列表"]')!.click();
+    await waitFor(() => !document.querySelector('.compact-player') && window.innerHeight===expandedHeight
+      && !!document.querySelector('[data-slot=popover-content]'), 'Queue did not expand the compact window');
+    document.dispatchEvent(new KeyboardEvent('keydown', { key:'Escape', bubbles:true }));
+    await waitFor(() => !document.querySelector('[data-slot=popover-content]'));
+    if(window.innerWidth!==expandedWidth)throw new Error('Expanded window width changed');
+    await collapseWindow();
+    document.querySelector<HTMLButtonElement>('[aria-label="展开主界面"]')!.click();
+    await waitFor(() => !document.querySelector('.compact-player') && window.innerHeight===expandedHeight, 'Window did not restore its original height');
+    try { await native.window.setCompact(true,0);throw new Error('Invalid compact height accepted'); }
+    catch(error) { if(!(error instanceof Error) || !error.message.includes('Invalid compact window parameters'))throw error; }
     document.querySelector<HTMLButtonElement>('.window-close')!.click();
     await waitFor(() => !!document.querySelector('[data-slot=dialog-content]'));
     const dialog = document.querySelector<HTMLElement>('[data-slot=dialog-content]')!;
@@ -439,8 +524,16 @@ export async function verifyWebPage() {
     await waitFor(() => document.documentElement.dataset.theme === 'light');
     const maximized = await native.window.maximize();
     if (!maximized.maximized) throw new Error('Test window did not maximize');
+    await waitFor(() => window.innerHeight>expandedHeight, 'Maximized window did not resize');
+    const maximizedHeight=(await settledWindowSize()).height;
+    await collapseWindow();
+    document.querySelector<HTMLButtonElement>('[aria-label="展开主界面"]')!.click();
+    await waitFor(() => !document.querySelector('.compact-player') && window.innerHeight===maximizedHeight, 'Window did not restore maximized height')
+      .catch(async error => { throw new Error(`${error.message}: ${window.innerHeight}/${maximizedHeight}, ${JSON.stringify(await native.window.getState())}`); });
+    if(!(await native.window.getState()).maximized)throw new Error('Compact mode did not restore maximized state');
     const restored = await native.window.maximize();
     if (restored.maximized) throw new Error('Test window did not restore');
+    await waitFor(() => window.innerHeight===expandedHeight, 'Normal viewport did not finish restoring');
     await native.window.setTheme('glass-light');
     await native.window.setTheme('glass');
     await native.window.setTheme('light');
@@ -514,21 +607,78 @@ export async function verifyWebPage() {
   const controlsBefore=controls.getBoundingClientRect();
   lyricsToggle.click();
   await waitFor(()=>!!document.querySelector('.lyrics-page'));
+  await new Promise(resolve => setTimeout(resolve, 220));
+  const lyricsPage = document.querySelector<HTMLElement>('.lyrics-page')!;
+  if (getComputedStyle(lyricsPage).getPropertyValue('-webkit-app-region').trim() !== 'drag')
+    throw new Error('Lyrics page background does not allow dragging the window');
+  if (getComputedStyle(lyricsPage.querySelector('.lyrics-track')!).getPropertyValue('-webkit-app-region').trim() !== 'drag')
+    throw new Error('Lyrics cover and metadata block window dragging');
+  const pageBounds = lyricsPage.getBoundingClientRect();
+  const trackBounds = lyricsPage.querySelector('.lyrics-track')!.getBoundingClientRect();
+  const lyricArea = lyricsPage.querySelector('.lyrics-lines,.lyrics-message')!;
+  const lyricBounds = lyricArea.getBoundingClientRect();
+  const coverBounds = lyricsPage.querySelector('.cover')!.getBoundingClientRect();
+  const pageCenter = (pageBounds.top + pageBounds.bottom) / 2;
+  const narrowLyrics = window.innerWidth <= 800;
+  if (narrowLyrics ? trackBounds.bottom > lyricBounds.top :
+    Math.abs((trackBounds.top + trackBounds.bottom) / 2 - pageCenter) > 1
+      || Math.abs((lyricBounds.top + lyricBounds.bottom) / 2 - pageCenter) > 1)
+    throw new Error('Lyrics layout did not center wide columns or stack narrow content');
+  if (coverBounds.width !== (narrowLyrics ? 64 : 320) || coverBounds.height !== coverBounds.width
+    || getComputedStyle(lyricsPage.querySelector('h2')!).fontSize !== '22px')
+    throw new Error('Lyrics responsive cover size or fixed title size changed');
+  if (window.innerWidth >= 1200 && coverBounds.left - pageBounds.left < 100)
+    throw new Error('Lyrics cover shifted left instead of centering within its column');
   const lyricsClose=document.querySelector<HTMLButtonElement>('.lyrics-close')!;
   if(document.activeElement!==lyricsClose || !document.querySelector('.library-layer')?.hasAttribute('inert'))
     throw new Error('Lyrics page did not move focus or disable the covered library');
+  if (getComputedStyle(document.querySelector('.library-layer')!).visibility !== 'hidden')
+    throw new Error('Covered library controls still contribute CEF drag exclusion regions');
   const controlsAfter=controls.getBoundingClientRect();
   if(!playerTrack.hasAttribute('inert') || getComputedStyle(playerTrack).visibility!=='hidden' ||
     Math.abs(controlsBefore.x-controlsAfter.x)>1 || Math.abs(controlsBefore.y-controlsAfter.y)>1)
     throw new Error('Lyrics page did not hide track metadata while preserving player controls');
-  for(const control of Array.from(document.querySelectorAll('.lyrics-close,.lyrics-track,.lyrics-lines')))
+  for(const control of Array.from(document.querySelectorAll('.lyrics-close,.lyrics-track button,.lyrics-lines li.lyric-interactive,.lyrics-message button')))
     if(getComputedStyle(control).getPropertyValue('-webkit-app-region').trim()!=='no-drag')
       throw new Error('Lyrics controls overlap native draggable regions');
+  const lyricsProbe = document.createElement('ol'); lyricsProbe.className = 'lyrics-lines';
+  lyricsProbe.innerHTML = '<li><button>歌词拖动区域检查</button></li>'.repeat(20);
+  lyricArea.replaceWith(lyricsProbe);
+  const stopObserving = observeLyricDragRegions(lyricsProbe);
+  try {
+    const first = lyricsProbe.firstElementChild!;
+    await waitFor(() => first.classList.contains('lyric-interactive'), 'Visible lyric row did not become interactive');
+    if (getComputedStyle(lyricsProbe).getPropertyValue('-webkit-app-region').trim() !== 'drag'
+      || getComputedStyle(first).getPropertyValue('-webkit-app-region').trim() !== 'no-drag')
+      throw new Error('Lyrics blank space blocks dragging or lyric rows block interaction');
+    lyricsProbe.scrollTop = 500;
+    await waitFor(() => !first.classList.contains('lyric-interactive'), 'Offscreen lyric row still blocks dragging');
+    const bounds = lyricsProbe.getBoundingClientRect();
+    for (const row of Array.from(lyricsProbe.querySelectorAll('.lyric-interactive'))) {
+      const rect = row.getBoundingClientRect();
+      if (rect.top < bounds.top || rect.bottom > bounds.bottom)
+        throw new Error('Clipped lyric row still blocks dragging');
+    }
+    lyricsProbe.scrollTop = 0;
+    await waitFor(() => first.classList.contains('lyric-interactive'), 'Returning lyric row lost interaction');
+  } finally { stopObserving(); lyricsProbe.replaceWith(lyricArea); }
+  const menuOverlay = document.createElement('div'); menuOverlay.dataset.slot = 'popover-content';
+  document.body.append(menuOverlay);
+  if (getComputedStyle(lyricsPage).getPropertyValue('-webkit-app-region').trim() !== 'no-drag')
+    throw new Error('Lyrics dragging blocks menu dismissal');
+  menuOverlay.remove();
+  const dialogOverlay = document.createElement('div'); dialogOverlay.setAttribute('role', 'dialog');
+  document.body.append(dialogOverlay);
+  if (getComputedStyle(lyricsPage).getPropertyValue('-webkit-app-region').trim() !== 'no-drag')
+    throw new Error('Lyrics dragging blocks a modal dialog');
+  dialogOverlay.remove();
   const handledEscape=new KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true});
   handledEscape.preventDefault();lyricsClose.dispatchEvent(handledEscape);
   if(!document.querySelector('.lyrics-page'))throw new Error('Handled Escape closed the lyrics page');
   lyricsClose.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}));
   await waitFor(()=>!document.querySelector('.lyrics-page') && !document.querySelector('.library-layer')?.hasAttribute('inert'));
+  if (getComputedStyle(document.querySelector('.library-layer')!).visibility !== 'visible')
+    throw new Error('Closing lyrics did not restore library visibility');
   if(playerTrack.hasAttribute('inert') || getComputedStyle(playerTrack).visibility!=='visible')
     throw new Error('Closing lyrics did not restore player track metadata');
   const host = window as unknown as CefTransport;

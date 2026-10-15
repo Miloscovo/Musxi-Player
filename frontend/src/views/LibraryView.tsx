@@ -79,10 +79,12 @@ export default function LibraryView({ library: lib, theme, appearance, onAppeara
   useLayoutEffect(() => {
     const element = content.current;
     if (!element) return;
-    let width = element.clientWidth;
+    let compactRows = window.innerWidth <= 1100;
     const observer = new ResizeObserver(() => {
-      if (width !== element.clientWidth) {
-        width = element.clientWidth;
+      const nextCompactRows = window.innerWidth <= 1100;
+      // Width-only changes do not change row height; retain measured scroll positions.
+      if (compactRows !== nextCompactRows) {
+        compactRows = nextCompactRows;
         virtualSongs.measure();
       }
       measureListOffset();

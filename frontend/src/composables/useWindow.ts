@@ -43,5 +43,6 @@ export function useWindow() {
   return { state, error, theme, appearance, setAppearance, transparency, setTransparency: updateTransparency,
     minimize: () => invoke(native.window.minimize), maximize: () => invoke(native.window.maximize),
     minimizeToTray: () => invoke(native.window.minimizeToTray),
+    setCompact: (compact: boolean, height: number) => invoke(() => native.window.setCompact(compact, height)),
     close: () => invoke(native.window.close) };
 }

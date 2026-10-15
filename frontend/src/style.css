@@ -26,6 +26,9 @@ input.seek-bar{position:absolute;left:0;top:-5px;width:100%;height:10px;margin:0
 :root{--app-surface:#fff;--app-ink:#1c2621;--app-soft:#e1f2e9}:root[data-theme=dark]{--app-surface:#101617;--app-ink:#edf4f0;--app-soft:#223b31}:root[data-theme=glass]{--app-surface:#101214;--app-ink:#f1f5f3;--app-soft:#24322d}
 
 .library-content>header,.sidebar{-webkit-app-region:drag;user-select:none}.sidebar button,.library-content>header button{-webkit-app-region:no-drag}
+/* Let outside clicks reach Radix dismissal instead of starting a native window drag. */
+body:has([data-slot="popover-content"],[data-slot="context-menu-content"]) :is(.window-bar,.library-content>header,.sidebar,.lyrics-page) { -webkit-app-region:no-drag }
+body:has([role=dialog]) .lyrics-page { -webkit-app-region:no-drag }
 
 .icon{width:22px;height:22px;vertical-align:middle;flex-shrink:0}.toolbar>button[aria-label="切换主题"]{background:var(--side);color:var(--ink);font-size:24px;padding:5px 8px;width:40px;height:40px}
 
@@ -52,7 +55,7 @@ input.seek-bar{position:absolute;left:0;top:-5px;width:100%;height:10px;margin:0
 :root[data-tone]:not([data-tone=green]) { --accent:var(--tone-light); --app-soft:var(--tone-soft-light); --soft:var(--app-soft); --appearance-selected:var(--app-soft); --appearance-ink:var(--accent); --switch-accent:var(--accent) }
 :root:is([data-theme=dark],[data-theme=glass])[data-tone]:not([data-tone=green]) { --accent:var(--tone-dark); --app-soft:var(--tone-soft-dark) }
 :root[data-tone=pink] { --switch-accent:var(--accent-fill) }
-main.app-shell { --sidebar-width:clamp(190px,15.5vw,240px); overflow:hidden; border-radius:16px }
+main.app-shell { --sidebar-width:clamp(210px,15.5vw,240px); overflow:hidden; border-radius:16px }
 .sidebar { display:flex; flex-direction:column; width:var(--sidebar-width); min-height:0; padding:38px 10px 22px; background:var(--side) }
 .window-bar { background:transparent }
 .window-buttons .window-maximize { display:grid; place-items:center }
@@ -199,8 +202,7 @@ main.app-shell { --sidebar-width:clamp(190px,15.5vw,240px); overflow:hidden; bor
 .appearance-slider::-webkit-slider-thumb { appearance:none; width:14px; height:14px; margin-top:-5px; border-radius:50%; background:var(--accent-fill); box-shadow:0 0 0 3px var(--app-surface) }
 .appearance-slider-labels { display:flex; justify-content:space-between; color:var(--muted); font-size:12px }
 @media (max-width:700px) {
-  .appearance-segment { gap:5px; padding-inline:6px; font-size:13px }
-  .appearance-segment svg { width:16px; height:16px }
+  .appearance-segment { gap:5px; padding-inline:6px }
 }
 @media (prefers-reduced-motion:reduce) {
   .appearance-segment,.appearance-switch,.appearance-switch span { transition:none }
@@ -241,7 +243,6 @@ main.app-shell { --sidebar-width:clamp(190px,15.5vw,240px); overflow:hidden; bor
 input.seek-bar::-webkit-slider-runnable-track { background:linear-gradient(to right,var(--accent-fill) var(--progress),#9caaa944 var(--progress)) }
 input.seek-bar::-webkit-slider-thumb { background:var(--accent) }
 @media (max-width:1100px) {
-  .app-shell { --sidebar-width:178px }
   .library-content { padding-inline:24px }
   .track-row { grid-template-columns:28px 46px minmax(0,1fr) minmax(85px,125px) 56px 38px; column-gap:10px }
   .track-table-head>span:nth-child(5) { display:none }
@@ -249,49 +250,36 @@ input.seek-bar::-webkit-slider-thumb { background:var(--accent) }
   .song .track-index { grid-column:1; grid-row:1 / 3 }
   .song>.cover { grid-column:2; grid-row:1 / 3 }
   .song .track-name { grid-column:3; grid-row:1 }
-  .song .track-album { grid-column:3; grid-row:2; font-size:12px }
+  .song .track-album { grid-column:3; grid-row:2 }
   .song .track-artist { grid-column:4; grid-row:1 / 3 }
   .song .track-duration { grid-column:5; grid-row:1 / 3 }
   .song .song-actions { grid-column:6; grid-row:1 / 3 }
   .player,:root[data-theme=dark] .player,:root[data-theme=glass] .player { gap:12px; padding-inline:18px }
   .player-track { gap:12px }
-  .player-track .cover { width:60px; height:60px }
   .player-side { gap:12px }
   .volume-control { width:min(155px,100%) }
   .play-controls { gap:5px }
 }
 @media (max-width:900px) {
-  .library-sections .library-section { gap:8px; font-size:15px }
-  .app-shell { --sidebar-width:160px }
+  .library-sections .library-section { gap:8px }
   .sidebar>button:not(.avatar-button) { padding-inline:18px }
   .library-content { padding:32px 18px 22px }
   .song-scroll { margin-right:-18px; padding-right:9px }
   .library-content>header::before { left:-18px; right:-18px }
-  .page-heading h1 { font-size:27px }
   .collection-search { width:min(300px,42vw) }
-  .player,:root[data-theme=dark] .player,:root[data-theme=glass] .player { min-height:88px; gap:7px; padding:10px 12px }
-  .player-track .cover { width:52px; height:52px }
-  .player h2 { font-size:14px }
-  .player .track p { font-size:12px }
+  .player,:root[data-theme=dark] .player,:root[data-theme=glass] .player { gap:7px; padding-inline:12px }
   .play-controls { gap:3px }
-  .play-controls button { width:40px; height:44px }
-  .play-controls button svg { width:31px; height:31px }
-  .play-controls .play-button { width:40px; height:44px }
-  .play-controls .play-button svg { width:37px; height:37px }
   .volume-control { width:min(115px,100%); gap:6px }
-  .volume-control>.icon { width:30px; height:30px }
 }
 @media (max-width:700px) {
   .library-sections { grid-template-columns:repeat(2,minmax(0,1fr)) }
-  .app-shell { --sidebar-width:130px }
   .library-content { --track-header-top:140px }
   .sidebar { padding-inline:6px }
-  .sidebar>button:not(.avatar-button) { gap:7px; padding-inline:10px; font-size:13px }
+  .sidebar>button:not(.avatar-button) { gap:7px; padding-inline:10px }
   .library-content>header { align-items:flex-start; flex-wrap:wrap }
   .header-actions { margin-left:0 }
   .collection-search { width:min(380px,calc(100vw - 170px)) }
   .volume-control { display:none }
-  .player-track .cover { width:42px; height:42px }
 }
 
 /* CEF windowless rendering composites these backgrounds with the desktop.
@@ -413,31 +401,30 @@ html,body,#app,main.app-shell { background:transparent!important }
 .platform-avatar { width:36px; height:36px; padding:0; border-radius:50%; overflow:hidden; background:var(--surface); border:1px solid var(--line); -webkit-app-region:no-drag; }
 .platform-avatar:hover { box-shadow:0 0 0 3px var(--hover-surface); }
 .platform-avatar img { display:block; width:100%; height:100%; object-fit:cover; }
-@media(max-width:1100px) { .sidebar-accounts { margin-inline:4px; } .sidebar-account { grid-template-columns:28px minmax(0,1fr) 28px; gap:6px; } .sidebar-account .account-platform-icon,.platform-avatar { width:28px; height:28px; } .sidebar-account strong { font-size:13px; } }
+@media(max-width:1100px) { .sidebar-accounts { margin-inline:4px; } .sidebar-account { gap:6px; } }
 /* Full-screen lyrics page: covers the library above the player dock. */
 .app-body { position:relative; display:flex; flex:1; min-height:0 }
 .library-layer { display:flex; flex:1; min-width:0; min-height:0 }
-/* Isolate only while covered: sticky headers stay under the lyrics page, but
-   the sidebar rail must otherwise stay above the window drag bar. */
-.library-layer[inert] { isolation:isolate }
+/* Keep the covered library mounted, but exclude its controls from CEF drag regions. */
+.library-layer[inert] { isolation:isolate; visibility:hidden }
 .lyrics-toggle { position:relative; flex:none; padding:0; border-radius:11px; background:transparent; line-height:0 }
 .lyrics-toggle svg { position:absolute; inset:0; margin:auto; width:30px; height:30px; padding:4px; border-radius:50%; background:#0008; fill:none; stroke:#fff; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; opacity:0; transition:opacity .15s }
 .lyrics-toggle:is(:hover,:focus-visible) svg { opacity:1 }
-.lyrics-page { position:absolute; inset:0; z-index:4; display:grid; grid-template-columns:minmax(220px,38%) minmax(0,1fr); grid-template-rows:minmax(0,1fr); align-items:center; gap:clamp(24px,5vw,72px); padding:56px clamp(24px,6vw,96px) 24px; background:var(--surface); color:var(--ink); animation:lyrics-in .2s ease-out }
+.lyrics-page { position:absolute; inset:0; z-index:4; display:grid; grid-template-columns:minmax(320px,38%) minmax(0,1fr); grid-template-rows:minmax(0,1fr); align-items:center; gap:clamp(24px,5vw,72px); padding:56px clamp(24px,6vw,96px); background:var(--surface); color:var(--ink); animation:lyrics-in .2s ease-out; -webkit-app-region:drag }
 @keyframes lyrics-in { from { opacity:0; transform:translateY(24px) } }
 .lyrics-close { position:absolute; left:20px; top:40px; display:grid; place-items:center; width:40px; height:40px; padding:0; border-radius:10px; background:transparent; color:var(--ink) }
 .lyrics-close:hover { background:var(--hover-surface) }
 .lyrics-close svg { width:26px; height:26px; fill:none; stroke:currentColor; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round }
-.lyrics-track { display:flex; flex-direction:column; align-items:center; min-width:0; text-align:center }
-.lyrics-close,.lyrics-track,.lyrics-lines { -webkit-app-region:no-drag }
-.lyrics-track .cover { width:min(100%,320px); height:auto; aspect-ratio:1; border-radius:18px; box-shadow:0 18px 40px #0002; font-size:72px }
+.lyrics-track { display:flex; flex-direction:column; align-items:center; min-width:0; text-align:center; -webkit-app-region:drag }
+.lyrics-close,.lyrics-track button,.lyrics-lines li.lyric-interactive,.lyrics-message button { -webkit-app-region:no-drag }
+.lyrics-track .cover { width:320px; height:auto; aspect-ratio:1; border-radius:18px; box-shadow:0 18px 40px #0002; font-size:72px }
 .lyrics-title { display:flex; flex-direction:column; align-items:inherit; min-width:0; max-width:100% }
 .lyrics-track h2 { max-width:100%; margin:28px 0 6px; overflow:hidden; font-size:22px; text-overflow:ellipsis; white-space:nowrap }
 .lyrics-track p { margin:0; color:var(--muted) }
 .lyrics-origin { margin-top:14px; padding:2px 8px; border:1px solid var(--line); border-radius:6px; color:var(--muted); font-size:12px }
 .lyrics-title>button[data-variant=secondary] { margin-top:10px }
 .lyrics-lines,.lyrics-message { align-self:stretch; height:100%; min-height:0; margin:0 }
-.lyrics-lines { position:relative; overflow:auto; padding:0; list-style:none; scrollbar-width:none; mask-image:linear-gradient(transparent,#000 18%,#000 82%,transparent) }
+.lyrics-lines { position:relative; overflow:auto; padding:0; list-style:none; scrollbar-width:none; mask-image:linear-gradient(transparent,#000 18%,#000 82%,transparent); -webkit-app-region:drag }
 .lyrics-lines li { margin:2px 0 }
 /* Let the first and last lines scroll to the vertical center. */
 .lyrics-lines::before,.lyrics-lines::after { display:block; height:45%; content:"" }
@@ -448,14 +435,12 @@ html,body,#app,main.app-shell { background:transparent!important }
 .lyrics-lines:not(.synced) span { color:var(--ink) }
 .lyrics-message { display:grid; place-items:center; color:var(--muted); font-size:18px }
 @media (max-width:800px) {
-  .lyrics-page { grid-template-columns:1fr; grid-template-rows:auto minmax(0,1fr); gap:16px; padding-top:64px }
+  .lyrics-page { grid-template-columns:minmax(0,1fr); grid-template-rows:auto minmax(0,1fr); gap:16px; padding-block:64px 24px }
   .lyrics-track { flex-direction:row; gap:14px; text-align:left }
-  .lyrics-title { align-items:flex-start }
+  .lyrics-title { flex:1; align-items:flex-start }
   .lyrics-track .cover { width:64px; border-radius:10px; font-size:28px }
-  .lyrics-track h2 { margin:0; font-size:17px }
-  .lyrics-origin { display:none }
+  .lyrics-track h2 { margin:0 }
   .lyrics-close { top:16px; left:10px }
-  .lyrics-lines :is(button,span) { font-size:17px }
 }
 @media (prefers-reduced-motion:reduce) { .lyrics-page { animation:none } .lyrics-toggle svg { transition:none } }
 .lyrics-match-dialog { width:960px; max-width:calc(100vw - 32px); max-height:calc(100dvh - 40px); overflow:auto; color:var(--ink) }
@@ -512,6 +497,15 @@ html,body,#app,main.app-shell { background:transparent!important }
    the times never touch the cover at any window size. */
 .player,:root[data-theme=dark] .player,:root[data-theme=glass] .player { padding-top:30px; padding-bottom:8px }
 .player { z-index:5 } /* Above .lyrics-page (z-index 4), which ends at the dock's top edge. */
+.app-body[hidden] { display:none }
+.player-rail { position:absolute; top:-6px; left:0; z-index:3; width:100%; height:12px; padding:0; border-radius:0; background:transparent; cursor:n-resize; -webkit-app-region:no-drag }
+.player-rail[data-state=collapsed] { top:-16px; height:16px; cursor:s-resize }
+.player-rail::after { position:absolute; left:0; right:0; top:5px; height:2px; background:transparent; content:"" }
+.player-rail[data-state=collapsed]::after { top:auto; bottom:0 }
+.player-rail:hover::after,.player-rail:focus-visible::after { background:var(--line) }
+.compact-player .player { margin-top:16px; -webkit-app-region:drag }
+.compact-player .player :is(button,input,.track) { -webkit-app-region:no-drag }
+body:has([data-slot="popover-content"],[data-slot="context-menu-content"]) .compact-player .player { -webkit-app-region:no-drag }
 .player-progress { position:absolute; top:7px; left:25px; right:25px; display:flex; align-items:center; gap:12px; height:16px; z-index:2 }
 .player-time { flex:none; min-width:34px; color:var(--muted); font-size:11px; line-height:16px; font-variant-numeric:tabular-nums; letter-spacing:.2px }
 .player-time.elapsed { text-align:right }

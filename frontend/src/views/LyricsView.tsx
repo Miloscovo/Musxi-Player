@@ -3,7 +3,7 @@ import LyricsMatchDialog from '../components/LyricsMatchDialog';
 import CoverImage from '../components/CoverImage';
 import { Button } from '../components/ui/button';
 import { useLyrics } from '../composables/useLyrics';
-import { activeLyricLine } from '../composables/lyrics';
+import { activeLyricLine, observeLyricDragRegions } from '../composables/lyrics';
 import { useLyricsTranslation } from '../composables/lyricsTranslation';
 import type { LibraryState } from '../native/library';
 
@@ -46,6 +46,9 @@ export default function LyricsView({ trackId, now, positionMs, canSeek, onSeek, 
   const markScrolled = () => { userScroll.current = Date.now(); };
   const message = !trackId ? '尚未播放歌曲' : loading ? '正在加载歌词…' : failed ? '歌词加载失败，请检查网络后重试' :
     !lines.length ? (lyrics?.platform && lyrics.platform !== 'local' ? '这首歌在平台上暂无歌词' : '暂无歌词') : '';
+  useLayoutEffect(() => {
+    if (list.current) return observeLyricDragRegions(list.current);
+  }, [lines, message]);
   return <section className="lyrics-page" aria-label="歌词">
     <Button variant="unstyled" ref={closeButton} className="lyrics-close" aria-label="收起歌词页" title="收起" onClick={onClose}>
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>

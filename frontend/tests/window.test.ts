@@ -19,4 +19,9 @@ test('window API validates replies and uses the shared protocol', async () => {
   }
   result = { enabled: 'yes', maximized: false };
   await assert.rejects(client.getState(), /Invalid window state/);
+  result = { enabled: true, maximized: false, compact: true };
+  assert.deepEqual(await client.setCompact(true, 126), result);
+  assert.deepEqual(seen.at(-1), { version: 1, command: 'window.setCompact', params: { compact: true, height: 126 } });
+  result = { enabled: true, maximized: false, compact: 'yes' };
+  await assert.rejects(client.getState(), /Invalid window state/);
 });

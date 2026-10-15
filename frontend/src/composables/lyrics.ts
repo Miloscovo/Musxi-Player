@@ -13,3 +13,16 @@ export function activeLyricLine(lines: readonly LyricsLine[], positionMs: number
 
 // The Core only echoes source; any listed value works for the song that is playing.
 export function lyricsSource(id: string) { return id.startsWith('local:') ? 'local' as const : 'queue' as const; }
+
+// CEF does not clip no-drag rectangles to their scroll container.
+export function observeLyricDragRegions(container: HTMLOListElement) {
+  const observer = new IntersectionObserver(entries => {
+    for (const entry of entries)
+      entry.target.classList.toggle('lyric-interactive', entry.isIntersecting && entry.intersectionRatio === 1);
+  }, { root: container, threshold: 1 });
+  for (const row of Array.from(container.children)) observer.observe(row);
+  return () => {
+    observer.disconnect();
+    for (const row of Array.from(container.children)) row.classList.remove('lyric-interactive');
+  };
+}
