@@ -13,6 +13,7 @@ import PlaybackPlatform from './components/PlaybackPlatform';
 import LyricsView from './views/LyricsView';
 import { playbackTimes, formatPlaybackTime } from './composables/playbackTime';
 import { useDesktopLyrics } from './composables/useDesktopLyrics';
+import { bindWheelRange } from './composables/wheelRange';
 
 export default function App() {
   const shell = useWindow(); const library = useLibrary();
@@ -48,6 +49,17 @@ export default function App() {
   const [showRemaining, setShowRemaining] = useState(false);
   const [hoverSeek, setHoverSeek] = useState<{ x: number; ms: number } | null>(null);
   const hasState = !!state;
+  const wheelPlayback = useRef(state); wheelPlayback.current = state;
+  useEffect(() => {
+    const input = seekInput.current;
+    if (input && connected) return bindWheelRange(input, seek, setSeekDraft,
+      () => wheelPlayback.current?.pending ? null : wheelPlayback.current?.positionMs ?? null, 5000, 1000);
+  }, [hasState, connected, state?.trackId, seek]);
+  useEffect(() => {
+    const input = volumeInput.current;
+    if (input && connected) return bindWheelRange(input, setVolume, setVolumeDraft,
+      () => wheelPlayback.current?.volumePercent ?? null, 5, 1);
+  }, [hasState, connected, setVolume]);
   const operation = library.state?.operation;
   const notice = library.state?.notice || '';
   const playbackMessage = state?.phase === 'failed' ? status : '';
@@ -179,7 +191,7 @@ export default function App() {
         </Button>
         <input ref={volumeInput} type="range" min="0" max="100" value={volumeDraft ?? state.volumePercent}
           style={{ '--volume': `${volumeDraft ?? state.volumePercent}%` } as CSSProperties}
-          disabled={busy || !connected} onInput={event => setVolumeDraft(Number(event.currentTarget.value))} aria-label="音量" />
+          disabled={!connected} onInput={event => setVolumeDraft(Number(event.currentTarget.value))} aria-label="音量" />
         <span id="volume" className="sr-only">{state.volumePercent}%</span>
       </div>}
         <QueuePanel library={library} />

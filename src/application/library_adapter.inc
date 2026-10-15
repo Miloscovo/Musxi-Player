@@ -104,6 +104,40 @@ LibraryReply applicationLibrary(const std::string& name,const std::string& param
             ++libraryOperationId;libraryOperationKind=request.value("op","");libraryOperationStatus="pending";libraryOperationError.clear();
             return reply({{"id",std::to_string(libraryOperationId)}});
         }
+        if(name=="library.removeLocalFolder" || name=="library.removeLocalTrack") {
+            const bool trackRemoval=name=="library.removeLocalTrack";
+            if(p.size()!=(trackRemoval?2:1))return {400,"无效移除参数",{}};
+            const auto id=requiredText(p,"id");
+            const auto folderId=trackRemoval?requiredText(p,"playlistId"):id;
+            const bool allFolders=trackRemoval && folderId=="musxi:local";
+            if(localImportPending || localScan.valid() || !libraryNextPlay.is_null())return {409,"正在处理音乐，请稍后重试",{}};
+            loadLocalCatalog(cloud::dataDir()/L"local-music.json");
+            auto folders=localFolders,tracks=localTracks;std::set<std::string> removed;
+            const auto folder=std::find_if(folders.begin(),folders.end(),[&](const Json& row){return row.at("id")==folderId;});
+            if(!allFolders && folder==folders.end())return {404,"本地文件夹不存在",{}};
+            if(trackRemoval) {
+                if(std::none_of(tracks.begin(),tracks.end(),[&](const Json& row){return row.at("id")==id && (allFolders || inLocalFolder(row,folderId));}))return {404,"歌曲不在该本地歌单中",{}};
+            } else folders.erase(folder);
+            for(auto& row:tracks)if((!trackRemoval || row.at("id")==id) && (allFolders || inLocalFolder(row,folderId))) {
+                auto& memberships=row["folders"];
+                if(allFolders)memberships=Json::array();
+                else memberships.erase(std::remove(memberships.begin(),memberships.end(),Json(folderId)),memberships.end());
+                if(memberships.empty())removed.insert(row.at("id").get<std::string>());
+            }
+            tracks.erase(std::remove_if(tracks.begin(),tracks.end(),[&](const Json& row){return removed.count(row.at("id").get<std::string>());}),tracks.end());
+            if(!saveLocalCatalog(tracks,cloud::dataDir()/L"local-music.json",folders))return {503,"移除记录保存失败，请检查存储空间后重试",{}};
+            localTracks=std::move(tracks);localFolders=std::move(folders);
+            if(!trackRemoval && localFolderId==id)localFolderId.clear();
+            for(int index=(int)cloudQueue.size()-1;index>=0;--index)if(removed.count(cloudQueue[index].value("id",""))) {
+                cloudQueue.erase(cloudQueue.begin()+index);if(index<=cloudCurrent)--cloudCurrent;
+            }
+            if(removed.count(unplayableTrackId))cancelUnplayableSkip();
+            localCurrent=-1;
+            for(int index=0;index<(int)localTracks.size();++index)if(localTracks[index].value("id","")==audioTrackId)localCurrent=index;
+            savePlaybackHistory(cloud::dataDir()/L"playback-history.json");
+            notice(trackRemoval?L"已从歌单移除歌曲，磁盘文件未删除":L"已移除音乐文件夹，磁盘文件未删除");
+            return reply({{"id",std::to_string(++libraryOperationId)}});
+        }
         if(name=="library.importLocal") {
             if(!p.empty())return {400,"无效导入参数",{}};
             if(localImportPending || localScan.valid())return {409,"正在导入音乐，请稍后再试",{}};
@@ -305,13 +339,7 @@ LibraryReply applicationLibrary(const std::string& name,const std::string& param
             }
             if(!cloudConnected) return {409,"请先扫码登录",{}};
             if(cloudBusy() && cloudOperation!="audio") return {409,"正在处理其他请求，请稍后重试",{}};
-            if(libraryOperationStatus=="pending" && libraryOperationKind=="audio" &&
-               audioTrackId==libraryPlayTrackId && audioBackend().snapshot().pending)closeAudio();
-            ++cloudGeneration;++libraryOperationId;libraryOperationKind="audio";
-            libraryPlayPaused=false;
-            libraryOperationStatus="pending";libraryOperationError.clear();libraryPlayGeneration=-1;
-            libraryPlayTrackId=next.value("id","");
-            libraryNextPlay=next;cloudAutoNext=false;cancelUnplayableSkip();
+            schedulePlayback(std::move(next));
             return reply({{"id",std::to_string(libraryOperationId)}});
         }
         if(cloudBusy() || !libraryNextPlay.is_null()) return {409,"正在处理请求，请稍后重试",{}};

@@ -78,6 +78,9 @@ public:
         return false;
     }
     void GetViewRect(CefRefPtr<CefBrowser>,CefRect& rect) override {
+        if(const auto frozen=static_cast<const RECT*>(GetPropW(testWindow_,ResizeViewProperty))) {
+            rect=CefRect(0,0,frozen->right,frozen->bottom);return;
+        }
         RECT r{};GetClientRect(testWindow_,&r);const int dpi=GetDpiForWindow(testWindow_);
         rect=CefRect(0,0,std::max(1,MulDiv(r.right,96,dpi)),std::max(1,MulDiv(r.bottom,96,dpi)));
     }
@@ -283,6 +286,26 @@ public:
                 if(reply.code) callback->Failure(reply.code,reply.message);
                 else callback->Success(Json{{"version",1},{"result",Json::parse(reply.json)}}.dump());
                 return true;
+            }
+            if(smoke_ && testWindow_ && command=="test.resizeWindow") {
+                if(params.size()!=3 || !params.contains("width") || !params.contains("height") || !params.contains("stage") ||
+                   !params["width"].is_number_unsigned() || !params["height"].is_number_unsigned() || !params["stage"].is_string() ||
+                   params["width"].get<uint64_t>()<800 || params["width"].get<uint64_t>()>4096 ||
+                   params["height"].get<uint64_t>()<560 || params["height"].get<uint64_t>()>2160) {
+                    callback->Failure(400,"Invalid resize test parameters");return true;
+                }
+                const auto stage=params["stage"].get<std::string>();
+                if(stage!="begin" && stage!="update" && stage!="end") {callback->Failure(400,"Invalid resize stage");return true;}
+                if((stage=="begin")==static_cast<bool>(GetPropW(testWindow_,ResizeViewProperty))) {
+                    callback->Failure(409,"Invalid resize test sequence");return true;
+                }
+                if(stage=="begin")SendMessageW(testWindow_,WM_ENTERSIZEMOVE,0,0);
+                const int dpi=GetDpiForWindow(testWindow_);
+                const bool resized=SetWindowPos(testWindow_,nullptr,0,0,MulDiv(params["width"].get<int>(),dpi,96),
+                    MulDiv(params["height"].get<int>(),dpi,96),SWP_NOMOVE|SWP_NOZORDER|SWP_NOACTIVATE)!=FALSE;
+                if(stage=="end" || !resized)SendMessageW(testWindow_,WM_EXITSIZEMOVE,0,0);
+                if(!resized){callback->Failure(500,"Test window resize failed");return true;}
+                callback->Success(Json{{"version",1},{"result",true}}.dump());return true;
             }
             if(smoke_ && testWindow_ && command=="test.windowSize" && params.empty()) {
                 RECT bounds{};GetClientRect(testWindow_,&bounds);const auto dpi=GetDpiForWindow(testWindow_);

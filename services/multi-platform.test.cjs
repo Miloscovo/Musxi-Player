@@ -3,6 +3,28 @@ const assert=require('node:assert/strict');
 const {MultiPlatform}=require('./multi-platform.cjs');
 function fixture(){const calls=[];const adapters=Object.fromEntries(['kugou','netease','qq'].map(platform=>[platform,{async run(r){calls.push([platform,r]);if(r.op==='init')return {connected:!!r.session,profile:{name:platform},session:r.session};if(r.op==='sync')return {playlists:[{id:platform==='kugou'?'1':platform+':1'}]};if(r.op==='search')return {tracks:[{id:platform+':song',name:platform,artist:'Artist',album:'Album'}],total:1,hasMore:false};if(r.op==='vip_auto')return {session:{cookie:{token:'private'}},outcome:'skipped'};return {status:'connected',profile:{name:platform},session:{platform}};}}]));return {calls,adapters,manager:new MultiPlatform(adapters)};}
 
+test('confirmed favorite edits refresh counts and automatic covers on every platform',async()=>{
+  for(const platform of ['kugou','netease','qq']){
+    const {manager,adapters}=fixture();
+    await manager.run({op:'init',session:{platform:'multi',accounts:{[platform]:{}}}});
+    const list={id:platform+':liked',favorite:true,editable:true,count:99,cover:'old',automaticCover:true};
+    let rows=[{id:platform+':one',name:'One',artist:'Artist',cover:'first'},{id:platform+':two',name:'Two',artist:'Artist',cover:'second'}];
+    adapters[platform].run=async r=>{
+      if(r.op==='sync')return {playlists:[list]};
+      if(r.op==='song_update')rows=rows.slice(1);
+      return {playlist:list,playlists:[list],tracks:rows};
+    };
+    await manager.run({op:'sync'});
+    for(const expected of [1,0]){
+      const result=await manager.run({op:'song_update',id:rows[0].id,kind:'favorite',enabled:false});
+      assert.equal(result.playlist.count,expected);
+      assert.equal(result.playlists[0].count,expected);
+      assert.equal(result.playlists[0].cover,expected?'second':'');
+      assert.equal(result.favoritesCount,expected);
+    }
+  }
+});
+
 test('cloud favorites refresh signed-in own favorites, merge exact metadata and retain playable sources',async()=>{
   const {manager,adapters}=fixture();
   await manager.run({op:'init',session:{platform:'multi',accounts:{kugou:{},netease:{}}}});

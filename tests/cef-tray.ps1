@@ -115,23 +115,37 @@ $originalCursor=New-Object TrayCheck+Point;[void][TrayCheck]::GetCursorPos([ref]
 try {
  Wait-For { (Find-TestWindow 'MusxiPlayerTestHost') -ne [IntPtr]::Zero } 'No test window (close an existing test instance before running)'
  $window=Find-TestWindow 'MusxiPlayerTestHost';Start-Sleep -Seconds 2
- # Keep CEF hit regions current throughout repeated grow/shrink updates.
+ # Keep the page and its hit regions fixed until interactive resize ends.
  $beforeResize=New-Object TrayCheck+Rect;[void][TrayCheck]::GetWindowRect($window,[ref]$beforeResize)
  $resizeScale=[TrayCheck]::GetDpiForWindow($window)/96.0
- [void][TrayCheck]::PostMessage($window,0x231,[IntPtr]::Zero,[IntPtr]::Zero)
+ [void][TrayCheck]::SetWindowPos($window,[IntPtr]::Zero,40,40,[int](914*$resizeScale),[int](600*$resizeScale),0x14)
+ Wait-For {
+  $sized=New-Object TrayCheck+Rect;[void][TrayCheck]::GetWindowRect($window,[ref]$sized)
+  $point=[IntPtr]((($sized.top+[int](15*$resizeScale)) -shl 16) -bor ($sized.left+[int](848*$resizeScale)))
+  [TrayCheck]::SendMessage($window,0x84,[IntPtr]::Zero,$point).ToInt32() -eq 1
+ } 'Initial resize viewport did not settle'
+ [void][TrayCheck]::SendMessage($window,0x231,[IntPtr]::Zero,[IntPtr]::Zero)
  try {
   foreach($width in @(850,914,882,946,850)){
    [void][TrayCheck]::SetWindowPos($window,[IntPtr]::Zero,40,40,[int]($width*$resizeScale),[int](560*$resizeScale),0x14)
    Wait-For {
     $sized=New-Object TrayCheck+Rect;[void][TrayCheck]::GetWindowRect($window,[ref]$sized)
     $y=$sized.top+[int](15*$resizeScale)
-    $caption=[IntPtr](($y -shl 16) -bor ($sized.left+[int](($width-150)*$resizeScale)))
-    $button=[IntPtr](($y -shl 16) -bor ($sized.left+[int](($width-66)*$resizeScale)))
+    $caption=[IntPtr](($y -shl 16) -bor ($sized.left+[int](764*$resizeScale)))
+    $button=[IntPtr](($y -shl 16) -bor ($sized.left+[int](848*$resizeScale)))
     [TrayCheck]::SendMessage($window,0x84,[IntPtr]::Zero,$caption).ToInt32() -eq 2 -and
-     [TrayCheck]::SendMessage($window,0x84,[IntPtr]::Zero,$button).ToInt32() -eq 1
-   } 'CEF controls did not follow the viewport during repeated resize'
+     ($width -lt 860 -or [TrayCheck]::SendMessage($window,0x84,[IntPtr]::Zero,$button).ToInt32() -eq 1)
+   } 'CEF control positions changed before resize release'
   }
- } finally {[void][TrayCheck]::PostMessage($window,0x232,[IntPtr]::Zero,[IntPtr]::Zero)}
+ } finally {[void][TrayCheck]::SendMessage($window,0x232,[IntPtr]::Zero,[IntPtr]::Zero)}
+ Wait-For {
+  $sized=New-Object TrayCheck+Rect;[void][TrayCheck]::GetWindowRect($window,[ref]$sized)
+  $y=$sized.top+[int](15*$resizeScale)
+  $caption=[IntPtr](($y -shl 16) -bor ($sized.left+[int](700*$resizeScale)))
+  $button=[IntPtr](($y -shl 16) -bor ($sized.left+[int](784*$resizeScale)))
+  [TrayCheck]::SendMessage($window,0x84,[IntPtr]::Zero,$caption).ToInt32() -eq 2 -and
+   [TrayCheck]::SendMessage($window,0x84,[IntPtr]::Zero,$button).ToInt32() -eq 1
+ } 'CEF controls did not move to their final positions after resize release'
  [void][TrayCheck]::SetWindowPos($window,[IntPtr]::Zero,$beforeResize.left,$beforeResize.top,
   $beforeResize.right-$beforeResize.left,$beforeResize.bottom-$beforeResize.top,0x14)
  Start-Sleep -Milliseconds 400

@@ -41,6 +41,8 @@ export interface LibraryCommands {
   'library.open': { id: string };
   'library.play': { source: 'search' | 'library' | 'queue' | 'local' | 'recent'; id: string };
   'library.importLocal': Record<string, never>;
+  'library.removeLocalFolder': { id: string };
+  'library.removeLocalTrack': { id: string; playlistId: string };
   'library.playPlaylist': { id: string };
   'library.setPlaybackOrder': { order: PlaybackOrder };
   'library.qualities': { id: string };
@@ -172,6 +174,8 @@ export function createLibraryClient(host: CefTransport) {
     open: (id: string, signal?: AbortSignal) => dispatch('library.open', { id }, signal),
     play: (source: 'search' | 'library' | 'queue' | 'local' | 'recent', id: string, signal?: AbortSignal) => dispatch('library.play', { source, id }, signal),
     importLocal: (signal?: AbortSignal) => dispatch('library.importLocal', {}, signal),
+    removeLocalFolder: (id: string, signal?: AbortSignal) => dispatch('library.removeLocalFolder', { id }, signal),
+    removeLocalTrack: (id: string, playlistId: string, signal?: AbortSignal) => dispatch('library.removeLocalTrack', { id, playlistId }, signal),
     playPlaylist: (id: string, signal?: AbortSignal) => dispatch('library.playPlaylist', { id }, signal),
     setPlaybackOrder: (order: PlaybackOrder, signal?: AbortSignal) => dispatch('library.setPlaybackOrder', { order }, signal),
     qualities: (id: string, signal?: AbortSignal) => dispatch('library.qualities', { id }, signal),

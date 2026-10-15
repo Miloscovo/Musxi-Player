@@ -27,6 +27,7 @@ bool smoke=false,createFailed=false,testApp=false,preview=false,hostClosing=fals
 COLORREF frameColor=RGB(255,255,255);
 ULONGLONG startTick=0;
 CompositionSurface surface;
+RECT resizeView{};
 HCURSOR webCursor=nullptr;
 bool mouseTracked=false,imeActive=false,releasingCapture=false,renderFailed=false;
 constexpr UINT TrayMessage=WM_APP+44;
@@ -271,8 +272,17 @@ LRESULT CALLBACK testProc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp) {
             }
         }return 0;
     case WM_MOVE: if(browser)browser->NotifyMoveOrResizeStarted();break;
-    case WM_ENTERSIZEMOVE: surface.setResizing(true);SetTimer(hwnd,101,16,nullptr);return 0;
-    case WM_EXITSIZEMOVE: surface.setResizing(false);KillTimer(hwnd,101);if(browser)browser->WasResized();return 0;
+    case WM_ENTERSIZEMOVE: {
+        GetClientRect(hwnd,&resizeView);const int dpi=GetDpiForWindow(hwnd);
+        resizeView.right=std::max(1,MulDiv(resizeView.right,96,dpi));
+        resizeView.bottom=std::max(1,MulDiv(resizeView.bottom,96,dpi));
+        SetPropW(hwnd,musxi::cef_adapter::ResizeViewProperty,&resizeView);
+        surface.setResizing(true);SetTimer(hwnd,101,16,nullptr);return 0;
+    }
+    case WM_EXITSIZEMOVE:
+        RemovePropW(hwnd,musxi::cef_adapter::ResizeViewProperty);
+        surface.setResizing(false);KillTimer(hwnd,101);
+        if(browser){browser->WasResized();browser->Invalidate(PET_VIEW);}return 0;
     case WM_TIMER: if(wp==101){CefDoMessageLoopWork();return 0;}break;
     case WM_ERASEBKGND: {if(GetWindowLongPtrW(hwnd,GWL_EXSTYLE)&WS_EX_NOREDIRECTIONBITMAP)return 1;RECT r;GetClientRect(hwnd,&r);auto brush=CreateSolidBrush(frameColor);FillRect(reinterpret_cast<HDC>(wp),&r,brush);DeleteObject(brush);return 1;}
     case WM_APP+43: frameColor=wp?RGB(16,18,20):RGB(255,255,255);InvalidateRect(hwnd,nullptr,TRUE);return 0;
@@ -304,9 +314,13 @@ LRESULT CALLBACK testProc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp) {
         if(browser) {
             browser->WasHidden(wp==SIZE_MINIMIZED);
             if(wp!=SIZE_MINIMIZED) {
-                browser->WasResized();
-                // CEF holds subsequent resizes until a matching-size frame is painted.
-                browser->Invalidate(PET_VIEW);
+                if(GetPropW(hwnd,musxi::cef_adapter::ResizeViewProperty)) {
+                    if(!surface.present(hwnd))PostMessageW(hwnd,musxi::cef_adapter::RecoveryFailed,0,0);
+                } else {
+                    browser->WasResized();
+                    // CEF holds subsequent resizes until a matching-size frame is painted.
+                    browser->Invalidate(PET_VIEW);
+                }
             }
         }
         return 0;

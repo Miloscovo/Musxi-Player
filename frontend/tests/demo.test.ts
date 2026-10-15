@@ -119,4 +119,24 @@ test('demo mutations stay isolated and local import is virtual and deduplicated'
   assert.notEqual((await c.player.getState()).trackId, state.tracks[0].id);
   await c.library.setPlaybackOrder('repeat-one'); assert.equal((await c.library.getState()).playbackOrder, 'repeat-one');
   assert.deepEqual(await c.window.getState(), {enabled:false, maximized:false});
+  const playing=await c.player.getState();
+  await c.library.removeLocalFolder(state.localPlaylists![0].id);
+  const removed=await c.library.getState();
+  assert.equal(removed.localPlaylists?.length,0);assert.equal(removed.trackCount,0);assert.equal(removed.queue?.length,0);
+  assert.equal((await c.player.getState()).trackId,playing.trackId);
+  await c.library.importLocal();
+  assert.ok(!(await c.library.getState()).tracks.some(song=>state.tracks.some(old=>old.id===song.id)));
+});
+
+test('local track removal refreshes folder counts without removing folders or stopping playback',async()=>{
+  for(const playlistId of ['musxi:local','local-folder:demo']) {
+    const c=client();await c.library.importLocal();await c.library.open(playlistId);
+    const before=await c.library.getState();const song=before.tracks[0];await c.library.play('local',song.id);
+    await c.library.removeLocalTrack(song.id,playlistId);
+    const after=await c.library.getState();
+    assert.equal(after.trackCount,before.trackCount-1);assert.equal(after.localPlaylists?.[0].count,before.trackCount-1);
+    assert.equal(after.localPlaylists?.length,1);assert.equal(after.queue?.length,0);
+    assert.equal((await c.player.getState()).trackId,song.id);assert.equal((await c.player.getState()).playing,true);
+    await assert.rejects(c.library.removeLocalTrack(song.id,playlistId),/歌曲不在/);
+  }
 });

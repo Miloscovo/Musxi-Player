@@ -103,6 +103,8 @@ export async function verifyWebPage() {
     favorite: async (id: string, enabled: boolean) => { actions.push(`favorite:${id}:${enabled}`); },
     add: async (id: string, list: string) => { actions.push(`add:${id}:${list}`); },
     importLocal: async () => { actions.push('importLocal'); },
+    removeLocalFolder: async id => { actions.push(`removeLocalFolder:${id}`); },
+    removeLocalTrack: async (id,playlistId) => { actions.push(`removeLocalTrack:${id}:${playlistId}`); },
     playPlaylist: async id => { actions.push(`playlistPlay:${id}`); },
     setPlaybackOrder: async order => { actions.push(`order:${order}`); },
     qualities: async id => { actions.push(`qualities:${id}`); },
@@ -139,6 +141,10 @@ export async function verifyWebPage() {
     await waitFor(() => !!fixture.querySelector('.song.track-row'));
     // Resizing a long playlist must retain row height and the current scroll anchor.
     const fixtureState = fixtureLibrary.state!;
+    fixtureLibrary.state = { ...fixtureState, tracks: [{ ...song, id: 'remaining', name: 'Remaining favorite' }], trackCount: 1 };
+    root.render(createElement(LibraryView, { library: fixtureLibrary, theme: 'light' }));
+    await waitFor(() => fixture.querySelectorAll('.song.track-row').length === 1
+      && fixture.querySelector('.track-title')?.textContent === 'Remaining favorite', 'Favorite removal retained a stale song row');
     fixtureLibrary.state = { ...fixtureState, tracks: Array.from({ length: 1000 }, (_, index) => ({ ...song, id: index ? `resize-${index}` : song.id })), trackCount: 1000 };
     root.render(createElement(LibraryView, { library: fixtureLibrary, theme: 'light' }));
     await waitFor(() => fixture.querySelector('.song-list')!.getBoundingClientRect().height > 50000, 'Long resize fixture did not load');
@@ -232,8 +238,27 @@ export async function verifyWebPage() {
     checkPlaylistText(Array.from(fixture.querySelectorAll('.playlist')).find(button=>button.textContent?.includes(localPlaylist.name))!);
     if(fixture.querySelector('.track-table'))throw new Error('Local home still shows the song table');
     const localCards=fixture.querySelectorAll<HTMLButtonElement>('.local-import-grid .playlist');
-    if(!localCards[0].classList.contains('local-all') || !localCards[localCards.length-1].classList.contains('local-import'))
-      throw new Error('Local all/import cards are not first/last');
+    if(!localCards[0].classList.contains('local-all') || !localCards[localCards.length-2].classList.contains('local-import')
+      || !localCards[localCards.length-1].classList.contains('local-remove'))
+      throw new Error('Local all/import/remove card order is incorrect');
+    const removeButton=fixture.querySelector<HTMLButtonElement>('.local-remove')!;
+    if(Math.abs(removeButton.getBoundingClientRect().height-importButton.getBoundingClientRect().height)>1
+      || Math.abs(removeButton.getBoundingClientRect().width-importButton.getBoundingClientRect().width)>1)throw new Error('Local remove card differs from import card size');
+    removeButton.click();
+    await waitFor(()=>!!document.querySelector('.local-folder-options button'));
+    const removeOption=document.querySelector<HTMLButtonElement>('.local-folder-options button')!;
+    if(!removeOption.textContent?.includes(localPlaylist.name) || removeOption.querySelector('svg'))throw new Error('Folder removal option should contain its name without an icon');
+    if(removeButton.textContent!=='移除音乐文件夹' || document.querySelector('.local-folder-dialog h2')?.textContent!=='移除音乐文件夹')throw new Error('Folder removal title is incorrect');
+    removeOption.click();await waitFor(()=>actions.includes(`removeLocalFolder:${localPlaylist.id}`));
+    if(!document.querySelector('.local-folder-dialog'))throw new Error('Folder removal unexpectedly closed the dialog');
+    fixtureLibrary.state={...fixtureLibrary.state!,localPlaylists:[]};
+    root.render(createElement(LibraryView,{library:fixtureLibrary,theme:'light'}));
+    await waitFor(()=>!!document.querySelector('.local-folder-options p'));
+    document.querySelector('.local-folder-dialog')!.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}));
+    await waitFor(()=>!document.querySelector('.local-folder-dialog'));
+    fixtureLibrary.state={...fixtureLibrary.state!,localPlaylists:[localPlaylist]};
+    root.render(createElement(LibraryView,{library:fixtureLibrary,theme:'light'}));
+    await waitFor(()=>fixture.querySelectorAll('.local-import-grid .playlist').length===localCards.length);
     localCards[0].click();
     await waitFor(() => !!fixture.querySelector('.song.track-row'), 'All-local playlist did not show songs');
     if(fixture.querySelector('h1')?.textContent !== '本地歌曲整合')throw new Error('All-local playlist title is incorrect');
@@ -247,6 +272,19 @@ export async function verifyWebPage() {
     await waitFor(() => !!fixture.querySelector('.song.track-row'), 'Local song did not render');
     fixture.querySelector<HTMLElement>('.song.track-row')!.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
     if (!actions.includes(`play:local:${song.id}`)) throw new Error('Local double-click did not play offline');
+    fixture.querySelector<HTMLElement>('.song.track-row')!.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,button:2,clientX:500,clientY:300}));
+    await waitFor(()=>!!document.querySelector('[data-slot=context-menu-content]'));
+    const localMenuItems=Array.from(document.querySelectorAll<HTMLElement>('[data-slot=context-menu-content] [role=menuitem]'));
+    const removeTrackItem=localMenuItems.find(item=>item.textContent==='移除');
+    if(!removeTrackItem || localMenuItems.some(item=>item.textContent==='播放'))throw new Error('Local song menu did not replace Play with Remove');
+    removeTrackItem.click();await waitFor(()=>actions.includes(`removeLocalTrack:${song.id}:${localPlaylist.id}`));
+    await waitFor(()=>!document.querySelector('[data-slot=context-menu-content]'));
+    const localSongState=fixtureLibrary.state!;
+    fixtureLibrary.state={...localSongState,tracks:[],trackCount:0,localPlaylists:[{...localPlaylist,count:0}]};
+    root.render(createElement(LibraryView,{library:fixtureLibrary,theme:'light'}));
+    await waitFor(()=>!fixture.querySelector('.song.track-row'));
+    fixtureLibrary.state=localSongState;root.render(createElement(LibraryView,{library:fixtureLibrary,theme:'light'}));
+    await waitFor(()=>!!fixture.querySelector('.song.track-row'));
     const sidebarToggle=fixture.querySelector<HTMLButtonElement>('[data-slot=sidebar-rail]')!;
     sidebarToggle.click();
     await waitFor(() => !fixture.querySelector('[data-slot=sidebar]'), 'Sidebar did not completely collapse');
@@ -435,6 +473,73 @@ export async function verifyWebPage() {
     const expandedSize=await settledWindowSize();
     const expandedHeight=expandedSize.height;
     const expandedWidth=expandedSize.width;
+    const resizeTest=(stage:string,width:number,height:number)=>request(window as unknown as CefTransport,'test.resizeWindow',{stage,width,height});
+    const resizeAlpha=async(x:number,y:number)=>Number(await request(window as unknown as CefTransport,'test.pixelAlpha',{x,y}));
+    const checkResizeCorners=async()=>{
+      const size=await request(window as unknown as CefTransport,'test.windowSize',{}) as {width:number;height:number};
+      for(const [x,y] of [[0,0],[size.width-1,0],[0,size.height-1],[size.width-1,size.height-1]])
+        if(await resizeAlpha(x,y)!==0)throw new Error('Interactive resize lost a window corner');
+    };
+    const resizeTheme=document.documentElement.dataset.theme;
+    const resizeOpacity=document.documentElement.style.getPropertyValue('--background-opacity');
+    const timeAxis=document.querySelector('.player-progress')!.getBoundingClientRect();
+    try {
+      await resizeTest('begin',Math.max(800,expandedWidth-64),Math.max(560,expandedHeight-40));
+      await resizeTest('update',expandedWidth+64,expandedHeight+40);
+      await new Promise(resolve=>setTimeout(resolve,80));
+      if(window.innerWidth!==expandedWidth || window.innerHeight!==expandedHeight
+        || document.querySelector('.player-progress')!.getBoundingClientRect().top!==timeAxis.top)
+        throw new Error('Window contents reflowed during interactive resize');
+      const background=await request(window as unknown as CefTransport,'test.pixelAlpha',{x:Math.floor(expandedWidth/2),y:20});
+      if(await request(window as unknown as CefTransport,'test.pixelAlpha',{x:expandedWidth+16,y:20})!==background)
+        throw new Error('Expanded resize area did not preserve the page background alpha');
+      await checkResizeCorners();
+      for(const [x,y] of [[expandedWidth-1,0],[expandedWidth-1,expandedHeight-1],[0,expandedHeight-1]])
+        if(await resizeAlpha(x,y)!==255)throw new Error('Old viewport corners left a gap inside the enlarged window');
+      await resizeTest('update',Math.max(800,expandedWidth-32),Math.max(560,expandedHeight-32));
+      await checkResizeCorners();
+      document.documentElement.dataset.theme='glass-light';
+      document.documentElement.style.setProperty('--background-opacity','0.5');
+      const glassDeadline=Date.now()+2000;
+      while(Math.abs(await resizeAlpha(Math.floor(expandedWidth/2),20)-128)>1) {
+        if(Date.now()>glassDeadline)throw new Error('Translucent resize frame did not arrive');
+        await new Promise(resolve=>setTimeout(resolve,20));
+      }
+      await resizeTest('update',expandedWidth+64,expandedHeight+40);
+      await checkResizeCorners();
+      for(const [x,y] of [[expandedWidth-1,0],[expandedWidth-1,expandedHeight-1],[0,expandedHeight-1],[expandedWidth+16,20]])
+        if(Math.abs(await resizeAlpha(x,y)-128)>1)throw new Error('Resize seam changed the translucent background opacity');
+      await resizeTest('end',Math.max(800,expandedWidth-64),Math.max(560,expandedHeight-40));
+      const finalSize=await settledWindowSize();
+      if(finalSize.width===expandedWidth && finalSize.height===expandedHeight)throw new Error('Resize release did not apply the final layout');
+    } finally {
+      if(resizeTheme===undefined)delete document.documentElement.dataset.theme;else document.documentElement.dataset.theme=resizeTheme;
+      if(resizeOpacity)document.documentElement.style.setProperty('--background-opacity',resizeOpacity);
+      else document.documentElement.style.removeProperty('--background-opacity');
+      try {await resizeTest('end',expandedWidth,expandedHeight);}
+      catch {await resizeTest('begin',expandedWidth,expandedHeight);await resizeTest('end',expandedWidth,expandedHeight);}
+      await settledWindowSize();
+    }
+    const playerDock=document.querySelector<HTMLElement>('.player')!;
+    const appShell=document.querySelector<HTMLElement>('.app-shell')!;
+    const shellStyle=appShell.getAttribute('style');
+    try {
+      for(const [width,height] of [[800,560],[900,560],[expandedWidth,expandedHeight]]) {
+        appShell.style.width=`${width}px`;appShell.style.height=`${height}px`;appShell.style.margin='0';
+        await new Promise(resolve=>requestAnimationFrame(()=>resolve(undefined)));
+        if(getComputedStyle(playerDock).getPropertyValue('-webkit-app-region').trim()!=='no-drag')
+          throw new Error('Resized player dock can be intercepted by native window dragging');
+        for(const control of Array.from(playerDock.querySelectorAll<HTMLElement>('button,input'))) {
+          if(!control.getClientRects().length || control.closest('[inert]'))continue;
+          const bounds=control.getBoundingClientRect();
+          if(bounds.width<=0 || bounds.height<=0)continue;
+          const hit=document.elementFromPoint(bounds.left+bounds.width/2,bounds.top+bounds.height/2);
+          if(!hit || !control.contains(hit))throw new Error(`Resized player control is blocked: ${control.getAttribute('aria-label')}`);
+        }
+      }
+    } finally {
+      if(shellStyle===null)appShell.removeAttribute('style');else appShell.setAttribute('style',shellStyle);
+    }
     const settingsPage=document.querySelector('.settings-content');
     const rail=document.querySelector<HTMLElement>('.player-rail')!;
     const railBounds=rail.getBoundingClientRect();
@@ -573,6 +678,13 @@ export async function verifyWebPage() {
       slider.dispatchEvent(new Event('change', { bubbles: true }));
       await waitFor(() => events.some(e => e.event === 'player.volumeChanged' && e.state.volumePercent === target));
       await waitFor(() => document.querySelector('#volume')?.textContent === `${target}%`);
+      for(const [deltaY,expected] of [[120,target+5],[-120,target]]) {
+        const wheel=new WheelEvent('wheel',{deltaY,bubbles:true,cancelable:true});
+        slider.dispatchEvent(wheel);
+        if(!wheel.defaultPrevented)throw new Error('Volume wheel did not prevent page scrolling');
+        await waitFor(()=>document.querySelector('#volume')?.textContent===`${expected}%`, 'Volume wheel did not change native volume');
+        await waitFor(()=>Number(slider.value)===expected, 'Volume wheel preview did not settle');
+      }
       const mute=document.querySelector<HTMLButtonElement>('.volume-button');
       if(!mute)throw new Error('Mute button is missing');
       await waitFor(()=>!mute.disabled);mute.click();

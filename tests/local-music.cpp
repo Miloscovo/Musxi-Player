@@ -1,9 +1,26 @@
 #include "../src/application/application.cpp"
 #include <iostream>
 void requireLocal(bool value,const char* message){if(!value)throw std::runtime_error(message);}
+struct LocalProfileFiles {
+    std::map<fs::path,std::pair<bool,std::string>> saved;
+    LocalProfileFiles() {
+        cloud::testProfile=true;
+        for(const auto* name:{L"local-music.json",L"playback-history.json",L"local-music.json.tmp",L"playback-history.json.tmp"}) {
+            const auto path=cloud::dataDir()/name;std::ifstream file(path,std::ios::binary);
+            saved[path]={fs::exists(path),std::string(std::istreambuf_iterator<char>(file),{})};
+        }
+    }
+    ~LocalProfileFiles() {
+        for(const auto& [path,original]:saved)try {
+            std::error_code error;fs::remove(path,error);
+            if(original.first){std::ofstream file(path,std::ios::binary);file<<original.second;}
+        }catch(...){}
+    }
+};
 int main(int argc,char** argv) {
     if(argc!=2)return 1;
     const auto folder=fs::path(argv[1]).parent_path()/(L"local-music-check-"+std::to_wstring(GetCurrentProcessId()));
+    LocalProfileFiles profileFiles;
     try {
         const auto nested=folder/L"歌曲 子文件夹";fs::create_directories(nested);
         fs::copy_file(fs::path(argv[1])/L"source.wav",folder/L"测试音乐.WAV");
@@ -108,6 +125,52 @@ int main(int argc,char** argv) {
         requireLocal(cloudQueue.empty() && audioTrackId==restoredId,"empty queue lost independently playing song");
         {std::ofstream bad(history);bad<<"{broken";}
         requireLocal(!restorePlaybackHistory(history) && audioTrackId==restoredId,"corrupt history changed current song");
+        const auto removeTrack=[](const Json& params){return musxi::applicationLibrary("library.removeLocalTrack",params.dump());};
+        const auto trackRows=localTracks,trackFolders=localFolders;
+        const auto rootId=localFolders[0].at("id").get<std::string>();
+        requireLocal(removeTrack({{"id",restoredId}}).code==400,"track removal accepted missing scope");
+        requireLocal(removeTrack({{"id",restoredId},{"playlistId",42}}).code==400,"track removal accepted invalid scope");
+        requireLocal(removeTrack({{"id","local:missing"},{"playlistId","musxi:local"}}).code==404,"track removal accepted missing song");
+        const auto sharedIndex=static_cast<size_t>(std::distance(localTracks.begin(),std::find_if(localTracks.begin(),localTracks.end(),[&](const Json& row){return row.at("id")==restoredId;})));
+        cloudQueue=localTracks;cloudCurrent=(int)sharedIndex;localView=true;localFolderId=rootId;
+        const auto trackGeneration=audioBackend().snapshot().generation;
+        requireLocal(removeTrack({{"id",restoredId},{"playlistId",rootId}}).code==0,"scoped track removal failed");
+        requireLocal(localTracks.size()==2 && !inLocalFolder(localTracks[sharedIndex],rootId) && inLocalFolder(localTracks[sharedIndex],nestedId) && cloudQueue.size()==2,"scoped removal lost shared song or queue entry");
+        requireLocal(localVisibleTracks().size()==1 && localPlaylistRows()[0]["count"]==1 && localPlaylistRows()[1]["count"]==1,"scoped removal did not refresh folder counts");
+        requireLocal(removeTrack({{"id",restoredId},{"playlistId",rootId}}).code==404,"scoped removal accepted a song outside that playlist");
+        localFolderId=nestedId;
+        requireLocal(removeTrack({{"id",restoredId},{"playlistId","musxi:local"}}).code==0,"all-local track removal failed");
+        requireLocal(localTracks.size()==1 && localFolders.size()==2 && localVisibleTracks().empty() && localPlaylistRows()[1]["count"]==0 && cloudQueue.size()==1,"all-local removal retained a song or removed its empty folder");
+        requireLocal(opened && audioTrackId==restoredId && localActive && audioBackend().snapshot().generation==trackGeneration,"track removal interrupted current playback");
+        localLoaded=false;loadLocalCatalog(cloud::dataDir()/L"local-music.json");
+        requireLocal(localTracks.size()==1 && fs::exists(nested/L"另一首歌.flac"),"track removal did not persist or deleted the music file");
+        localTracks=trackRows;localFolders=trackFolders;
+        requireLocal(saveLocalCatalog(localTracks,cloud::dataDir()/L"local-music.json",localFolders),"test catalog restore failed");
+        const auto removeFolder=[](const Json& params){return musxi::applicationLibrary("library.removeLocalFolder",params.dump());};
+        const auto parentId=localFolders[0].at("id").get<std::string>();
+        requireLocal(removeFolder({{"id",parentId},{"extra",true}}).code==400,"extra folder removal parameters accepted");
+        requireLocal(removeFolder({{"id",42}}).code==400,"non-string folder removal accepted");
+        requireLocal(removeFolder({{"id","local-folder:missing"}}).code==404,"unknown folder removal accepted");
+        localImportPending=true;
+        requireLocal(removeFolder({{"id",parentId}}).code==409,"folder removed during pending import");localImportPending=false;
+        const auto oldTracks=localTracks,oldFolders=localFolders;const auto highWater=localIdHighWater;
+        const auto nativeCatalog=cloud::dataDir()/L"local-music.json";
+        std::error_code removeError;fs::remove(nativeCatalog,removeError);fs::create_directory(nativeCatalog);
+        requireLocal(removeFolder({{"id",parentId}}).code==503 && localTracks==oldTracks && localFolders==oldFolders,"failed save changed the local catalog");
+        fs::remove(nativeCatalog);
+        cloudQueue=localTracks;cloudCurrent=1;localFolderId=parentId;localView=true;
+        const auto removalGeneration=audioBackend().snapshot().generation;
+        requireLocal(removeFolder({{"id",parentId}}).code==0,"parent import removal failed");
+        requireLocal(localFolders.size()==1 && localTracks.size()==1 && inLocalFolder(localTracks[0],nestedId),"shared nested song was removed");
+        requireLocal(cloudQueue.size()==1 && cloudCurrent==0 && localFolderId.empty(),"folder removal did not update queue/current view");
+        requireLocal(removeFolder({{"id",nestedId}}).code==0 && localFolders.empty() && localTracks.empty() && cloudQueue.empty(),"last folder retained orphan catalog/queue entries");
+        requireLocal(opened && audioTrackId==restoredId && localActive && localCurrent==-1 && audioBackend().snapshot().generation==removalGeneration,"folder removal interrupted current playback");
+        requireLocal(fs::exists(folder/L"测试音乐.WAV") && fs::exists(nested/L"另一首歌.flac"),"folder removal deleted disk files");
+        localLoaded=false;localIdHighWater=0;loadLocalCatalog(nativeCatalog);
+        requireLocal(localTracks.empty() && localFolders.empty() && localIdHighWater==highWater,"removed catalog/high-water mark did not survive reload");
+        const auto importedAgain=scanLocalFolder(folder,localTracks,localFolders,localIdHighWater);
+        for(const auto& track:importedAgain["tracks"])for(const auto& old:oldTracks)requireLocal(track.at("id")!=old.at("id"),"reimport reused a removed track ID");
+        for(const auto& old:oldFolders)requireLocal(importedAgain["folders"][0].at("id")!=old.at("id"),"reimport reused a removed folder ID");
         closeAudio();audioBackendStorage().reset();fs::remove_all(folder);
         std::cout<<"PASS: recursive import, Unicode, corrupt-file filtering, deduplication, persistence, path boundary and offline WASAPI playback/skip\n";return 0;
     } catch(const std::exception& e) {

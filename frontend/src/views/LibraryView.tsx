@@ -8,6 +8,7 @@ import type { Theme } from '../native/window';
 import { safeImage, type Track } from '../native/library';
 import CoverImage from '../components/CoverImage';
 import { Button } from '../components/ui/button';
+import { Dialog, DialogTrigger, DialogContent, DialogTitle, DialogDescription } from '../components/ui/dialog';
 import { SidebarProvider, Sidebar, SidebarRail } from '../components/ui/sidebar';
 import { Tooltip, TooltipTrigger, TooltipProvider, TooltipContent } from '../components/ui/tooltip';
 import { ContextMenu, ContextMenuTrigger, ContextMenuContent, ContextMenuItem,
@@ -22,6 +23,7 @@ const librarySections: { id: LibrarySection; label: string; icon: string }[] = [
   { id: 'saved', label: '收藏歌单', icon: 'm12 3 2.8 5.7 6.3.9-4.6 4.5 1.1 6.3-5.6-3-5.6 3 1.1-6.3L3 9.6l6.3-.9L12 3Z' },
   { id: 'local', label: '本地音乐', icon: 'M3 7V5a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z' },
 ];
+const trashIcon='M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7m4-7v7';
 function appendUnique(previous: Track[], incoming?: Track[]) {
   if (!incoming?.length) return previous;
   const indices = new Map(previous.map((track,index) => [track.id,index])); const rows = [...previous];
@@ -33,11 +35,13 @@ export default function LibraryView({ library: lib, theme, appearance, onAppeara
   transparency?: number; onTransparency?: (value: number) => void;
 }) {
   const { state, error, pending, page } = lib;
-  const [playlistRows, setPlaylistRows] = useState<Track[]>([]); const [searchRows, setSearchRows] = useState<Track[]>([]);
+  const playlistRows = state?.tracks || [];
+  const [searchRows, setSearchRows] = useState<Track[]>([]);
   const [view, setView] = useState<'library' | 'search' | 'settings' | 'recent'>('library');
   const [query, setQuery] = useState(''); const [showTracks, setShowTracks] = useState(false);
   const [librarySection, setLibrarySection] = useState<LibrarySection>('created');
   const [settingsSection, setSettingsSection] = useState<'appearance' | 'playback'>('appearance');
+  const [removeFoldersOpen, setRemoveFoldersOpen] = useState(false);
   const [playlistQuery, setPlaylistQuery] = useState('');
   const content = useRef<HTMLDivElement>(null);
   const songScroll = useRef<HTMLDivElement>(null);
@@ -96,8 +100,7 @@ export default function LibraryView({ library: lib, theme, appearance, onAppeara
     const changed = state?.playlistId !== previousPlaylist.current;
     previousPlaylist.current = state?.playlistId;
     if (changed) setPlaylistQuery('');
-    setPlaylistRows(previous => appendUnique(changed ? [] : previous, state?.tracks));
-  }, [state?.playlistId, state?.tracks]);
+  }, [state?.playlistId]);
   useLayoutEffect(() => {
     const changed = state?.keywords !== previousKeywords.current;
     previousKeywords.current = state?.keywords;
@@ -220,7 +223,25 @@ export default function LibraryView({ library: lib, theme, appearance, onAppeara
           <div>MP3、WAV、FLAC、AAC、M4A / MP4、OGG / OGA、Opus、WMA</div>
           <small>包含子文件夹，重复文件不会重复导入；具体编码须受当前解码器支持。</small>
         </TooltipContent></Tooltip>
-      </TooltipProvider></div>}
+      </TooltipProvider>
+        <Dialog open={removeFoldersOpen} onOpenChange={setRemoveFoldersOpen}>
+          <DialogTrigger asChild><Button variant="ghost" className="playlist local-import local-remove" disabled={busy}>
+            <span className="cover placeholder" aria-hidden="true"><svg className="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d={trashIcon}/></svg></span>
+            <div className="playlist-info"><strong>移除音乐文件夹</strong></div>
+          </Button></DialogTrigger>
+          <DialogContent className="local-folder-dialog">
+            <DialogTitle>移除音乐文件夹</DialogTitle>
+            <DialogDescription>点击文件夹名称，从音乐库移除。电脑上的音乐文件会保留。</DialogDescription>
+            <div className="local-folder-options">
+              {state?.localPlaylists?.length ? state.localPlaylists.map(list=><Button key={list.id} variant="secondary" disabled={busy}
+                onClick={()=>void lib.removeLocalFolder(list.id)}>
+                <span>{list.name}</span>
+              </Button>) : <p>暂无已导入的音乐文件夹。</p>}
+            </div>
+            <Button variant="secondary" onClick={()=>setRemoveFoldersOpen(false)}>关闭</Button>
+          </DialogContent>
+        </Dialog>
+      </div>}
       {view === 'settings' ? settingsSection === 'playback' ? <PlaybackSettings/> : <AppearanceSettings appearance={appearance ?? { mode: theme === 'dark' || theme === 'glass' ? 'dark' : 'light', transparent: theme === 'glass' || theme === 'glass-light', tone: 'green' }} onAppearance={onAppearance ?? (() => {})} transparency={transparency} onTransparency={onTransparency ?? (() => {})}/> : view === 'library' && !showTracks ? <>
         {!isLocal && <>
           <div className="playlist-grid">{librarySection === 'created' && state?.connected && <Button variant="ghost" className="playlist" disabled={busy || !state?.connected} onClick={() => open('musxi:cloud-favorites')}><div className="cover placeholder" aria-hidden="true"><svg className="playlist-heart size-11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1.1-1.1a5.5 5.5 0 0 0-7.8 7.8L12 21l8.8-8.6a5.5 5.5 0 0 0 0-7.8Z"/></svg></div><div className="playlist-info"><strong>云端收藏整合</strong><span>{state?.favoritesCount ?? (state?.playlistId === 'musxi:cloud-favorites' ? state.trackCount : 0)} 首</span></div></Button>}{visiblePlaylists.map(list => <Button variant="ghost" key={list.id} className="playlist" disabled={busy} onClick={() => open(list.id)}><CoverImage url={list.cover}/><div className="playlist-info"><strong>{list.name}</strong><span>{list.count} 首{list.platform && ` · ${platformNames[list.platform]}`}</span></div></Button>)}</div>
@@ -246,7 +267,8 @@ export default function LibraryView({ library: lib, theme, appearance, onAppeara
             <div className="song-actions"><Button variant="unstyled" className="song-play" disabled={pending || (!songIsLocal && !state?.connected)} aria-label={`播放 ${song.name}`} onClick={() => lib.play(playSource, song.id)}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4v16l13-8z"/></svg></Button><Button variant="unstyled" className="song-menu" disabled={busy} aria-label="歌曲操作" onClick={() => {if(!songIsLocal)void menu(song.id);}}>•••</Button></div>
           </div></ContextMenuTrigger><ContextMenuContent aria-label="歌曲操作">
             <ContextMenuItem disabled={pending || (!songIsLocal && !state?.connected)} onSelect={() => void lib.queueNext(playSource, song.id)}>下一首播放</ContextMenuItem>
-            {songIsLocal ? <ContextMenuItem onSelect={() => void lib.play(playSource, song.id)}>播放</ContextMenuItem> : menuId === song.id && state?.menu.id === song.id ? <>
+            {songIsLocal ? isLocal ? <ContextMenuItem disabled={busy} onSelect={() => void lib.removeLocalTrack(song.id,state!.playlistId)}>移除</ContextMenuItem>
+              : <ContextMenuItem onSelect={() => void lib.play(playSource, song.id)}>播放</ContextMenuItem> : menuId === song.id && state?.menu.id === song.id ? <>
               {state.menu.providers ? <>
                 {[false,true].map(liked => {
                   const providers=state.menu.providers!.filter(provider=>provider.liked===liked);

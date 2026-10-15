@@ -48,6 +48,18 @@ test('favorite and unfavorite affect only the system favorites and use returned 
   assert.equal(state.rows['20'].length,0);assert.equal(state.rows['10'].length,1);
   assert.equal(state.writes[1].p.fileids,'99');assert.equal(state.writes[1].p.listid,'20');
 });
+
+test('removing favorites replaces fallback artwork with the remaining first song',async()=>{
+  const {a,state}=fixture();
+  const secondHash='b'.repeat(32);
+  state.rows['20']=[{fileid:1,hash,img:'https://img.kgimg.com/first.jpg'},{fileid:2,hash:secondHash,img:'https://img.kgimg.com/second.jpg'}];
+  let result=await a.run({op:'song_update',id:'source',kind:'favorite',enabled:false});
+  assert.equal(result.playlist.count,1);
+  assert.equal(result.playlist.cover,'https://img.kgimg.com/second.jpg');
+  a.knownTracks.set('second',{id:'second',hash:secondHash});
+  result=await a.run({op:'song_update',id:'second',kind:'favorite',enabled:false});
+  assert.equal(result.playlist.count,0);assert.equal(result.playlist.cover,'');
+});
 test('rejected writes and unverifiable outcomes never report success or auto-retry',async()=>{
   const {a,state}=fixture();const request={op:'song_update',kind:'favorite',id:'source',enabled:true};
   state.failWrite=true;await assert.rejects(a.run(request),/接口返回错误/);assert.equal(state.rows['20'].length,0);

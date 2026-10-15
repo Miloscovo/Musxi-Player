@@ -30,6 +30,13 @@ class MultiPlatform {
     if(request.op==='poll' && result.status==='connected')this.accounts[platform]={connected:true,profile:result.profile};
     if(request.op==='logout') {this.accounts[platform]={connected:false};delete this.sessions[platform];delete this.favoriteKeys[platform];this.playlists[platform]=[];}
     if(result.playlists)this.playlists[platform]=result.playlists;
+    if(['tracks','song_update'].includes(request.op) && result.playlist && Array.isArray(result.tracks)) {
+      const playlist={...result.playlist,count:result.tracks.length};
+      if(playlist.automaticCover || !playlist.cover)playlist.cover=result.tracks[0]?.cover || '';
+      result.playlist=playlist;
+      this.playlists[platform]=(this.playlists[platform] || []).map(row=>row.id===playlist.id?{...row,...playlist}:row);
+      if(result.playlists)result.playlists=this.playlists[platform];
+    }
     return result;
   }
   async sourceFor(track,platform) {
@@ -172,8 +179,8 @@ class MultiPlatform {
     if(op==='song_update' && request.aggregate)return this.decorate({...await this.favorites(),message:result.message});
     if(op==='song_menu' && request.menuId){result.sourceId=request.id;result.id=request.menuId;}
     if(op==='song_update') {
-      result.playlists=this.allPlaylists();
       try {await this.readFavorites(platform);} catch {result.warnings=[...(result.warnings || []),`${NAMES[platform]}收藏数量更新失败，请重新同步`];}
+      result.playlists=this.allPlaylists();
     }
     return this.decorate({...result,platform});
   }

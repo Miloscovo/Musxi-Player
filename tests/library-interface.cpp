@@ -6,17 +6,28 @@ class SwitchAudio final:public musxi::IAudioBackend {
 public:
     musxi::AudioState state;
     bool failNext=false;
-    musxi::AudioResult load(const std::wstring&) override {state.opened=true;state.pending=true;state.phase="loading";return {};}
-    musxi::AudioResult play() override {state.requestedPlaying=state.playing=true;return {};}
+    std::set<std::wstring> brokenPaths,rejectedPaths;
+    std::vector<musxi::AudioEvent> events;
+    musxi::AudioResult load(const std::wstring& path) override {
+        ++state.generation;state.opened=true;state.pending=true;state.playing=false;state.phase="loading";state.error.clear();
+        failNext=brokenPaths.count(path)!=0;
+        return rejectedPaths.count(path)?musxi::AudioResult{musxi::AudioError::BackendFailure,0}:musxi::AudioResult{};
+    }
+    musxi::AudioResult play() override {state.requestedPlaying=state.playing=true;state.phase="buffering";return {};}
     musxi::AudioResult pause() override {state.requestedPlaying=state.playing=false;return {};}
     musxi::AudioResult resume() override {return play();}
     musxi::AudioResult stop() override {return pause();}
     musxi::AudioResult seek(std::uint32_t position) override {state.positionMs=position;return {};}
     musxi::AudioResult setVolume(int value) override {state.volumePercent=value;return {};}
-    musxi::AudioResult unload() override {state={};return {};}
+    musxi::AudioResult unload() override {const auto generation=state.generation+1;state={};state.generation=generation;events.clear();return {};}
     musxi::AudioState snapshot() const override {return state;}
-    void poll() override {state.pending=false;state.phase=failNext?"failed":state.requestedPlaying?"playing":"paused";failNext=false;}
-    std::vector<musxi::AudioEvent> takeEvents() override {return {};}
+    void poll() override {
+        if((state.phase=="ended" || state.phase=="failed") && !failNext)return;
+        state.pending=false;state.phase=failNext?"failed":state.requestedPlaying?"playing":"paused";
+        if(failNext){state.playing=false;state.error="Simulated decode failure";events.push_back({musxi::AudioEventKind::Error,state.generation,{musxi::AudioError::BackendFailure,0}});}
+        failNext=false;
+    }
+    std::vector<musxi::AudioEvent> takeEvents() override {std::vector<musxi::AudioEvent> result;result.swap(events);return result;}
 };
 int main() try {
     const auto productionData=cloud::dataDir();
@@ -135,7 +146,7 @@ int main() try {
         cloudQueue=Json::array({{{"id","played"}},{{"id","locked"}},{{"id","free"}}});
         cloudCurrent=0;libraryPlayTrackId="played";libraryOperationKind="audio";libraryOperationStatus="completed";
         const auto order=playbackOrder;playbackOrder="sequential";
-        skip(1);cloudTick(); // What advancePlayback() does when "played" ends.
+        skip(1);cloudTick();cloudTick();
         require(requested==std::vector<std::string>{"locked"},"auto-advance did not request the next song");
         require(unplayableQueueIndex()==1 && unplayableSkipAt!=0,"unplayable song was not located by its request");
         require(utf8(toast).find("3 秒后播放下一首")!=std::string::npos,"skip notice missing");
@@ -178,6 +189,108 @@ int main() try {
         playbackOrder=order;cloudRequestOverride=nullptr;cancelUnplayableSkip();
         if(cloudFuture.valid())cloudFuture.get();
     }
+    {
+        std::vector<std::string> requested;
+        const auto seedQueue=[&](const std::vector<std::string>& ids,const std::set<std::string>& broken) {
+            if(cloudFuture.valid())cloudFuture.get();
+            closeAudio();cancelUnplayableSkip();libraryNextPlay=nullptr;platformRollback={};
+            libraryQualityChange=libraryPlatformChange=libraryPlayPaused=false;
+            playbackOrder="sequential";cloudConnected=true;localActive=false;cloudQueue=Json::array();localTracks=Json::array();
+            requested.clear();switched->brokenPaths.clear();switched->rejectedPaths.clear();switched->failNext=false;
+            for(const auto& id:ids) {
+                Json row={{"id",id},{"name",id},{"artist","Test"},{"album","Test"},{"path","skip-fixture-"+id}};
+                cloudQueue.push_back(row);if(id.rfind("local:",0)==0)localTracks.push_back(row);
+                if(broken.count(id))switched->brokenPaths.insert(cloud::toWide(row["path"].get<std::string>()));
+            }
+            cloudCurrent=0;audioTrackId=libraryPlayTrackId=ids.front();currentPlaybackTrack=cloudQueue[0];
+            libraryPlayGeneration=++cloudGeneration;libraryOperationKind="audio";libraryOperationStatus="completed";
+            recentRecordedGeneration=cloudGeneration;recentTracks=Json::array();
+            switched->state.opened=switched->state.playing=switched->state.requestedPlaying=true;switched->state.phase="playing";
+            cloudRequestOverride=[&](const Json& request) {
+                const auto id=request.value("id","");requested.push_back(id);
+                return Json{{"ok",true},{"data",{{"path","skip-fixture-"+id},{"track",{{"id",id},{"name",id},{"artist","Test"},{"album","Test"}}}}}};
+            };
+        };
+        const auto finish=[&] {
+            switched->state.playing=false;switched->state.phase="ended";
+            switched->events.push_back({musxi::AudioEventKind::Ended,switched->state.generation,{}});pollAudio();
+        };
+        const auto pump=[] {cloudTick();pollAudio();};
+        const auto decodeNextFailure=[&] {
+            finish();pump();pump();
+            require(switched->state.phase=="failed" && unplayableSkipAt && unplayableSkipAt<=GetTickCount64(),"decode failure did not schedule immediate skip");
+        };
+        seedQueue({"played","bad1","bad2","good"},{"bad1","bad2"});
+        finish();
+        require(libraryPlayTrackId=="bad1" && libraryOperationStatus=="pending" && !libraryNextPlay.is_null(),"Ended did not initialize the same request as manual Next");
+        for(int i=0;i<9;++i)pump();
+        require(requested==std::vector<std::string>({"bad1","bad2","good"}) && audioTrackId=="good" && switched->state.playing,"consecutive decoder failures did not reach the playable song");
+        require(libraryPlayTrackId=="good" && libraryPlayGeneration==cloudGeneration && libraryOperationStatus=="completed" &&
+            recentTracks.size()==1 && recentTracks[0]["id"]=="good" && unplayableTracks.empty(),"automatic playback lost request state, recent history or failure cleanup");
+
+        for(const auto& order:{"sequential","random"}) {
+            seedQueue({"played","bad1","bad2"},{"played","bad1","bad2"});playbackOrder=order;
+            finish();for(int i=0;i<20;++i)pump();
+            require(requested.size()==3 && std::set<std::string>(requested.begin(),requested.end()).size()==3 &&
+                !unplayableSkipAt && libraryNextPlay.is_null() && !switched->state.playing,"all-broken queue retried a song or failed to stop");
+        }
+        seedQueue({"played","bad","good"},{});switched->rejectedPaths.insert(L"skip-fixture-bad");
+        finish();for(int i=0;i<8;++i)pump();
+        require(audioTrackId=="good" && switched->state.playing,"synchronous load rejection did not skip immediately");
+
+        seedQueue({"local:played","local:bad1","local:bad2"},{"local:played","local:bad1","local:bad2"});
+        const auto localOperationStart=libraryOperationId;
+        cloudConnected=false;localActive=true;finish();for(int i=0;i<15;++i)pump();
+        require(unplayableTracks.empty() && !unplayableSkipAt && !switched->state.playing &&
+            libraryOperationId==localOperationStart+3,"offline local failures did not stop after one pass");
+        seedQueue({"played","local:bad","good"},{"local:bad"});
+        finish();for(int i=0;i<8;++i)pump();
+        require(audioTrackId=="good" && switched->state.playing,"mixed local/cloud failure did not advance");
+
+        for(const auto& action:{"pause","cancel","clear","remove","manual"}) {
+            seedQueue({"played","bad","good"},{"bad"});decodeNextFailure();
+            if(std::string(action)=="pause")setPlaying(false);
+            else if(std::string(action)=="cancel")invoke("library.cancel");
+            else if(std::string(action)=="clear")invoke("library.queueClear");
+            else if(std::string(action)=="remove")invoke("library.queueRemove",{{"id","bad"}});
+            else require(invoke("library.skip",{{"delta",1}}).code==0,"manual Next after failure was rejected");
+            for(int i=0;i<5;++i)pump();
+            const auto expected=std::string(action)=="manual"?std::vector<std::string>{"bad","good"}:std::vector<std::string>{"bad"};
+            require(requested==expected,"user action left an unwanted automatic skip");
+        }
+        seedQueue({"played","bad","good"},{"bad"});
+        require(invoke("library.skip",{{"delta",1}}).code==0,"manual failure test rejected");pump();pump();
+        require(unplayableSkipAt && unplayableSkipAt<=GetTickCount64(),"manual decode failure did not use the shared immediate skip");
+        for(int i=0;i<5;++i)pump();require(audioTrackId=="good","manual failure did not advance");
+
+        seedQueue({"played","good"},{});playbackOrder="repeat-one";switched->failNext=true;pollAudio();
+        for(int i=0;i<4;++i)pump();require(requested.empty() && !unplayableSkipAt,"single-repeat decode failure changed songs");
+        seedQueue({"played","good"},{});libraryQualityChange=true;switched->failNext=true;pollAudio();
+        for(int i=0;i<4;++i)pump();require(requested.empty() && !unplayableSkipAt,"quality-switch failure changed songs");
+        seedQueue({"played","good"},{});
+        switched->events.push_back({musxi::AudioEventKind::Error,switched->state.generation-1,{musxi::AudioError::BackendFailure,0}});pollAudio();
+        require(!unplayableSkipAt,"stale backend error skipped the current song");
+        seedQueue({"played","next","good"},{});
+        require(invoke("library.skip",{{"delta",1}}).code==0,"manual next before EOF rejected");finish();
+        for(int i=0;i<4;++i)pump();
+        require(requested==std::vector<std::string>{"next"} && audioTrackId=="next","old EOF overrode a manual next request");
+        seedQueue({"played","good"},{});
+        libraryQualityChange=true;cloudOperation="audio";requestGeneration=cloudGeneration;
+        libraryOperationKind="audio";libraryOperationStatus="pending";
+        std::promise<Json> qualityFailure;cloudFuture=qualityFailure.get_future();finish();
+        require(cloudAutoNext,"EOF during a quality download was lost");
+        qualityFailure.set_value({{"ok",false},{"error","Quality unavailable"}});
+        for(int i=0;i<5;++i)pump();
+        require(audioTrackId=="good" && switched->state.playing,"failed quality download swallowed natural next playback");
+        seedQueue({"played","bad"},{});
+        cloudRequestOverride=[&](const Json& request){requested.push_back(request.value("id",""));return Json{{"ok",false},{"error","Unavailable"}};};
+        invoke("library.skip",{{"delta",1}});pump();pump();
+        require(switched->state.playing,"download failure prematurely interrupted the old song");
+        for(int i=0;i<8;++i){if(unplayableSkipAt)unplayableSkipAt=1;pump();}
+        require(requested.size()==2 && !switched->state.playing && !unplayableSkipAt,"all unavailable downloads left old playback running");
+        cloudRequestOverride=nullptr;switched->brokenPaths.clear();switched->rejectedPaths.clear();localTracks=Json::array();
+        cancelUnplayableSkip();libraryNextPlay=nullptr;closeAudio();
+    }
     cloud::testProfile=true;
     Json aggregate={{"playlist",{{"id","musxi:cloud-favorites"},{"name","云端收藏整合"}}},{"playlists",Json::array({{{"id","qq:liked"},{"editable",true}}})}};
     aggregate["tracks"]=Json::array({{{"id","merged"},{"name","Song"},{"platforms",Json::array({"netease","qq"})},{"sources",Json::array({{{"id","netease:song"}},{{"id","qq:song"}}})}}});
@@ -188,8 +301,20 @@ int main() try {
     require(aggregateSnapshot["favoritesCount"]==1,"aggregate count missing from library state");
     require(aggregateSnapshot["tracks"][0]["platforms"].size()==2 && !aggregateSnapshot["tracks"][0].contains("sources"),"aggregate tags or redaction failed");
     auto updated=aggregate;updated["tracks"]=Json::array();updated["message"]="Updated";
+    opened=true;audioTrackId="merged";currentPlaybackTrack=aggregate["tracks"][0];
+    libraryNowMenu={{"id","merged"},{"liked",true}};
+    const auto favoriteQueue=cloudQueue;const auto favoriteGeneration=switched->state.generation;
+    const auto favoritePlaying=switched->state.playing;
+    cloudRequestOverride=[&](const Json& request){
+        require(request.value("op","")=="song_menu" && request.at("track")==currentPlaybackTrack,"favorite edit refreshed the wrong playback menu");
+        return Json{{"ok",true},{"data",{{"id","merged"},{"liked",false},{"playlists",Json::array()}}}};
+    };
     complete("song_update",{{"ok",true},{"data",updated}});
     require(cloudPlaylistId=="musxi:cloud-favorites" && cloudTracks.empty(),"favorite edit did not refresh aggregate view");
+    cloudTick();
+    require(!libraryNowMenu.value("liked",true),"favorite edit retained stale now-playing heart state");
+    require(cloudQueue==favoriteQueue && switched->state.generation==favoriteGeneration && switched->state.playing==favoritePlaying,"favorite edit changed playback or queue");
+    cloudRequestOverride=nullptr;closeAudio();
     complete("tracks",{{"ok",true},{"data",aggregate}});
     complete("logout",{{"ok",true},{"data",{{"platform","netease"},{"playlists",Json::array()},{"profile",{{"name","QQ"}}}}}});
     require(cloudPlaylistId.empty() && cloudTracks.empty(),"logout retained departed provider favorites");

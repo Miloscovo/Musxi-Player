@@ -2,6 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createNativeClient } from '../src/native/client.ts';
 import { parseLibraryState, parseLyrics, safeImage } from '../src/native/library.ts';
+import { PlaylistPages } from '../src/composables/playlistPages.ts';
+import type { Track } from '../src/native/library.ts';
 const snapshot = {
   connected: false, busy: false, user: '', status: '', notice: '', qr: '', avatar: '',
   playlists: [], tracks: [], trackCount: 0, playlistId: '', playlistName: '', search: [],
@@ -9,6 +11,46 @@ const snapshot = {
   now: { name: '', artist: '', cover: '' }, menu: { id: '', liked: false, canFavorite: false, playlists: [] },
   operation: { id: '0', status: 'idle', kind: '', error: '' }
 };
+
+test('confirmed playlist edits replace all loaded pages, including shifted and emptied pages', async () => {
+  for (const removed of [0, 60, 100]) {
+    const cache = new PlaylistPages();
+    let tracks: Track[] = Array.from({ length: 101 }, (_, index) => ({ id: String(index), name: String(index), artist: '', cover: '', duration: 0, count: 0, editable: false }));
+    let edit = '0';
+    const read = async (page: number) => parseLibraryState({ ...snapshot, playlistId: 'liked', trackCount: tracks.length,
+      tracks: tracks.slice((page - 1) * 50, page * 50), operation: { id: edit, status: 'completed', kind: 'song_update', error: '' } });
+    for (let page = 1; page <= 3; page++) await cache.update(await read(page), page, read);
+    tracks = tracks.filter(track => track.id !== String(removed)); edit = '1';
+    const result = await cache.update(await read(3), 3, read);
+    assert.equal(result?.page, 2);
+    assert.deepEqual(result?.state.tracks, tracks);
+    assert.equal(new Set(result?.state.tracks.map(track => track.id)).size, 100);
+    assert.deepEqual((await cache.update(await read(2), 2, read))?.state.tracks, tracks);
+  }
+});
+
+test('merged favorites replace platform labels and representatives even when the count is unchanged', async () => {
+  const cache = new PlaylistPages();
+  const row: Track = { id: 'netease:one', name: 'Song', artist: '', cover: '', duration: 0, count: 0, editable: false, platforms: ['netease', 'qq'] };
+  const state = parseLibraryState({ ...snapshot, playlistId: 'musxi:cloud-favorites', trackCount: 1, tracks: [row] });
+  await cache.update(state, 1, async () => state);
+  const changed = { ...state, tracks: [{ ...row, id: 'qq:one', platforms: ['qq' as const] }], operation: { id: '1', status: 'completed' as const, kind: 'song_update', error: '' } };
+  assert.deepEqual((await cache.update(changed, 1, async () => changed))?.state.tracks, changed.tracks);
+  const empty = { ...changed, trackCount: 0, tracks: [], operation: { ...changed.operation, id: '2' } };
+  assert.deepEqual((await cache.update(empty, 1, async () => empty))?.state.tracks, []);
+});
+
+test('page refresh refuses mixed playlist snapshots and retries after a racing operation', async () => {
+  const cache = new PlaylistPages();
+  const before = parseLibraryState({ ...snapshot, playlistId: 'liked', trackCount: 51 });
+  await cache.update(before, 1, async () => before);
+  const changed = { ...before, operation: { id: '1', status: 'completed' as const, kind: 'song_update', error: '' } };
+  assert.equal(await cache.update(changed, 2, async () => ({ ...changed, playlistId: 'other' })), null);
+  const later = { ...changed, operation: { ...changed.operation, id: '2', kind: 'song_menu' } };
+  const pages: number[] = [];
+  assert.ok(await cache.update(later, 2, async page => { pages.push(page); return later; }));
+  assert.deepEqual(pages, [1]);
+});
 test('library snapshot rejects invalid rows and operation status', () => {
   assert.deepEqual(parseLibraryState(snapshot), snapshot);
   assert.throws(() => parseLibraryState({ ...snapshot, tracks: [{ id: '1' }] }), { code: 502 });
@@ -63,6 +105,10 @@ test('library client sends typed business actions and preserves operation IDs', 
   ]);
   await native.library.importLocal();
   assert.deepEqual(seen.at(-1), { version: 1, command: 'library.importLocal', params: {} });
+  await native.library.removeLocalFolder('local-folder:1');
+  assert.deepEqual(seen.at(-1), { version: 1, command: 'library.removeLocalFolder', params: { id: 'local-folder:1' } });
+  await native.library.removeLocalTrack('local:1','musxi:local');
+  assert.deepEqual(seen.at(-1), { version: 1, command: 'library.removeLocalTrack', params: { id: 'local:1', playlistId: 'musxi:local' } });
   await native.library.play('local', 'local:1');
   assert.deepEqual(seen.at(-1), { version: 1, command: 'library.play', params: { source: 'local', id: 'local:1' } });
   await native.library.queueNext('local', 'local:1');

@@ -125,6 +125,27 @@ int main(int argc,char** argv) {
         require(musxi::applicationLibrary("library.playPlaylist","{\"id\":\"queue-playlist\"}").code==0,"cloud play-all rejected");
         require(cloudQueue.size()==2 && cloudQueue[0]["id"]=="playlist-second" && cloudQueue[1]["id"]=="playlist-first" && libraryNextPlay["id"]=="playlist-first" && libraryNextPlay["source"]=="queue","cloud play-all did not preserve/deduplicate the queue or schedule its first song");
         libraryNextPlay=nullptr;
+        // Real EOF -> corrupt downloaded audio -> immediate next, without a user command.
+        closeAudio();cancelUnplayableSkip();libraryQualityChange=libraryPlatformChange=libraryPlayPaused=false;
+        cloudConnected=true;localActive=false;playbackOrder="sequential";cloudCurrent=-1;
+        cloudQueue=Json::array({{{"id","auto-start"},{"name","Start"}},{{"id","auto-broken"},{"name","Broken"}},{{"id","auto-good"},{"name","Good"}}});
+        std::vector<std::string> autoRequests;
+        cloudRequestOverride=[&](const Json& request) {
+            const auto id=request.value("id","");autoRequests.push_back(id);
+            const auto path=folder/(id+"-"+std::to_string(GetCurrentProcessId())+".wav");
+            if(id=="auto-broken"){std::ofstream broken(path,std::ios::binary);broken<<"not an audio file";}
+            else fs::copy_file(folder/"source.wav",path,fs::copy_options::overwrite_existing);
+            return Json{{"ok",true},{"data",{{"path",utf8(path.wstring())},{"track",{{"id",id},{"name",id},{"artist","Test"},{"album","Test"}}}}}};
+        };
+        require(musxi::applicationLibrary("library.play","{\"source\":\"queue\",\"id\":\"auto-start\"}").code==0,"automatic next fixture rejected");
+        cloudTick();cloudTick();s=waitState([](auto state){return state.playing && !state.pending;});
+        musxi::applicationPlayerCommand(musxi::PlayerCommand::Seek,s.durationMs>80?s.durationMs-80:0);
+        const auto autoDeadline=GetTickCount64()+6000;
+        do{cloudTick();pollAudio();s=musxi::applicationPlayerState();if(s.trackId=="auto-good" && s.playing && !s.pending)break;Sleep(5);}while(GetTickCount64()<autoDeadline);
+        require(s.trackId=="auto-good" && s.playing && !s.pending && autoRequests==std::vector<std::string>({"auto-start","auto-broken","auto-good"}),
+            "real EOF/decode failure did not advance immediately to playable audio");
+        require(libraryPlayTrackId=="auto-good" && libraryPlayGeneration==cloudGeneration && libraryOperationStatus=="completed","real auto-next request state was not synchronized");
+        cloudRequestOverride=nullptr;closeAudio();
         const auto profile=folder/("history-check-"+std::to_string(GetCurrentProcessId()));
         fs::create_directories(profile/"cloud-cache");
         const auto retained=profile/"cloud-cache"/"saved.wav";

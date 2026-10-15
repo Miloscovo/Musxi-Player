@@ -47,8 +47,7 @@ ULONGLONG unplayableSkipAt=0;
 std::string unplayableTrackId;
 std::set<std::string> unplayableTracks;
 void cancelUnplayableSkip(){unplayableSkipAt=0;unplayableTrackId.clear();unplayableTracks.clear();}
-// The song an audio request is actually for. Auto-advance goes through skip(),
-// which does not update libraryPlayTrackId, so failures are located by this.
+// Download replies can resolve to a different platform ID than the queue request.
 std::string audioRequestId;
 int cloudCurrent=-1;
 int cloudGeneration=0,requestGeneration=0,searchPage=1,searchTotal=0;
@@ -180,7 +179,7 @@ bool restorePlatformSource() {
     return true;
 }
 musxi::PlayerResult setPlaying(bool requested) {
-    if(!requested)cancelUnplayableSkip();
+    cancelUnplayableSkip();
     libraryPlayPaused=!requested;
     const bool retry=requested && audioBackend().snapshot().phase=="failed" &&
         libraryOperationKind=="audio" && libraryOperationStatus=="failed" && audioTrackId==libraryPlayTrackId;
@@ -190,7 +189,6 @@ musxi::PlayerResult setPlaying(bool requested) {
     return playerResult(result);
 }
 musxi::PlayerService& playerService();
-bool skipLocal(int delta);
 int nextQueueIndex(int delta,int current=-2) {
     if(current==-2)current=cloudCurrent;
     const int size=static_cast<int>(cloudQueue.size());
@@ -222,9 +220,29 @@ int nextUnplayedQueueIndex() {
     return candidates[std::uniform_int_distribution<std::size_t>(0,candidates.size()-1)(random)];
 }
 void skip(int delta) {
-    if(skipLocal(delta))return;
-    const int failed=unplayableQueueIndex();
-    if(!cloudQueue.empty())cloudPlay(nextQueueIndex(delta,failed>=0?failed:-2),true);
+    const auto result=musxi::applicationLibrary("library.skip",Json{{"delta",delta}}.dump());
+    if(result.code!=0 && !cloudQueue.empty())notice(cloud::toWide(result.message));
+}
+void schedulePlayback(Json next,bool resetFailures=true) {
+    if(libraryOperationStatus=="pending" && libraryOperationKind=="audio" &&
+       audioTrackId==libraryPlayTrackId && audioBackend().snapshot().pending)closeAudio();
+    ++cloudGeneration;++libraryOperationId;libraryOperationKind="audio";
+    libraryPlayPaused=false;libraryOperationStatus="pending";libraryOperationError.clear();libraryPlayGeneration=-1;
+    libraryPlayTrackId=next.value("id","");libraryNextPlay=std::move(next);cloudAutoNext=false;
+    if(resetFailures)cancelUnplayableSkip();
+}
+bool scheduleFailedTrackSkip(const std::string& id,ULONGLONG delay) {
+    if(libraryQualityChange || libraryPlatformChange || libraryPlayPaused || id.empty())return false;
+    unplayableTrackId=id;unplayableTracks.insert(id);
+    if(nextUnplayedQueueIndex()<0) {
+        const bool exhausted=playbackOrder!="repeat-one" && unplayableQueueIndex()>=0;
+        cancelUnplayableSkip();
+        if(exhausted && audioBackend().snapshot().requestedPlaying){audioBackend().pause();syncAudioView();}
+        return false;
+    }
+    unplayableSkipAt=GetTickCount64()+delay;
+    if(libraryOperationStatus=="pending" && libraryOperationKind=="audio")libraryOperationStatus="cancelled";
+    return true;
 }
 musxi::PlayerResult seekMilliseconds(std::uint32_t milliseconds) {
     cancelUnplayableSkip();
@@ -270,13 +288,17 @@ void pollAudio() {
     audioBackend().poll();syncAudioView();
     collectAudioCaches();
     const auto audio=audioBackend().snapshot();
-    if(audio.opened && audio.playing && !audio.pending && audio.phase!="failed" && recentRecordedGeneration!=cloudGeneration && libraryPlayGeneration==cloudGeneration &&
+    if(audio.opened && audio.playing && !audio.pending && audio.phase!="failed" && libraryPlayGeneration==cloudGeneration &&
+       libraryNextPlay.is_null() && !(cloudBusy() && cloudOperation=="audio") &&
        audioTrackId==libraryPlayTrackId && currentPlaybackTrack.is_object() && currentPlaybackTrack.value("id","")==audioTrackId) {
-        if(!libraryQualityChange || audioTrackId!=recentLastPlayedId) {
-            auto track=currentPlaybackTrack;track["duration"]=audio.durationMs;recordRecentTrack(track);
+        cancelUnplayableSkip();
+        if(recentRecordedGeneration!=cloudGeneration) {
+            if(!libraryQualityChange || audioTrackId!=recentLastPlayedId) {
+                auto track=currentPlaybackTrack;track["duration"]=audio.durationMs;recordRecentTrack(track);
+            }
+            recentLastPlayedId=audioTrackId;
+            recentRecordedGeneration=cloudGeneration;
         }
-        recentLastPlayedId=audioTrackId;
-        recentRecordedGeneration=cloudGeneration;
     }
     if(!platformRollback.path.empty() && libraryPlayGeneration==cloudGeneration && !audio.pending) {
         if(audio.phase=="failed") {restorePlatformSource();return;}
@@ -291,9 +313,15 @@ void pollAudio() {
     for(const auto& event:audioBackend().takeEvents()) {
         if(event.generation!=audioBackend().snapshot().generation)continue;
         if(event.kind==musxi::AudioEventKind::Ended) {
+            if(!libraryNextPlay.is_null() || (cloudBusy() && cloudOperation=="audio" && !libraryQualityChange))continue;
             if(!cloudQueue.empty() && cloudBusy())cloudAutoNext=true;
             else advancePlayback();
-        } else notice(L"音频播放中断，请重新播放或选择其他歌曲");
+        } else {
+            const bool skipFailed=audio.phase=="failed" && audio.requestedPlaying &&
+                libraryPlayGeneration==cloudGeneration && audioTrackId==libraryPlayTrackId &&
+                scheduleFailedTrackSkip(audioTrackId,0);
+            notice(skipFailed?L"该歌曲播放失败，正在尝试下一首":L"音频播放中断，请重新播放或选择其他歌曲");
+        }
     }
     syncAudioView();
 }
@@ -430,12 +458,7 @@ void cloudTick() {
             // An unplayable queue song (rights, membership, removed) moves on after a
             // short notice instead of leaving playback stuck; one lap of the queue at most.
             if(op=="audio" && requestGeneration==cloudGeneration && !libraryQualityChange && !platformChange && !libraryPlayPaused && !cloudQueue.empty()) {
-                unplayableTrackId=audioRequestId;unplayableTracks.insert(audioRequestId);
-                if(nextUnplayedQueueIndex()>=0) {
-                    unplayableSkipAt=GetTickCount64()+3000;cloudStatus+=L"，3 秒后播放下一首";
-                    // The notice already reports it; a failed operation would show it again.
-                    if(libraryOperationStatus=="pending" && libraryOperationKind=="audio")libraryOperationStatus="cancelled";
-                } else cancelUnplayableSkip();
+                if(scheduleFailedTrackSkip(audioRequestId,3000))cloudStatus+=L"，3 秒后播放下一首";
             }
             if(op!="avatar" && op!="vip_auto") {cloudPolling=false;notice(cloudStatus);}
             if(result.value("fatal",false)) {cloudBridge.stop();cloudInitialized=false;cloudConnected=false;}
@@ -508,6 +531,9 @@ void cloudTick() {
                     cloudTracks=data.at("tracks");
                 }
                 cloudStatus=cloudText(data,"message");notice(cloudStatus);cloudSaveSnapshot(data);
+                libraryMenu=Json::object();
+                if(opened && currentPlaybackTrack.is_object() && audioTrackId.rfind("local:",0)!=0)
+                    cloudRequest({{"op","song_menu"},{"id",audioTrackId},{"menuId",audioTrackId},{"track",currentPlaybackTrack}});
             } else if(op=="audio") {
                 auto path=cloudText(data,"path");
                 if(requestGeneration!=cloudGeneration) {if(!path.empty()) DeleteFileW(path.c_str());}
@@ -522,7 +548,11 @@ void cloudTick() {
                     cloudCurrent=-1;
                     cloudTempPath=path;
                     auto playbackResult=loadAndPlayAudio(path,data["track"].value("id",""));
-                    if(!playbackResult) {if(!restorePlatformSource()) {closeAudio();cloudStatus=L"Windows 无法播放该音频编码，请尝试其他歌曲";notice(cloudStatus);}}
+                    if(!playbackResult) {if(!restorePlatformSource()) {
+                        closeAudio();cloudStatus=L"Windows 无法播放该音频编码，请尝试其他歌曲";
+                        if(scheduleFailedTrackSkip(audioRequestId,0))cloudStatus=L"该歌曲播放失败，正在尝试下一首";
+                        notice(cloudStatus);
+                    }}
                     else {
                         currentQuality=data.value("quality","");
                         if(libraryPlatformChange) {libraryNowMenu=Json::object();libraryQualities=Json::object();}
@@ -540,7 +570,7 @@ void cloudTick() {
                             const auto seekResult=audioBackend().seek(previousAudio.positionMs);
                             if(!seekResult)notice(L"已切换，但无法恢复播放位置");
                         }
-                        cloudAutoNext=false;cancelUnplayableSkip();
+                        cloudAutoNext=false;unplayableSkipAt=0;
                         cloudNowTitle=cloudText(data["track"],"name");cloudNowArtist=cloudText(data["track"],"artist");cloudNowCover=data["track"].value("cover","");
                         auto id=data["track"].value("id","");
                         for(int i=0;i<(int)cloudQueue.size();++i) if(cloudQueue[i].value("id","")==id) {cloudCurrent=i;break;}
@@ -582,10 +612,13 @@ void cloudTick() {
     if(unplayableSkipAt && GetTickCount64()>=unplayableSkipAt && !cloudBusy() && libraryNextPlay.is_null()) {
         unplayableSkipAt=0;
         const int index=nextUnplayedQueueIndex();
-        if(index>=0 && cloudConnected) {
-            ++libraryOperationId;libraryOperationKind="audio";libraryOperationStatus="pending";libraryOperationError.clear();
-            libraryPlayPaused=false;libraryPlayTrackId=cloudQueue[index].value("id","");
-            libraryNextPlay={{"source","queue"},{"id",libraryPlayTrackId}};
+        if(index>=0 && cloudQueue[index].value("id","").rfind("local:",0)==0) {
+            const auto id=cloudQueue[index].value("id","");
+            const auto found=std::find_if(localTracks.begin(),localTracks.end(),[&](const Json& row){return row.value("id","")==id;});
+            if(found!=localTracks.end())playLocal((int)std::distance(localTracks.begin(),found),false);
+            else if(scheduleFailedTrackSkip(id,0))notice(L"本地歌曲不存在，正在尝试下一首");
+        } else if(index>=0 && cloudConnected) {
+            schedulePlayback({{"source","queue"},{"id",cloudQueue[index].value("id","")}},false);
         } else cancelUnplayableSkip();
     }
 }

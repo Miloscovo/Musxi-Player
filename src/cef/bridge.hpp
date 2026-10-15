@@ -38,4 +38,5 @@ void browserImeBounds(const std::vector<CefRect>& bounds);
 int browserPixelAlpha(int x,int y);
 inline constexpr unsigned RecoveryFailed=0x8000+42;
 inline constexpr wchar_t DragRegionProperty[]=L"MusxiDragRegion";
+inline constexpr wchar_t ResizeViewProperty[]=L"MusxiResizeView";
 }

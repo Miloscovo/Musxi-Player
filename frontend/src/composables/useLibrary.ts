@@ -2,11 +2,12 @@ import type { MusicPlatform } from '../native/library';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { native } from '../native/client';
 import type { LibraryState, PlaybackOrder, AudioQuality } from '../native/library';
+import { PlaylistPages } from './playlistPages';
 export function useLibrary() {
   const [state, setState] = useState<LibraryState | null>(null);
   const [error, setError] = useState(''); const [pending, setPending] = useState(false); const [page, setPage] = useState(1);
   const runtime = useRef({ active: false, pending: false, page: 1, state: null as LibraryState | null,
-    controller: new AbortController(), task: null as Promise<boolean> | null });
+    controller: new AbortController(), task: null as Promise<boolean> | null, tracks: new PlaylistPages() });
   const actions = useMemo(() => {
     const r = runtime.current;
     function changePage(next: number) { r.page = next; setPage(next); }
@@ -19,7 +20,13 @@ export function useLibrary() {
           const value = await native.library.getState(requestedPage, signal);
           if (r.active && !signal.aborted && requestedPage === r.page) {
             if (r.state && value.playlistId !== r.state.playlistId && r.page !== 1) changePage(1);
-            else { r.state = value; setState(value); return true; }
+            else {
+              const snapshot = await r.tracks.update(value, requestedPage, page => native.library.getState(page, signal));
+              if (snapshot && r.active && !signal.aborted && requestedPage === r.page) {
+                if (snapshot.page !== r.page) changePage(snapshot.page);
+                r.state = snapshot.state; setState(snapshot.state); return true;
+              }
+            }
           }
         } catch (e) { if (r.active && !signal.aborted) setError(String(e)); }
         return false;
@@ -64,6 +71,8 @@ export function useLibrary() {
       recentRemove: (id:string) => run(signal=>native.library.recentRemove(id,signal)),
       recentClear: () => run(signal=>native.library.recentClear(signal)),
       importLocal: () => run(signal => native.library.importLocal(signal)),
+      removeLocalFolder: (id: string) => run(signal => native.library.removeLocalFolder(id, signal)),
+      removeLocalTrack: (id: string, playlistId: string) => run(signal => native.library.removeLocalTrack(id, playlistId, signal)),
       skip: (delta: -1 | 1) => playback(signal => native.library.skip(delta, signal)),
       menu: (id: string) => run(signal => native.library.menu(id, signal)),
       favorite: (id: string, enabled: boolean, platform?: MusicPlatform) => run(signal => native.library.favorite(id, enabled, signal, platform)),

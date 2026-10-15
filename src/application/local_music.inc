@@ -5,6 +5,7 @@ bool localView=false,localActive=false,localLoaded=false,localImportPending=fals
 int localCurrent=-1;
 Json localTracks=Json::array();
 Json localFolders=Json::array();
+size_t localIdHighWater=0;
 std::string localFolderId;
 std::future<Json> localScan;
 std::atomic_bool localCancelled{false};
@@ -16,6 +17,15 @@ bool localFormat(const fs::path& path) {
 }
 std::wstring localPathKey(const fs::path& path) {
     auto value=path.lexically_normal().wstring();CharLowerBuffW(value.data(),static_cast<DWORD>(value.size()));return value;
+}
+size_t localIdMaximum(const Json& tracks,const Json& folders,size_t number=0) {
+    for(const auto* rows:{&tracks,&folders})for(const auto& row:*rows) {
+        const auto id=row.value("id","");const auto colon=id.find(':');
+        const auto digits=colon==std::string::npos?std::string{}:id.substr(colon+1);
+        if(!digits.empty() && digits.find_first_not_of("0123456789")==std::string::npos)
+            number=std::max(number,static_cast<size_t>(std::stoull(digits)));
+    }
+    return number;
 }
 void loadLocalCatalog(const fs::path& file) {
     if(localLoaded)return;localLoaded=true;
@@ -48,27 +58,29 @@ void loadLocalCatalog(const fs::path& file) {
             }
             row["folders"]=Json::array({found->at("id")});
         }
+        localIdHighWater=localIdMaximum(localTracks,localFolders,std::max(localIdHighWater,saved.value("idHighWater",size_t{})));
     } catch(...) {notice(L"本地音乐记录读取失败，请重新导入文件夹");}
 }
-bool saveLocalCatalog(const Json& rows,const fs::path& file,const Json& folders=Json::array()) {
+bool saveLocalCatalog(const Json& rows,const fs::path& file,const Json& folders=Json::array(),size_t highWater=0) {
     auto temporary=file;temporary+=L".tmp";
-    std::ofstream stream(temporary,std::ios::binary);stream<<Json{{"version",2},{"tracks",rows},{"folders",folders}}.dump(2);stream.close();
+    std::ofstream stream(temporary,std::ios::binary);stream<<Json{{"version",2},{"tracks",rows},{"folders",folders},
+        {"idHighWater",localIdMaximum(rows,folders,std::max(localIdHighWater,highWater))}}.dump(2);stream.close();
     return !stream.fail() && MoveFileExW(temporary.c_str(),file.c_str(),MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH);
 }
-Json scanLocalFolder(const fs::path& folder,Json existing,Json folders=Json::array()) {
+Json scanLocalFolder(const fs::path& folder,Json existing,Json folders=Json::array(),size_t number=0) {
+    number=localIdMaximum(existing,folders,number);
+    const auto nextId=[&] {if(number==SIZE_MAX)throw std::overflow_error("Local ID limit");return std::to_string(++number);};
     const auto folderKey=localPathKey(folder);
     auto found=std::find_if(folders.begin(),folders.end(),[&](const Json& item){return localPathKey(fs::u8path(item.at("path").get<std::string>()))==folderKey;});
     if(found==folders.end()) {
         const auto name=folder.filename().empty()?folder.root_name():folder.filename();
-        folders.push_back({{"id","local-folder:"+std::to_string(folders.size()+1)},{"path",folder.u8string()},{"name",name.u8string()}});
+        folders.push_back({{"id","local-folder:"+nextId()},{"path",folder.u8string()},{"name",name.u8string()}});
         found=std::prev(folders.end());
     }
     const auto folderId=found->at("id").get<std::string>();
     std::map<std::wstring,bool> seen;
-    size_t number=0;
     for(const auto& row:existing) {
         seen[localPathKey(fs::u8path(row.at("path").get<std::string>()))]=true;
-        number=std::max(number,static_cast<size_t>(std::stoull(row.at("id").get<std::string>().substr(6))));
     }
     size_t added=0,skipped=0;std::error_code error;
     fs::recursive_directory_iterator it(folder,fs::directory_options::skip_permission_denied,error),end;
@@ -80,7 +92,7 @@ Json scanLocalFolder(const fs::path& folder,Json existing,Json folders=Json::arr
             const auto key=localPathKey(entry.path());
             if(!seen.count(key))try {
                 musxi::FfmpegDecoder decoder(&localCancelled);decoder.open(entry.path().wstring());
-                existing.push_back({{"id","local:"+std::to_string(++number)},{"path",entry.path().u8string()},{"folders",Json::array({folderId})},
+                existing.push_back({{"id","local:"+nextId()},{"path",entry.path().u8string()},{"folders",Json::array({folderId})},
                     {"name",entry.path().filename().u8string()},{"artist","未知歌手"},{"album",""},{"cover",""},
                     {"duration",std::max<std::int64_t>(0,decoder.info().durationMs)},{"count",0},{"editable",false}});
                 seen[key]=true;++added;
@@ -94,12 +106,12 @@ Json scanLocalFolder(const fs::path& folder,Json existing,Json folders=Json::arr
         error.clear();it.increment(error);
         if(error){++skipped;error.clear();}
     }
-    return {{"tracks",existing},{"folders",folders},{"added",added},{"skipped",skipped}};
+    return {{"tracks",existing},{"folders",folders},{"added",added},{"skipped",skipped},{"idHighWater",number}};
 }
 void startLocalScan(const fs::path& folder) {
     if(localScan.valid())throw std::runtime_error("正在导入音乐，请稍后再试");
     loadLocalCatalog(cloud::dataDir()/L"local-music.json");localCancelled=false;
-    localScan=std::async(std::launch::async,[folder,rows=localTracks,folders=localFolders]{return scanLocalFolder(folder,rows,folders);});
+    localScan=std::async(std::launch::async,[folder,rows=localTracks,folders=localFolders,number=localIdHighWater]{return scanLocalFolder(folder,rows,folders,number);});
 }
 void chooseLocalFolder() {
     IFileOpenDialog* dialog=nullptr;
@@ -127,7 +139,9 @@ void localTick() {
     try {
         auto result=localScan.get();auto rows=result.at("tracks");
         auto folders=result.at("folders");
-        const bool saved=saveLocalCatalog(rows,cloud::dataDir()/L"local-music.json",folders);
+        const auto highWater=result.at("idHighWater").get<size_t>();
+        const bool saved=saveLocalCatalog(rows,cloud::dataDir()/L"local-music.json",folders,highWater);
+        localIdHighWater=highWater;
         localTracks=std::move(rows);
         localFolders=std::move(folders);
         notice(L"已导入 "+std::to_wstring(result.value("added",size_t{}))+L" 首歌曲，跳过 "+std::to_wstring(result.value("skipped",size_t{}))+
@@ -151,10 +165,12 @@ Json localVisibleTracks() {
     if(localFolderId.empty())return localTracks;
     auto result=Json::array();for(const auto& row:localTracks)if(inLocalFolder(row,localFolderId))result.push_back(row);return result;
 }
-void playLocal(int index) {
+void playLocal(int index,bool resetFailures=true) {
     if(index<0 || index>=static_cast<int>(localTracks.size()))return;
     if(!closeAudio()){notice(L"无法释放上一首歌曲，请重试");return;}
-    ++cloudGeneration;++libraryOperationId;libraryNextPlay=nullptr;cloudAutoNext=false;cloudCurrent=-1;cancelUnplayableSkip();libraryQualityChange=false;currentQuality.clear();
+    ++cloudGeneration;++libraryOperationId;libraryNextPlay=nullptr;cloudAutoNext=false;cloudCurrent=-1;
+    if(resetFailures)cancelUnplayableSkip();else unplayableSkipAt=0;
+    libraryQualityChange=false;currentQuality.clear();
     for(int i=0;i<(int)cloudQueue.size();++i)if(cloudQueue[i].value("id","")==localTracks[index].value("id","")){cloudCurrent=i;break;}
     localActive=true;localCurrent=index;const auto& row=localTracks[index];
     currentPlaybackTrack=row;
@@ -163,10 +179,6 @@ void playLocal(int index) {
     cloudNowTitle=cloud::toWide(row.value("name",""));cloudNowArtist=cloud::toWide(row.value("artist",""));cloudNowCover.clear();
     if(!loadAndPlayAudio(fs::u8path(row.at("path").get<std::string>()).wstring(),libraryPlayTrackId)) {
         libraryOperationStatus="failed";libraryOperationError="无法打开本地歌曲，文件可能已移动或删除";
+        if(scheduleFailedTrackSkip(libraryPlayTrackId,0))notice(L"本地歌曲播放失败，正在尝试下一首");
     }
-}
-bool skipLocal(int delta) {
-    if(!localActive)return false;
-    if(!cloudQueue.empty())cloudPlay(nextQueueIndex(delta),true);
-    return true;
 }

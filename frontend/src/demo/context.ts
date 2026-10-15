@@ -22,6 +22,7 @@ export function createDemoTransport(): CefTransport {
   const listeners = new Map<number, (reply: string) => void>();
   let playbackSettings = { defaultQuality: '128', outputDevice: '', devices: [{ id: 'demo-output', name: '演示音频设备' }] };
   let requestId = 0, operationId = 0;
+  let localId = 0;
   let timer: ReturnType<typeof setInterval> | undefined;
   let lastTick = Date.now();
   const queue = () => library.queue!;
@@ -154,11 +155,30 @@ export function createDemoTransport(): CefTransport {
       }
       case 'library.importLocal':
         if (!lists.has('local-folder:demo')) {
-          const rows = demoSongs().slice(0, 3).map((song, index) => ({ ...song, id: `local:${index}`, name: `${song.name}.flac` }));
+          const rows = demoSongs().slice(0, 3).map(song => ({ ...song, id: `local:${localId++}`, name: `${song.name}.flac` }));
           songs.push(...rows); lists.set('local-folder:demo', rows);
           library.localPlaylists!.push({ id: 'local-folder:demo', name: '演示音乐文件夹', artist: '', cover: '', duration: 0, count: rows.length, editable: false });
         }
         library.notice = '已添加虚拟演示文件夹，不读取真实文件。'; break;
+      case 'library.removeLocalFolder': {
+        if(!library.localPlaylists?.some(list=>list.id===p.id))fail('本地文件夹不存在',404);
+        const removed=new Set((lists.get(p.id) || []).map(song=>song.id));
+        lists.delete(p.id);library.localPlaylists=library.localPlaylists!.filter(list=>list.id!==p.id);
+        for(let index=songs.length-1;index>=0;index--)if(removed.has(songs[index].id))songs.splice(index,1);
+        library.queue=queue().filter(song=>!removed.has(song.id));
+        if(library.playlistId===p.id){library.playlistId='musxi:local';library.playlistName='本地歌曲整合';}
+        library.notice='已移除音乐文件夹，磁盘文件未删除。';break;
+      }
+      case 'library.removeLocalTrack': {
+        const scopes=library.localPlaylists!.filter(list=>p.playlistId==='musxi:local' || list.id===p.playlistId);
+        if(!scopes.some(list=>lists.get(list.id)?.some(song=>song.id===p.id)))fail('歌曲不在该本地歌单中',404);
+        for(const list of scopes){const rows=(lists.get(list.id) || []).filter(song=>song.id!==p.id);lists.set(list.id,rows);list.count=rows.length;}
+        if(!library.localPlaylists!.some(list=>lists.get(list.id)?.some(song=>song.id===p.id))) {
+          const index=songs.findIndex(song=>song.id===p.id);if(index>=0)songs.splice(index,1);
+          library.queue=queue().filter(song=>song.id!==p.id);
+        }
+        library.notice='已从歌单移除歌曲，磁盘文件未删除。';break;
+      }
       case 'library.queueNext': {
         const song = track(p.id); if (song.id === player.trackId) fail('歌曲正在播放');
         library.queue = queue().filter(row => row.id !== p.id);

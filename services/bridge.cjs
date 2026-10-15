@@ -236,11 +236,11 @@ class Adapter {
       try {
         if(p.favorite) {
           const first=(await this.playlistTracks(p))[0];
-          if(first?.cover)p.cover=first.cover;
+          if(first?.cover){p.cover=first.cover;p.automaticCover=true;}
         } else {
           const body=await this.api('playlist_track_all_new',{listid:p.id,page:1,pagesize:1});
           const first=arrayAt(body.data,['info','songs','lists'])[0];
-          if(first && cover(first))p.cover=cover(first);
+          if(first && cover(first)){p.cover=cover(first);p.automaticCover=true;}
         }
       } catch { /* Missing artwork must not prevent playlist synchronization. */ }
     }
@@ -375,6 +375,7 @@ class Adapter {
           if(after.some(row=>this.sameSong(row,t))!==adding) throw Error('酷狗尚未返回预期结果，请同步歌单后查看');
         }
         target.count=after.length;
+        if(target.automaticCover || !target.cover)target.cover=after[0]?.cover || '';
         return {id:t.id,playlist:target,tracks:after,playlists:lists,message:kind==='favorite'?(adding?'已收藏到“我喜欢”':'已取消收藏'):(submitted?'已添加到歌单':'这首歌曲已在该歌单中')};
       }
       case 'covers': {
