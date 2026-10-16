@@ -5,6 +5,8 @@ import { Button } from '../components/ui/button';
 import { useLyrics } from '../composables/useLyrics';
 import { activeLyricLine, observeLyricDragRegions } from '../composables/lyrics';
 import { useLyricsTranslation } from '../composables/lyricsTranslation';
+import { translationHint } from '../composables/translationStatus';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../components/ui/tooltip';
 import type { LibraryState } from '../native/library';
 
 const origins: Record<string, string> = { 'lrc-file': '本地歌词文件', embedded: '内嵌歌词', online: '在线歌词', cache: '在线歌词', matched: '指定歌词' };
@@ -13,7 +15,11 @@ export default function LyricsView({ trackId, now, positionMs, canSeek, onSeek, 
   trackId: string; now?: LibraryState['now']; positionMs: number; canSeek: boolean;
   onSeek: (positionMs: number) => void; onClose: () => void;
 }) {
-  const { lyrics, loading, failed, retry, retryTranslation } = useLyrics(trackId, true);
+  const { lyrics, loading, failed, retry, retryTranslation, translation, settleManual } = useLyrics(trackId, true);
+  const hint = translationHint(lyrics, translation);
+  // The reply to a manual check fades out after a few seconds (see .transient).
+  useEffect(() => { if (!hint.transient) return; const timer = setTimeout(settleManual, 4000); return () => clearTimeout(timer); },
+    [hint.transient, hint.text]);
   const [matching,setMatching]=useState(false);
   const [showTranslation,setShowTranslation]=useLyricsTranslation();
   useEffect(()=>{setMatching(false);},[trackId]);
@@ -23,7 +29,6 @@ export default function LyricsView({ trackId, now, positionMs, canSeek, onSeek, 
   const lines = lyrics?.lines || [];
   const active = synced ? activeLyricLine(lines, positionMs) : -1;
   const translated = synced && lines.some(line => line.translation);
-  const translating = !!lyrics?.translationPending;
   const dual = translated && showTranslation;
   useEffect(() => { closeButton.current?.focus({ focusVisible: false } as FocusOptions); }, []);
   useEffect(() => {
@@ -59,13 +64,18 @@ export default function LyricsView({ trackId, now, positionMs, canSeek, onSeek, 
         <p>{now?.artist}</p>
         {lyrics && origins[lyrics.origin] && <span className="lyrics-origin">{origins[lyrics.origin]}</span>}
         {trackId.startsWith('local:') && <Button variant="secondary" size="sm" onClick={()=>setMatching(true)}>{lyrics?.kind==='none'?'搜索歌词':'选择 / 替换歌词'}</Button>}
-        {translated ? <Button variant="unstyled" className="lyrics-translation-toggle" role="switch" aria-checked={showTranslation}
-          onClick={()=>setShowTranslation(!showTranslation)}><span aria-hidden="true"/>显示翻译</Button> :
-          translating ? <span className="lyrics-translation-status" role="status">正在获取翻译…</span> :
-          synced && lyrics?.translation==='none' && <span className="lyrics-translation-status">该版本暂无翻译</span>}</div>
-        {lyrics?.translation==='unknown' && !translating && lines.length>0 &&
-          (lyrics.platform==='netease' || lyrics.platform==='qq' || lyrics.translationRetryable) &&
-          <Button variant="ghost" size="sm" onClick={retryTranslation}>重试获取翻译</Button>}
+        {(translated || hint.text || hint.action) && <div className="lyrics-translation">
+          {translated && <Button variant="unstyled" className="lyrics-translation-toggle" role="switch" aria-checked={showTranslation}
+            onClick={()=>setShowTranslation(!showTranslation)}><span aria-hidden="true"/>显示翻译</Button>}
+          {hint.action==='recheck' && <TooltipProvider delayDuration={400}><Tooltip><TooltipTrigger asChild>
+            <Button variant="unstyled" className="lyrics-translation-recheck" aria-label="重新检查翻译" disabled={hint.pending}
+              data-pending={hint.pending || undefined} onClick={retryTranslation}>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.34-5.66"/><path d="M20 4v4.5h-4.5"/></svg>
+            </Button></TooltipTrigger><TooltipContent side="bottom" className="compact">重新检查翻译</TooltipContent></Tooltip></TooltipProvider>}
+          {hint.text && <span className={`lyrics-translation-status${hint.transient?' transient':''}`} role="status">{hint.text}</span>}
+          {hint.action==='retry' && <Button variant="unstyled" className="lyrics-translation-retry" disabled={hint.pending} onClick={retryTranslation}>
+            {lyrics?.translation==='available'?'重试':'重试获取翻译'}</Button>}
+        </div>}</div>
     </div>
     {message ? <div className="lyrics-message" role="status"><p>{message}</p>
       {failed && <Button variant="ghost" onClick={retry}>重试</Button>}</div> :

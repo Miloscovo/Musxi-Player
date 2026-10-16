@@ -19,15 +19,21 @@ export async function loadLyricsRequest(request: () => Promise<Lyrics>, id: stri
 // Polls a shown result until its background translation lookup settles. Every
 // ready reply is delivered (lines may gain translations); other songs' replies
 // and a reply that reverts to pending end the refresh without touching the page.
+// Resolves 'timeout' when this page gave up waiting, so it can say so without
+// inventing a reason the Core never sent; request errors propagate.
 export async function refreshTranslation(request: () => Promise<Lyrics>, id: string, signal: AbortSignal,
-  wait: () => Promise<void>, deliver: (value: Lyrics) => void, now: () => number = Date.now, timeoutMs = 20000) {
+  wait: () => Promise<void>, deliver: (value: Lyrics) => void, now: () => number = Date.now, timeoutMs = 20000):
+  Promise<'settled' | 'timeout' | 'stopped'> {
   const deadline = now() + timeoutMs;
-  while (!signal.aborted && now() < deadline) {
+  while (!signal.aborted) {
+    if (now() >= deadline) return 'timeout';
     await wait();
-    if (signal.aborted || now()>=deadline) return;
+    if (signal.aborted) break;
+    if (now() >= deadline) return 'timeout';
     const value = await request();
-    if (signal.aborted || value.id !== id || value.status !== 'ready') return;
+    if (signal.aborted || value.id !== id || value.status !== 'ready') break;
     deliver(value);
-    if (!value.translationPending) return;
+    if (!value.translationPending) return 'settled';
   }
+  return 'stopped';
 }

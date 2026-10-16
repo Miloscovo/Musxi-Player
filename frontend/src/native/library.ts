@@ -70,6 +70,16 @@ export interface Lyrics {
   offsetMs?: number;
   kind: 'synced' | 'plain' | 'none'; lines: LyricsLine[];
   translation?: LyricsTranslation; translationPending?: boolean; translationRetryable?: boolean;
+  translationLookup?: TranslationLookup;
+}
+// The latest translation check, separate from what is on screen: a song can keep
+// a saved translation while its update is pending or has failed. Absent on older Cores.
+export const translationLookupReasons = ['not_provided', 'network', 'timeout', 'platform_error', 'invalid_data',
+  'unsupported_format', 'version_mismatch', 'not_bound', 'not_synced', 'no_lyrics', 'internal_error'] as const;
+export type TranslationLookupReason = typeof translationLookupReasons[number];
+export interface TranslationLookup {
+  status: 'idle' | 'pending' | 'succeeded' | 'failed' | 'unsupported';
+  reason?: TranslationLookupReason; canRefresh: boolean;
 }
 const object = (value: unknown): Record<string, unknown> => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new NativeError(502, 'Invalid library object');
@@ -150,6 +160,15 @@ export function parseLyrics(value: unknown): Lyrics {
   if (v.translation !== undefined && !['available', 'none', 'unknown'].includes(v.translation as string)) throw new NativeError(502, 'Invalid lyrics translation');
   if (v.translationPending !== undefined) fields(v, ['translationPending'], 'boolean');
   if (v.translationRetryable !== undefined) fields(v, ['translationRetryable'], 'boolean');
+  if (v.translationLookup !== undefined) {
+    const lookup = object(v.translationLookup); fields(lookup, ['canRefresh'], 'boolean');
+    if (!['idle', 'pending', 'succeeded', 'failed', 'unsupported'].includes(lookup.status as string)) throw new NativeError(502, 'Invalid translation lookup');
+    if (lookup.reason !== undefined) {
+      fields(lookup, ['reason'], 'string');
+      // A reason added by a newer Core still reads as a failure, not a protocol error.
+      if (!translationLookupReasons.includes(lookup.reason as TranslationLookupReason)) lookup.reason = 'internal_error';
+    }
+  }
   return value as Lyrics;
 }
 export const safeImage =(value: string) => /^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=\r\n]+$/.test(value) ? value : '';

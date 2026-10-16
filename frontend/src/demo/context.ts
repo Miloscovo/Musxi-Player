@@ -3,6 +3,7 @@ import { platformNames, type Track, type PlaybackOrder, type AudioQuality, type 
 import { NativeError } from '../native/types.ts';
 import { createDemoLibrary, createDemoPlayer, demoPlaylistSongs, demoSongs } from './data.ts';
 import { createDemoLyricsMatch } from './lyricsMatch.ts';
+import { createDemoTranslation } from './translation.ts';
 
 export function isDemoMode(host: CefTransport = globalThis as CefTransport, search = globalThis.location?.search || '') {
   const query = new URLSearchParams(search);
@@ -29,6 +30,7 @@ export function createDemoTransport(): CefTransport {
   const fail = (message: string, code = 409): never => { throw new NativeError(code, message); };
   const track = (id: string) => songs.find(song => song.id === id) || fail('演示歌曲不存在', 404);
   const lyricsMatch=createDemoLyricsMatch(track);
+  const demoTranslation=createDemoTranslation();
   function favoriteRows(): Track[] {
     return songs.flatMap(song => {
       const platforms = (['netease','kugou','qq'] as MusicPlatform[]).filter(platform =>
@@ -122,16 +124,14 @@ export function createDemoTransport(): CefTransport {
     if (command === 'library.image') return '';
     if (command === 'library.lyricsMatch') return lyricsMatch.run(p);
     if (command === 'library.lyrics') {
-      const selected=lyricsMatch.lyrics(String(p.id));if(selected)return {...selected,source:p.source};
+      const selected=lyricsMatch.lyrics(String(p.id),p.retryTranslation===true);if(selected)return {...selected,source:p.source};
       const song = track(String(p.id));
-      // Synthetic lines every eight seconds; same shape as the native reply.
-      // Even-numbered demo songs carry a translation on most lines, like platform lyrics.
-      const translated = Number(song.id.replace(/\D/g, '')) % 2 === 0;
+      // Synthetic lines every eight seconds; same shape as the native reply. Each
+      // song number shows one translation case (see demo/translation.ts).
       const lines = Array.from({ length: Math.min(40, Math.floor(song.duration / 8000)) }, (_, i) => ({ timeMs: i * 8000,
-        text: translated ? `${song.name} · Demo lyric line ${i + 1}` : `${song.name} · 演示歌词第 ${i + 1} 行`,
-        ...(translated && i % 7 !== 3 ? { translation: `演示译文第 ${i + 1} 行` } : {}) }));
-      return { status: 'ready', source: p.source, id: song.id, platform: song.id.startsWith('local:') ? 'local' : 'kugou', origin: lines.length ? 'lrc-file' : '',
-        kind: lines.length ? 'synced' : 'none', lines, translation: translated && lines.length ? 'available' : 'none' };
+        text: `${song.name} · Demo lyric line ${i + 1}`, ...(i % 7 !== 3 ? { translation: `演示译文第 ${i + 1} 行` } : {}) }));
+      return demoTranslation({ status: 'ready', source: p.source, id: song.id, platform: song.id.startsWith('local:') ? 'local' : 'kugou',
+        origin: lines.length ? 'lrc-file' : '', kind: lines.length ? 'synced' : 'none', lines }, p.retryTranslation === true);
     }
     switch (command) {
       case 'library.search': {
