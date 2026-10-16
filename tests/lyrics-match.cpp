@@ -28,6 +28,9 @@ int main() {
         require(matchBridge.start(error,L"lyrics-bridge.cjs"),"fixture restart");
         state=finish(requestMatch({{"action","preview"},{"id","local:991"},{"session",session},{"candidate","0"}}));
         require(state["preview"]["lines"][0]["text"]=="IPC fixture","preview missing");
+        require(state["preview"]["translationLookup"]["status"]=="succeeded" &&
+            state["preview"]["translationLookup"]["reason"]=="not_provided" &&
+            state["preview"]["translationLookup"]["canRefresh"]==false,"preview translation contract missing/session escaped");
         require(!musxi::lyrics::readMatch(cloud::dataDir()/L"lyrics-matches",identity),"preview persisted without confirmation");
         state=requestMatch({{"action","adjust"},{"id","local:991"},{"session",session},{"offsetMs",1500}});
         require(state["preview"]["lines"][0]["timeMs"]==2500,"preview offset wrong");
@@ -41,6 +44,8 @@ int main() {
         require(matchBridge.start(error,L"lyrics-bridge.cjs"),"Kugou preview fixture restart");
         state=finish(requestMatch({{"action","preview"},{"id","local:991"},{"session",session},{"candidate","0"}}));
         require(state["preview"]["translation"]=="available" && state["preview"]["lines"][0]["translation"]=="IPC 夹具","Kugou KRC preview translation missing");
+        require(state["preview"]["translationLookup"]["status"]=="succeeded" &&
+            !state["preview"]["translationLookup"].contains("reason"),"successful preview has spurious error");
         state=finish(requestMatch({{"action","save"},{"id","local:991"},{"session",session},{"offsetMs",1500}}));
         lyricsCancelled=false;lyrics=readLocalLyrics(audio,"local","local:991");
         require(lyrics["translation"]=="available" && lyrics["lines"][0]["timeMs"]==2500 && lyrics["lines"][0]["translation"]=="IPC 夹具","Kugou preview translation did not persist with offset");

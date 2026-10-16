@@ -14,4 +14,12 @@ function foundLyrics(text,translation) {
   if(!usable(translation) || /^[0-9a-fA-F]+$/.test(translation.trim()))return result;
   return {...result,translationState:'available',translation};
 }
-module.exports={foundLyrics};
+// Only stable codes cross IPC. Never classify errors by private response text.
+function errorReason(error) {
+  if(['network','timeout','platform_error','invalid_data','unsupported_format','version_mismatch','internal_error'].includes(error?.lyricsReason))return error.lyricsReason;
+  if(['ETIMEDOUT','ECONNABORTED','UND_ERR_CONNECT_TIMEOUT','UND_ERR_HEADERS_TIMEOUT'].includes(error?.code) || error?.name==='TimeoutError')return 'timeout';
+  if(['ENOTFOUND','EAI_AGAIN','ECONNREFUSED','ECONNRESET','ENETUNREACH','EHOSTUNREACH','ERR_NETWORK'].includes(error?.code))return 'network';
+  return 'internal_error';
+}
+function lyricsError(reason,message='歌词请求失败') {return Object.assign(Error(message),{lyricsReason:reason});}
+module.exports={foundLyrics,errorReason,lyricsError};

@@ -13,7 +13,8 @@ class QQAdapter {
     this.child.on('exit',()=>this.stop('QQ 接口连接已中断，请重新扫码'));
     readline.createInterface({input:this.child.stdout}).on('line',line=>{
       const pending=this.pending;if(!pending)return;this.pending=null;clearTimeout(pending.timer);
-      try{const reply=JSON.parse(line);reply.ok?pending.resolve(reply.data):pending.reject(Error(reply.error || 'QQ 请求失败'));}catch{pending.reject(Error('QQ 接口返回数据无效'));}
+      try{const reply=JSON.parse(line);reply.ok?pending.resolve(reply.data):pending.reject(Object.assign(Error(reply.error || 'QQ 请求失败'),
+        {lyricsReason:reply.reason}));}catch{pending.reject(Object.assign(Error('QQ 接口返回数据无效'),{lyricsReason:'invalid_data'}));}
     });
   }
   stop(message){const child=this.child;this.child=null;if(child)child.kill();if(this.pending){clearTimeout(this.pending.timer);this.pending.reject(Error(message));this.pending=null;}}

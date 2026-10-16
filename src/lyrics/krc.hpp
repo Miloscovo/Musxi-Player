@@ -6,6 +6,7 @@ namespace musxi::lyrics {
 struct KrcLyrics {
     std::string original,translation; // Normalized timed text for the existing v2 stores.
     Translation state=Translation::Unknown;
+    std::string reason="invalid_data"; // Stable public classification; never raw metadata.
 };
 // Input is already decrypted/inflated UTF-8. Translation metadata failures keep
 // the original; indexes are resolved before sorting, dropping blanks or clamping.

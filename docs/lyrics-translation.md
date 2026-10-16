@@ -7,6 +7,21 @@ hides or shows translations everywhere (`localStorage` key
 Lines without a translation, and songs without one, show the original as before.
 AI translation, romanization and word highlighting are out of scope.
 
+## Translation lookup reliability
+
+The backend now separates the translation that can be displayed from the most
+recent lookup. The lyrics page exposes a fresh check and keeps saved bilingual
+lyrics visible during updates and failures. See
+[the lookup contract](lyrics-translation-reliability.md) for fields and examples.
+
+`retryTranslation: true` requests one fresh translation check for any supported
+recording, including KuGou and local bindings that already have a translation or
+confirmed absence. It bypasses translation freshness, retains visible originals
+and translations, and joins a running check for the same song. Subsequent polls
+omit the flag. Successful translation checks do not renew the original's cache
+age. All three platforms must pass original text/timing compatibility before a
+refresh is attached; a matching timestamp alone is insufficient.
+
 ## Sources
 
 - NetEase: `tlyric.lyric` from the existing `lyric` module response.

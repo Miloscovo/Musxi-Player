@@ -93,6 +93,11 @@ std::optional<CacheEntry> readCache(const fs::path& directory,const std::string&
         const auto saved=json.at("savedAt").get<std::int64_t>();
         if(saved<0 || saved>now)return {};
         CacheEntry entry;entry.text=json.at("text").get<std::string>();entry.none=json.at("none").get<bool>();
+        entry.savedAt=saved;
+        const auto checked=json.find("translationCheckedAt");
+        // Bad optional metadata never discards the original. Legacy records use savedAt.
+        entry.translationCheckedAt=checked==json.end()?saved:
+            checked->is_number_integer() && *checked>=0 && *checked<=now?checked->get<std::int64_t>():0;
         entry.translationState=state.value_or(Translation::Unknown);
         try {
             if(entry.translationState==Translation::Available)entry.translation=json.at("translation").get<std::string>();
@@ -102,7 +107,7 @@ std::optional<CacheEntry> readCache(const fs::path& directory,const std::string&
         if(!valid(entry))return {};
         entry.fresh=now-saved<(entry.none?86400ll:30ll*86400);
         entry.translationFresh=entry.translationState==Translation::Available ||
-            (entry.translationState==Translation::None && now-saved<7ll*86400);
+            (entry.translationState==Translation::None && entry.translationCheckedAt>0 && now-entry.translationCheckedAt<7ll*86400);
         return entry;
     }catch(...){return {};}
 }
@@ -115,11 +120,12 @@ bool writeCache(const fs::path& directory,const std::string& key,const CacheEntr
     std::lock_guard<std::recursive_mutex> lock(cacheStoreMutex);
     fs::path temporary;
     try {
-        if(key.empty() || now<0 || !valid(entry))return false;
+        if(key.empty() || now<0 || entry.savedAt<0 || entry.savedAt>now || entry.translationCheckedAt<0 || entry.translationCheckedAt>now || !valid(entry))return false;
         fs::create_directories(directory);const auto target=cachePath(directory,key);
         temporary=target;temporary+=".tmp";
-        const auto data=Json{{"version",2},{"key",key},{"format","lrc"},{"savedAt",now},{"none",entry.none},{"text",entry.text},
-            {"translationState",translationName(entry.translationState)},{"translation",entry.translation}}.dump();
+        const auto data=Json{{"version",2},{"key",key},{"format","lrc"},{"savedAt",entry.savedAt?entry.savedAt:now},{"none",entry.none},{"text",entry.text},
+            {"translationState",translationName(entry.translationState)},{"translation",entry.translation},
+            {"translationCheckedAt",entry.translationCheckedAt?entry.translationCheckedAt:now}}.dump();
         {std::ofstream output(temporary,std::ios::binary|std::ios::trunc);output<<data;output.close();if(!output)throw std::runtime_error("cache write");}
 #ifdef _WIN32
         if(!MoveFileExW(temporary.c_str(),target.c_str(),MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH))throw std::runtime_error("cache replace");
@@ -128,5 +134,15 @@ bool writeCache(const fs::path& directory,const std::string& key,const CacheEntr
 #endif
         trim(directory);return true;
     }catch(...) {std::error_code error;if(!temporary.empty())fs::remove(temporary,error);return false;}
+}
+bool updateCacheTranslation(const fs::path& directory,const std::string& key,const CacheEntry& expected,
+    const CacheEntry& replacement,std::int64_t now) {
+    std::lock_guard<std::recursive_mutex> lock(cacheStoreMutex);
+    const auto current=readCache(directory,key,now);
+    if(!current || current->text!=expected.text || current->none!=expected.none || current->savedAt!=expected.savedAt ||
+        current->translationState!=expected.translationState || current->translation!=expected.translation ||
+        current->translationCheckedAt!=expected.translationCheckedAt || replacement.text!=expected.text || replacement.none!=expected.none)return false;
+    auto entry=replacement;entry.savedAt=expected.savedAt;entry.translationCheckedAt=now;
+    return writeCache(directory,key,entry,now);
 }
 }

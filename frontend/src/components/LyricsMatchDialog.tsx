@@ -6,6 +6,7 @@ import { platformNames, type MusicPlatform } from '../native/library';
 import type { MatchState } from '../native/lyricsMatch';
 import { activeLyricLine } from '../composables/lyrics';
 import { useLyricsTranslation } from '../composables/lyricsTranslation';
+import { translationHint } from '../composables/translationStatus';
 
 const durationText=(ms: number)=>`${Math.floor(ms/60000)}:${String(Math.floor(ms/1000)%60).padStart(2,'0')}`;
 export default function LyricsMatchDialog({id,positionMs,canSeek,onSeek,onClose,onSaved}: {
@@ -19,6 +20,7 @@ export default function LyricsMatchDialog({id,positionMs,canSeek,onSeek,onClose,
   const preview=state?.preview;const lines=preview?.lines || [];const active=preview?.kind==='synced'?activeLyricLine(lines,positionMs):-1;
   const [showTranslation,setShowTranslation]=useLyricsTranslation();
   const translated=preview?.kind==='synced' && lines.some(line=>line.translation);const dual=translated && showTranslation;
+  const hint=translationHint(preview || null);
   async function perform(action:string,params:Record<string,unknown>={}) {
     controller.current?.abort();const task=new AbortController();controller.current=task;
     setBusy(true);setError('');
@@ -65,8 +67,14 @@ export default function LyricsMatchDialog({id,positionMs,canSeek,onSeek,onClose,
         <div className="lyrics-match-pages"><Button variant="secondary" size="sm" disabled={busy || page<=1} onClick={()=>search(page-1)}>上一页</Button><span>第 {page} 页</span><Button variant="secondary" size="sm" disabled={busy || !state?.hasMore || page>=10} onClick={()=>search(page+1)}>下一页</Button></div>
       </div>
       <div className="lyrics-match-preview"><strong>{state?.selectedName || '歌词预览'}</strong><small>{state?.platform?platformNames[state.platform]:''}</small>
-        {translated && <Button variant="unstyled" className="lyrics-translation-toggle" role="switch" aria-checked={showTranslation}
-          onClick={()=>setShowTranslation(!showTranslation)}><span aria-hidden="true"/>显示翻译</Button>}
+        {(translated || hint.text) && <div className="lyrics-translation">
+          {translated && <Button variant="unstyled" className="lyrics-translation-toggle" role="switch" aria-checked={showTranslation}
+            onClick={()=>setShowTranslation(!showTranslation)}><span aria-hidden="true"/>显示翻译</Button>}
+          {hint.text && <span className="lyrics-translation-status">{hint.text}</span>}
+          {/* A preview's translation is retried by previewing the same candidate again. */}
+          {preview?.translationLookup?.status==='failed' && selected && <Button variant="unstyled" className="lyrics-translation-retry"
+            disabled={busy} onClick={()=>void perform('preview',{candidate:selected})}>重新预览</Button>}
+        </div>}
         {preview ? <ol ref={list} className={dual?'dual':undefined} onWheel={()=>{scrollAt.current=Date.now();}} onPointerDown={()=>{scrollAt.current=Date.now();}} onKeyDown={()=>{scrollAt.current=Date.now();}}>
           {lines.map((line,index)=><li key={index} aria-current={active===index?'true':undefined}>{preview.kind==='synced'?<Button variant="ghost" disabled={!canSeek} onClick={()=>onSeek(line.timeMs)}>{line.text || '♪'}{dual && line.translation && <small>{line.translation}</small>}</Button>:<span>{line.text || '♪'}</span>}</li>)}
         </ol>:<p>{selected?'此候选暂无可用歌词，请选择其他版本。':'选择候选后，可随当前音频预览歌词。'}</p>}

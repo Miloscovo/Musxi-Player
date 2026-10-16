@@ -492,9 +492,26 @@ html,body,#app,main.app-shell { background:transparent!important }
 .lyrics-translation-toggle[aria-checked=true] span::after { transform:translateX(12px) }
 .lyrics-translation-toggle:hover { color:var(--ink) }
 .lyrics-translation-status { margin-top:14px; color:var(--muted); font-size:12px }
+/* Translation row: switch, a quiet recheck icon, then one line of status and its action.
+   Wraps under narrow covers instead of pushing the title column wider. */
+.lyrics-translation { display:flex; flex-wrap:wrap; align-items:center; justify-content:inherit; column-gap:6px; row-gap:2px; margin-top:14px; max-width:100% }
+.lyrics-track .lyrics-translation { justify-content:center }
+.lyrics-translation>.lyrics-translation-toggle,.lyrics-translation>.lyrics-translation-status { margin-top:0 }
+.lyrics-translation-recheck { display:grid; place-items:center; width:24px; height:24px; padding:0; border-radius:6px; background:transparent; color:var(--muted); opacity:.7; transition:opacity .15s ease-out,background-color .15s ease-out }
+.lyrics-translation-recheck svg { width:15px; height:15px; fill:none; stroke:currentColor; stroke-width:2; stroke-linecap:round; stroke-linejoin:round }
+.lyrics-translation-recheck:is(:hover,:focus-visible):enabled { background:var(--hover-surface); color:var(--ink); opacity:1 }
+.lyrics-translation-recheck:disabled { cursor:default }
+.lyrics-translation-recheck[data-pending] svg { animation:lyrics-recheck 1s linear infinite }
+@keyframes lyrics-recheck { to { transform:rotate(360deg) } }
+.lyrics-translation-retry { padding:2px 6px; border-radius:6px; background:transparent; color:var(--accent); font:inherit; font-size:12px }
+.lyrics-translation-retry:is(:hover,:focus-visible):enabled { background:var(--hover-surface) }
+.lyrics-translation-status.transient { animation:lyrics-hint-out 4s ease-in forwards }
+@keyframes lyrics-hint-out { 0%,75% { opacity:1 } to { opacity:0 } }
+.music-tooltip.compact { padding:5px 10px; border-radius:8px; font-size:12px; line-height:1.4 }
 .lyrics-match-preview .lyrics-translation-toggle { align-self:flex-start; margin-top:0 }
-@media (max-width:800px) { .lyrics-translation-toggle,.lyrics-translation-status { margin-top:6px } }
-@media (prefers-reduced-motion:reduce) { .lyrics-translation-toggle span,.lyrics-translation-toggle span::after { transition:none } }
+.lyrics-match-preview .lyrics-translation { justify-content:flex-start; margin-top:0 }
+@media (max-width:800px) { .lyrics-translation-toggle,.lyrics-translation-status,.lyrics-translation { margin-top:6px } .lyrics-track .lyrics-translation { justify-content:flex-start } }
+@media (prefers-reduced-motion:reduce) { .lyrics-translation-toggle span,.lyrics-translation-toggle span::after,.lyrics-translation-recheck { transition:none } .lyrics-translation-recheck[data-pending] svg,.lyrics-translation-status.transient { animation:none } }
 /* Progress row: elapsed, seek bar and total share one line at the top of the dock.
    Padding moves 10px from the bottom to the top, so the dock keeps its height and
    the times never touch the cover at any window size. */

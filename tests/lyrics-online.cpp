@@ -12,6 +12,9 @@ int main() {
         musxi::lyrics::writeCache(directory,key,{"[00:01]Offline",false},lyricsNow()-31ll*86400);
         result=readOnlineLyrics(request,directory,key,false);
         require(result["origin"]=="cache" && result["lines"][0]["text"]=="Offline","stale cache not available offline");
+        result=readOnlineLyrics(request,directory,key,false,true);
+        require(result["lines"][0]["text"]=="Offline" && result.value("translationRefresh",false),
+            "manual check fetched a new original instead of preserving stale displayed lyrics");
         musxi::lyrics::writeCache(directory,key,{"",true},lyricsNow()-86401);
         require(readOnlineLyrics(request,directory,key,false).value("error",false),"expired negative cache reused");
         musxi::lyrics::writeCache(directory,key,{"",true},lyricsNow());
@@ -183,6 +186,97 @@ int main() {
         cancelLyrics();musxi::lyrics::removeMatch(matches,identity);fs::remove_all(root);
         musxi::lyrics::removeCache(profileCache,"netease:789");
         require(!musxi::lyrics::readCache(profileCache,"netease:789",lyricsNow()),"test cache entry left behind");
+        // Manual checks bypass a fresh negative translation without clearing the original.
+        cancelLyrics();lyricsCancelled=false;translationAttempted.clear();translationOutcomes.clear();
+        musxi::lyrics::CacheEntry negative;negative.text=kugouOriginal;negative.translationState=musxi::lyrics::Translation::None;
+        const auto acquired=lyricsNow()-2*86400;
+        require(musxi::lyrics::writeCache(profileCache,"netease:789",negative,acquired),"negative manual seed");
+        currentPlaybackTrack={{"id","netease:789"},{"name","Fixture delayed"}};audioTrackId="netease:789";
+        first=poll([](const Json& v){return v["status"]=="ready";});
+        require(first["translation"]=="none" && !first.value("translationPending",false) &&
+            first["translationLookup"]["canRefresh"]==true,"fresh none should be manually refreshable");
+        const auto clicking=requestLyrics("queue","netease:789",true);
+        const auto clickGeneration=lyricsGeneration;
+        require(clicking["status"]=="ready" && clicking["lines"]==first["lines"] && clicking.value("translationPending",false),
+            "manual translation check cleared shown original");
+        for(int i=0;i<5;++i)requestLyrics("queue","netease:789",true);
+        require(lyricsGeneration==clickGeneration,"repeated click restarted original lookup");
+        filled=poll([](const Json& v){return v["status"]=="ready" && !v.value("translationPending",false);});
+        auto saved=musxi::lyrics::readCache(profileCache,"netease:789",lyricsNow());
+        require(filled["translation"]=="available" && filled["translationLookup"]["status"]=="succeeded" &&
+            saved->savedAt==acquired,"manual check failed or renewed original cache");
+        require(filled.dump().find("translationOriginal")==std::string::npos && filled.dump().find("translationSavedAt")==std::string::npos,
+            "private translation context leaked");
+        // Failed refresh, confirmed absence, and same-time wrong words keep old bilingual content.
+        for(const auto* name:{"Fixture timeout","Fixture none","Fixture same-time different"}) {
+            cancelLyrics();lyricsCancelled=false;
+            currentPlaybackTrack["name"]=name;
+            first=poll([](const Json& v){return v["status"]=="ready";});
+            requestLyrics("queue","netease:789",true);
+            filled=poll([](const Json& v){return v["status"]=="ready" && !v.value("translationPending",false);});
+            require(filled["translation"]=="available" && filled["lines"][0]["translation"]=="IPC 夹具","refresh lost saved translation");
+            const std::string reason=std::string(name)=="Fixture timeout"?"timeout":std::string(name)=="Fixture none"?"not_provided":"version_mismatch";
+            require(filled["translationLookup"]["reason"]==reason,"refresh reason lost");
+        }
+        // KuGou gets the same capability and force-refresh path despite fresh none.
+        cancelLyrics();lyricsCancelled=false;translationAttempted.clear();translationOutcomes.clear();
+        require(musxi::lyrics::writeCache(profileCache,kugouKey,negative,acquired),"Kugou negative manual seed");
+        currentPlaybackTrack={{"id","fixture:kugou"},{"hash",hash},{"name","Kugou"}};audioTrackId="fixture:kugou";
+        first=kugouPoll("fixture:kugou",[](const Json& v){return v["status"]=="ready";});
+        require(first["translationRetryable"]==true && first["translationLookup"]["canRefresh"]==true,"online Kugou retry capability missing");
+        requestLyrics("queue","fixture:kugou",true);
+        filled=kugouPoll("fixture:kugou",[](const Json& v){return v["status"]=="ready" && !v.value("translationPending",false);});
+        require(filled["translation"]=="available","manual Kugou negative refresh did not use KRC");
+        cancelLyrics();lyricsCancelled=false;translationAttempted.clear();translationOutcomes.clear();
+        require(musxi::lyrics::writeCache(profileCache,"qq:fixture",negative,acquired),"QQ negative seed");
+        currentPlaybackTrack={{"id","qq:fixture"},{"name","Fixture delayed"}};audioTrackId="qq:fixture";
+        first=kugouPoll("qq:fixture",[](const Json& v){return v["status"]=="ready";});
+        requestLyrics("queue","qq:fixture",true);
+        filled=kugouPoll("qq:fixture",[](const Json& v){return v["status"]=="ready" && !v.value("translationPending",false);});
+        require(filled["translation"]=="available","QQ fresh negative manual check blocked by cache");
+        musxi::lyrics::removeCache(profileCache,"qq:fixture");
+        // Local snapshots have their own check time; stale/legacy none is checked once.
+        cancelLyrics();lyricsCancelled=false;translationAttempted.clear();translationOutcomes.clear();
+        fs::create_directories(root);{std::ofstream out(audio);out<<"synthetic";}
+        const auto newIdentity=musxi::lyrics::fileIdentity(audio);
+        auto noTranslation=snapshot("netease:789");noTranslation["translationState"]="none";noTranslation["translation"]="";
+        noTranslation["translationCheckedAt"]=lyricsNow();
+        musxi::lyrics::saveMatch(matches,newIdentity,noTranslation);audioTrackId="local:5";
+        chosen=local([](const Json& v){return v["status"]=="ready";});
+        require(chosen["translation"]=="none" && !chosen.value("translationPending",false),"fresh local none auto-queried");
+        requestLyrics("local","local:5",true);
+        chosen=local([](const Json& v){return v["status"]=="ready" && !v.value("translationPending",false);});
+        require(chosen["translation"]=="available" && chosen["lines"][0]["timeMs"]==1500 &&
+            musxi::lyrics::readMatch(matches,newIdentity)->at("text")==noTranslation["text"],"manual local none check lost binding/offset");
+        require(chosen.dump().find(audio.u8string())==std::string::npos && !chosen.contains("translationSelection"),"snapshot refresh context leaked");
+        cancelLyrics();lyricsCancelled=false;translationAttempted.clear();translationOutcomes.clear();
+        noTranslation.erase("translationCheckedAt");musxi::lyrics::saveMatch(matches,newIdentity,noTranslation);
+        chosen=local([](const Json& v){return v["status"]=="ready" && !v.value("translationPending",false);});
+        require(chosen["translation"]=="available","legacy local none never rechecked");
+        // Same-timestamp but changed original is rejected for NetEase too.
+        cancelLyrics();lyricsCancelled=false;translationAttempted.clear();translationOutcomes.clear();
+        auto different=snapshot("netease:789");different["track"]["name"]="Fixture same-time different";
+        musxi::lyrics::saveMatch(matches,newIdentity,different);
+        chosen=local([](const Json& v){return v["status"]=="ready" && !v.value("translationPending",false);});
+        require(chosen["translation"]=="unknown" && chosen["translationLookup"]["reason"]=="version_mismatch","local same-time wrong words accepted");
+        // A delayed manual refresh cannot restore a binding deleted while it ran.
+        cancelLyrics();lyricsCancelled=false;translationAttempted.clear();translationOutcomes.clear();
+        noTranslation["track"]["name"]="Fixture delayed";noTranslation["translationCheckedAt"]=lyricsNow();
+        musxi::lyrics::saveMatch(matches,newIdentity,noTranslation);
+        local([](const Json& v){return v["status"]=="ready";});
+        const auto checking=requestLyrics("local","local:5",true);
+        require(checking.value("translationPending",false),"local delayed refresh not started");
+        musxi::lyrics::removeMatch(matches,newIdentity);
+        chosen=local([](const Json& v){return v["status"]=="ready" && !v.value("translationPending",false);});
+        require(!musxi::lyrics::readMatch(matches,newIdentity) && chosen["translation"]=="none", "late refresh recreated removed binding");
+        cancelLyrics();musxi::lyrics::removeMatch(matches,newIdentity);
+        lyricsCancelled=false;
+        {std::ofstream out(root/L"song.lrc");out<<"[00:01]Local only";}
+        const auto unbound=readLocalLyrics(audio,"local","local:5");
+        require(unbound["translationLookup"]["reason"]=="not_bound" && unbound["translationLookup"]["canRefresh"]==false,"unbound local reported platform absence");
+        const auto plain=lyricsReply("queue","qq:plain","qq","online",musxi::lyrics::parse("Plain lyrics"));
+        require(plain["translationLookup"]["reason"]=="not_synced","plain original incorrectly refreshable");
+        fs::remove_all(root);musxi::lyrics::removeCache(profileCache,"netease:789");musxi::lyrics::removeCache(profileCache,kugouKey);
 #endif
         stopLyrics();fs::remove_all(directory);std::cout<<"Online lyrics lifecycle passed\n";return 0;
     }catch(const std::exception& e){stopLyrics();fs::remove_all(directory);std::cerr<<e.what()<<'\n';return 1;}

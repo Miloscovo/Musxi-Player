@@ -25,7 +25,8 @@ class QQTests(unittest.IsolatedAsyncioTestCase):
     async def test_lyrics_without_login_or_song_detail(self):
         self.a.client.lyric=S(get_lyric=AsyncMock(return_value=S(lyric='[00:01.00]Original')))
         request={'op':'lyrics','id':'qq:abc123'}
-        self.assertEqual(await self.a.run(request),{'outcome':'found','format':'lrc','text':'[00:01.00]Original','translationState':'none'})
+        self.assertEqual(await self.a.run(request),{'outcome':'found','format':'lrc','text':'[00:01.00]Original',
+            'translationState':'unknown','translationReason':'invalid_data'})
         self.a.client.lyric.get_lyric.assert_awaited_once_with('abc123',qrc=False,trans=True,roma=False)
         self.a.client.lyric.get_lyric.return_value=S(lyric='[00:01.00]Original',trans='[00:01.00]原文')
         self.assertEqual(await self.a.run(request),{'outcome':'found','format':'lrc','text':'[00:01.00]Original',
@@ -38,6 +39,9 @@ class QQTests(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn('translation',result)
         self.a.client.lyric.get_lyric.return_value=S(lyric='[00:01.00]Original',trans='  ')
         self.assertEqual((await self.a.run(request))['translationState'],'none')
+        self.a.client.lyric.get_lyric.return_value=S(lyric='[00:01.00]Original',trans=None)
+        result=await self.a.run(request)
+        self.assertEqual((result['translationState'],result['translationReason']),('unknown','invalid_data'))
         self.a.client.lyric.get_lyric.return_value=S(lyric='')
         self.assertEqual(await self.a.run(request),{'outcome':'none'})
         for text in ['abc123ff', 'x\0y', 'x'*(1024*1024+1)]:

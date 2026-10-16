@@ -93,11 +93,14 @@ KrcLyrics extractKrc(std::string_view text) {
     }
     try {
         if(duplicateLanguage)throw std::runtime_error("KRC duplicate language");
-        if(!seenLanguage) {result.state=Translation::None;return result;}
+        if(!seenLanguage) {result.state=Translation::None;result.reason="not_provided";return result;}
         using Json=nlohmann::json;
         const auto metadata=Json::parse(decode64(language),[](int depth,Json::parse_event_t,Json&) {
             if(depth>16)throw std::runtime_error("KRC language depth");return true;
         });
+        if(metadata.contains("version") && metadata.at("version").is_number_integer() && metadata.at("version")!=1) {
+            result.reason="unsupported_format";return result;
+        }
         if(!metadata.at("version").is_number_integer() || metadata.at("version")!=1 ||
             !metadata.at("content").is_array() || metadata.at("content").size()>16)
             throw std::runtime_error("KRC language schema");
@@ -107,10 +110,11 @@ KrcLyrics extractKrc(std::string_view text) {
                 throw std::runtime_error("KRC language type");
             const auto& type=block.at("type");const auto& target=block.at("language");
             if(type==0)continue; // Word-level romanization is not a translation.
-            if(type!=1 || target!=0 || selected)throw std::runtime_error("KRC unsupported or ambiguous translation");
+            if(type!=1 || target!=0) {result.reason="unsupported_format";return result;}
+            if(selected)throw std::runtime_error("KRC ambiguous translation");
             selected=&block;
         }
-        if(!selected) {result.state=Translation::None;return result;}
+        if(!selected) {result.state=Translation::None;result.reason="not_provided";return result;}
         const auto& translated=selected->at("lyricContent");
         if(!translated.is_array() || translated.size()!=rows.size())throw std::runtime_error("KRC row count");
         result.translation=offset;bool available=false;
@@ -133,9 +137,10 @@ KrcLyrics extractKrc(std::string_view text) {
             available|=usable;
         }
         if(result.translation.size()>MaxOnlineLyricsBytes)throw std::runtime_error("KRC translation size");
-        if(!available) {result.translation.clear();result.state=Translation::None;return result;}
+        if(!available) {result.translation.clear();result.state=Translation::None;result.reason="not_provided";return result;}
         if(judgeTranslation(result.original,result.translation)!=Translation::Available)throw std::runtime_error("KRC translation alignment");
         result.state=Translation::Available;
+        result.reason.clear();
     }catch(...) {result.translation.clear();result.state=Translation::Unknown;}
     return result;
 }

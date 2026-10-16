@@ -5,9 +5,11 @@ std::atomic_bool matchCancelled{false};
 std::uint64_t matchSequence=0;
 std::string matchSession,matchJob,matchLocalId,matchPlaybackId,matchOperation;
 Json matchIdentity,matchCandidates=Json::array(),matchSelection,matchResult;
+Json matchTranslationLookup=nullptr; // Preview diagnostics are not persisted with the choice.
 bool matchHasMore=false;
 void cancelMatch() {
     matchCancelled=true;matchBridge.cancel();matchSession.clear();matchCandidates=Json::array();matchSelection=nullptr;
+    matchTranslationLookup=nullptr;
 }
 void matchTick() {
     if(!matchSession.empty() && matchPlaybackId!=audioTrackId)cancelMatch();
@@ -20,8 +22,10 @@ void matchTick() {
     if(result.contains("error"))return;
     if(matchOperation=="begin") {matchIdentity=result.at("identity");matchSelection=result.at("selection");}
     if(matchOperation=="search") {matchCandidates=result.at("tracks");matchHasMore=result.at("hasMore");matchSelection=nullptr;}
-    if(matchOperation=="preview")matchSelection=result.at("selection");
-    if(matchOperation=="save" || matchOperation=="reset") {matchSelection=result.at("selection");translationAttempted.erase(matchLocalId);cancelLyrics();}
+    if(matchOperation=="preview") {matchSelection=result.at("selection");matchTranslationLookup=result.value("translationLookup",Json(nullptr));}
+    if(matchOperation=="save" || matchOperation=="reset") {
+        matchSelection=result.at("selection");translationAttempted.erase(matchLocalId);translationOutcomes.erase(matchLocalId);cancelLyrics();
+    }
 }
 void stopMatch() {
     cancelMatch();if(matchFuture.valid())try{matchFuture.get();}catch(...){}
@@ -31,7 +35,10 @@ Json matchPreview(const Json& selection,const std::string& id) {
     if(!selection.is_object())return nullptr;
     auto result=lyricsReply("local",id,"local","matched",musxi::lyrics::matchLyrics(selection));
     result["offsetMs"]=selection.at("offsetMs");
-    result["translation"]=translationReply(selection.value("translationState","unknown"),result);return result;
+    result["translation"]=translationReply(selection.value("translationState","unknown"),result);
+    if(result["kind"]=="synced" && matchTranslationLookup.is_object())result["translationLookup"]=matchTranslationLookup;
+    // Preview retry uses its session/job (preview again), never library.lyrics on the playing file.
+    result["translationLookup"]["canRefresh"]=false;result["translationRetryable"]=false;return result;
 }
 Json matchPublic() {
     Json result={{"status",matchFuture.valid()?"pending":"ready"},{"session",matchSession},{"job",matchJob},{"id",matchLocalId}};
@@ -107,7 +114,7 @@ Json requestMatch(const Json& params) {
         if(offset < -musxi::lyrics::MaxMatchOffset || offset > musxi::lyrics::MaxMatchOffset)throw std::invalid_argument("时间校正范围为前后 600 秒");
         selection["offsetMs"]=offset;
     }
-    if(action=="search" || action=="preview")matchSelection=nullptr;
+    if(action=="search" || action=="preview") {matchSelection=nullptr;matchTranslationLookup=nullptr;}
     matchCancelled=false;matchOperation=action;matchJob=std::to_string(++matchSequence);matchResult=nullptr;
     bool ready=true;
     if(action=="search" || action=="preview") {std::wstring error;ready=matchBridge.start(error,L"lyrics.cjs");}
@@ -153,8 +160,12 @@ Json requestMatch(const Json& params) {
             musxi::lyrics::CacheEntry entry;entry.text=text;attachTranslation(entry,data);
             selection={{"text",text},{"offsetMs",0},{"platform",request.at("platform")},{"track",request.at("track")},
                 {"translationState",musxi::lyrics::translationName(entry.translationState)},{"translation",entry.translation}};
+            if(entry.translationState!=musxi::lyrics::Translation::Unknown)selection["translationCheckedAt"]=lyricsNow();
             (void)musxi::lyrics::matchLyrics(selection);
-            return {{"selection",selection}};
+            auto preview=lyricsReply("local","","local","matched",musxi::lyrics::matchLyrics(selection));
+            if(preview["kind"]=="synced")translationLookup(preview,entry.translationState==musxi::lyrics::Translation::Unknown?"failed":"succeeded",
+                entry.translationReason.empty() && entry.translationState==musxi::lyrics::Translation::Unknown?"invalid_data":entry.translationReason,false);
+            return {{"selection",selection},{"translationLookup",preview.at("translationLookup")}};
         }catch(const std::exception& error){return {{"error",error.what()}};}
     });
     return matchPublic();
