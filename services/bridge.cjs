@@ -144,14 +144,15 @@ class Adapter {
     let res;
     try { res = await this.call(name, { ...params, cookie: { ...this.cookie } }); }
     catch (error) {
-      if (error?.body) throw failure(error.body,audio);
-      throw new Error('无法连接酷狗服务，请检查网络后重试');
+      if (error?.body) throw Object.assign(failure(error.body,audio),{lyricsReason:'platform_error'});
+      const {lyricsError,errorReason}=require('./lyrics-result.cjs');
+      throw lyricsError(errorReason(error)==='timeout'?'timeout':'network','无法连接酷狗服务，请检查网络后重试');
     }
     const body = res.body;
     if (body?.ssaCode) throw new Error('账号需要在官方客户端完成安全验证，请验证后重新扫码');
     if (name === 'search_lyric' && Number(body?.status) === 404 && Array.isArray(body.candidates) && !body.candidates.length)
       throw Object.assign(failure(body), { notFound: true });
-    if (!body || (body.status !== undefined && ![1, 200].includes(Number(body.status))) || (body.error_code && Number(body.error_code) !== 0)) throw failure(body,audio);
+    if (!body || (body.status !== undefined && ![1, 200].includes(Number(body.status))) || (body.error_code && Number(body.error_code) !== 0)) throw Object.assign(failure(body,audio),{lyricsReason:'platform_error'});
     for (const entry of res.cookie || []) {
       const pair = entry.split(';')[0]; const at = pair.indexOf('=');
       if (at > 0) this.cookie[pair.slice(0, at)] = pair.slice(at + 1);
@@ -286,10 +287,10 @@ class Adapter {
         const until=Date.now()+13500;
         const call=async(name,params,limit=13500)=>{
           const remaining=Math.min(limit,until-Date.now());
-          if(remaining<=0)throw Error('歌词请求超时');
+          if(remaining<=0)throw require('./lyrics-result.cjs').lyricsError('timeout','歌词请求超时');
           let timer;
           try {return await Promise.race([this.api(name,params),new Promise((_,reject)=>{
-            timer=setTimeout(()=>reject(Error('歌词请求超时')),remaining);
+            timer=setTimeout(()=>reject(require('./lyrics-result.cjs').lyricsError('timeout','歌词请求超时')),remaining);
           })]);}finally{clearTimeout(timer);}
         };
         let found;
@@ -297,20 +298,27 @@ class Adapter {
         // (instrumentals, many remixes); that is "no lyrics", not a failed request.
         try {found=await call('search_lyric',{hash:t.hash,album_audio_id:t.audioId || 0,duration:t.duration || 0});}
         catch(error) {if(error.notFound)return {outcome:'none'};throw error;}
-        if(!Array.isArray(found.candidates))throw Error('歌词搜索结果无效');
+        if(!Array.isArray(found.candidates))throw require('./lyrics-result.cjs').lyricsError('invalid_data','歌词搜索结果无效');
         if(!found.candidates.length)return {outcome:'none'};
         // Hash-scoped search only; never broaden to a title search or another platform.
         const candidate=found.candidates.find(c=>c.id && typeof c.accesskey==='string' && c.accesskey &&
           (!c.hash || String(c.hash).toLowerCase()===t.hash.toLowerCase()));
-        if(!candidate)throw Error('未找到匹配的歌词版本');
+        if(!candidate)throw require('./lyrics-result.cjs').lyricsError('version_mismatch','未找到匹配的歌词版本');
         const download={id:candidate.id,accesskey:candidate.accesskey};
-        const krc=async(limit)=>require('./krc.cjs').decodeKrc((await call('lyric',{...download,fmt:'krc',decode:false},limit)).content);
+        const krc=async(limit)=>{
+          const body=await call('lyric',{...download,fmt:'krc',decode:false},limit);
+          try{return require('./krc.cjs').decodeKrc(body.content);}
+          catch{throw require('./lyrics-result.cjs').lyricsError('invalid_data');}
+        };
         if(request.translationOnly===true)return {outcome:'found',format:'krc',text:await krc()};
         const body=await call('lyric',{...download,fmt:'lrc',decode:true});
-        const result=require('./lyrics-result.cjs').foundLyrics(body.decodeContent);
+        let result;
+        try{result=require('./lyrics-result.cjs').foundLyrics(body.decodeContent);}
+        catch{throw require('./lyrics-result.cjs').lyricsError('invalid_data','歌词内容无效');}
         // Matching previews may include translations of this exact candidate.
         // KRC damage or timeout never discards a valid LRC original.
-        if(request.includeTranslation===true)try {result.krc=await krc(4000);}catch{}
+        if(request.includeTranslation===true)try {result.krc=await krc(4000);}
+        catch(error){result.translationReason=require('./lyrics-result.cjs').errorReason(error);}
         return result;
       }
       case 'vip_auto': {

@@ -57,6 +57,20 @@ int main() {
         require(!writeCache(directory,key,stray,now),"translation text without available state");
         require(judgeTranslation(translated.text,"[00:01.00]你好\n[00:02.00]世界\n[00:30.00]多余")==Translation::None,"two of three rows accepted");
         require(judgeTranslation(translated.text,"[00:01.00]你好\n[00:02.00]世界")==Translation::Available,"aligned translation rejected");
+        require(writeCache(directory,key,none,now),"fresh none for independent clocks");
+        const auto beforeRefresh=*readCache(directory,key,now+6*86400);
+        auto refreshed=beforeRefresh;refreshed.translationState=Translation::Available;refreshed.translation=translated.translation;
+        require(updateCacheTranslation(directory,key,beforeRefresh,refreshed,now+6*86400),"translation compare-update");
+        const auto afterRefresh=readCache(directory,key,now+31*86400);
+        require(afterRefresh && !afterRefresh->fresh && afterRefresh->savedAt==now &&
+            afterRefresh->translationCheckedAt==now+6*86400 && afterRefresh->translation==translated.translation,
+            "translation refresh renewed original lifetime or lost independent time");
+        require(!updateCacheTranslation(directory,key,beforeRefresh,refreshed,now+6*86400),"stale translation writer replaced newer cache");
+        auto changed=*afterRefresh;changed.text="[00:01.00]Changed\n[00:02.00]Words";
+        require(!updateCacheTranslation(directory,key,*afterRefresh,changed,now+31*86400),"translation updater replaced original");
+        {nlohmann::json record;{std::ifstream in(stored);in>>record;}record["translationCheckedAt"]="broken";
+         std::ofstream out(stored);out<<record;}
+        require(readCache(directory,key,now+1)->text==none.text,"bad optional clock discarded original");
         for(int i=0;i<260;++i)require(writeCache(directory,"qq:"+std::to_string(i),{"",true},now),"bounded cache write");
         std::size_t count=0;for(const auto& file:fs::directory_iterator(directory))if(file.path().extension()==".json")++count;
         require(count<=256,"cache entry cap");

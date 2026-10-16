@@ -77,6 +77,8 @@ int main(int argc,char** argv) {
         Json deep="x";for(int i=0;i<20;i++)deep=Json::array({deep});
         require(extractKrc(metadata(Json::array({block(1,deep)}))+simple).state==Translation::Unknown,"metadata depth unbounded");
         require(extractKrc("[language:"+base64(Json{{"version",2},{"content",Json::array()}}.dump())+"]\n"+simple).state==Translation::Unknown,"future version treated as absence");
+        require(extractKrc("[language:"+base64(Json{{"version",2},{"content",Json::array()}}.dump())+"]\n"+simple).reason=="unsupported_format","future KRC schema not classified");
+        require(extractKrc("[language:bad]\n"+simple).reason=="invalid_data","damaged KRC not classified");
         std::string many;for(int i=0;i<5001;i++)many+="[1000,1000]Hello\n";
         require(extractKrc(many).original.empty(),"KRC row limit not enforced");
         require(extractKrc("[1000,bad]Hello").original.empty(),"invalid KRC timing accepted");

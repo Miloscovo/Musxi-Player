@@ -156,11 +156,15 @@ class Adapter:
             if re.fullmatch(r'[0-9a-fA-F]+', text.strip()): raise PublicError('歌词解码失败')
             found = {'outcome':'found', 'format':'lrc', 'text':text, 'translationState':'unknown'}
             trans = getattr(result, 'trans', None)
-            if trans is None or (isinstance(trans, str) and not trans.strip()): found['translationState'] = 'none'
+            if trans is None:
+                # The SDK may suppress decryption errors; None does not prove absence.
+                found['translationReason'] = 'invalid_data'
+            elif isinstance(trans, str) and not trans.strip(): found['translationState'] = 'none'
             # A damaged translation keeps the original usable and stays unknown for a later retry.
             elif isinstance(trans, str) and len(trans.encode('utf-8'))<=1024*1024 and '\0' not in trans and \
                     not re.fullmatch(r'[0-9a-fA-F]+', trans.strip()):
                 found['translationState'] = 'available'; found['translation'] = trans
+            if found['translationState']=='unknown' and 'translationReason' not in found: found['translationReason']='invalid_data'
             return found
         if op=='init':
             saved = r.get('session') or {}
@@ -230,13 +234,18 @@ async def main():
         if not line: break
         try:
             if len(line)>16*1024*1024: raise PublicError('请求过大')
-            result=await asyncio.wait_for(adapter.run(json.loads(line)),timeout=80)
+            request=json.loads(line)
+            result=await asyncio.wait_for(adapter.run(request),timeout=13.5 if request.get('op')=='lyrics' else 80)
             reply={'ok':True,'data':result}
         except PublicError as error:
             # Only our own validation errors are public. Pydantic errors may include credentials.
-            reply={'ok':False,'error':str(error)}
+            reply={'ok':False,'error':str(error),'reason':'invalid_data'}
+        except TimeoutError:
+            reply={'ok':False,'error':'QQ 请求超时','reason':'timeout'}
+        except OSError:
+            reply={'ok':False,'error':'QQ 网络请求失败','reason':'network'}
         except Exception:
-            reply={'ok':False,'error':'QQ 接口请求失败，请检查网络或在官方客户端确认账号状态'}
+            reply={'ok':False,'error':'QQ 接口请求失败，请检查网络或在官方客户端确认账号状态','reason':'platform_error'}
         sys.stdout.write(json.dumps(reply,ensure_ascii=False)+'\n');sys.stdout.flush()
     await adapter.client.close()
 

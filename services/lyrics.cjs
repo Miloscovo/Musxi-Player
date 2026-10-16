@@ -1,6 +1,7 @@
 'use strict';
 // Dedicated IPC process: no account initialization, library sync or playback requests.
 const readline=require('node:readline');
+const {errorReason,lyricsError}=require('./lyrics-result.cjs');
 class LyricsService {
   constructor(create) {this.create=create;this.adapters=new Map();}
   async run(request) {
@@ -22,7 +23,10 @@ class LyricsService {
       if(request[field]!==undefined && (typeof request[field]!=='boolean' || (request[field] && expected!=='kugou')))
         throw Error('无效翻译请求');
     if(!this.adapters.has(expected))this.adapters.set(expected,this.create(expected));
-    return this.adapters.get(expected).run(request);
+    let timer;
+    try {return await Promise.race([this.adapters.get(expected).run(request),new Promise((_,reject)=>{
+      timer=setTimeout(()=>reject(lyricsError('timeout')),14000);
+    })]);}finally{clearTimeout(timer);}
   }
   close(){for(const adapter of this.adapters.values())adapter.stop?.('歌词服务已关闭');}
 }
@@ -40,7 +44,7 @@ async function main() {
     try {
       if(Buffer.byteLength(line)>1024*1024)throw Error();
       const data=await service.run(JSON.parse(line));send(JSON.stringify({ok:true,data})+'\n');
-    }catch {send(JSON.stringify({ok:false,error:'歌词获取失败，请稍后重试'})+'\n');}
+    }catch(error) {send(JSON.stringify({ok:false,error:'歌词获取失败，请稍后重试',reason:errorReason(error)})+'\n');}
   }}finally{service.close();}
 }
 if(require.main===module)main().catch(()=>{process.exitCode=1;});

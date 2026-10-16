@@ -139,8 +139,8 @@ public:
                     std::this_thread::sleep_for(std::chrono::milliseconds(30));
                 }
             }
-            return {{"ok", false}, {"error", "请求超时，请退出账号连接后重试"}, {"fatal", true}};
-        } catch (...) { return {{"ok", false}, {"error", "本机接口连接已中断，请重新连接"}, {"fatal", true}}; }
+            return {{"ok", false}, {"error", "请求超时，请退出账号连接后重试"}, {"fatal", true}, {"reason", "timeout"}};
+        } catch (...) { return {{"ok", false}, {"error", "本机接口连接已中断，请重新连接"}, {"fatal", true}, {"reason", "internal_error"}}; }
     }
     void cancel() { stopping = true; if(job)TerminateJobObject(job,0);else {auto p = process.load(); if (p) TerminateProcess(p, 0);} }
     // Call stop only after the request future has completed.

@@ -8,6 +8,27 @@ cloud::Bridge lyricsBridge;
 std::uint64_t lyricsGeneration=0;
 std::string lyricsPlaybackId;
 ULONGLONG lyricsResultUntil=0;
+std::int64_t lyricsNow();
+std::string lookupReason(const Json& value,const char* field="reason",const char* fallback="internal_error") {
+    static const std::set<std::string> reasons{"not_provided","network","timeout","platform_error","invalid_data",
+        "unsupported_format","version_mismatch","not_bound","not_synced","no_lyrics","internal_error"};
+    const auto found=value.find(field);
+    return found!=value.end() && found->is_string() && reasons.count(found->get<std::string>())?found->get<std::string>():fallback;
+}
+void translationLookup(Json& reply,const char* status,const std::string& reason={},bool canRefresh=true) {
+    reply["translationLookup"]={{"status",status},{"canRefresh",canRefresh}};
+    if(!reason.empty())reply["translationLookup"]["reason"]=reason;
+    if(std::string(status)=="pending")reply["translationPending"]=true;
+    else reply.erase("translationPending");
+    // Kept for old UIs, including their formerly omitted KuGou retry path.
+    reply["translationRetryable"]=canRefresh;
+}
+void translationSupport(Json& reply) {
+    if(reply.at("kind")=="none")translationLookup(reply,"unsupported","no_lyrics",false);
+    else if(reply.at("kind")!="synced")translationLookup(reply,"unsupported","not_synced",false);
+    else if(reply.at("platform")=="local" && reply.at("origin")!="matched")translationLookup(reply,"unsupported","not_bound",false);
+    else translationLookup(reply,"idle");
+}
 Json lyricsReply(const std::string& source,const std::string& id,const std::string& platform,
     const char* origin,const musxi::lyrics::Lyrics& value) {
     Json lines=Json::array();
@@ -18,8 +39,9 @@ Json lyricsReply(const std::string& source,const std::string& id,const std::stri
         lines.push_back(std::move(row));
     }
     // "unknown" is never shown to the user as "no translation"; callers refine it.
-    return {{"status","ready"},{"source",source},{"id",id},{"platform",platform},{"origin",origin},
+    Json reply={{"status","ready"},{"source",source},{"id",id},{"platform",platform},{"origin",origin},
         {"kind",musxi::lyrics::kindName(value.kind)},{"lines",std::move(lines)},{"translation",translated?"available":"none"}};
+    translationSupport(reply);return reply;
 }
 // Translation state of a selection/cache entry, as shown to the UI.
 std::string translationReply(const std::string& state,const Json& reply) {
@@ -41,7 +63,7 @@ std::string lyricsText(std::string bytes) {
     }
     return {};
 }
-Json readLocalLyrics(const fs::path& audio,const std::string& source,const std::string& id) {
+Json readLocalLyrics(const fs::path& audio,const std::string& source,const std::string& id,bool forceTranslation=false) {
     try {
         const auto identity=musxi::lyrics::fileIdentity(audio);
         const auto selected=musxi::lyrics::readMatch(cloud::dataDir()/L"lyrics-matches",identity);
@@ -49,11 +71,12 @@ Json readLocalLyrics(const fs::path& audio,const std::string& source,const std::
             auto reply=lyricsReply(source,id,"local","matched",musxi::lyrics::matchLyrics(*selected));
             reply["offsetMs"]=selected->at("offsetMs");
             reply["translation"]=translationReply(selected->value("translationState","unknown"),reply);
-            reply["translationRetryable"]=reply["translation"]=="unknown";
-            // v0.4 snapshots: fetch the translation for the saved recording later.
-            if(reply["translation"]=="unknown") {
-                reply["translationRefresh"]=true;reply["translationFileIdentity"]=identity;
-            }
+            reply["translationFileIdentity"]=identity;reply["translationSelection"]=*selected;
+            const auto checked=selected->find("translationCheckedAt");
+            const bool fresh=checked!=selected->end() && checked->is_number_integer() && *checked>0 && *checked<=lyricsNow() &&
+                lyricsNow()-checked->get<std::int64_t>()<7ll*86400;
+            if(reply["kind"]=="synced" && (forceTranslation || reply["translation"]=="unknown" || (reply["translation"]=="none" && !fresh)))
+                reply["translationRefresh"]=true;
             return reply;
         }
     }catch(...) {} // Missing files still follow the existing local lookup path.
@@ -80,11 +103,15 @@ std::string translationTrackId;
 std::uint64_t translationGeneration=0;
 Json lyricsRefresh=nullptr; // What the current lookup would refresh: online request or local path.
 std::set<std::string> translationAttempted; // Automatic attempts are bounded; explicit retry clears the song.
+// Retain failures across the 60-second result cache, scoped to the actual lyrics/binding.
+std::map<std::string,std::pair<std::string,Json>> translationOutcomes;
+std::string translationBasis;
+std::string translationManualId; // Retains a click while an old worker drains.
 const wchar_t* translationService=L"lyrics.cjs"; // Tests substitute an offline fixture.
 void cancelTranslation() {
     if(!translationTrackId.empty())translationAttempted.erase(translationTrackId);
     translationCancelled=true;translationBridge.cancel();translationTrackId.clear();
-    if(lyricsResult.is_object())lyricsResult.erase("translationPending");
+    if(lyricsResult.is_object() && lyricsResult.value("translationPending",false))translationSupport(lyricsResult);
 }
 void stopLyrics() {
     lyricsCancelled=true;lyricsBridge.cancel();++lyricsGeneration;
@@ -94,6 +121,7 @@ void stopLyrics() {
     if(translationFuture.valid()) {try {translationFuture.get();} catch(...) {}}
     translationBridge.stop();translationCancelled=false;
     lyricsCancelled=false;lyricsTrackId.clear();lyricsResult=nullptr;
+    translationAttempted.clear();translationOutcomes.clear();translationManualId.clear();
 }
 void cancelLyrics() {
     lyricsCancelled=true;lyricsBridge.cancel();++lyricsGeneration;
@@ -110,25 +138,66 @@ void translationTick() {
         lyricsResult.is_object() && result.is_object() && result.value("id","")==translationTrackId;
     if(current && translationGeneration==lyricsGeneration && result.value("status","")=="ready") {
         result["source"]=lyricsResult.at("source");lyricsResult=std::move(result);lyricsResultUntil=GetTickCount64()+60000;
-    } else if(lyricsResult.is_object())lyricsResult.erase("translationPending");
+    } else if(current && translationGeneration==lyricsGeneration) {
+        const bool supported=lyricsResult.value("translationRetryable",false);
+        translationLookup(lyricsResult,"failed",lookupReason(result),supported);
+    }
+    if(current && translationGeneration==lyricsGeneration && lyricsResult.contains("translationLookup")) {
+        if(translationOutcomes.size()>=256)translationOutcomes.erase(translationOutcomes.begin());
+        translationOutcomes[translationTrackId]={translationBasis,lyricsResult.at("translationLookup")};
+    }
     translationTrackId.clear();translationCancelled=false;
 }
 void startTranslation() {
-    if(!lyricsResult.is_object() || !lyricsResult.value("translationRefresh",false))return;
+    if(!lyricsResult.is_object())return;
     const auto id=lyricsResult.value("id","");
+    const bool newContext=lyricsResult.contains("translationFileIdentity") || lyricsResult.contains("translationOriginal") ||
+        lyricsResult.contains("translationSelection");
+    if(!newContext && !lyricsResult.value("translationRefresh",false))return;
+    // Save refresh context even when no automatic lookup is necessary: a later
+    // manual check of available/none must not reload or clear visible lyrics.
     if(lyricsResult.contains("translationFileIdentity")) {
         lyricsRefresh["identity"]=lyricsResult.at("translationFileIdentity");lyricsResult.erase("translationFileIdentity");
     }
-    // A cancelled worker must drain before another refresh starts. Keep the intent.
-    if(translationFuture.valid()) {lyricsResult["translationPending"]=true;return;}
+    for(const auto* field:{"translationSelection","translationOriginal","translationSavedAt"})if(lyricsResult.contains(field)) {
+        lyricsRefresh[field]=lyricsResult.at(field);lyricsResult.erase(field);
+    }
+    // Only build the comparison token when a result arrives or a task starts,
+    // never on every Application tick while displaying a settled lyric page.
+    if(lyricsResult.value("translationRefresh",false) && translationFuture.valid()) {translationLookup(lyricsResult,"pending");return;}
+    const auto context=lyricsRefresh.is_object()?lyricsRefresh:Json::object();
+    const auto basisText=lyricsResult.value("lines",Json::array()).dump()+context.value("identity",Json(nullptr)).dump()+
+        context.value("translationSelection",Json(nullptr)).dump();
+    // Diagnostic reuse only; never used to authorize a save or establish version identity.
+    const auto basis=std::to_string(std::hash<std::string>{}(basisText))+":"+std::to_string(basisText.size());
+    if(!lyricsResult.value("translationRefresh",false)) {
+        const auto remembered=translationOutcomes.find(id);
+        if(remembered!=translationOutcomes.end() && remembered->second.first==basis &&
+            lyricsResult.value("translationLookup",Json::object()).value("status","")=="idle")
+            lyricsResult["translationLookup"]=remembered->second.second;
+        return;
+    }
     lyricsResult.erase("translationRefresh");
-    if(!lyricsRefresh.is_object() || !translationAttempted.insert(id).second)return;
-    translationCancelled=false;translationTrackId=id;lyricsResult["translationPending"]=true;
+    if(!lyricsRefresh.is_object() || !lyricsResult.value("translationRetryable",false))return;
+    translationBasis=basis;
+    const auto previous=translationOutcomes.find(id);
+    if(previous!=translationOutcomes.end() && previous->second.first!=translationBasis) {
+        translationOutcomes.erase(previous);translationAttempted.erase(id);
+    }
+    if(translationAttempted.size()>=256 && !translationAttempted.count(id)) {
+        translationOutcomes.erase(*translationAttempted.begin());translationAttempted.erase(translationAttempted.begin());
+    }
+    if(!translationAttempted.insert(id).second) {
+        translationSupport(lyricsResult);
+        const auto remembered=translationOutcomes.find(id);
+        if(remembered!=translationOutcomes.end())lyricsResult["translationLookup"]=remembered->second.second;
+        return;
+    }
+    translationCancelled=false;translationTrackId=id;translationLookup(lyricsResult,"pending");
     translationGeneration=lyricsGeneration;
     // Bridge lifetime stays on the Application thread, like the other bridges.
     std::wstring error;(void)translationBridge.start(error,translationService);
-    translationFuture=std::async(std::launch::async,[refresh=std::move(lyricsRefresh)] {return refreshTranslation(refresh);});
-    lyricsRefresh=nullptr;
+    translationFuture=std::async(std::launch::async,[refresh=lyricsRefresh] {return refreshTranslation(refresh);});
 }
 void lyricsTick() {
     if((lyricsFuture.valid() || !translationTrackId.empty()) && lyricsPlaybackId!=audioTrackId && !lyricsCancelled.load())cancelLyrics();
@@ -142,6 +211,10 @@ void lyricsTick() {
     if(!lyricsCancelled.load() && result.is_object() && result.value("id","")==lyricsTrackId &&
         result.value("generation",std::uint64_t{})==lyricsGeneration) {
         result.erase("generation");lyricsResult=std::move(result);lyricsResultUntil=GetTickCount64()+60000;
+        if(translationManualId==lyricsTrackId) {
+            if(lyricsResult.value("translationRetryable",false))lyricsResult["translationRefresh"]=true;
+            translationAttempted.erase(lyricsTrackId);translationOutcomes.erase(lyricsTrackId);translationManualId.clear();
+        }
         startTranslation();
     }
     else {lyricsResult=nullptr;lyricsTrackId.clear();}
@@ -164,19 +237,25 @@ void attachTranslation(musxi::lyrics::CacheEntry& entry,const Json& data) {
     try {
     if(data.contains("krc")) {
         auto extracted=extractKrc(data.at("krc").get<std::string>());
-        if(!retimeKrc(extracted,entry.text))return;
-        entry.translationState=extracted.state;entry.translation=extracted.translation;return;
+        if(!retimeKrc(extracted,entry.text)) {entry.translationReason="version_mismatch";return;}
+        entry.translationState=extracted.state;entry.translation=extracted.translation;entry.translationReason=extracted.reason;return;
     }
     const auto state=data.value("translationState",std::string{"unknown"});
-    if(state=="none") {entry.translationState=Translation::None;return;}
+    if(state=="none") {entry.translationState=Translation::None;entry.translationReason="not_provided";return;}
+    entry.translationReason=lookupReason(data,"translationReason","invalid_data");
     if(state!="available" || !data.contains("translation") || !data.at("translation").is_string())return;
     auto text=data.at("translation").get<std::string>();
     if(text.size()>MaxOnlineLyricsBytes || !normalizeText(text) || text.find('\0')!=std::string::npos)return;
     // An incompatible translation is unusable, not evidence the platform has none.
     if(judgeTranslation(entry.text,text)==Translation::Available) {
-        entry.translationState=Translation::Available;entry.translation=std::move(text);
+        entry.translationState=Translation::Available;entry.translation=std::move(text);entry.translationReason.clear();
+    } else {
+        const auto aligned=parse(entry.text,text);
+        entry.translationReason=aligned.candidates==0?"not_provided":"version_mismatch";
+        if(aligned.lyrics.kind==Kind::Synced && parse(text).kind==Kind::Synced && aligned.candidates==0)entry.translationState=Translation::None;
+        else if(aligned.candidates==0)entry.translationReason="invalid_data";
     }
-    } catch(...) {entry.translationState=Translation::Unknown;entry.translation.clear();}
+    } catch(...) {entry.translationState=Translation::Unknown;entry.translation.clear();entry.translationReason="invalid_data";}
 }
 // Validates one service reply; throws so callers keep their cached copy.
 musxi::lyrics::CacheEntry lyricsEntry(const Json& data,const std::optional<musxi::lyrics::CacheEntry>& cached) {
@@ -188,45 +267,60 @@ musxi::lyrics::CacheEntry lyricsEntry(const Json& data,const std::optional<musxi
     entry.text=data.at("text").get<std::string>();
     if(data.at("format")=="krc") {
         const auto extracted=extractKrc(entry.text);
-        entry.text=extracted.original;entry.translation=extracted.translation;entry.translationState=extracted.state;
+        entry.text=extracted.original;entry.translation=extracted.translation;entry.translationState=extracted.state;entry.translationReason=extracted.reason;
     }
     if(entry.text.size()>MaxOnlineLyricsBytes || !normalizeText(entry.text) || entry.text.find('\0')!=std::string::npos ||
         parse(entry.text).kind==Kind::None)throw std::runtime_error("lyrics data");
     if(data.at("format")=="lrc")attachTranslation(entry,data);
     // A transient translation failure keeps a translation already verified for the same original.
-    if(entry.translationState==Translation::Unknown && cached && cached->text==entry.text &&
+    if(entry.translationState!=Translation::Available && cached && cached->text==entry.text &&
         cached->translationState==Translation::Available) {entry.translationState=cached->translationState;entry.translation=cached->translation;}
     return entry;
 }
-Json readOnlineLyrics(const Json& request,const fs::path& directory,const std::string& key,bool serviceReady) {
+Json readOnlineLyrics(const Json& request,const fs::path& directory,const std::string& key,bool serviceReady,bool forceTranslation=false) {
     using namespace musxi::lyrics;
     const auto source=request.at("source").get<std::string>(),id=request.at("id").get<std::string>();
     const auto platform=request.at("platform").get<std::string>();
     const auto cached=readCache(directory,key,lyricsNow());
     const auto reply=[&](const CacheEntry& value,const char* origin) {
         auto result=lyricsReply(source,id,platform,origin,parse(value.text,value.translation).lyrics);
-        result["translation"]=translationReply(translationName(value.translationState),result);return result;
+        result["translation"]=translationReply(translationName(value.translationState),result);
+        result["translationOriginal"]=value.text;result["translationSavedAt"]=value.savedAt;
+        return result;
     };
     // Fresh originals show at once; a missing translation is fetched afterwards by the
     // translation worker, so upgrading from v0.4 never delays the lyrics page.
-    if(cached && cached->fresh) {
+    if(cached && (cached->fresh || (forceTranslation && !cached->none))) {
         auto result=reply(*cached,"cache");
-        if(!cached->none && !cached->translationFresh)result["translationRefresh"]=true;
+        if(result["kind"]=="synced" && (forceTranslation || !cached->translationFresh))result["translationRefresh"]=true;
         return result;
     }
+    std::string fetchFailure="internal_error";
     try {
         if(lyricsCancelled.load() || !serviceReady)throw std::runtime_error("lyrics unavailable");
         const auto response=lyricsBridge.call(request,15000);
-        if(lyricsCancelled.load() || !response.value("ok",false))throw std::runtime_error("lyrics request");
+        if(lyricsCancelled.load() || !response.value("ok",false)) {
+            fetchFailure=lookupReason(response);throw std::runtime_error("lyrics request");
+        }
+        fetchFailure="invalid_data";
         auto entry=lyricsEntry(response.at("data"),cached);
         if(lyricsCancelled.load())throw std::runtime_error("lyrics cancelled");
-        writeCache(directory,key,entry,lyricsNow());
+        const auto acquired=lyricsNow();entry.savedAt=acquired;entry.translationCheckedAt=acquired;
+        writeCache(directory,key,entry,acquired);
         auto result=reply(entry,"online");
+        if(result["kind"]=="synced" && platform!="kugou")
+            translationLookup(result,entry.translationState==Translation::Unknown ||
+                (!entry.translationReason.empty() && entry.translationReason!="not_provided")?"failed":"succeeded",entry.translationReason);
         // A new KuGou LRC shows first, then the independent worker downloads KRC.
-        if(platform=="kugou" && !entry.none && entry.translationState==Translation::Unknown)result["translationRefresh"]=true;
+        if(platform=="kugou" && result["kind"]=="synced" && entry.translationState==Translation::Unknown)result["translationRefresh"]=true;
         return result;
     }catch(...) {
-        if(!lyricsCancelled.load() && cached && !cached->none)return reply(*cached,"cache");
+        if(!lyricsCancelled.load() && cached && !cached->none) {
+            auto result=reply(*cached,"cache");
+            if(result["kind"]=="synced")translationLookup(result,"failed",fetchFailure);
+            if(forceTranslation && result["kind"]=="synced")result["translationRefresh"]=true;
+            return result;
+        }
         return Json{{"id",id},{"error",true}};
     }
 }
@@ -241,60 +335,75 @@ Json lyricsSession(const Json& saved,const std::string& platform) {
 Json refreshTranslation(const Json& refresh) {
     using namespace musxi::lyrics;
     const auto id=refresh.at("id").get<std::string>(),source=refresh.at("source").get<std::string>();
-    const Json failed={{"id",id},{"status","failed"}};
+    const auto failed=[&](const std::string& reason) {return Json{{"id",id},{"status","failed"},{"reason",reason}};};
     try {
-        if(refresh.contains("request")) {
-            auto request=refresh.at("request");const auto directory=fs::u8path(refresh.at("directory").get<std::string>());
-            const auto key=refresh.at("key").get<std::string>();
-            const auto cached=readCache(directory,key,lyricsNow());
-            if(request.at("platform")=="kugou")request["translationOnly"]=true;
-            if(!translationBridge.running() || translationCancelled.load())return failed;
-            const auto response=translationBridge.call(request,15000);
-            if(translationCancelled.load() || !response.value("ok",false))return failed;
-            auto entry=lyricsEntry(response.at("data"),cached);
-            if(request.at("platform")=="kugou") {
-                KrcLyrics extracted{entry.text,entry.translation,entry.translationState};
-                if(!cached || !retimeKrc(extracted,cached->text))return failed;
-                entry.translation=std::move(extracted.translation);
-                entry.text=cached->text; // Add a translation without changing the visible LRC version.
-            }
-            // A failed translation must not be cached as "none"; keep the old entry for a retry.
-            if(entry.none || entry.translationState==Translation::Unknown || translationCancelled.load())return failed;
-            writeCache(directory,key,entry,lyricsNow());
-            auto result=lyricsReply(source,id,request.at("platform").get<std::string>(),"online",parse(entry.text,entry.translation).lyrics);
-            result["translation"]=translationReply(translationName(entry.translationState),result);return result;
+        const bool online=refresh.contains("request");
+        Json request,selection,identity;
+        fs::path directory;
+        std::optional<CacheEntry> cached;
+        std::string key,original;
+        if(online) {
+            request=refresh.at("request");directory=fs::u8path(refresh.at("directory").get<std::string>());
+            key=refresh.at("key").get<std::string>();cached=readCache(directory,key,lyricsNow());
+            if(!cached || cached->none || cached->text!=refresh.at("translationOriginal") ||
+                cached->savedAt!=refresh.at("translationSavedAt"))return failed("version_mismatch");
+            original=cached->text;
+        } else {
+            const auto audio=fs::u8path(refresh.at("path").get<std::string>());
+            directory=cloud::dataDir()/L"lyrics-matches";identity=fileIdentity(audio);
+            if(!refresh.contains("identity") || refresh.at("identity")!=identity)return failed("version_mismatch");
+            const auto selected=readMatch(directory,identity);
+            if(!selected || !refresh.contains("translationSelection") || *selected!=refresh.at("translationSelection"))return failed("version_mismatch");
+            selection=*selected;original=selection.at("text").get<std::string>();
+            const auto platform=selection.at("platform").get<std::string>();const auto& track=selection.at("track");
+            request={{"op","lyrics"},{"id",track.at("id")},{"platform",platform},{"track",track},
+                {"profileDir",cloud::dataDir().u8string()},{"session",lyricsSession(cloud::readSession(),platform)}};
         }
-        const auto audio=fs::u8path(refresh.at("path").get<std::string>());const auto directory=cloud::dataDir()/L"lyrics-matches";
-        const auto identity=fileIdentity(audio);const auto selected=readMatch(directory,identity);
-        if(refresh.contains("identity") && refresh.at("identity")!=identity)return failed;
-        if(!selected || selected->value("translationState","unknown")!="unknown")return failed;
-        const auto& track=selected->at("track");const auto platform=selected->at("platform").get<std::string>();
-        Json request={{"op","lyrics"},{"id",track.at("id")},{"platform",platform},{"track",track},
-            {"profileDir",cloud::dataDir().u8string()},{"session",lyricsSession(cloud::readSession(),platform)}};
-        if(platform=="kugou")request["translationOnly"]=true;
-        if(translationCancelled.load() || !translationBridge.running())return failed;
+        if(request.at("platform")=="kugou")request["translationOnly"]=true;
+        if(translationCancelled.load() || !translationBridge.running())return failed("internal_error");
         const auto response=translationBridge.call(request,15000);
-        if(translationCancelled.load() || !response.value("ok",false))return failed;
-        const auto& data=response.at("data");auto selection=*selected;
-        if(data.at("outcome")=="none")return failed; // The platform lost the lyrics; keep the snapshot as is.
-        auto entry=lyricsEntry(data,std::nullopt);
-        if(entry.translationState==Translation::Unknown)return failed;
-        if(platform=="kugou") {
-            KrcLyrics extracted{entry.text,entry.translation,entry.translationState};
-            if(!retimeKrc(extracted,selection.at("text").get<std::string>()))return failed;
-            entry.translation=std::move(extracted.translation);
+        if(translationCancelled.load())return failed("internal_error");
+        if(!response.value("ok",false))return failed(lookupReason(response));
+        const auto& data=response.at("data");
+        if(data.at("outcome")=="none")return failed("no_lyrics");
+        auto fetched=lyricsEntry(data,std::nullopt);
+        // All three platforms must prove original compatibility, even when the
+        // newly returned translation happens to use the same timestamps.
+        if(!sameOriginal(original,fetched.text))return failed("version_mismatch");
+        if(request.at("platform")=="kugou") {
+            KrcLyrics extracted{fetched.text,fetched.translation,fetched.translationState};
+            if(!retimeKrc(extracted,original))return failed("version_mismatch");
+            fetched.translation=std::move(extracted.translation);
         }
-        // Translation aligned against the user's saved original, not the newer server text.
-        if(entry.translationState==Translation::Available &&
-            judgeTranslation(selection.at("text").get<std::string>(),entry.translation)!=Translation::Available)return failed;
-        selection["translationState"]=translationName(entry.translationState);
-        selection["translation"]=entry.translationState==Translation::Available?entry.translation:std::string{};
-        // Never overwrite a choice the user changed while this request was running.
-        if(translationCancelled.load() || !updateMatch(directory,identity,*selected,selection))return failed;
-        auto result=lyricsReply(source,id,"local","matched",matchLyrics(selection));
-        result["offsetMs"]=selection.at("offsetMs");
-        result["translation"]=translationReply(selection.at("translationState").get<std::string>(),result);return result;
-    }catch(...) {return failed;}
+        if(fetched.translationState==Translation::Unknown)return failed(fetched.translationReason.empty()?"invalid_data":fetched.translationReason);
+        if(fetched.translationState==Translation::Available && judgeTranslation(original,fetched.translation)!=Translation::Available)
+            return failed("version_mismatch");
+        if(translationCancelled.load())return failed("internal_error");
+        const auto checked=lyricsNow();
+        Json result;
+        if(online) {
+            auto updated=*cached;
+            if(fetched.translationState==Translation::Available || updated.translationState!=Translation::Available) {
+                updated.translationState=fetched.translationState;updated.translation=fetched.translation;
+            }
+            if(!updateCacheTranslation(directory,key,*cached,updated,checked))return failed("internal_error");
+            result=lyricsReply(source,id,request.at("platform").get<std::string>(),"cache",parse(updated.text,updated.translation).lyrics);
+            result["translation"]=translationReply(translationName(updated.translationState),result);
+            result["translationOriginal"]=updated.text;result["translationSavedAt"]=updated.savedAt;
+        } else {
+            auto updated=selection;
+            if(fetched.translationState==Translation::Available || selection.value("translationState","unknown")!="available") {
+                updated["translationState"]=translationName(fetched.translationState);updated["translation"]=fetched.translation;
+            }
+            updated["translationCheckedAt"]=checked;
+            if(!updateMatch(directory,identity,selection,updated))return failed("version_mismatch");
+            result=lyricsReply(source,id,"local","matched",matchLyrics(updated));result["offsetMs"]=updated.at("offsetMs");
+            result["translation"]=translationReply(updated.at("translationState").get<std::string>(),result);
+            result["translationFileIdentity"]=identity;result["translationSelection"]=updated;
+        }
+        translationLookup(result,"succeeded",fetched.translationState==Translation::None?"not_provided":"");
+        return result;
+    }catch(...) {return failed("invalid_data");}
 }
 const Json* findLocalTrack(const std::string& id) {
     for(const auto& row:localTracks)if(row.value("id","")==id)return &row;
@@ -304,14 +413,23 @@ const Json* findLocalTrack(const std::string& id) {
 Json requestLyrics(const std::string& source,const std::string& id,bool retryTranslation=false) {
     const auto pending=Json{{"status","pending"},{"source",source},{"id",id},{"platform",""},{"origin",""},{"kind","none"},{"lines",Json::array()}};
     lyricsTick();
-    if(retryTranslation) {translationAttempted.erase(id);cancelLyrics();}
+    if(!translationManualId.empty() && translationManualId!=id)translationManualId.clear();
+    if(retryTranslation)translationManualId=id;
     if(lyricsTrackId==id && !lyricsCancelled.load()) {
-        if(lyricsResult.is_object() && GetTickCount64()<lyricsResultUntil) {
+        if(lyricsResult.is_object() && (GetTickCount64()<lyricsResultUntil || lyricsResult.value("translationPending",false) || retryTranslation)) {
             if(lyricsResult.value("error",false)) {
                 lyricsResult=nullptr;lyricsTrackId.clear();
                 throw std::runtime_error("歌词获取失败，请检查网络后重试");
             }
-            auto reply=lyricsResult;reply["source"]=source;reply.erase("translationRefresh");reply.erase("translationFileIdentity");return reply;
+            if(retryTranslation) {
+                translationManualId.clear();
+                if(lyricsResult.value("translationRetryable",false) && !lyricsResult.value("translationPending",false)) {
+                    translationAttempted.erase(id);translationOutcomes.erase(id);lyricsResult["translationRefresh"]=true;startTranslation();
+                }
+            }
+            auto reply=lyricsResult;reply["source"]=source;
+            for(const auto* field:{"translationRefresh","translationFileIdentity","translationSelection","translationOriginal","translationSavedAt"})reply.erase(field);
+            return reply;
         }
         if(lyricsFuture.valid())return pending;
     }
@@ -319,6 +437,8 @@ Json requestLyrics(const std::string& source,const std::string& id,bool retryTra
     if(lyricsFuture.valid()) {if(!lyricsCancelled.load())cancelLyrics();return pending;}
     if(!translationTrackId.empty())cancelTranslation();
     lyricsCancelled=false;lyricsTrackId=id;lyricsResult=nullptr;lyricsPlaybackId=audioTrackId;lyricsRefresh=nullptr;
+    const bool forceTranslation=translationManualId==id;translationManualId.clear();
+    if(forceTranslation) {translationAttempted.erase(id);translationOutcomes.erase(id);}
     const auto generation=++lyricsGeneration;
     if(id.rfind("local:",0)!=0) {
         const auto* track=findLyricsTrack(id);
@@ -332,16 +452,16 @@ Json requestLyrics(const std::string& source,const std::string& id,bool retryTra
             {"profileDir",profile.u8string()},{"session",session}};
         lyricsRefresh={{"id",id},{"source",source},{"request",request},{"directory",(profile/L"lyrics-cache").u8string()},{"key",key}};
         std::wstring error;const bool ready=lyricsBridge.start(error,L"lyrics.cjs");
-        lyricsFuture=std::async(std::launch::async,[request,directory=profile/L"lyrics-cache",key,ready,generation] {
-            auto result=readOnlineLyrics(request,directory,key,ready);result["generation"]=generation;return result;
+        lyricsFuture=std::async(std::launch::async,[request,directory=profile/L"lyrics-cache",key,ready,generation,forceTranslation] {
+            auto result=readOnlineLyrics(request,directory,key,ready,forceTranslation);result["generation"]=generation;return result;
         });
         return pending;
     }
     const auto* row=findLocalTrack(id);
     if(!row) {lyricsTrackId.clear();throw std::out_of_range("本地歌曲不存在");}
     lyricsRefresh={{"id",id},{"source",source},{"path",row->at("path")}};
-    lyricsFuture=std::async(std::launch::async,[path=fs::u8path(row->at("path").get<std::string>()),source,id,generation] {
-        auto result=readLocalLyrics(path,source,id);result["generation"]=generation;return result;
+    lyricsFuture=std::async(std::launch::async,[path=fs::u8path(row->at("path").get<std::string>()),source,id,generation,forceTranslation] {
+        auto result=readLocalLyrics(path,source,id,forceTranslation);result["generation"]=generation;return result;
     });
     return pending;
 }

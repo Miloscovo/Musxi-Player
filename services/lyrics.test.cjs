@@ -3,6 +3,31 @@ const test=require('node:test');const assert=require('node:assert/strict');
 const {Adapter}=require('./bridge.cjs');const {NeteaseAdapter}=require('./netease.cjs');
 const {LyricsService}=require('./lyrics.cjs');const {foundLyrics}=require('./lyrics-result.cjs');
 const {decodeKrc}=require('./krc.cjs');const {deflateSync}=require('node:zlib');
+const {errorReason}=require('./lyrics-result.cjs');
+
+test('lyrics failures expose stable reasons without private messages',async()=>{
+  assert.equal(errorReason({code:'ECONNRESET',message:'private'}),'network');
+  assert.equal(errorReason({code:'ETIMEDOUT'}),'timeout');
+  assert.equal(errorReason({lyricsReason:'private',message:'timeout secret'}),'internal_error');
+  for(const [failure,expected] of [[{code:'ETIMEDOUT'},'timeout'],[{code:'ECONNRESET'},'network']]) {
+    const a=new NeteaseAdapter(async()=>{throw failure;});
+    await assert.rejects(a.run({op:'lyrics',id:'netease:123'}),e=>errorReason(e)===expected);
+  }
+  const a=new NeteaseAdapter(async()=>({body:{code:403}}));
+  await assert.rejects(a.run({op:'lyrics',id:'netease:123'}),e=>errorReason(e)==='platform_error');
+});
+
+test('malformed NetEase translation fields are unknown and KuGou optional errors are classified',async()=>{
+  for(const tlyric of [42,'text',[],{lyric:42}]) {
+    const a=new NeteaseAdapter(async()=>({body:{code:200,lrc:{lyric:'[00:01]Original'},tlyric}}));
+    assert.equal((await a.run({op:'lyrics',id:'netease:123'})).translationState,'unknown');
+  }
+  const a=new Adapter(async(name,p)=>({body:name==='search_lyric'?{candidates:[{id:2,accesskey:'synthetic'}]}:
+    p.fmt==='lrc'?{decodeContent:'[00:01]Hello'}:{content:'bad'}}));
+  const result=await a.run({op:'lyrics',track:{hash:'a'.repeat(32)},includeTranslation:true});
+  assert.equal(result.text,'[00:01]Hello');assert.equal(result.translationReason,'invalid_data');
+  await assert.rejects(a.run({op:'lyrics',track:{hash:'a'.repeat(32)},translationOnly:true}),e=>errorReason(e)==='invalid_data');
+});
 function encodedKrc(text) {
   const key=Buffer.from([64,71,97,119,94,50,116,71,81,54,49,45,206,210,110,105]);
   const compressed=deflateSync(text);for(let i=0;i<compressed.length;i++)compressed[i]^=key[i%16];

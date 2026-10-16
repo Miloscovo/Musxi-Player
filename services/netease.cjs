@@ -20,9 +20,12 @@ class NeteaseAdapter {
   constructor(call){this.call=call;this.cookie='';this.profile=null;this.key='';this.tracks=new Map();this.lists=new Map();}
   session(){return {platform:'netease',cookie:this.cookie,profile:this.profile};}
   async api(name,params={}){
-    let result;try{result=await this.call(name,{...params,cookie:this.cookie});}catch{throw Error('无法连接网易云服务，请稍后重试');}
+    let result;try{result=await this.call(name,{...params,cookie:this.cookie});}catch(error){
+      const {lyricsError,errorReason}=require('./lyrics-result.cjs');
+      throw lyricsError(errorReason(error)==='timeout'?'timeout':'network','无法连接网易云服务，请稍后重试');
+    }
     let body=result.body;if(body?.body)body=body.body;
-    if(!body || body.code && ![200,800,801,802,803].includes(Number(body.code)))throw Error('网易云接口拒绝请求，请在官方客户端确认账号状态');
+    if(!body || body.code && ![200,800,801,802,803].includes(Number(body.code)))throw require('./lyrics-result.cjs').lyricsError('platform_error','网易云接口拒绝请求，请在官方客户端确认账号状态');
     return body;
   }
   auth(){if(!this.profile)throw Error('请先扫码登录网易云音乐');}
@@ -47,7 +50,16 @@ class NeteaseAdapter {
       this.cookie=r.session?.cookie || '';
       const b=await this.api('lyric',{id:r.id.slice(8)});
       if(b.nolyric===true || b.uncollected===true)return {outcome:'none'};
-      return require('./lyrics-result.cjs').foundLyrics(b.lrc?.lyric,b.tlyric?.lyric ?? null);
+      // Missing tlyric in an otherwise valid NetEase lyric response is verified absence.
+      // Present malformed fields must remain unknown instead.
+      const {foundLyrics,lyricsError}=require('./lyrics-result.cjs');
+      let translated=null;
+      if(b.tlyric!==undefined && b.tlyric!==null) {
+        translated=typeof b.tlyric==='object' && !Array.isArray(b.tlyric)?b.tlyric.lyric ?? null:{};
+        if(typeof translated!=='string' && translated!==null)translated={};
+      }
+      try {return foundLyrics(b.lrc?.lyric,translated);}
+      catch {throw lyricsError('invalid_data','歌词内容无效');}
     }
     case 'init':for(const row of r.tracks || [])if(row.id?.startsWith('netease:'))this.tracks.set(row.id,{...row,serviceId:row.id.slice(8),platform:'netease'});if(r.session?.cookie){this.cookie=r.session.cookie;try{const b=await this.api('login_status');const p=b.data?.profile;if(p?.userId)this.profile={id:String(p.userId),name:p.nickname};}catch{this.profile=null;}}return {connected:!!this.profile,profile:this.profile,session:this.session()};
     case 'qr':{const key=await this.api('login_qr_key');this.key=key.data?.unikey;if(!this.key)throw Error('未收到网易云二维码');const b=await this.api('login_qr_create',{key:this.key,qrimg:true});return {image:b.data?.qrimg || '',status:'waiting'};}
