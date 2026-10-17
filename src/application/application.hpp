@@ -1,5 +1,7 @@
 #pragma once
 #include "../player/player_service.hpp"
+#include <memory>
+namespace musxi::updates { class Fixture; }
 namespace musxi {
 // C++17 boundary: ownership stays in the application; no CEF types exposed.
 int runApplication(void* instance);
@@ -11,6 +13,7 @@ struct HostHooks {
     bool (*canClose)()=nullptr;
     bool connectCloud=true; // Disable network startup for host smoke tests only.
     bool testProfile=false; // Existing independent test installation only.
+    std::shared_ptr<updates::Fixture> updateFixture; // Validated dev-only fixture, owned across shutdown.
 };
 void setHostHooks(HostHooks hooks);
 // Application-thread only; returns a copy, never a borrowed backend object.
@@ -21,4 +24,6 @@ void setApplicationPlayerEvents(PlayerService::Events sink);
 // C++17 serialized DTO boundary. No SDK, UI framework, credentials or file handles.
 struct LibraryReply { int code=0; std::string message; std::string json; };
 LibraryReply applicationLibrary(const std::string& command,const std::string& params);
+// Additive update API; does not change playback/library bridge contracts.
+LibraryReply applicationUpdates(const std::string& command,const std::string& params);
 }

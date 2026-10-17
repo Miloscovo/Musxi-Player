@@ -170,6 +170,7 @@ main.app-shell { --sidebar-width:clamp(210px,15.5vw,240px); overflow:hidden; bor
 .pagination button { background:var(--soft); color:var(--ink) }
 .settings-content { max-width:560px; width:100%; padding-top:0; padding-bottom:24px }
 .library-sections.settings-sections { grid-template-columns:repeat(2,minmax(0,1fr)) }
+.library-sections.settings-sections:has(> :nth-child(3)) { grid-template-columns:repeat(3,minmax(0,1fr)) }
 .playback-setting { margin-bottom:28px }
 .playback-setting label { display:block; margin-bottom:12px; font-size:15px; font-weight:600; color:var(--ink) }
 .settings-content .playback-setting select { width:100%; max-width:360px; min-width:0; height:40px; padding:0 12px; border:1px solid var(--line); border-radius:8px; background:var(--search); color:var(--ink); font:inherit; font-size:14px }
@@ -611,3 +612,40 @@ html:has(.desktop-lyrics),html:has(.desktop-lyrics) body,html:has(.desktop-lyric
 .dl-error { position:absolute; bottom:6px; left:0; right:0; color:var(--dl-sub); font-size:11px; text-align:center; text-shadow:var(--dl-halo) }
 @keyframes dl-fade { from { opacity:0 } }
 @media (prefers-reduced-motion:reduce) { .dl-line,.dl-capsule,.dl-colors,.dl-unlock { animation:none } .desktop-lyrics { transition:none } }
+/* App updates: Settings "关于与更新" and the dock notice. */
+.update-settings h3 { margin:0 }
+.update-current p,.update-release-head p,.update-source,.update-hint,.update-unsupported { margin:5px 0 0; color:var(--muted); opacity:1; font-size:13px; line-height:1.6 }
+.update-status { display:flex; align-items:center; justify-content:space-between; gap:16px; margin-top:22px; padding:14px 16px; border:1px solid var(--line); border-radius:10px; background:var(--search) }
+.update-status strong { display:block; color:var(--ink); font-size:14px; font-weight:600 }
+.update-status p { margin:4px 0 0; color:var(--muted); opacity:1; font-size:13px }
+.update-status button { flex-shrink:0 }
+.update-status[data-tone=available] strong,.update-status[data-tone=success] strong { color:var(--accent) }
+.update-status[data-tone=error] strong { color:#c44e4e }
+.update-status[data-tone=warning] strong { color:#b7791f }
+.update-release { margin-top:22px }
+.update-badge { display:inline-block; margin-left:8px; padding:1px 7px; border:1px solid currentColor; border-radius:10px; color:var(--accent); font-size:11px; font-weight:500; line-height:16px; vertical-align:2px }
+.update-actions { display:flex; flex-wrap:wrap; gap:8px; margin-top:14px }
+.update-notes { max-height:260px; overflow:auto; margin-top:14px; padding:12px 14px; border:1px solid var(--line); border-radius:10px; color:var(--ink); font-size:13px; line-height:1.7; user-select:text }
+.update-notes h4 { margin:4px 0 2px; font-size:14px; font-weight:600 }
+.update-notes p { margin:0; color:var(--ink); opacity:1; overflow-wrap:anywhere }
+.update-notes .update-notes-item { position:relative; padding-left:14px }
+.update-notes .update-notes-item::before { position:absolute; left:2px; content:"•"; color:var(--muted) }
+.update-notes-gap { height:8px }
+.update-notes-empty { margin:14px 0 0; color:var(--muted); font-size:13px }
+.update-ignore { margin:10px 0 0; color:var(--muted); font-size:13px }
+.update-link { padding:0; background:none; color:var(--accent); font:inherit; text-decoration:underline; text-underline-offset:2px; cursor:pointer }
+.update-link:disabled { opacity:.5 }
+.update-auto { margin-top:28px; padding-top:22px; border-top:1px solid var(--line) }
+.update-source { margin-top:16px }
+.update-demo { margin-top:24px }
+.update-notice { position:absolute; right:24px; bottom:calc(100% + 12px); z-index:81; display:flex; align-items:center; gap:14px; max-width:calc(100vw - 48px); padding:10px 10px 10px 16px; border:1px solid var(--line); border-radius:10px; background:var(--surface-alpha); color:var(--ink); font-size:14px; box-shadow:0 4px 16px #0002; -webkit-app-region:no-drag }
+.update-notice-text { display:flex; align-items:center; min-width:0; white-space:nowrap }
+.update-notice-text strong { overflow:hidden; text-overflow:ellipsis; font-weight:600 }
+.update-notice-actions { display:flex; align-items:center; gap:4px; flex-shrink:0 }
+.update-notice-actions button { height:30px; padding:0 10px; border-radius:7px; background:transparent; color:var(--ink); font:inherit; font-size:13px }
+.update-notice-actions button:hover { background:var(--hover-surface) }
+.update-notice-actions .update-notice-primary { background:var(--accent-fill); color:#fff }
+.update-notice-actions .update-notice-primary:hover { background:color-mix(in srgb,var(--accent-fill) 88%,#fff) }
+.update-notice-close { width:30px; padding:0!important; color:var(--muted)!important; font-size:18px!important }
+/* Transient alerts stack above the persistent notice instead of covering it. */
+.player:has(.update-notice) .message-alerts { bottom:calc(100% + 70px) }

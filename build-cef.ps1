@@ -4,7 +4,8 @@ param(
     [switch]$Test,
     [switch]$Vue,
     [Parameter(Mandatory=$true)][string]$FfmpegRoot,
-    [string]$FixtureTool
+    [string]$FixtureTool,
+    [switch]$ReleaseBuild
 )
 $ErrorActionPreference = 'Stop'
 Set-Location $PSScriptRoot
@@ -24,7 +25,8 @@ try {
 } finally { Pop-Location }
 $fixtureArguments = @()
 if ($FixtureTool) { $fixtureArguments = @("-DMUSXI_FFMPEG_FIXTURE_TOOL=$FixtureTool") }
-& $cmakePath -S . -B build/cef-msvc -G $Generator -A x64 -DMUSXI_ENABLE_CEF=ON "-DCEF_ROOT=$CefRoot" -DMUSXI_BUILD_VUE_UI=ON -DMUSXI_ENABLE_FFMPEG=ON "-DFFMPEG_ROOT=$FfmpegRoot" @fixtureArguments
+$releaseMode=if ($ReleaseBuild) { 'ON' } else { 'OFF' }
+& $cmakePath -S . -B build/cef-msvc -G $Generator -A x64 -DMUSXI_ENABLE_CEF=ON "-DCEF_ROOT=$CefRoot" -DMUSXI_BUILD_VUE_UI=ON -DMUSXI_ENABLE_FFMPEG=ON "-DFFMPEG_ROOT=$FfmpegRoot" "-DMUSXI_RELEASE_BUILD=$releaseMode" @fixtureArguments
 if ($LASTEXITCODE -ne 0) { throw 'CEF configure failed.' }
 & $cmakePath --build build/cef-msvc --config Release --parallel 6
 if ($LASTEXITCODE -ne 0) { throw 'CEF build failed.' }

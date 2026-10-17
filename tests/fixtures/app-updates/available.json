@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "current": {"version": "0.4.0", "releaseBuild": true},
+  "releases": [
+    {
+      "id": 20,
+      "tag_name": "v0.5.0",
+      "draft": false,
+      "prerelease": true,
+      "published_at": "2026-10-16T00:00:00Z",
+      "body": "## 更新说明\n- 更新提醒与下载入口\n- 本地界面验收，不会真的下载或安装",
+      "html_url": "https://github.com/Miloscovo/Musxi-Player/releases/tag/v0.5.0",
+      "assets": [
+        {
+          "id": 120,
+          "name": "MusxiPlayer-Setup-0.5.0.exe",
+          "state": "uploaded",
+          "size": 123456,
+          "browser_download_url": "https://github.com/Miloscovo/Musxi-Player/releases/download/v0.5.0/MusxiPlayer-Setup-0.5.0.exe"
+        }
+      ]
+    }
+  ],
+  "fetch": {"delaySeconds": 1}
+}

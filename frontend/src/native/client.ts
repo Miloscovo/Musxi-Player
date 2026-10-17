@@ -7,13 +7,14 @@ import { createLibraryClient } from './library.ts';
 import { createWindowClient } from './window.ts';
 import { createLyricsMatchClient } from './lyricsMatch.ts';
 import { createDesktopLyricsClient } from './desktopLyrics.ts';
+import { createUpdatesClient } from './updates.ts';
 
 export function createNativeClient(host: CefTransport) {
   if (isDemoMode(host)) host = createDemoTransport();
   async function command<K extends keyof NativeCommands>(name: K, params: NativeCommands[K]['params'], options?: RequestOptions) {
     return parsePlayerState(await request(host, name, params, options));
   }
-  return Object.freeze({ desktopLyrics: createDesktopLyricsClient(host), lyricsMatch: createLyricsMatchClient(host), window: createWindowClient(host), library: createLibraryClient(host), player: Object.freeze({
+  return Object.freeze({ desktopLyrics: createDesktopLyricsClient(host), lyricsMatch: createLyricsMatchClient(host), window: createWindowClient(host), library: createLibraryClient(host), updates: createUpdatesClient(host), player: Object.freeze({
     pause: (options?: RequestOptions) => command('player.pause', {}, options),
     resume: (options?: RequestOptions) => command('player.resume', {}, options),
     seek: (positionMs: number, options?: RequestOptions) => command('player.seek', { positionMs }, options),

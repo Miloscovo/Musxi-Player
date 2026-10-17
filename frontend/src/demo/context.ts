@@ -4,6 +4,7 @@ import { NativeError } from '../native/types.ts';
 import { createDemoLibrary, createDemoPlayer, demoPlaylistSongs, demoSongs } from './data.ts';
 import { createDemoLyricsMatch } from './lyricsMatch.ts';
 import { createDemoTranslation } from './translation.ts';
+import { createDemoUpdates, type DemoUpdateScenario } from './updates.ts';
 
 export function isDemoMode(host: CefTransport = globalThis as CefTransport, search = globalThis.location?.search || '') {
   const query = new URLSearchParams(search);
@@ -31,6 +32,9 @@ export function createDemoTransport(): CefTransport {
   const track = (id: string) => songs.find(song => song.id === id) || fail('演示歌曲不存在', 404);
   const lyricsMatch=createDemoLyricsMatch(track);
   const demoTranslation=createDemoTranslation();
+  const updates=createDemoUpdates();
+  const scenario=new URLSearchParams(globalThis.location?.search || '').get('updates');
+  if(scenario)try{updates.setScenario(scenario as DemoUpdateScenario);}catch{/* Unknown ?updates= keeps the default. */}
   function favoriteRows(): Track[] {
     return songs.flatMap(song => {
       const platforms = (['netease','kugou','qq'] as MusicPlatform[]).filter(platform =>
@@ -93,6 +97,7 @@ export function createDemoTransport(): CefTransport {
       for (const send of desktopListeners.values()) send(JSON.stringify({ version: 1, event: 'desktopLyrics.changed', state: desktop }));
       return { ...desktop };
     }
+    if (command.startsWith('updates.')) return updates.run(command, p);
     if (command.startsWith('window.')) return { enabled: false, maximized: false };
     if (command === 'player.getState') return player;
     if (command.startsWith('player.')) {

@@ -12,6 +12,7 @@ import { AccountDialog } from '../components/AccountDialog';
 import type { useLibrary } from '../composables/useLibrary';
 import { verifyDesktopWindow } from './desktopSmoke';
 import { observeLyricDragRegions } from '../composables/lyrics';
+import { verifyUpdatesUI } from './updatesSmoke';
 
 async function waitFor(check: () => boolean, message = 'Event/UI update timed out') {
   const end = Date.now() + 3000;
@@ -30,6 +31,8 @@ function checkMenuDragRegions(open: boolean) {
 
 // Invoked only by the real CEF --cef-smoke run (cloud startup is disabled).
 export async function verifyWebPage() {
+  const updateScenario = new URLSearchParams(location.search).get('updatesSmoke');
+  if (updateScenario) { await verifyUpdatesUI(updateScenario); return; }
   if (new URLSearchParams(location.search).has('desktopSmoke')) { await verifyDesktopWindow(); return; }
   const library = await native.library.getState();
   if (!Array.isArray(library.playlists) || library.connected) throw new Error('Unexpected offline library state');
@@ -430,10 +433,21 @@ export async function verifyWebPage() {
     await waitFor(() => fixture.querySelector('[data-slot=alert-description]')?.textContent === '导入完成', 'New message did not display');
   } finally { root.unmount(); fixture.remove(); }
   document.querySelector<HTMLButtonElement>('.settings-nav')?.click();
-  await waitFor(() => document.querySelectorAll('.settings-sections button').length === 2);
+  // 外观 / 播放 / 关于与更新 (the third tab appears once updates.getState answers).
+  await waitFor(() => document.querySelectorAll('.settings-sections button').length === 3, 'Update settings tab is missing');
   const settingsTabs = document.querySelectorAll<HTMLButtonElement>('.settings-sections button');
-  if (Math.abs(settingsTabs[0].getBoundingClientRect().width-settingsTabs[1].getBoundingClientRect().width)>1
+  if (Array.from(settingsTabs).some(tab => Math.abs(tab.getBoundingClientRect().width-settingsTabs[0].getBoundingClientRect().width)>1
+      || Math.abs(tab.getBoundingClientRect().top-settingsTabs[0].getBoundingClientRect().top)>1)
     || document.querySelector('.settings-content h2')) throw new Error('Settings tabs or removed subtitle are incorrect');
+  // Smoke runs a development build with network disabled: no notice, no download, no automatic check.
+  settingsTabs[2].click();
+  await waitFor(() => !!document.querySelector('.update-settings .update-status'), 'Update settings did not load');
+  const updates = await native.updates.getState();
+  if (updates.current.releaseBuild || updates.result !== 'development_build' || updates.automaticCheckEnabled
+    || document.querySelector('.update-notice') || document.querySelector('.update-primary')
+    || !document.querySelector('.update-status')?.textContent?.includes('开发版本')
+    || !document.querySelector('.update-current')?.textContent?.includes(updates.current.version))
+    throw new Error('Development-build update settings are incorrect');
   settingsTabs[1].click();
   await waitFor(() => !!document.querySelector('#audio-output-device'), 'Playback settings did not load');
   if (document.querySelector('.settings-content h2') || document.querySelectorAll('#default-audio-quality option').length !== 4)
