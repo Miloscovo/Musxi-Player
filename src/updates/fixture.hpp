@@ -17,9 +17,15 @@ private:
     explicit Fixture(BuildInfo info):info_(std::move(info)){}
     FetchResult fetch(const std::atomic_bool& cancelled,const Manager::Clock& clock);
     bool recordOpen(const std::string& url);
+    std::unique_ptr<Downloader> createDownloader();
     BuildInfo info_;
     std::vector<Step> steps_;
     std::atomic_size_t fetchCount_{0};
     std::vector<std::string> openedUrls_;
+    bool downloadEnabled_=false,launchFails_=false;
+    int downloadDelayMs_=0;
+    std::string downloadReason_;
+    std::vector<Release> downloadReleases_;
+    std::vector<std::string> installedReleases_;
 };
 }

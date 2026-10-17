@@ -5,7 +5,9 @@
 #include <winhttp.h>
 #include <shellapi.h>
 #include "updates.hpp"
+#include "download.hpp"
 #include <algorithm>
+#include <array>
 #include <memory>
 #include <regex>
 
@@ -120,5 +122,99 @@ bool openBrowser(const std::string& url) {
     if(url.size()>512 || !std::regex_match(url,allowed))return false;
     std::wstring wide(url.begin(),url.end());
     return reinterpret_cast<INT_PTR>(ShellExecuteW(nullptr,L"open",wide.c_str(),nullptr,nullptr,SW_SHOWNORMAL))>32;
+}
+bool allowedAssetUrl(const std::string& url,bool redirected) {
+    if(url.empty() || url.size()>8192 || url.find_first_of("\\#\r\n\t ")!=url.npos ||
+        std::any_of(url.begin(),url.end(),[](unsigned char c){return c<33 || c>126;}))return false;
+    static const std::regex official(R"(^https://github\.com/Miloscovo/Musxi-Player/releases/download/[v0-9A-Za-z.+-]+/(MusxiPlayer-[0-9A-Za-z.+-]+\.exe|MusxiPlayer-Update-[0-9A-Za-z.+-]+\.json)$)");
+    if(std::regex_match(url,official))return true;
+    // GitHub's signed Release asset redirect. Exact host, no arbitrary domains,
+    // userinfo, HTTP downgrade or tokens copied into logs/state.
+    static const std::regex cdn(R"(^https://release-assets\.githubusercontent\.com/github-production-release-asset/[0-9A-Za-z/_-]+\?[^#\\\s]+$)");
+    return redirected && std::regex_match(url,cdn);
+}
+std::string streamOfficialAsset(const std::string& initial,std::uint64_t limit,
+    const std::atomic_bool& cancelled,const DownloadSink& sink) {
+    if(!allowedAssetUrl(initial) || !limit || limit>=2147483648ULL)return "invalid_download";
+    const auto deadline=std::chrono::steady_clock::now()+std::chrono::minutes(30);
+    const auto expired=[&]{return cancelled.load() || std::chrono::steady_clock::now()>=deadline;};
+    const auto failure=[&]{return cancelled.load()?"cancelled":GetLastError()==ERROR_WINHTTP_TIMEOUT ||
+        std::chrono::steady_clock::now()>=deadline?"timeout":"network_error";};
+    Handle session(WinHttpOpen(L"MusxiPlayer-InstallerDownload/1",WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
+        WINHTTP_NO_PROXY_NAME,WINHTTP_NO_PROXY_BYPASS,WINHTTP_FLAG_ASYNC));
+    if(!session || !WinHttpSetTimeouts(session.get(),5000,5000,5000,10000))return failure();
+    std::string url=initial;
+    for(int redirect=0;redirect<=5;++redirect) {
+        if(expired())return failure();
+        if(!allowedAssetUrl(url,redirect>0))return "unsafe_redirect";
+        const std::wstring wide(url.begin(),url.end());URL_COMPONENTS components{};components.dwStructSize=sizeof(components);
+        components.dwHostNameLength=components.dwUrlPathLength=components.dwExtraInfoLength=static_cast<DWORD>(-1);
+        if(!WinHttpCrackUrl(wide.c_str(),static_cast<DWORD>(wide.size()),0,&components) || components.nScheme!=INTERNET_SCHEME_HTTPS ||
+            components.nPort!=INTERNET_DEFAULT_HTTPS_PORT)return "unsafe_redirect";
+        std::wstring host(components.lpszHostName,components.dwHostNameLength),path(components.lpszUrlPath,components.dwUrlPathLength);
+        if(components.dwExtraInfoLength)path.append(components.lpszExtraInfo,components.dwExtraInfoLength);
+        Handle connection(WinHttpConnect(session.get(),host.c_str(),INTERNET_DEFAULT_HTTPS_PORT,0));
+        if(!connection)return failure();
+        Request operation;
+        if(!operation.prepare(WinHttpOpenRequest(connection.get(),L"GET",path.c_str(),nullptr,
+            WINHTTP_NO_REFERER,WINHTTP_DEFAULT_ACCEPT_TYPES,WINHTTP_FLAG_SECURE)))return failure();
+        auto request=operation.handle.get();
+        const auto wait=[&](BOOL started) {
+            if(!started && GetLastError()!=ERROR_IO_PENDING)return false;
+            while(!expired()) {
+                const auto result=WaitForSingleObject(operation.context->event,50);
+                if(result==WAIT_OBJECT_0) {
+                    if(operation.context->error){SetLastError(operation.context->error);return false;}return true;
+                }
+                if(result!=WAIT_TIMEOUT)return false;
+            }
+            return false;
+        };
+        DWORD disable=WINHTTP_DISABLE_REDIRECTS|WINHTTP_DISABLE_COOKIES,auth=WINHTTP_AUTOLOGON_SECURITY_LEVEL_HIGH;
+        if(!WinHttpSetOption(request,WINHTTP_OPTION_DISABLE_FEATURE,&disable,sizeof(disable)) ||
+            !WinHttpSetOption(request,WINHTTP_OPTION_AUTOLOGON_POLICY,&auth,sizeof(auth)))return failure();
+        constexpr wchar_t headers[]=L"Accept: application/octet-stream\r\nAccept-Encoding: identity\r\n";
+        if(!wait(WinHttpSendRequest(request,headers,static_cast<DWORD>(-1),WINHTTP_NO_REQUEST_DATA,0,0,
+            reinterpret_cast<DWORD_PTR>(operation.context))) || !wait(WinHttpReceiveResponse(request,nullptr)))return failure();
+        DWORD status=0,size=sizeof(status);
+        if(!WinHttpQueryHeaders(request,WINHTTP_QUERY_STATUS_CODE|WINHTTP_QUERY_FLAG_NUMBER,WINHTTP_HEADER_NAME_BY_INDEX,
+            &status,&size,WINHTTP_NO_HEADER_INDEX))return failure();
+        if(status==301 || status==302 || status==303 || status==307 || status==308) {
+            if(redirect==5)return "too_many_redirects";
+            std::array<wchar_t,8193> location{};size=static_cast<DWORD>(location.size()*sizeof(wchar_t));
+            if(!WinHttpQueryHeaders(request,WINHTTP_QUERY_LOCATION,WINHTTP_HEADER_NAME_BY_INDEX,location.data(),&size,WINHTTP_NO_HEADER_INDEX))return "unsafe_redirect";
+            const std::wstring target(location.data());
+            if(std::any_of(target.begin(),target.end(),[](wchar_t c){return c<33 || c>126;}))return "unsafe_redirect";
+            url.clear();for(const auto c:target)url.push_back(static_cast<char>(c));continue;
+        }
+        if(status==429 || status==403)return "rate_limited";
+        if(status!=200)return "http_error";
+        const auto encoding=header(request,L"Content-Encoding");
+        if(!encoding.empty() && encoding!=L"identity")return "invalid_download";
+        const auto length=header(request,L"Content-Length");
+        if(!length.empty()) {
+            try {if(length.find_first_not_of(L"0123456789")!=length.npos || std::stoull(length)>limit)return "size_mismatch";}
+            catch(...){return "size_mismatch";}
+        }
+        std::uint64_t received=0;
+        for(;;) {
+            if(expired())return failure();
+            if(!wait(WinHttpReadData(request,operation.context->buffer,sizeof(operation.context->buffer),nullptr)))return failure();
+            const auto read=operation.context->read;if(!read)break;
+            if(read>limit-received)return "size_mismatch";
+            if(!sink(operation.context->buffer,read))return cancelled?"cancelled":"download_rejected";
+            received+=read;
+        }
+        return expired()?failure():std::string{};
+    }
+    return "too_many_redirects";
+}
+bool launchInstaller(const std::filesystem::path& installer) {
+    if(!installer.is_absolute() || installer.filename()!=L"installer.exe")return false;
+    SHELLEXECUTEINFOW info{};info.cbSize=sizeof(info);info.fMask=SEE_MASK_NOCLOSEPROCESS|SEE_MASK_FLAG_NO_UI;
+    info.lpVerb=L"open";info.lpFile=installer.c_str();info.nShow=SW_SHOWNORMAL;
+    // Interactive existing Inno installer; no silent flags or automatic reboot.
+    if(!ShellExecuteExW(&info))return false;
+    if(info.hProcess)CloseHandle(info.hProcess);return true;
 }
 }

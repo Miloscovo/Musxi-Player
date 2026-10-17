@@ -94,6 +94,43 @@ int main(int argc,char** argv) {
             require(manager->state()["reason"]=="cancelled","fixture cancellation lost");
         }
         // A formal binary rejects the override before opening even a nonexistent file.
+        {
+            auto data=sample;data["releases"][0]["assets"][0]["size"]=3;
+            data["releases"][0]["assets"].push_back({{"id",121},{"name","MusxiPlayer-Update-0.5.0.json"},{"state","uploaded"},{"size",186},
+                {"browser_download_url","https://github.com/Miloscovo/Musxi-Player/releases/download/v0.5.0/MusxiPlayer-Update-0.5.0.json"}});
+            data["download"]={{"delayMilliseconds",0}};
+            auto next=data["releases"];
+            next[0]["id"]=21;next[0]["tag_name"]="v0.6.0";
+            next[0]["html_url"]="https://github.com/Miloscovo/Musxi-Player/releases/tag/v0.6.0";
+            next[0]["assets"][0]["id"]=122;next[0]["assets"][0]["name"]="MusxiPlayer-Setup-0.6.0.exe";
+            next[0]["assets"][0]["browser_download_url"]="https://github.com/Miloscovo/Musxi-Player/releases/download/v0.6.0/MusxiPlayer-Setup-0.6.0.exe";
+            next[0]["assets"][1]["id"]=123;next[0]["assets"][1]["name"]="MusxiPlayer-Update-0.6.0.json";
+            next[0]["assets"][1]["browser_download_url"]="https://github.com/Miloscovo/Musxi-Player/releases/download/v0.6.0/MusxiPlayer-Update-0.6.0.json";
+            data["fetch"]=Json::array({Json::object(),Json{{"releases",next}}});
+            auto fixture=load(data);auto manager=fixture->createManager(clock);
+            require(manager->state()["capabilities"]["installerDownload"]==true,"download fixture capability missing");
+            require(manager->command("updates.install",{{"releaseId","20"},{"assetId","120"}}).code==409,"fixture installed before check");
+            manager->command("updates.check",Json::object());auto state=finished(*manager);
+            require(state["latest"]["inAppDownloadAvailable"]==true,"download fixture manifest missing");
+            require(manager->command("updates.startDownload",{{"url","evil"}}).code==400,"download accepted arbitrary URL");
+            require(manager->command("updates.startDownload",{{"releaseId","19"},{"assetId","120"}}).code==409,"stale download accepted");
+            require(!manager->command("updates.startDownload",{{"releaseId","20"},{"assetId","120"}}).code,"fixture download start failed");
+            const auto until=std::chrono::steady_clock::now()+std::chrono::seconds(3);
+            while(!(state=manager->state())["download"]["canInstall"].get<bool>()) {
+                require(std::chrono::steady_clock::now()<until,"fixture download timeout");std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+            now+=31;manager->command("updates.check",Json::object());state=finished(*manager);
+            require(state["download"]["superseded"]==true && state["download"]["canInstall"]==false,"superseded installer still offered");
+            require(manager->command("updates.install",{{"releaseId","20"},{"assetId","120"}}).reason=="release_changed","superseded installer launched");
+            require(!manager->command("updates.startDownload",{{"releaseId","21"},{"assetId","122"}}).code,"new release download failed");
+            const auto nextUntil=std::chrono::steady_clock::now()+std::chrono::seconds(3);
+            while(!(state=manager->state())["download"]["canInstall"].get<bool>()) {
+                require(std::chrono::steady_clock::now()<nextUntil,"new release download timeout");std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+            require(!manager->command("updates.install",{{"releaseId","21"},{"assetId","122"}}).code && manager->installRequested(),"fixture install not recorded");
+            require(fixture->diagnostics()["installedReleases"]==Json::array({"21"}),"fixture launched real installer or lost record");
+            require(manager->command("updates.check",Json::object()).reason=="shutting_down","check during install accepted");
+        }
         bool rejected=false;try{Fixture::load(dir/"missing.json",{"0.4.0","release",true});}
         catch(const std::exception& error){rejected=std::string(error.what())=="update_fixture_forbidden_in_release_build";}
         require(rejected,"release build accepted fixture");

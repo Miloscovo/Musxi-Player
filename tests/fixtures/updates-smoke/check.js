@@ -18,7 +18,7 @@ const wait = async probe => {
 };
 (async () => {
   if (new URLSearchParams(location.search).has('desktopLyrics')) {
-    for (const command of ['updates.getState', 'updates.check', 'updates.setPreferences', 'updates.ignoreRelease', 'updates.fixtureDiagnostics', 'updates.openDownload', 'updates.openReleaseNotes']) {
+    for (const command of ['updates.getState', 'updates.check', 'updates.setPreferences', 'updates.ignoreRelease', 'updates.fixtureDiagnostics', 'updates.openDownload', 'updates.openReleaseNotes', 'updates.startDownload', 'updates.cancelDownload', 'updates.install']) {
       await rejected(command, {}, 403);
     }
     await request('test.desktopReport', {updatesDenied: true});
@@ -47,6 +47,26 @@ const wait = async probe => {
     await request('desktopLyrics.setVisible', {visible: true});
     await wait(async () => (await request('test.desktop')).page?.updatesDenied === true);
     await request('desktopLyrics.setVisible', {visible: false});
+    if (available.capabilities?.installerDownload) {
+      const ids = {releaseId: '20', assetId: '120'};
+      require(available.latest.inAppDownloadAvailable === true, 'Download capability lost manifest');
+      await rejected('updates.startDownload', {url: 'https://example.invalid'}, 400);
+      await rejected('updates.install', {...ids, path: 'cmd.exe'}, 400);
+      await rejected('updates.startDownload', ids, 400, true);
+      await rejected('updates.startDownload', {releaseId: '19', assetId: '120'}, 409);
+      await rejected('updates.install', ids, 409);
+      await request('updates.startDownload', ids);
+      await wait(async () => (await request('updates.getState')).download.status === 'downloading');
+      await request('updates.cancelDownload');
+      await wait(async () => (await request('updates.getState')).download.status === 'cancelled');
+      await request('updates.startDownload', ids);
+      await wait(async () => (await request('updates.getState')).download.canInstall === true);
+      const ready = await request('updates.getState');
+      require(ready.download.receivedBytes === 3 && ready.download.status === 'ready', 'Fixture bytes not verified');
+      const installing = await request('updates.install', ids);
+      require(installing.download.status === 'installing', 'Install state not returned');
+      require((await request('updates.fixtureDiagnostics')).installedReleases.join(',') === '20', 'Fixture did not record install');
+    }
     await request('test.complete');
     return;
   }
