@@ -163,10 +163,19 @@ try {
  Wait-For { ([TrayCheck]::GetWindowLongPtr($desktop,-20).ToInt64() -band 0x20) -ne 0 } 'Tray desktop lock failed'
  $content=Open-Menu;Click-Menu $content 96
  Wait-For { ([TrayCheck]::GetWindowLongPtr($desktop,-20).ToInt64() -band 0x20) -eq 0 } 'Tray desktop unlock failed'
+ # The menu can still own focus after its command has completed.
+ Wait-For {
+  (Find-TestWindow 'MusxiTrayMenu' $true) -eq [IntPtr]::Zero -and
+   [TrayCheck]::GetForegroundWindow() -ne [IntPtr]::Zero
+ } 'Tray menu did not finish closing before the focus check'
  $focus=[TrayCheck]::GetForegroundWindow();$dpi=[TrayCheck]::GetDpiForWindow($desktop)/96.0
+ if($focus -eq $desktop){throw 'Desktop lyrics took focus while unlocking'}
  [void][TrayCheck]::SetWindowPos($desktop,[IntPtr]::Zero,80,120,[int](480*$dpi),[int](180*$dpi),0x14)
  Start-Sleep -Milliseconds 300
- if([TrayCheck]::GetForegroundWindow() -ne $focus){throw 'Desktop resize stole focus'}
+ if([TrayCheck]::GetForegroundWindow() -ne $focus){
+  $afterFocus=[TrayCheck]::GetForegroundWindow()
+  throw "Desktop resize changed focus: $(Class-Name $focus) ($focus) -> $(Class-Name $afterFocus) ($afterFocus); desktop=$desktop"
+ }
  $icon=New-Object TrayCheck+IconIdentifier
  $icon.size=[Runtime.InteropServices.Marshal]::SizeOf($icon);$icon.window=$window;$icon.id=1
  Wait-For {
