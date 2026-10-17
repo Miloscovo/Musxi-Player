@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import type { AppUpdates } from '../composables/useAppUpdates';
-import { formatBytes, formatDate, formatTime, noteLines, shortCommit, updateSummary } from '../composables/appUpdates';
+import { downloadReasonText, formatBytes, formatDate, formatTime, noteLines, shortCommit, updateSummary } from '../composables/appUpdates';
 import { isDemoMode } from '../demo/context';
 import { demoUpdateScenarios, type DemoUpdateScenario } from '../demo/updates';
 import { native } from '../native/client';
@@ -14,10 +14,58 @@ export function ReleaseNotes({ notes }: { notes: string }) {
     <p key={index} className={line.kind === 'item' ? 'update-notes-item' : undefined}>{line.text}</p>)}</div>;
 }
 
+function DownloadProgress({ updates, onDismiss }: { updates: AppUpdates; onDismiss: () => void }) {
+  const download = updates.state?.download;
+  if (!download) return null;
+
+  const percentage = download.totalBytes > 0 ? Math.round((download.receivedBytes / download.totalBytes) * 100) : 0;
+  const isActive = download.status === 'preparing' || download.status === 'downloading' || download.status === 'verifying';
+  const isFailed = download.status === 'failed';
+  const isCancelled = download.status === 'cancelled';
+  const isReady = download.status === 'ready';
+
+  let statusText = '';
+  if (download.status === 'preparing') statusText = '准备下载…';
+  else if (download.status === 'downloading') statusText = `下载中 ${percentage}%`;
+  else if (download.status === 'verifying') statusText = '校验中…';
+  else if (download.status === 'ready') statusText = '安装包已就绪';
+  else if (download.status === 'installing') statusText = '正在启动安装程序…';
+  else if (download.status === 'failed') statusText = `下载失败：${downloadReasonText(download.reason)}`;
+  else if (download.status === 'cancelled') statusText = '已取消下载';
+
+  const showProgress = download.status === 'downloading' && download.totalBytes > 0;
+  const supersededWarning = download.superseded && '版本信息已变化，当前安装包已失效，请下载最新版本。';
+
+  return <div className="update-download-progress" data-status={download.status}>
+    <div className="update-download-status">
+      <strong>{statusText}</strong>
+      {supersededWarning && <p className="update-download-warning">{supersededWarning}</p>}
+    </div>
+    {isActive && <div className={`update-progress-bar${showProgress ? '' : ' update-progress-pending'}`} role="progressbar"
+      aria-label={statusText} aria-valuemin={0} aria-valuemax={100} aria-valuenow={showProgress ? percentage : undefined}>
+      <div className="update-progress-fill" style={{ width: `${percentage}%` }}/>
+    </div>}
+    <div className="update-download-actions">
+      {download.canCancel && <Button variant="secondary" disabled={!!updates.busy} onClick={() => void updates.cancelDownload()}>取消下载</Button>}
+      {isFailed && !download.superseded && <Button variant="secondary" disabled={!!updates.busy}
+        onClick={() => void updates.startDownload(download.releaseId, download.assetId)}>重试</Button>}
+      {isReady && !download.superseded && <>
+        <Button className="update-primary" disabled={!!updates.busy || !download.canInstall}
+          onClick={() => void updates.install(download.releaseId, download.assetId)}>退出并安装</Button>
+        <Button variant="secondary" disabled={!!updates.busy} onClick={onDismiss}>稍后</Button>
+      </>}
+      {(isCancelled || download.superseded) && <Button variant="secondary" disabled={!!updates.busy} onClick={() => void updates.cancelDownload()}>清除</Button>}
+    </div>
+    {isReady && !download.superseded && <p className="update-hint">“退出并安装”将关闭播放器并启动安装向导；稍后可在这里继续安装。</p>}
+  </div>;
+}
+
 export default function UpdateSettings({ updates }: { updates: AppUpdates }) {
   const { state, busy } = updates;
   const [notesOpen, setNotesOpen] = useState(false);
+  const [deferredPackage, setDeferredPackage] = useState('');
   const [scenario, setScenario] = useState<DemoUpdateScenario>('available');
+
   const demo = isDemoMode() && <div className="playback-setting update-demo">
     <label htmlFor="update-demo-scenario">演示状态</label>
     <select id="update-demo-scenario" value={scenario} onChange={async e => {
@@ -33,6 +81,12 @@ export default function UpdateSettings({ updates }: { updates: AppUpdates }) {
   const summary = updateSummary(state), latest = state.latest, checking = state.checkStatus === 'checking';
   const throttled = !checking && !state.canCheck && state.retryAt > 0;
   const ignored = !!latest && state.preferences.ignoredReleaseId === latest.releaseId;
+  const hasInAppDownload = state.capabilities?.installerDownload && latest?.inAppDownloadAvailable;
+  const download = state.download;
+  const isDownloading = download && (download.status !== 'idle' && download.status !== 'cancelled');
+  const packageKey = download ? `${download.releaseId}/${download.assetId}` : '';
+  const progressDismissed = download?.status === 'ready' && !download.superseded && deferredPackage === packageKey;
+
   return <section className="settings-content update-settings" aria-label="关于与更新" aria-busy={checking || !!busy}>
     <div className="update-current">
       <h3>Musxi Player {state.current.version}</h3>
@@ -44,18 +98,25 @@ export default function UpdateSettings({ updates }: { updates: AppUpdates }) {
         title={throttled ? `可在 ${formatTime(state.retryAt)} 后再次检查` : undefined}>
         {checking ? '检查中…' : state.checkStatus === 'failed' ? '重试' : '检查更新'}</Button>
     </div>
+    {isDownloading && !progressDismissed && <DownloadProgress updates={updates} onDismiss={() => setDeferredPackage(packageKey)}/>}
+    {progressDismissed && <div className="update-download-deferred" role="status">
+      <p>安装包已保留，可在本次运行中稍后安装。</p>
+      <Button variant="secondary" onClick={() => setDeferredPackage('')}>查看安装</Button>
+    </div>}
     {latest && <div className="update-release">
       <div className="update-release-head">
         <div><h3>{latest.version}{latest.prerelease && <span className="update-badge">预发布</span>}</h3>
           <p>{[formatDate(latest.publishedAt) && `发布于 ${formatDate(latest.publishedAt)}`, latest.assetName && `${latest.assetName} · ${formatBytes(latest.bytes)}`].filter(Boolean).join(' · ')}</p></div>
       </div>
       <div className="update-actions">
-        {latest.downloadAvailable && <Button className="update-primary" disabled={!!busy}
-          onClick={() => void updates.openDownload(latest.releaseId, latest.assetId)}>下载安装包</Button>}
+        {hasInAppDownload && !isDownloading && <Button className="update-primary" disabled={!!busy}
+          onClick={() => void updates.startDownload(latest.releaseId, latest.assetId)}>下载安装包</Button>}
+        {(!hasInAppDownload || download?.status === 'failed') && latest.downloadAvailable && <Button className={!hasInAppDownload ? 'update-primary' : undefined} variant={!hasInAppDownload ? 'default' : 'secondary'} disabled={!!busy}
+          onClick={() => void updates.openDownload(latest.releaseId, latest.assetId)}>在浏览器下载</Button>}
         <Button variant="secondary" disabled={!!busy} onClick={() => void updates.openNotes(latest.releaseId)}>在浏览器查看发布说明</Button>
         <Button variant="secondary" aria-expanded={notesOpen} onClick={() => setNotesOpen(open => !open)}>{notesOpen ? '收起说明' : '展开说明'}</Button>
       </div>
-      {latest.downloadAvailable && <p className="update-hint">安装包会在浏览器中下载，请退出播放器后再运行安装程序。</p>}
+      {!hasInAppDownload && latest.downloadAvailable && <p className="update-hint">安装包会在浏览器中下载，请退出播放器后再运行安装程序。</p>}
       {notesOpen && <ReleaseNotes notes={latest.notes}/>}
       {updates.canIgnore && latest.downloadAvailable && <p className="update-ignore">{ignored ? <>已设置不再提醒此版本。
         <Button variant="unstyled" className="update-link" disabled={!!busy} onClick={() => void updates.ignore('')}>恢复提醒</Button></> :

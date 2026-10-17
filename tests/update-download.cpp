@@ -40,8 +40,10 @@ int main(int argc,char** argv) {
         Json manifest={{"schemaVersion",1},{"version",r.version},{"architecture","x64"},{"assetName",r.assetName},{"bytes",r.bytes},
             {"sha256","ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"}};
         std::string body=manifest.dump(),payload="abc",transportError;bool slow=false,launchOk=false;int launches=0;
+        std::atomic_int transfers{0};
         r.manifestBytes=body.size();
         auto transport=[&](const std::string& url,std::uint64_t,const std::atomic_bool& cancel,const DownloadSink& sink)->std::string {
+            ++transfers;
             if(url==manifestUrl(r))return sink(body.data(),body.size())?"":"download_rejected";
             require(url==downloadUrl(r),"unexpected transport URL");
             while(slow && !cancel)std::this_thread::sleep_for(std::chrono::milliseconds(1));
@@ -61,6 +63,9 @@ int main(int argc,char** argv) {
             auto legacy=r;legacy.manifestId.clear();require(d.start(legacy).reason=="download_unavailable","legacy release downloaded");
             require(!d.start(r).code,"download start failed");
             auto s=finished(d);require(s["status"]=="ready" && s["receivedBytes"]==3 && s["canInstall"]==true,"verified download not ready");
+            const auto completedTransfers=transfers.load();
+            require(!d.start(r).code && d.state()["status"]=="ready" && transfers==completedTransfers,
+                "ready package was downloaded again");
             require(d.install("19","120").reason=="release_changed" && launches==0,"wrong release installed");
             require(d.install("20","120").reason=="installer_start_failed" && d.state()["canInstall"]==true,"launch failure lost ready state");
             require(!d.cancel().code && d.state()["canInstall"]==false,"ready cancel failed");
@@ -85,6 +90,25 @@ int main(int argc,char** argv) {
             fs::remove(entry.path()/L"installer.exe");fs::remove(entry.path());
         }
         require(kept==1,"failed/cancelled download cache leaked");fs::remove(root);
+        // Deferring installation preserves the package only for this run.
+        const auto launchesBeforeExit=launches;
+        fs::path deferredInstaller;
+        {
+            Downloader d(root,transport,launch);
+            require(!d.start(r).code && finished(d)["canInstall"]==true,"deferred package not ready");
+            for(const auto& entry:fs::directory_iterator(root))deferredInstaller=entry.path()/L"installer.exe";
+            require(fs::exists(deferredInstaller),"ready package missing before normal exit");
+        }
+        require(launches==launchesBeforeExit,"normal exit launched deferred installer");
+        require(!fs::exists(deferredInstaller) && fs::is_empty(root),"normal exit leaked verified package");
+        fs::remove(root);
+        {
+            Downloader d(root,transport,launch);
+            const auto cancelled=d.cancel();
+            require(!cancelled.code && cancelled.state["status"]=="cancelled" && cancelled.state["releaseId"]=="" &&
+                cancelled.state["assetId"]=="" && cancelled.state["canInstall"]==false,"empty task cancellation state");
+            require(!fs::exists(root),"empty cancellation created cache files");
+        }
         {
             Downloader d(root,transport,launch);slow=true;d.start(r);d.stop();
             require(d.state()["canInstall"]==false,"shutdown allowed install");slow=false;

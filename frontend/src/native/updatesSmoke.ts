@@ -1,6 +1,7 @@
 import { native } from './client';
 import { request, type CefTransport } from './transport';
 import { formatDate, formatTime } from '../composables/appUpdates';
+import { NativeError } from './types';
 
 // Real app/hook/CEF/native flow, selected only by --cef-smoke plus a local fixture.
 // Never replaces transport, app state, clocks or update actions with test doubles.
@@ -29,7 +30,7 @@ async function click(node: HTMLButtonElement | null | undefined, why: string) {
 const queryButton = (selector: string) => document.querySelector<HTMLButtonElement>(selector);
 const idle = () => waitFor(() => document.querySelector('.update-settings')?.getAttribute('aria-busy') === 'false', 'Action did not finish');
 async function diagnostics() {
-  const reply = await request(host, 'updates.fixtureDiagnostics', {}) as { fixtureMode: boolean; fetchCount: number; openedUrls: string[] };
+  const reply = await request(host, 'updates.fixtureDiagnostics', {}) as { fixtureMode: boolean; fetchCount: number; openedUrls: string[]; installedReleases: string[] };
   require(reply.fixtureMode === true && Array.isArray(reply.openedUrls), 'Not connected to a native fixture');
   return reply;
 }
@@ -123,12 +124,105 @@ async function verifyThemesAndWidth() {
   }
 }
 
+async function verifyDownloadUI(scenario: string) {
+  await hasNotice('0.5.0');
+  await click(button('.update-notice', '查看'), 'Open download details');
+  await idle();
+  require((await native.updates.getState()).download?.status === 'idle', 'Opening settings started a download');
+  require(button('.update-actions', '下载安装包'), 'In-app download entry missing');
+  const progressStatus = () => document.querySelector('.update-download-progress')?.getAttribute('data-status');
+  async function ready() {
+    await waitFor(() => progressStatus() === 'ready', 'Verified package not shown', 15000);
+    await idle();
+    require((await native.updates.getState()).download?.canInstall, 'UI offered an unverified package');
+    require(text('.update-download-progress').includes('关闭播放器'), 'Exit warning missing');
+    require((await diagnostics()).installedReleases.length === 0, 'Download installed automatically');
+  }
+  async function checkLatest() {
+    await waitFor(async () => (await native.updates.getState()).canCheck, 'Check cooldown did not finish', 65000);
+    // After cooldown, the hook must see canCheck before the actual user click.
+    await waitFor(() => !queryButton('.update-status button')?.disabled, 'Check button did not refresh', 35000);
+    await click(queryButton('.update-status button'), 'Check for a changed release');
+    await waitFor(() => text('.update-release-head').includes('0.6.0'), 'New release missing', 15000);
+  }
+
+  // Start and cancel through the reminder: cancellation must settle before retry.
+  if (scenario === 'download') {
+    await click(queryButton('.update-notice-primary'), 'Start download from reminder');
+    await waitFor(() => progressStatus() === 'downloading', 'Byte progress missing');
+    const bar = document.querySelector('[role=progressbar]')!;
+    require(Number(bar.getAttribute('aria-valuenow')) > 0, 'No byte progress percentage');
+    require(button('.update-notice', '查看进度'), 'Reminder still offers a duplicate download');
+    require(!button('.update-download-actions', '退出并安装'), 'Install offered during download');
+    await click(button('.update-download-actions', '取消下载'), 'Cancel active download');
+    await waitFor(() => button('.update-actions', '下载安装包'), 'Cancellation never settled');
+    require((await native.updates.getState()).download?.status === 'cancelled', 'UI declared cancellation too early');
+  }
+  await click(button('.update-actions', '下载安装包'), 'Start/restart download');
+
+  if (scenario === 'download-network' || scenario === 'download-checksum') {
+    await waitFor(() => progressStatus() === 'failed', 'Download error missing', 15000);
+    require(text('.update-download-status').includes(scenario === 'download-network' ? '网络连接失败' : '文件校验失败'), 'Wrong download error');
+    require(!button('.update-download-actions', '退出并安装'), 'Failed package can be installed');
+    await expectOpen(button('.update-actions', '在浏览器下载'), downloadURL('0.5.0'));
+    await click(button('.update-download-actions', '重试'), 'Retry failed download');
+    await waitFor(() => progressStatus() === 'downloading', 'Retry did not restart download');
+    await waitFor(() => progressStatus() === 'failed', 'Retry did not settle', 15000);
+    require((await diagnostics()).installedReleases.length === 0, 'Failed package installed');
+    return;
+  }
+  await ready();
+
+  if (scenario === 'download-changed') {
+    await checkLatest();
+    await waitFor(() => text('.update-download-warning').includes('失效'), 'Superseded warning missing');
+    require(!button('.update-download-actions', '退出并安装'), 'Superseded package offered install');
+    try {
+      await native.updates.install('20', '120');
+      throw new Error('Stale install was accepted');
+    } catch (e) { require(e instanceof NativeError && e.code === 409, 'Stale install did not return 409'); }
+    require((await diagnostics()).installedReleases.length === 0, 'Stale package launched');
+    await click(button('.update-download-actions', '清除'), 'Clear obsolete package');
+    await waitFor(() => button('.update-actions', '下载安装包'), 'Latest download entry missing');
+    await click(button('.update-actions', '下载安装包'), 'Download current release');
+    await ready();
+    require((await native.updates.getState()).download?.releaseId === '30', 'Wrong replacement package');
+  } else if (scenario === 'download') {
+    await click(button('.update-download-actions', '稍后'), 'Defer installation');
+    await waitFor(() => document.querySelector('.update-download-deferred'), 'Deferred entry missing');
+    require((await native.updates.getState()).download?.status === 'ready', 'Later deleted verified package');
+    require((await diagnostics()).installedReleases.length === 0, 'Later launched installer');
+    await click(button('.update-download-deferred', '查看安装'), 'Restore deferred install');
+    await ready();
+    await click(button('.update-download-actions', '稍后'), 'Defer before navigation');
+    await click(button('.settings-sections', '播放'), 'Leave updates');
+    await click(button('.settings-sections', '关于与更新'), 'Return to retained package');
+    await ready();
+    await click(queryButton('.update-notice-primary'), 'Reminder must open details before installing');
+    require((await diagnostics()).installedReleases.length === 0, 'Reminder bypassed exit warning');
+  }
+  const currentId = scenario === 'download-changed' ? '30' : '20';
+  await click(button('.update-download-actions', '退出并安装'), 'Install verified package');
+  if (scenario === 'download-install-failed') {
+    await waitFor(() => text('.message-alerts').includes('无法启动安装程序'), 'Launch failure not reported');
+    await ready();
+    require(!button('.update-download-actions', '退出并安装')?.disabled, 'Launch failure disabled retry');
+  } else {
+    await waitFor(async () => (await diagnostics()).installedReleases.includes(currentId), 'Install did not record current package');
+    await waitFor(() => progressStatus() === 'installing', 'Installing state missing');
+    require(!text('.update-download-progress').includes('安装成功'), 'UI claimed installation completed');
+  }
+}
+
 export async function verifyUpdatesUI(scenario: string) {
   const initial = await native.updates.getState();
   require(initial.current.commit === 'update-fixture', 'UI smoke requires local native input');
   await diagnostics();
   await waitFor(() => document.querySelector('.library-shell'), 'Application did not mount');
-  if (scenario === 'available') {
+  if (scenario.startsWith('download')) {
+    require(initial.capabilities?.installerDownload, 'Download scenario lacks native capability');
+    await verifyDownloadUI(scenario);
+  } else if (scenario === 'available') {
     // Do not trigger check here: the startup timer must produce the card itself.
     await hasNotice('0.5.0');
     noticeBounds();

@@ -75,7 +75,9 @@
 | `updates.cancelDownload` | `{}` | 完整状态；异步取消需继续轮询直到 cancelled；ready 时取消会丢弃缓存 |
 | `updates.install` | `{releaseId: string, assetId: string}` | 完整状态，status=installing；生产环境随后请求正常关闭应用 |
 
-所有 ID 为第一阶段正整数字符串。命令不接受 URL、路径、额外字段或 persistent；原有主页面信任、托盘和桌面歌词权限限制继续生效。
+命令参数中的 release/asset ID 为第一阶段正整数字符串。命令不接受 URL、路径、额外字段或 persistent；原有主页面信任、托盘和桌面歌词权限限制继续生效。
+
+下载器已启用但尚未选择任务时，`download` 是对象而非 null：`status="idle"`，`releaseId/assetId/version/reason` 都为空字符串，字节数为 0，`canCancel/canInstall/superseded` 都为 false。未开始下载就调用取消也可产生 ID 为空的 `cancelled` 状态；已选择过任务后的 cancelled 通常仍保留任务 ID。前端解析必须接受这些无任务状态；真正发起下载/安装命令时仍需有效正整数 ID，不应为初始状态伪造 ID。
 
 download.status：`idle → preparing → downloading → verifying → ready → installing`；中途可为 `failed` 或 `cancelled`。准备阶段下载小清单，不计入 receivedBytes。可安装只能依据 `canInstall`；100% 字节仍可能正在校验。检查发现新版已变化时旧下载 `superseded=true`、canInstall=false；旧按钮调用返回 409，刷新状态后由用户下载新版。
 
@@ -108,7 +110,7 @@ MusxiPlayerWeb.exe --test-app --update-fixture=<仓库>/tests/fixtures/app-updat
 
 可改 `download.delayMilliseconds`（0～30000）观察进度/取消；`reason` 可为 `"" / timeout / network_error / rate_limited / disk_full / checksum_mismatch / size_mismatch`；`launchFails=true` 模拟启动失败并保留 ready。无任意文件负载或执行参数。安装样本仅支持大小 3 的已选资产，且清单大小必须为生成 JSON 的真实大小（当前 0.5.0 样本为 186）。
 
-CC 负责 TS 客户端/运行时校验、共享 hook、下载/校验/失败/稍后/退出安装界面、demo 和产品 UI 点击验收。当前 backend CEF smoke 使用独立测试 HTML，并非 CC 产品 UI 点击验收。
+原分工由 CC 负责 TS 客户端、共享 hook、界面、demo 和产品 UI 验收；2026-10-17 用户要求 Codex 接手 CC 剩余工作。独立 backend CEF smoke 使用测试 HTML，与下述新增产品页面点击验收分别记录。
 
 ## 后端验证结果（2026-10-17）
 
@@ -118,3 +120,31 @@ CC 负责 TS 客户端/运行时校验、共享 hook、下载/校验/失败/稍�
 - 专项首轮 14/15：独立验证副本保留旧时间戳，导致 manager 原生对象未重编译，版本失效断言失败。已显式刷新相关源文件时间戳并重编译，复核 20 个后端/测试源文件哈希一致；最终结果为上述 15/15。
 - 原生验证继续沿用第一阶段 ignored 独立源码/构建副本及既有 compile-only FFmpeg 审计例外；仓库正式 `verify-ffmpeg.ps1` 未改，无正式发布构建/签名或产品安装包发布。
 - 证据 `build/app-updates/phase2-{a-tests.log,b-core-tests-final.log,b-native-build-refreshed.log,b-native-build-last.log,b-native-tests-final.log,source-record.json}`，安装探针见前节。真实产品双版本覆盖升级、真实安装器与播放/账号数据保留、CC 产品 UI 点击验收仍待完成。
+
+## 前端接手完成与产品页面验收（2026-10-17）
+
+用户授权 Codex 接手后，在 CC 本地实现上补齐了以下内容：
+
+- 下载 DTO 接受无任务 idle/cancelled 的空 ID；非空 ID 仍校验正整数字符串，禁止不一致的安装能力。
+- 进度沿用现有配色和圆角，只显示简洁进度条及百分比；准备/校验阶段显示不确定进度，校验通过前无安装入口。
+- “稍后”仅收起当前安装提示并提供“查看安装”入口，保留 ready；离开设置再回来仍能安装。提醒卡片下载中显示“查看进度”，就绪时显示“查看安装”，实际安装在详情中明确退出后由用户主动点击。
+- 安装按钮遵守 canInstall/superseded；下载失败可重试或通过浏览器下载；安装器启动失败保留包和安装按钮。修复存储失败提示及 409 提示与第一阶段回归不一致的问题。
+- 保留用户要求的简洁“关于与更新”图标，修正为圆圈加 i；demo 增加下载、校验、失败、就绪、失效和安装启动失败场景。暂时读取失败后继续轮询；旧后端 404 停止轮询，demo 切回支持的状态后恢复。
+
+前端测试 **83/83**、TypeScript/Vite 生产构建通过；原生 CEF 宿主重编译通过。新增五个真实产品页面点击场景全部通过（100.41 秒），第一阶段九个页面回归全部通过（131.42 秒）：
+
+```powershell
+ctest --test-dir <native-build> -C Release -R '^cef-updates-ui-smoke' --output-on-failure
+```
+
+五个新选择器为 `download / download-network / download-checksum / download-install-failed / download-changed`，仅在现有 smoke + fixture 校验下启动；测试不替换产品 hook、传输或时钟。覆盖卡片启动、进度、取消重试、校验失败禁止安装、稍后保留/恢复、重新进入设置、浏览器备用入口、安装启动失败、版本变更旧包失效及 409、新包安装记录。CMake 根据场景选择原有 available.json 或 download.json，并生成隔离样本。无生产命令或下载协议变更。
+
+浏览器 demo 通过浅色/深色窄窗口截图检查，以及旧后端演示切回下载后的轮询恢复检查；demo 不代替上述真实 CEF 验收。证据位于 ignored `build/app-updates/phase2-takeover-{frontend-tests,frontend-build,native-build,cef-download,cef-regression,visual}.log`，截图为 `takeover-{ready-light,later,ready-dark-narrow}.png`。验证仍使用前述独立源码副本及 compile-only FFmpeg 审计例外，不代表正式发布审计通过。
+
+产品 UI 的惰性样本验收已完成；真实双版本完整产品安装、账号/曲库等数据保留与安装器退出衔接仍按前节要求单独验收。本轮未执行真实产品安装或发布。
+
+### 接手后的补充复核（2026-10-17）
+
+未发现新的功能阻断问题，本轮仅补强测试：原生下载器断言相同 ready 包复用时不再次请求传输，未安装就正常退出会清理已校验文件且不启动安装器，尚无任务时取消保持空 ID 且不创建缓存。前端命令测试改用 downloading/cancelled/installing 的完整返回状态，并覆盖三个新命令对畸形回复的拒绝及原生 409/500 错误透传。
+
+最终前端 **84/84**、TypeScript/Vite 构建通过；新增断言所在的 `update-download` 专项 **1/1** 通过（0.78 秒）。功能源码未变，前述 14 项 CEF 结果继续适用。补充日志为 ignored `build/app-updates/phase2-review-{frontend-tests,frontend-build,download-build,download-tests}.log`。真实产品覆盖升级及数据保留仍属于发布前待验收项。

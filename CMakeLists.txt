@@ -206,15 +206,21 @@ if(BUILD_TESTING AND MUSXI_ENABLE_FFMPEG)
     set_tests_properties(cef-app-smoke PROPERTIES TIMEOUT 35 RUN_SERIAL TRUE)
     if(MUSXI_BUILD_VUE_UI)
       if(NOT MUSXI_RELEASE_BUILD)
-        foreach(scenario available current empty missing development checking failed stale changed)
+        foreach(scenario available current empty missing development checking failed stale changed
+            download download-network download-checksum download-install-failed download-changed)
           if(scenario STREQUAL "available")
             set(ui_test cef-updates-ui-smoke)
           else()
             set(ui_test "cef-updates-ui-smoke-${scenario}")
           endif()
+          if(scenario MATCHES "^download")
+            set(ui_sample download)
+          else()
+            set(ui_sample available)
+          endif()
           add_test(NAME "${ui_test}" COMMAND "${CMAKE_COMMAND}"
             "-DHOST=$<TARGET_FILE_DIR:cef_host>/MusxiPlayerWeb.exe" "-DSCENARIO=${scenario}"
-            "-DSAMPLE=${PROJECT_SOURCE_DIR}/tests/fixtures/app-updates/available.json"
+            "-DSAMPLE=${PROJECT_SOURCE_DIR}/tests/fixtures/app-updates/${ui_sample}.json"
             "-DROOT=${PROJECT_BINARY_DIR}/update-ui-fixtures" -P "${PROJECT_SOURCE_DIR}/tests/cef-updates-ui-smoke.cmake")
           set_tests_properties("${ui_test}" PROPERTIES TIMEOUT 100 RUN_SERIAL TRUE)
         endforeach()

@@ -14,37 +14,40 @@ export function useAppUpdates() {
   const [busy, setBusy] = useState('');
   const [message, setMessage] = useState({ text: '', error: false, token: '0' });
   const [dismissed, setDismissed] = useState<ReadonlySet<string>>(new Set());
-  const runtime = useRef({ active: false, started: 0, timer: 0, state: null as UpdateState | null });
+  const runtime = useRef({ active: false, unsupported: false, actionPending: false, started: 0, timer: 0, state: null as UpdateState | null });
   const notify = useCallback((text: string, error = false) =>
     setMessage(previous => ({ text, error, token: String(Number(previous.token) + 1) })), []);
   const accept = useCallback((next: UpdateState) => {
     runtime.current.state = next; setState(next); setLoadError('');
   }, []);
   const refresh = useCallback(async () => {
-    try { accept(await native.updates.getState()); setUnsupported(false); return true; }
+    try { accept(await native.updates.getState()); runtime.current.unsupported = false; setUnsupported(false); return true; }
     catch (e) {
       // An older backend answers unknown commands with 404: hide the feature, do not retry.
-      if (e instanceof NativeError && e.code === 404) setUnsupported(true);
+      if (e instanceof NativeError && e.code === 404) { runtime.current.unsupported = true; setUnsupported(true); }
       else setLoadError(e instanceof Error ? e.message : '读取更新状态失败');
       return false;
     }
   }, [accept]);
   const schedule = useCallback(() => {
     const r = runtime.current; window.clearTimeout(r.timer);
-    if (!r.active) return;
+    if (!r.active || r.unsupported) return;
     r.timer = window.setTimeout(async () => {
       if (!r.active) return;
-      if (await refresh()) schedule();
+      if (!r.actionPending) await refresh();
+      schedule();
     }, pollDelay(r.state, Date.now() - r.started));
   }, [refresh]);
   useEffect(() => {
     const r = runtime.current; r.active = true; r.started = Date.now();
-    void refresh().then(ok => { if (ok) schedule(); });
+    void refresh().then(() => schedule());
     return () => { r.active = false; window.clearTimeout(r.timer); };
   }, [refresh, schedule]);
 
   const actions = useMemo(() => {
     async function run(name: string, action: () => Promise<void>) {
+      if (runtime.current.actionPending) return;
+      runtime.current.actionPending = true;
       setBusy(name);
       try { await action(); }
       catch (e) {
@@ -55,12 +58,19 @@ export function useAppUpdates() {
           notify(retry > Date.now() / 1000 ? `检查过于频繁，请在 ${formatTime(retry)} 后重试` : '检查过于频繁，请稍后重试', true);
         } else if (code === 409) {
           await refresh();
-          notify(e instanceof NativeError && e.message === 'shutting_down' ? '播放器正在退出' : '版本信息已更新，请重新确认', true);
+          const msg = e instanceof NativeError ? e.message : '';
+          if (msg === 'shutting_down') notify('播放器正在退出', true);
+          else if (msg === 'release_changed') notify('版本信息已更新，请重新确认', true);
+          else if (msg === 'download_unavailable') notify('当前环境不支持应用内下载', true);
+          else if (msg === 'download_busy') notify('下载任务进行中', true);
+          else if (msg === 'download_not_ready') notify('安装包尚未准备就绪', true);
+          else notify('版本信息已更新，请重新确认', true);
         } else if (code === 404) notify('当前播放器版本不支持此操作', true);
         else if (e instanceof NativeError && e.message === 'browser_open_failed') notify('无法打开系统浏览器', true);
-        else if (e instanceof NativeError && e.message === 'storage_error') { await refresh(); notify('设置未能保存，请重试', true); }
+        else if (e instanceof NativeError && e.message === 'storage_error') { await refresh(); notify(name === 'startDownload' ? '无法创建下载文件，请检查磁盘空间和写入权限' : '设置未能保存，请重试', true); }
+        else if (e instanceof NativeError && e.message === 'installer_start_failed') { await refresh(); notify('无法启动安装程序，请稍后重试', true); }
         else notify(e instanceof Error && e.message ? `操作失败：${e.message}` : '操作失败', true);
-      } finally { setBusy(''); schedule(); }
+      } finally { runtime.current.actionPending = false; setBusy(''); schedule(); }
     }
     return {
       check: () => run('check', async () => { accept(await native.updates.check()); }),
@@ -73,10 +83,25 @@ export function useAppUpdates() {
         await native.updates.openReleaseNotes(releaseId); notify('已在浏览器中打开发布说明');
       }),
       dismiss: (releaseId: string) => setDismissed(previous => new Set(previous).add(releaseId)),
+      // Phase 2: in-app download actions
+      startDownload: (releaseId: string, assetId: string) => run('startDownload', async () => {
+        accept(await native.updates.startDownload(releaseId, assetId));
+      }),
+      cancelDownload: () => run('cancelDownload', async () => {
+        accept(await native.updates.cancelDownload());
+      }),
+      install: (releaseId: string, assetId: string) => run('install', async () => {
+        accept(await native.updates.install(releaseId, assetId));
+        notify('正在启动安装程序，播放器即将退出');
+      })
     };
   }, [accept, notify, refresh, schedule]);
 
-  return { state, refresh, unsupported, loadError, busy, message, notify: shouldNotify(state, dismissed),
+  const refreshState = useCallback(async () => {
+    const ok = await refresh(); schedule(); return ok;
+  }, [refresh, schedule]);
+
+  return { state, refresh: refreshState, unsupported, loadError, busy, message, notify: shouldNotify(state, dismissed),
     // The backend advertises persistent ignore by including the preference field.
     canIgnore: state?.preferences.ignoredReleaseId !== undefined, ...actions };
 }

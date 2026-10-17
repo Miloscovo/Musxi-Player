@@ -200,7 +200,7 @@ export default function LibraryView({ library: lib, theme, appearance, onAppeara
       {view === 'settings' && <nav className="library-sections settings-sections" aria-label="设置分类">
         {([{ id: 'appearance', label: '外观', icon: 'M12 3a9 9 0 1 0 0 18h1a2 2 0 0 0 1.5-3.3l-.2-.2a1.5 1.5 0 0 1 1.1-2.5H18a3 3 0 0 0 3-3 9 9 0 0 0-9-9ZM8 8a.8.8 0 1 0 0-1.6.8.8 0 0 0 0 1.6Zm5-1a.8.8 0 1 0 0-1.6.8.8 0 0 0 0 1.6Zm4 4a.8.8 0 1 0 0-1.6.8.8 0 0 0 0 1.6ZM6 13a.8.8 0 1 0 0-1.6.8.8 0 0 0 0 1.6Z' },
           { id: 'playback', label: '播放', icon: 'M11 4 6 8H3v8h3l5 4V4Zm4 4a6 6 0 0 1 0 8m3-11a10 10 0 0 1 0 14' },
-          ...(updates && !updates.unsupported ? [{ id: 'updates', label: '关于与更新', icon: 'M12 3a9 9 0 1 0 9 9M12 3v4m0-4 3 3m-3-3-3 3M12 11v6m0 0-2.5-2.5M12 17l2.5-2.5' }] as const : [])] as const).map(section =>
+          ...(updates && !updates.unsupported ? [{ id: 'updates', label: '关于与更新', icon: 'M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20ZM12 11v6m0-10h.01' }] as const : [])] as const).map(section =>
           <Button key={section.id} variant="secondary" className="library-section" aria-pressed={settingsSection === section.id}
             onClick={() => { resetScroll();setSettingsSection(section.id); }}><svg className="icon" viewBox="0 0 24 24" aria-hidden="true"><path d={section.icon}/></svg>{section.label}</Button>)}
       </nav>}
