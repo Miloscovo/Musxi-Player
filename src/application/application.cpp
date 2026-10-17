@@ -8,6 +8,7 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#include "../updates/fixture.hpp"
 #include <shellapi.h>
 #include <shlobj.h>
 #include <shobjidl.h>
@@ -34,11 +35,13 @@
 #include "../lyrics/krc.hpp"
 #include "../lyrics/cache.hpp"
 #include "../lyrics/match.hpp"
+#include "../updates/updates.hpp"
 #include "../cxx17_guard.hpp"
 namespace fs=std::filesystem;
 namespace {
 musxi::HostHooks hostHooks;
 bool applicationClosing=false;
+std::unique_ptr<musxi::updates::Manager> appUpdates;
 constexpr UINT_PTR HostTick=0xCEF, Tick=1;
 bool opened=false,playing=false,cloudConnected=false,cloudPolling=false,cloudInitialized=false;
 bool cloudLoginAfterInit=false,cloudAutoNext=false;
@@ -649,12 +652,26 @@ PlayerState applicationPlayerState(){return playerService().state();}
 PlayerResult applicationPlayerCommand(PlayerCommand command,std::uint32_t value){return playerService().invoke(command,value);}
 void setApplicationPlayerEvents(PlayerService::Events sink){playerService().setEventSink(std::move(sink));}
 #include "library_adapter.inc"
+LibraryReply applicationUpdates(const std::string& command,const std::string& params) {
+    if(!appUpdates)return {409,"updates_unavailable",{}};
+    try {
+        if(command=="updates.fixtureDiagnostics" && hostHooks.updateFixture) {
+            const auto input=Json::parse(params);
+            if(!input.is_object() || !input.empty())return {400,"invalid_params",{}};
+            return {0,{},hostHooks.updateFixture->diagnostics().dump()};
+        }
+        const auto reply=appUpdates->command(command,Json::parse(params));
+        return {reply.code,reply.reason,reply.state.dump()};
+    }catch(const Json::exception&){return {400,"invalid_params",{}};}
+    catch(...){return {500,"internal_error",{}};}
+}
 namespace {
 LRESULT CALLBACK wndProc(HWND hwnd,UINT message,WPARAM wp,LPARAM lp){
     switch(message){
     case WM_CREATE: SetTimer(hwnd,Tick,150,nullptr);return 0;
     case WM_TIMER:
         if(wp==HostTick){if(hostHooks.tick)hostHooks.tick();return 0;}
+        if(appUpdates)appUpdates->tick();
         localTick();lyricsTick();matchTick();cloudTick();coverTick();pollAudio();playerService().publish();
         if(hostHooks.connectCloud && GetTickCount64()>=playbackSaveAt) {
             savePlaybackHistory(cloud::dataDir()/L"playback-history.json");playbackSaveAt=GetTickCount64()+5000;
@@ -665,6 +682,7 @@ LRESULT CALLBACK wndProc(HWND hwnd,UINT message,WPARAM wp,LPARAM lp){
     case ImportLocalFolder: chooseLocalFolder();return 0;
     case WM_DESTROY:
         applicationClosing=true;
+        appUpdates.reset();
         if(hostHooks.connectCloud)savePlaybackHistory(cloud::dataDir()/L"playback-history.json");
         localCancelled=true;if(localScan.valid()){try{localScan.get();}catch(...){}}stopMatch();stopLyrics();applicationWindow=nullptr;
         KillTimer(hwnd,HostTick);KillTimer(hwnd,Tick);cloudStop();closeAudio();
@@ -686,6 +704,11 @@ int runApplication(void* nativeInstance){
     HWND hwnd=CreateWindowExW(0,wc.lpszClassName,L"Musxi Application",0,0,0,0,0,HWND_MESSAGE,nullptr,instance,nullptr);
     if(!hwnd){CoUninitialize();return 1;}
     applicationWindow=hwnd;
+    if(hostHooks.updateFixture)appUpdates=hostHooks.updateFixture->createManager();
+    else if(hostHooks.connectCloud)appUpdates=std::make_unique<updates::Manager>(updates::buildInfo(),cloud::dataDir(),true);
+    else appUpdates=std::make_unique<updates::Manager>(updates::buildInfo(),fs::path{},false,
+        [](const std::atomic_bool&){return updates::FetchResult{{},"network_disabled",0};},
+        [](const std::string&){return false;});
     if(hostHooks.connectCloud) {
         loadLocalCatalog(cloud::dataDir()/L"local-music.json");
         restorePlaybackHistory(cloud::dataDir()/L"playback-history.json");playbackSaveAt=GetTickCount64()+5000;

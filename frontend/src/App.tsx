@@ -14,10 +14,13 @@ import LyricsView from './views/LyricsView';
 import { playbackTimes, formatPlaybackTime } from './composables/playbackTime';
 import { useDesktopLyrics } from './composables/useDesktopLyrics';
 import { bindWheelRange } from './composables/wheelRange';
+import { useAppUpdates } from './composables/useAppUpdates';
+import UpdateNotice from './components/UpdateNotice';
 
 export default function App() {
   const shell = useWindow(); const library = useLibrary();
-  const desktop = useDesktopLyrics();
+  const desktop = useDesktopLyrics(); const updates = useAppUpdates();
+  const [showUpdates, setShowUpdates] = useState(0);
   const currentTrack = library.state?.now;
   const { state, error, loading, busy, connected, pause, resume, seek, setVolume } = usePlayerState();
   const [seekDraft, setSeekDraft] = useState<number | null>(null);
@@ -72,7 +75,8 @@ export default function App() {
     playback: { text: playbackMessage, error: state?.phase === 'failed' },
     window: { text: shell.error || desktop.error, error: true },
     connection: { text: connected ? '' : '正在连接…' },
-  }), [library.error, operation?.status, operation?.error, operation?.id, notice, error, playbackMessage, state?.phase, shell.error, desktop.error, connected, actionNotice]);
+    updates: updates.message,
+  }), [updates.message, library.error, operation?.status, operation?.error, operation?.id, notice, error, playbackMessage, state?.phase, shell.error, desktop.error, connected, actionNotice]);
   useEffect(() => {
     const seekElement = seekInput.current; const volumeElement = volumeInput.current;
     async function seekChanged() {
@@ -129,7 +133,7 @@ export default function App() {
       </Dialog>
     </div></div>}
     <div className="app-body" hidden={compact}>
-      <div className="library-layer" inert={lyricsOpen}><LibraryView library={library} theme={shell.theme} appearance={shell.appearance} onAppearance={shell.setAppearance} transparency={shell.transparency} onTransparency={shell.setTransparency} /></div>
+      <div className="library-layer" inert={lyricsOpen}><LibraryView library={library} theme={shell.theme} appearance={shell.appearance} onAppearance={shell.setAppearance} transparency={shell.transparency} onTransparency={shell.setTransparency} updates={updates} showUpdates={showUpdates} /></div>
       {lyricsOpen && <LyricsView trackId={state?.opened ? state.trackId : ''} now={currentTrack} positionMs={state?.positionMs ?? 0}
         canSeek={connected && !!state?.opened && !!state.durationMs} onSeek={positionMs => void seek(positionMs)} onClose={closeLyrics} />}
     </div>
@@ -196,6 +200,7 @@ export default function App() {
       </div>}
         <QueuePanel library={library} />
       </div>
+      {!compact && !lyricsOpen && <UpdateNotice updates={updates} onDetails={() => setShowUpdates(n => n + 1)} />}
       <MessageAlerts messages={messages} />
     </section>
   </main>;

@@ -245,6 +245,12 @@ public:
                     }
                 }
             }
+            if(command.rfind("updates.",0)==0) {
+                const auto reply=applicationUpdates(command,params.dump());
+                if(reply.code)callback->Failure(reply.code,reply.message);
+                else callback->Success(Json{{"version",1},{"result",Json::parse(reply.json)}}.dump());
+                return true;
+            }
             if(command.rfind("window.",0)==0) {
                 const bool theme=command=="window.setTheme";
                 if(theme) {

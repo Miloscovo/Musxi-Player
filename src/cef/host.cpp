@@ -3,6 +3,8 @@
 #include "include/cef_command_line.h"
 #include "include/cef_parser.h"
 #include "../application/application.hpp"
+#include "../updates/fixture.hpp"
+#include <cstdio>
 #include <commctrl.h>
 #include <filesystem>
 #include <shlwapi.h>
@@ -17,6 +19,7 @@
 #include <fstream>
 #include <climits>
 #include <map>
+#include <vector>
 
 namespace {
 std::wstring pagePath;
@@ -36,6 +39,7 @@ bool trayAdded=false;
 HICON trayIcon=nullptr;
 HWND trayWindow=nullptr;
 std::string mainUrl;
+std::string updatesUiSmoke;
 NOTIFYICONDATAW trayData(HWND hwnd) {
     NOTIFYICONDATAW data{};data.cbSize=sizeof(data);data.hWnd=hwnd;data.uID=1;
     data.uFlags=NIF_MESSAGE|NIF_ICON|NIF_TIP|NIF_SHOWTIP;
@@ -359,7 +363,9 @@ void ready(void* window) {
     }
     // Match Chromium's UTF-8 escaping before using an exact navigation/IPC allowlist.
     CefURLParts parts;
-    if(!CefParseURL(CefString(buffer).ToString()+(desktopSmoke?"?smoke=1&desktopSmoke=1":smoke?"?smoke=1":""),parts)) {
+    const auto query=!updatesUiSmoke.empty()?"?smoke=1&updatesSmoke="+updatesUiSmoke:
+        desktopSmoke?"?smoke=1&desktopSmoke=1":smoke?"?smoke=1":"";
+    if(!CefParseURL(CefString(buffer).ToString()+query,parts)) {
         createFailed=true;PostMessageW(nativeWindow,WM_CLOSE,0,0);return;
     }
     const auto url=CefString(&parts.spec).ToString();
@@ -396,7 +402,7 @@ void ready(void* window) {
 }
 void tick() {
     CefDoMessageLoopWork();
-    if(smoke && GetTickCount64()-startTick>20000)PostMessageW(nativeWindow,WM_CLOSE,0,0);
+    if(smoke && GetTickCount64()-startTick>(updatesUiSmoke.empty()?20000:90000))PostMessageW(nativeWindow,WM_CLOSE,0,0);
 }
 bool canClose() {
     if(!hostClosing){saveDesktopSettings();saveMainWindow();hostClosing=true;}
@@ -413,10 +419,32 @@ int run(HINSTANCE instance,int show,void* sandbox) {
     wchar_t exe[32768];GetModuleFileNameW(nullptr,exe,32768);
     const auto directory=std::filesystem::path(exe).parent_path();
     auto command=CefCommandLine::CreateCommandLine();command->InitFromString(GetCommandLineW());
+    std::shared_ptr<musxi::updates::Fixture> updateFixture;
+    if(command->HasSwitch("update-fixture")) {
+        try {
+            updateFixture=musxi::updates::Fixture::load(std::filesystem::path(command->GetSwitchValue("update-fixture").ToWString()));
+        }catch(const std::exception& error) {
+            const auto message=std::string("Musxi update fixture rejected: ")+error.what()+"\n";
+            OutputDebugStringA(message.c_str());std::fputs(message.c_str(),stderr);
+            return 2; // Never fall back to the real update source after a fixture error.
+        }
+    }
+    if(command->HasSwitch("cef-updates-ui-smoke")) {
+        // This selector only launches real UI assertions with validated local input.
+        updatesUiSmoke=command->GetSwitchValue("cef-updates-ui-smoke").ToString();
+        static const std::vector<std::string> scenarios{"available","current","empty","missing","development","checking","failed","stale","changed"};
+        if(!updateFixture || !command->HasSwitch("cef-smoke") ||
+            std::find(scenarios.begin(),scenarios.end(),updatesUiSmoke)==scenarios.end() ||
+            command->HasSwitch("cef-preview") || command->HasSwitch("cef-updates-smoke") ||
+            command->HasSwitch("cef-desktop-smoke") || command->HasSwitch("cef-smoke-unicode"))return 2;
+    }
     testApp=command->HasSwitch("test-app") || std::filesystem::path(exe).filename()==L"MusxiPlayerTest.exe";
     preview=command->HasSwitch("cef-preview");
     if(!preview)SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     pagePath=(directory/(preview?L"ui":L"ui-vue")/L"index.html").wstring();
+    // Isolated bridge fixture; the smoke flag also disables cloud/update I/O.
+    if(command->HasSwitch("cef-smoke") && command->HasSwitch("cef-updates-smoke"))
+        pagePath=(directory/L"updates-smoke"/L"index.html").wstring();
     desktopSmoke=command->HasSwitch("cef-desktop-smoke");
     smoke=command->HasSwitch("cef-smoke") || desktopSmoke;
     if(smoke && command->HasSwitch("cef-smoke-unicode"))pagePath=(directory/L"测试 空格"/L"index.html").wstring();
@@ -428,15 +456,15 @@ int run(HINSTANCE instance,int show,void* sandbox) {
     if(FAILED(SHGetFolderPathW(nullptr,CSIDL_LOCAL_APPDATA,nullptr,0,local)))return 2;
     const auto data=std::filesystem::path(local)/(preview?L"MusxiPlayer-Preview":testApp?L"MusxiPlayer-Test":L"MusxiPlayer");
     std::error_code ec;std::filesystem::create_directories(data,ec);if(ec)return 2;
-    if(!preview){loadDesktopSettings(data);loadMainWindow(data);}
-    CefString(&settings.root_cache_path)=(data/(smoke?L"cef-smoke-cache":L"cef-cache")).wstring();
+    if(!preview && !updateFixture){loadDesktopSettings(data);loadMainWindow(data);}
+    CefString(&settings.root_cache_path)=(data/(updateFixture?L"cef-update-fixture-cache":smoke?L"cef-smoke-cache":L"cef-cache")).wstring();
     CefString(&settings.log_file)=(data/L"cef.log").wstring();
     settings.log_severity=LOGSEVERITY_WARNING;
     // CEF Browser UI uses the application's main thread; Renderer uses IPC.
     // A singleton redirect/early exit is not a successful IPC smoke test.
     if(!CefInitialize(CefMainArgs(instance),settings,app,sandbox))
         return smoke?4:CefGetExitCode();
-    musxi::HostHooks hooks{ready,tick,canClose,!smoke && !preview,testApp};
+    musxi::HostHooks hooks{ready,tick,canClose,!smoke && !preview && !updateFixture,testApp,updateFixture};
     musxi::setHostHooks(hooks);
     const int result=musxi::runApplication(instance);
     musxi::setHostHooks({});

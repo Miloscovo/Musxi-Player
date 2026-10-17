@@ -6,7 +6,8 @@ param(
     [string]$Python="python.exe",
     [switch]$RequireCleanSource,
     [string]$PublicSourceRevision='efd72195e2202325c8a8af8b79068f63ccd1cd18',
-    [switch]$StageSourceBundles
+    [switch]$StageSourceBundles,
+    [switch]$ReleaseBuild
 )
 $ErrorActionPreference='Stop'
 Set-Location $PSScriptRoot
@@ -73,7 +74,7 @@ foreach ($sourceAsset in @($cefFfmpegSource,$sourceBundlePath)) {
 foreach ($required in @('build/runtime/node.exe','build/runtime/python/python.exe','build/services/qq_bridge.py','build/services/netease.cjs','build/services/multi-platform.cjs','build/services/node_modules','build/services/vendor')) {
     if (-not (Test-Path -LiteralPath $required)) { throw "Missing $required; run setup-cloud.ps1 first." }
 }
-& "$PSScriptRoot\build.ps1" -CefRoot $CefRoot -FfmpegRoot $FfmpegRoot -Test -FixtureTool $FixtureTool
+& "$PSScriptRoot\build.ps1" -CefRoot $CefRoot -FfmpegRoot $FfmpegRoot -Test -FixtureTool $FixtureTool -ReleaseBuild:$ReleaseBuild
 Copy-Item -LiteralPath (Join-Path $CefRoot 'LICENSE.txt') -Destination 'build/cef-license.txt'
 Copy-Item -LiteralPath (Join-Path $FfmpegRoot 'LICENSE.txt') -Destination 'build/ffmpeg-license.txt'
 $commit=(& git rev-parse HEAD).Trim()

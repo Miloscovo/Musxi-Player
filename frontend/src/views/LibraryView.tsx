@@ -16,6 +16,8 @@ import { ContextMenu, ContextMenuTrigger, ContextMenuContent, ContextMenuItem,
 
 import AppearanceSettings from '../components/AppearanceSettings';
 import PlaybackSettings from '../components/PlaybackSettings';
+import UpdateSettings from '../components/UpdateSettings';
+import type { AppUpdates } from '../composables/useAppUpdates';
 import type { Appearance } from '../composables/appearance';
 type LibrarySection = 'created' | 'saved' | 'local';
 const librarySections: { id: LibrarySection; label: string; icon: string }[] = [
@@ -30,9 +32,10 @@ function appendUnique(previous: Track[], incoming?: Track[]) {
   for (const track of incoming) { const index=indices.get(track.id); if(index!==undefined)rows[index]=track;else {indices.set(track.id,rows.length);rows.push(track);} }
   return rows;
 }
-export default function LibraryView({ library: lib, theme, appearance, onAppearance, transparency = 50, onTransparency }: {
+export default function LibraryView({ library: lib, theme, appearance, onAppearance, transparency = 50, onTransparency, updates, showUpdates = 0 }: {
   library: ReturnType<typeof useLibrary>; theme: Theme; appearance?: Appearance; onAppearance?: (next: Appearance) => void;
   transparency?: number; onTransparency?: (value: number) => void;
+  updates?: AppUpdates; showUpdates?: number;
 }) {
   const { state, error, pending, page } = lib;
   const playlistRows = state?.tracks || [];
@@ -40,8 +43,12 @@ export default function LibraryView({ library: lib, theme, appearance, onAppeara
   const [view, setView] = useState<'library' | 'search' | 'settings' | 'recent'>('library');
   const [query, setQuery] = useState(''); const [showTracks, setShowTracks] = useState(false);
   const [librarySection, setLibrarySection] = useState<LibrarySection>('created');
-  const [settingsSection, setSettingsSection] = useState<'appearance' | 'playback'>('appearance');
+  const [settingsSection, setSettingsSection] = useState<'appearance' | 'playback' | 'updates'>('appearance');
   const [removeFoldersOpen, setRemoveFoldersOpen] = useState(false);
+  useEffect(() => {
+    // The dock notice asks for the update details page.
+    if (showUpdates) { setView('settings'); setSettingsSection('updates'); setShowTracks(false); }
+  }, [showUpdates]);
   const [playlistQuery, setPlaylistQuery] = useState('');
   const content = useRef<HTMLDivElement>(null);
   const songScroll = useRef<HTMLDivElement>(null);
@@ -192,7 +199,8 @@ export default function LibraryView({ library: lib, theme, appearance, onAppeara
       {view !== 'recent' && isDemoMode() && <p className="demo-notice">演示模式：播放进度与导入文件夹均为模拟，不播放真实音频、不读取真实文件、不登录真实账号；刷新页面后重置。</p>}
       {view === 'settings' && <nav className="library-sections settings-sections" aria-label="设置分类">
         {([{ id: 'appearance', label: '外观', icon: 'M12 3a9 9 0 1 0 0 18h1a2 2 0 0 0 1.5-3.3l-.2-.2a1.5 1.5 0 0 1 1.1-2.5H18a3 3 0 0 0 3-3 9 9 0 0 0-9-9ZM8 8a.8.8 0 1 0 0-1.6.8.8 0 0 0 0 1.6Zm5-1a.8.8 0 1 0 0-1.6.8.8 0 0 0 0 1.6Zm4 4a.8.8 0 1 0 0-1.6.8.8 0 0 0 0 1.6ZM6 13a.8.8 0 1 0 0-1.6.8.8 0 0 0 0 1.6Z' },
-          { id: 'playback', label: '播放', icon: 'M11 4 6 8H3v8h3l5 4V4Zm4 4a6 6 0 0 1 0 8m3-11a10 10 0 0 1 0 14' }] as const).map(section =>
+          { id: 'playback', label: '播放', icon: 'M11 4 6 8H3v8h3l5 4V4Zm4 4a6 6 0 0 1 0 8m3-11a10 10 0 0 1 0 14' },
+          ...(updates && !updates.unsupported ? [{ id: 'updates', label: '关于与更新', icon: 'M12 3a9 9 0 1 0 9 9M12 3v4m0-4 3 3m-3-3-3 3M12 11v6m0 0-2.5-2.5M12 17l2.5-2.5' }] as const : [])] as const).map(section =>
           <Button key={section.id} variant="secondary" className="library-section" aria-pressed={settingsSection === section.id}
             onClick={() => { resetScroll();setSettingsSection(section.id); }}><svg className="icon" viewBox="0 0 24 24" aria-hidden="true"><path d={section.icon}/></svg>{section.label}</Button>)}
       </nav>}
@@ -242,7 +250,7 @@ export default function LibraryView({ library: lib, theme, appearance, onAppeara
           </DialogContent>
         </Dialog>
       </div>}
-      {view === 'settings' ? settingsSection === 'playback' ? <PlaybackSettings/> : <AppearanceSettings appearance={appearance ?? { mode: theme === 'dark' || theme === 'glass' ? 'dark' : 'light', transparent: theme === 'glass' || theme === 'glass-light', tone: 'green' }} onAppearance={onAppearance ?? (() => {})} transparency={transparency} onTransparency={onTransparency ?? (() => {})}/> : view === 'library' && !showTracks ? <>
+      {view === 'settings' ? settingsSection === 'updates' && updates ? <UpdateSettings updates={updates}/> : settingsSection === 'playback' ? <PlaybackSettings/> : <AppearanceSettings appearance={appearance ?? { mode: theme === 'dark' || theme === 'glass' ? 'dark' : 'light', transparent: theme === 'glass' || theme === 'glass-light', tone: 'green' }} onAppearance={onAppearance ?? (() => {})} transparency={transparency} onTransparency={onTransparency ?? (() => {})}/> : view === 'library' && !showTracks ? <>
         {!isLocal && <>
           <div className="playlist-grid">{librarySection === 'created' && state?.connected && <Button variant="ghost" className="playlist" disabled={busy || !state?.connected} onClick={() => open('musxi:cloud-favorites')}><div className="cover placeholder" aria-hidden="true"><svg className="playlist-heart size-11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1.1-1.1a5.5 5.5 0 0 0-7.8 7.8L12 21l8.8-8.6a5.5 5.5 0 0 0 0-7.8Z"/></svg></div><div className="playlist-info"><strong>云端收藏整合</strong><span>{state?.favoritesCount ?? (state?.playlistId === 'musxi:cloud-favorites' ? state.trackCount : 0)} 首</span></div></Button>}{visiblePlaylists.map(list => <Button variant="ghost" key={list.id} className="playlist" disabled={busy} onClick={() => open(list.id)}><CoverImage url={list.cover}/><div className="playlist-info"><strong>{list.name}</strong><span>{list.count} 首{list.platform && ` · ${platformNames[list.platform]}`}</span></div></Button>)}</div>
           {!state?.connected ? <div className="library-section-empty"><p>登录后查看你的音乐库。</p><Button onClick={() => {setAccountPlatform(null);setAccount(true);}}>扫码登录</Button></div>
