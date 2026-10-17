@@ -652,7 +652,8 @@ export async function verifyWebPage() {
     if(!(await native.window.getState()).maximized)throw new Error('Compact mode did not restore maximized state');
     const restored = await native.window.maximize();
     if (restored.maximized) throw new Error('Test window did not restore');
-    await waitFor(() => window.innerHeight===expandedHeight, 'Normal viewport did not finish restoring');
+    await waitFor(() => window.innerHeight===expandedHeight, 'Normal viewport did not finish restoring')
+      .catch(async error => { throw new Error(`${error.message}: viewport=${window.innerWidth}x${window.innerHeight}, expected=${expandedWidth}x${expandedHeight}, native=${JSON.stringify(await request(window as unknown as CefTransport,'test.windowSize',{}))}`); });
     await native.window.setTheme('glass-light');
     await native.window.setTheme('glass');
     await native.window.setTheme('light');
