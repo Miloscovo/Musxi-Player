@@ -34,6 +34,11 @@ RECT resizeView{};
 HCURSOR webCursor=nullptr;
 bool mouseTracked=false,imeActive=false,releasingCapture=false,renderFailed=false;
 constexpr UINT TrayMessage=WM_APP+44;
+constexpr UINT ResizeBrowserMessage=WM_APP+45;
+bool resizeBrowserPending=false;
+void scheduleBrowserResize(HWND hwnd) {
+    if(!resizeBrowserPending)resizeBrowserPending=PostMessageW(hwnd,ResizeBrowserMessage,0,0)!=FALSE;
+}
 const UINT TaskbarCreated=RegisterWindowMessageW(L"TaskbarCreated");
 bool trayAdded=false;
 HICON trayIcon=nullptr;
@@ -64,12 +69,13 @@ void removeTray(HWND hwnd) {
 }
 void showFromTray(HWND hwnd) {
     ShowWindow(hwnd,IsIconic(hwnd)?SW_RESTORE:SW_SHOW);
-    if(auto browser=musxi::cef_adapter::browserHost()){browser->WasHidden(false);browser->WasResized();}
+    if(auto browser=musxi::cef_adapter::browserHost()){browser->WasHidden(false);scheduleBrowserResize(hwnd);}
     SetForegroundWindow(hwnd);
 }
 bool hideToTray(HWND hwnd) {
     // Never hide the only reachable window if the notification icon cannot be added.
     if(!addTray(hwnd))return false;
+    KillTimer(hwnd,102);
     if(auto browser=musxi::cef_adapter::browserHost())browser->WasHidden(true);
     ShowWindow(hwnd,SW_HIDE);
     return true;
@@ -277,6 +283,7 @@ LRESULT CALLBACK testProc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp) {
         }return 0;
     case WM_MOVE: if(browser)browser->NotifyMoveOrResizeStarted();break;
     case WM_ENTERSIZEMOVE: {
+        KillTimer(hwnd,102);
         GetClientRect(hwnd,&resizeView);const int dpi=GetDpiForWindow(hwnd);
         resizeView.right=std::max(1,MulDiv(resizeView.right,96,dpi));
         resizeView.bottom=std::max(1,MulDiv(resizeView.bottom,96,dpi));
@@ -286,8 +293,11 @@ LRESULT CALLBACK testProc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp) {
     case WM_EXITSIZEMOVE:
         RemovePropW(hwnd,musxi::cef_adapter::ResizeViewProperty);
         surface.setResizing(false);KillTimer(hwnd,101);
-        if(browser){browser->WasResized();browser->Invalidate(PET_VIEW);}return 0;
-    case WM_TIMER: if(wp==101){CefDoMessageLoopWork();return 0;}break;
+        scheduleBrowserResize(hwnd);return 0;
+    case WM_TIMER:
+        if(wp==101){CefDoMessageLoopWork();return 0;}
+        if(wp==102){if(browser)browser->Invalidate(PET_VIEW);else KillTimer(hwnd,102);return 0;}
+        break;
     case WM_ERASEBKGND: {if(GetWindowLongPtrW(hwnd,GWL_EXSTYLE)&WS_EX_NOREDIRECTIONBITMAP)return 1;RECT r;GetClientRect(hwnd,&r);auto brush=CreateSolidBrush(frameColor);FillRect(reinterpret_cast<HDC>(wp),&r,brush);DeleteObject(brush);return 1;}
     case WM_APP+43: frameColor=wp?RGB(16,18,20):RGB(255,255,255);InvalidateRect(hwnd,nullptr,TRUE);return 0;
     case WM_NCCALCSIZE: return 0;
@@ -315,21 +325,30 @@ LRESULT CALLBACK testProc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp) {
     }
     case WM_DPICHANGED: {auto r=reinterpret_cast<RECT*>(lp);SetWindowPos(hwnd,nullptr,r->left,r->top,r->right-r->left,mainCompact?MulDiv(compactHeight,HIWORD(wp),96):r->bottom-r->top,SWP_NOZORDER);if(browser){browser->NotifyScreenInfoChanged();browser->WasResized();}return 0;}
     case WM_SIZE: {
+        if(wp==SIZE_MINIMIZED)KillTimer(hwnd,102);
         if(browser) {
             browser->WasHidden(wp==SIZE_MINIMIZED);
             if(wp!=SIZE_MINIMIZED) {
                 if(GetPropW(hwnd,musxi::cef_adapter::ResizeViewProperty)) {
                     if(!surface.present(hwnd))PostMessageW(hwnd,musxi::cef_adapter::RecoveryFailed,0,0);
                 } else {
-                    browser->WasResized();
-                    // CEF holds subsequent resizes until a matching-size frame is painted.
-                    browser->Invalidate(PET_VIEW);
+                    scheduleBrowserResize(hwnd);
                 }
             }
         }
         return 0;
     }
+    case ResizeBrowserMessage:
+        resizeBrowserPending=false;
+        // Query the final bounds after synchronous restore/compact window changes finish.
+        if(browser && !IsIconic(hwnd) && !GetPropW(hwnd,musxi::cef_adapter::ResizeViewProperty)) {
+            // Keep requesting frames until CEF acknowledges the final size, releasing its resize hold.
+            SetTimer(hwnd,102,50,nullptr);
+            browser->WasResized();browser->Invalidate(PET_VIEW);
+        }
+        return 0;
     case musxi::cef_adapter::RecoveryFailed:
+        KillTimer(hwnd,102);
         surface.clear();
         SetWindowLongPtrW(hwnd,GWL_EXSTYLE,GetWindowLongPtrW(hwnd,GWL_EXSTYLE)&~WS_EX_NOREDIRECTIONBITMAP);
         InvalidateRect(hwnd,nullptr,TRUE);
@@ -402,7 +421,7 @@ void ready(void* window) {
 }
 void tick() {
     CefDoMessageLoopWork();
-    if(smoke && GetTickCount64()-startTick>(updatesUiSmoke.empty()?20000:90000))PostMessageW(nativeWindow,WM_CLOSE,0,0);
+    if(smoke && GetTickCount64()-startTick>(updatesUiSmoke.empty()?30000:90000))PostMessageW(nativeWindow,WM_CLOSE,0,0);
 }
 bool canClose() {
     if(!hostClosing){saveDesktopSettings();saveMainWindow();hostClosing=true;}
@@ -497,8 +516,7 @@ bool setMainWindowCompact(bool compact,int height) {
         mainCompact=false;
         if(!SetWindowPlacement(testWindow,&expandedPlacement)){mainCompact=true;return false;}
     }
-    // Placement can report an intermediate restore size before maximizing.
-    if(auto browser=browserHost()){browser->NotifyScreenInfoChanged();browser->WasResized();}
+    scheduleBrowserResize(testWindow);
     return true;
 }
 void presentDesktopLyrics(const void* pixels,int width,int height) {paintDesktopLyrics(pixels,width,height);}
@@ -569,6 +587,10 @@ void dismissTrayMenu() {if(trayWindow)PostMessageW(trayWindow,WM_CLOSE,0,0);}
 void trayMenuClosed() {if(trayWindow){DestroyWindow(trayWindow);trayWindow=nullptr;}}
 void presentBrowser(bool popup,const void* pixels,int width,int height) {
     if(!testWindow || renderFailed)return;
+    if(!popup) {
+        RECT bounds{};GetClientRect(testWindow,&bounds);
+        if(std::abs(bounds.right-width)<=1 && std::abs(bounds.bottom-height)<=1)KillTimer(testWindow,102);
+    }
     if(surface.paint(testWindow,popup,pixels,width,height))return;
     surface.clear();
     if(!popup && surface.paint(testWindow,false,pixels,width,height))return;

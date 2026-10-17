@@ -92,6 +92,7 @@ $appVersion=(Get-Content "$PSScriptRoot/frontend/package.json" -Raw | ConvertFro
 $artifact=Join-Path $PSScriptRoot "dist/MusxiPlayer-Setup-$appVersion.exe"
 $hash=Get-FileHash -LiteralPath $artifact -Algorithm SHA256
 [System.IO.File]::WriteAllText("$artifact.sha256", "$($hash.Hash.ToLower())  $([System.IO.Path]::GetFileName($artifact))`n")
+$updateManifest=& "$PSScriptRoot/scripts/write-update-manifest.ps1" -Installer $artifact -Version $appVersion -OutputDirectory "$PSScriptRoot/dist"
 $releaseAssets=if ($StageSourceBundles) { @(
     @{ Source=$embeddedMaterials; Name="MusxiPlayer-CEF-FFmpeg-Source-$cefFfmpegCommit.tar.gz" },
     @{ Source=$sourceBundlePath; Name=$ffmpegManifest.source_asset_name }
@@ -106,10 +107,10 @@ foreach ($asset in $releaseAssets) {
 }
 if ((Get-Item -LiteralPath $artifact).Length -ge $githubAssetLimit) { throw 'The installer exceeds GitHub release asset size limits.' }
 Write-Host "Test upgrade installer: $artifact"
-$checksums=@($artifact) + @($releaseAssets | ForEach-Object { Join-Path $PSScriptRoot "dist/$($_.Name)" })
+$checksums=@($artifact,$updateManifest) + @($releaseAssets | ForEach-Object { Join-Path $PSScriptRoot "dist/$($_.Name)" })
 $lines=$checksums | ForEach-Object { "$((Get-FileHash -LiteralPath $_).Hash.ToLowerInvariant())  $([IO.Path]::GetFileName($_))" }
 [IO.File]::WriteAllText("$PSScriptRoot/dist/SHA256SUMS.txt", ($lines -join "`n") + "`n")
-$uploadRecord=@{ assets=@([IO.Path]::GetFileName($artifact)); source_revision=$PublicSourceRevision;
+$uploadRecord=@{ assets=@([IO.Path]::GetFileName($artifact),[IO.Path]::GetFileName($updateManifest)); source_revision=$PublicSourceRevision;
     source_url="https://github.com/Miloscovo/Musxi-Player/blob/$PublicSourceRevision/docs/release-source-delivery.md" }
 [IO.File]::WriteAllText("$PSScriptRoot/dist/release-assets.json", ($uploadRecord | ConvertTo-Json) + "`n")
-Write-Host "Default upload: $([IO.Path]::GetFileName($artifact)) only; use dist/release-assets.json, never a dist wildcard. Local checksums/source bundles are not default uploads. Announce the fixed source URL beside the download. -StageSourceBundles stages optional bundles without removing existing files."
+Write-Host "Default upload: installer and update manifest; use dist/release-assets.json, never a dist wildcard. Local checksums/source bundles are not default uploads. Announce the fixed source URL beside the download. -StageSourceBundles stages optional bundles without removing existing files."

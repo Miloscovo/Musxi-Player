@@ -18,11 +18,17 @@ struct Release {
     std::string id,assetId,tag,version,publishedAt,notes,assetName;
     bool prerelease=false;
     std::uint64_t bytes=0;
+    std::string manifestId,manifestName;
+    std::uint64_t manifestBytes=0;
 };
 struct Selection { std::string result; std::optional<Release> latest; };
 Selection selectRelease(const Json& releases,const BuildInfo& current);
 std::string releaseUrl(const Release& release);
 std::string downloadUrl(const Release& release);
+std::string manifestUrl(const Release& release);
+struct InstallerManifest { std::string sha256; };
+// Binds a small official Release manifest to the already selected installer.
+InstallerManifest parseInstallerManifest(const std::string& body,const Release& release);
 struct FetchResult { std::string body,reason; std::int64_t retryAfter=0; };
 FetchResult fetchReleases(const std::atomic_bool& cancelled);
 bool openBrowser(const std::string& url);
