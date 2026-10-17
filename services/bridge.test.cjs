@@ -193,6 +193,20 @@ test('real song_url bitRate field enables standard and high-quality choices', as
   assert.equal((await a.run({op:'audio',id:'song',quality:'320'})).quality,'320');
 });
 
+test('basic quality confirmation accepts small measured bitrate offsets without accepting another tier',async()=>{
+  const hash='a'.repeat(32);let bitRate=128029;
+  const a=authenticated(async()=>response({hash,url:['https://example.test/audio'],bitRate,extName:'mp3'}));
+  a.knownTracks.set('song',{id:'song',hash});
+  assert.deepEqual((await a.run({op:'qualities',id:'song'})).options.map(q=>q.id),['128']);
+  assert.equal((await a.run({op:'audio',id:'song',quality:'128'})).quality,'128');
+  await assert.rejects(a.run({op:'audio',id:'song',quality:'320'}),/暂时不可用/);
+  bitRate=320042;
+  assert.deepEqual((await a.run({op:'qualities',id:'song'})).options.map(q=>q.id),['320']);
+  assert.equal((await a.run({op:'audio',id:'song',quality:'320'})).quality,'320');
+  bitRate=192000;
+  assert.deepEqual((await a.run({op:'qualities',id:'song'})).options,[]);
+});
+
 test('VIP basic qualities use authorized variant URLs after old failures or silent downgrades',async()=>{
   const base='a'.repeat(32),hashes={'320':'b'.repeat(32),flac:'c'.repeat(32)};let oldFails=true;
   const calls=[];const a=authenticated(async(name,p)=>{
@@ -217,6 +231,27 @@ test('VIP basic qualities use authorized variant URLs after old failures or sile
   assert.equal((await a.run({op:'audio',id:'song',quality:'flac'})).quality,'flac');
   calls.length=0;await a.run({op:'audio',id:'song',quality:'128'});
   assert.deepEqual(calls.map(([name])=>name),['song_url']);
+});
+
+test('basic playback still authorizes the original song when variant metadata is unavailable',async()=>{
+  const hash='a'.repeat(32),calls=[];
+  const a=authenticated(async(name,p)=>{
+    calls.push(name);
+    if(name==='song_url')return response({url:[]});
+    if(name==='privilege_lite')throw Error('metadata unavailable');
+    if(name==='user_verify')return response({valid:1,auth:'fixture-user-auth'});
+    if(name==='song_auth')return response({auth:'fixture-song-auth',open_time:123});
+    if(name==='song_url_auth'){
+      assert.equal(p.hash,hash);assert.equal(p.album_id,'7');assert.equal(p.album_audio_id,'9');
+      return response({hash,url:['https://example.test/audio'],bitRate:128000,extName:'mp3'});
+    }
+    throw Error('Unexpected request');
+  });
+  a.knownTracks.set('song',{id:'song',hash,albumId:'7',audioId:'9'});
+  assert.ok((await a.run({op:'qualities',id:'song'})).options.some(q=>q.id==='128'));
+  calls.length=0;
+  assert.equal((await a.run({op:'audio',id:'song',quality:'128'})).quality,'128');
+  assert.deepEqual(calls,['song_url','privilege_lite','user_verify','song_auth','song_url_auth']);
 });
 
 test('authorized basic audio rejects invalid login, downgrades, trial and mismatched variants',async()=>{

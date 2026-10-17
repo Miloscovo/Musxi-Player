@@ -12,7 +12,8 @@ function confirmedQuality(data, id) {
   const bitrate=Number(data.bitRate ?? data.bitrate ?? data.bit_rate ?? 0);
   const format=String(data.extName ?? data.extname ?? data.ext_name ?? '').toLowerCase();
   if(id==='flac')return format==='flac';
-  return format!=='flac' && (bitrate===Number(id) || bitrate===Number(id)*1000);
+  // Measured bits/s can include small offsets, e.g. 128029 for nominal 128 kbps.
+  return format!=='flac' && (bitrate===Number(id) || Math.round(bitrate/1000)===Number(id));
 }
 function audioUrl(data) {
   const value=Array.isArray(data.url)?data.url[0]:data.url;
@@ -73,6 +74,16 @@ function vipState(data) {
   if(concept.some(v=>vipFlag(v.is_vip)===1) || vipFlag(data.is_vip)===1) return true;
   if(vipFlag(data.is_vip)!==0 || concept.some(v=>vipFlag(v.is_vip)===null)) return null;
   return false;
+}
+function conceptVipState(data) {
+  if(!Array.isArray(data?.busi_vip))return null;
+  const products=data.busi_vip.filter(v=>v?.busi_type==='concept');
+  const concept=products.filter(v=>v.product_type==='svip');
+  if(concept.some(v=>vipFlag(v.is_vip)===1))return true;
+  if(concept.length)return concept.every(v=>vipFlag(v.is_vip)===0)?false:null;
+  // A known listening entitlement is not evidence of concept VIP; unknown products stay unknown.
+  if(products.some(v=>v.product_type!=='tvip' || vipFlag(v.is_vip)===null))return null;
+  return products.length>0 || vipFlag(data.is_vip)===0?false:null;
 }
 function claimRecord(data) {
   if(!data || !Array.isArray(data.list) || !Number.isFinite(data.server_time) || data.server_time<1000000000) return null;
@@ -188,8 +199,9 @@ class Adapter {
       responseReceived=true;lastFailure=undefined;
       if(playable(data,track.hash))return data;
     } catch(error) {lastFailure=error; /* An older endpoint may reject a valid account entitlement. */}
+    // Variant metadata is optional; its failure must not skip account authorization.
+    try {variants ||= await this.advancedVariants(track);} catch {variants=[];}
     try {
-      variants ||= await this.advancedVariants(track);
       const matches=row=>String(row.quality)===quality && /^[a-f0-9]{32}$/i.test(row.hash || '');
       // The parent row can reuse the input hash even when labeled as standard.
       const variant=variants.slice(1).find(matches) || variants.find(matches);
@@ -324,7 +336,7 @@ class Adapter {
       case 'vip_auto': {
         this.auth();
         try {
-          const current=vipState((await this.api('user_vip_detail')).data);
+          const current=conceptVipState((await this.api('user_vip_detail')).data);
           if(current===true) return {outcome:'already_vip',notify:false};
           if(current===null) return {outcome:'unknown_status',notify:false};
           const record=claimRecord((await this.api('youth_month_vip_record')).data);
@@ -337,7 +349,7 @@ class Adapter {
           const claim=await this.api('youth_day_vip',{receive_day:record.day});
           if(Number(claim.status)!==1) return {outcome:'unverified',notify:false};
           const after=claimRecord((await this.api('youth_month_vip_record')).data);
-          const active=vipState((await this.api('user_vip_detail')).data);
+          const active=conceptVipState((await this.api('user_vip_detail')).data);
           if(after?.day===record.day && after.claimed && active===true)
             return {outcome:'claimed',notify:true,day:record.day};
           return {outcome:'unverified',notify:false};
@@ -404,8 +416,10 @@ class Adapter {
       case 'membership': {
         this.auth();const data=(await this.api('user_vip_detail')).data;
         const active=vipState(data);
-        const result={name:active===true?'酷狗 VIP':active===false?'非会员':'会员状态暂不可用'};
-        const entitlement=data?.busi_vip?.find(v=>v.busi_type==='concept' && vipFlag(v.is_vip)===1) || data;
+        const products=data?.busi_vip?.filter(v=>v.busi_type==='concept' && vipFlag(v.is_vip)===1) || [];
+        const entitlement=products.find(v=>v.product_type==='svip') || products.find(v=>v.product_type==='tvip') || products[0] || data;
+        const name=entitlement?.busi_type==='concept'?{svip:'概念版 VIP',tvip:'畅听 VIP'}[entitlement.product_type]:undefined;
+        const result={name:active===true?name || '酷狗 VIP':active===false?'非会员':'会员状态暂不可用'};
         const end=entitlement?.vip_end_time;
         if(active===true && typeof end==='string' && /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(end)){
           const expiresAt=Date.parse(end.replace(' ','T')+'+08:00');
