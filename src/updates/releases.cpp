@@ -54,6 +54,20 @@ std::optional<int> compareVersions(const std::string& left,const std::string& ri
 }
 std::string releaseUrl(const Release& r){return "https://github.com/Miloscovo/Musxi-Player/releases/tag/"+r.tag;}
 std::string downloadUrl(const Release& r){return "https://github.com/Miloscovo/Musxi-Player/releases/download/"+r.tag+"/"+r.assetName;}
+std::string manifestUrl(const Release& r){return "https://github.com/Miloscovo/Musxi-Player/releases/download/"+r.tag+"/"+r.manifestName;}
+InstallerManifest parseInstallerManifest(const std::string& body,const Release& r) {
+    if(body.empty() || body.size()>4096 || r.assetId.empty())throw std::runtime_error("invalid_manifest");
+    try {
+        const auto m=Json::parse(body);
+        if(!m.is_object() || m.size()!=6 || m.at("schemaVersion")!=1 || !m.at("schemaVersion").is_number_integer() ||
+            m.at("version")!=r.version || m.at("architecture")!="x64" || m.at("assetName")!=r.assetName ||
+            !m.at("bytes").is_number_unsigned() || m.at("bytes").get<std::uint64_t>()!=r.bytes ||
+            !m.at("sha256").is_string())throw std::runtime_error("invalid_manifest");
+        auto hash=m.at("sha256").get<std::string>();
+        if(hash.size()!=64 || hash.find_first_not_of("0123456789abcdef")!=hash.npos)throw std::runtime_error("invalid_manifest");
+        return {hash};
+    }catch(...){throw std::runtime_error("invalid_manifest");}
+}
 Selection selectRelease(const Json& releases,const BuildInfo& current) {
     if(!releases.is_array() || releases.size()>500)throw std::runtime_error("invalid_data");
     std::optional<Release> latest;
@@ -89,6 +103,19 @@ Selection selectRelease(const Json& releases,const BuildInfo& current) {
             r.assetId=assetId;r.assetName=name;r.bytes=static_cast<std::uint64_t>(size);
         }
         if(matches!=1){r.assetId.clear();r.assetName.clear();r.bytes=0;}
+        // Older releases keep the browser-only path. Never guess a manifest URL.
+        unsigned manifests=0;
+        for(const auto& asset:row["assets"]) {
+            if(!asset.is_object() || text(asset,"name",200)!="MusxiPlayer-Update-"+r.version+".json")continue;
+            ++manifests;
+            auto candidate=r;candidate.manifestName=text(asset,"name",200);
+            const auto aid=id(asset,"id");
+            if(aid.empty() || text(asset,"state",32)!="uploaded" || !asset.contains("size") || !asset["size"].is_number_integer())continue;
+            const auto size=asset["size"].get<std::int64_t>();
+            if(size<=0 || size>4096 || text(asset,"browser_download_url",512)!=manifestUrl(candidate))continue;
+            r.manifestId=aid;r.manifestName=candidate.manifestName;r.manifestBytes=static_cast<std::uint64_t>(size);
+        }
+        if(manifests!=1){r.manifestId.clear();r.manifestName.clear();r.manifestBytes=0;}
         latest=r;
     }
     if(sawPublished && !latest)throw std::runtime_error("invalid_data");

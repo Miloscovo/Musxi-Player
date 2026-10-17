@@ -14,6 +14,8 @@ Json cachedRelease(const Release& r) {
     Json assets=Json::array();
     if(!r.assetId.empty())assets.push_back({{"id",std::stoll(r.assetId)},{"name",r.assetName},{"state","uploaded"},
         {"size",r.bytes},{"browser_download_url",downloadUrl(r)}});
+    if(!r.manifestId.empty())assets.push_back({{"id",std::stoll(r.manifestId)},{"name",r.manifestName},{"state","uploaded"},
+        {"size",r.manifestBytes},{"browser_download_url",manifestUrl(r)}});
     return {{"id",std::stoll(r.id)},{"tag_name",r.tag},{"draft",false},{"prerelease",r.prerelease},
         {"published_at",r.publishedAt},{"body",r.notes},{"html_url",releaseUrl(r)},{"assets",assets}};
 }
