@@ -6,7 +6,15 @@ const reasons: Record<string, string> = {
   response_too_large: '发布信息过大', release_list_incomplete: '发布列表不完整，无法确认最新版本',
   network_disabled: '当前运行模式已禁用网络检查', internal_error: '播放器内部错误'
 };
+const downloadReasons: Record<string, string> = {
+  network_error: '网络连接失败', timeout: '连接超时', rate_limited: 'GitHub 暂时限制了访问',
+  http_error: 'HTTP 请求失败', unsafe_redirect: '不安全的重定向', too_many_redirects: '重定向次数过多',
+  invalid_download: '下载数据无效', invalid_manifest: '更新清单格式异常',
+  size_mismatch: '文件大小不匹配', checksum_mismatch: '文件校验失败', verification_failed: '文件校验失败',
+  disk_full: '磁盘空间不足', storage_error: '无法写入文件', internal_error: '播放器内部错误'
+};
 export const reasonText = (reason: string) => reasons[reason] || '未知原因';
+export const downloadReasonText = (reason: string) => downloadReasons[reason] || reason || '未知原因';
 
 export type UpdateTone = 'neutral' | 'success' | 'available' | 'warning' | 'error';
 export function updateSummary(s: UpdateState): { title: string; detail: string; tone: UpdateTone } {
@@ -32,9 +40,11 @@ export function shouldNotify(s: UpdateState | null, dismissed: ReadonlySet<strin
   return !!(s && r && s.current.releaseBuild && s.result === 'update_available' && r.downloadAvailable &&
     !dismissed.has(r.releaseId) && s.preferences.ignoredReleaseId !== r.releaseId);
 }
-/** Native schedules the automatic check about 5 s after start, so poll briefly at first. */
+/** Native schedules the automatic check about 5 s after start, so poll briefly at first. Phase 2: faster polling during active download. */
 export function pollDelay(s: UpdateState | null, sinceStartMs: number) {
   if (s?.checkStatus === 'checking') return 400;
+  const download = s?.download;
+  if (download && (download.status === 'preparing' || download.status === 'downloading' || download.status === 'verifying')) return 450;
   return sinceStartMs < 20000 ? 1000 : 30000;
 }
 export const formatTime = (seconds: number) => new Date(seconds * 1000).toLocaleString('zh-CN',

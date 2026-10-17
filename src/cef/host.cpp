@@ -451,7 +451,8 @@ int run(HINSTANCE instance,int show,void* sandbox) {
     if(command->HasSwitch("cef-updates-ui-smoke")) {
         // This selector only launches real UI assertions with validated local input.
         updatesUiSmoke=command->GetSwitchValue("cef-updates-ui-smoke").ToString();
-        static const std::vector<std::string> scenarios{"available","current","empty","missing","development","checking","failed","stale","changed"};
+        static const std::vector<std::string> scenarios{"available","current","empty","missing","development","checking","failed","stale","changed",
+            "download","download-network","download-checksum","download-install-failed","download-changed"};
         if(!updateFixture || !command->HasSwitch("cef-smoke") ||
             std::find(scenarios.begin(),scenarios.end(),updatesUiSmoke)==scenarios.end() ||
             command->HasSwitch("cef-preview") || command->HasSwitch("cef-updates-smoke") ||

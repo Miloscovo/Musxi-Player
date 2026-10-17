@@ -649,3 +649,18 @@ html:has(.desktop-lyrics),html:has(.desktop-lyrics) body,html:has(.desktop-lyric
 .update-notice-close { width:30px; padding:0!important; color:var(--muted)!important; font-size:18px!important }
 /* Transient alerts stack above the persistent notice instead of covering it. */
 .player:has(.update-notice) .message-alerts { bottom:calc(100% + 70px) }
+/* Phase 2: Download progress */
+.update-download-progress { margin-top:18px; padding:14px 16px; border:1px solid var(--line); border-radius:10px; background:var(--search) }
+.update-download-status { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:6px 12px; margin-bottom:10px }
+.update-download-status strong { display:block; color:var(--ink); font-size:14px; font-weight:600 }
+.update-download-warning { margin:6px 0 0; color:#c44e4e; opacity:1; font-size:13px }
+.update-progress-bar { position:relative; height:6px; border-radius:999px; background:var(--line); overflow:hidden }
+.update-progress-fill { position:absolute; left:0; top:0; height:100%; border-radius:999px; background:var(--accent); transition:width .15s ease-out }
+.update-progress-pending .update-progress-fill { width:35%!important; animation:update-progress-pending 1.4s ease-in-out infinite alternate }
+@keyframes update-progress-pending { from { left:0 } to { left:65% } }
+@media (prefers-reduced-motion:reduce) { .update-progress-pending .update-progress-fill { animation:none; left:32.5% } }
+.update-download-deferred { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:12px; margin-top:18px; color:var(--muted); font-size:13px }
+.update-download-deferred p { margin:0 }
+.update-download-progress[data-status=failed] .update-download-status strong { color:#c44e4e }
+.update-download-progress[data-status=ready] .update-download-status strong { color:var(--accent) }
+.update-download-actions { display:flex; flex-wrap:wrap; gap:8px; margin-top:12px }

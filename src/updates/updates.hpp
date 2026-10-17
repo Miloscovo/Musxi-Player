@@ -9,6 +9,7 @@
 #include <string>
 
 namespace musxi::updates {
+class Downloader;
 using Json=nlohmann::json;
 struct BuildInfo { std::string version,commit; bool release=false; };
 BuildInfo buildInfo();
@@ -53,6 +54,9 @@ public:
     void stop();
     Json state();
     Reply command(const std::string& name,const Json& params);
+    // Application-thread only, set once at construction before commands/ticks.
+    void setDownloader(std::unique_ptr<Downloader> downloader);
+    bool installRequested() const;
 private:
     void poll();
     void start();
@@ -72,5 +76,6 @@ private:
     bool autoCheck_=true,automatic_=false,autoAttempted_=false,stopped_=false,stale_=false;
     std::int64_t lastAttempt_=0,lastSuccess_=0,retryAt_=0;
     std::chrono::steady_clock::time_point autoAt_;
+    std::unique_ptr<Downloader> downloader_;
 };
 }

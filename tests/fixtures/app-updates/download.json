@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "current": {"version": "0.4.0", "releaseBuild": true},
+  "releases": [{
+    "id": 20, "tag_name": "v0.5.0", "draft": false, "prerelease": true,
+    "published_at": "2026-10-17T00:00:00Z",
+    "body": "本地下载联调：三个惰性字节，安装只记录动作，不执行程序、不退出窗口。",
+    "html_url": "https://github.com/Miloscovo/Musxi-Player/releases/tag/v0.5.0",
+    "assets": [
+      {"id": 120, "name": "MusxiPlayer-Setup-0.5.0.exe", "state": "uploaded", "size": 3,
+       "browser_download_url": "https://github.com/Miloscovo/Musxi-Player/releases/download/v0.5.0/MusxiPlayer-Setup-0.5.0.exe"},
+      {"id": 121, "name": "MusxiPlayer-Update-0.5.0.json", "state": "uploaded", "size": 186,
+       "browser_download_url": "https://github.com/Miloscovo/Musxi-Player/releases/download/v0.5.0/MusxiPlayer-Update-0.5.0.json"}
+    ]
+  }],
+  "fetch": {"delaySeconds": 1},
+  "download": {"delayMilliseconds": 2000, "reason": "", "launchFails": false}
+}

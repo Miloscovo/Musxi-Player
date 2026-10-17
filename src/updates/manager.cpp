@@ -3,6 +3,7 @@
 #endif
 #include <windows.h>
 #include "updates.hpp"
+#include "download.hpp"
 #include "update_build_info.hpp"
 #include <fstream>
 
@@ -30,8 +31,11 @@ Manager::Manager(BuildInfo info,std::filesystem::path profile,bool automatic,Fet
     load();
 }
 Manager::~Manager(){stop();}
+void Manager::setDownloader(std::unique_ptr<Downloader> downloader){downloader_=std::move(downloader);}
+bool Manager::installRequested() const{return downloader_ && downloader_->installing();}
 void Manager::stop() {
     stopped_=true;cancelled_=true;
+    if(downloader_)downloader_->stop();
     if(future_.valid()){try{future_.get();}catch(...){}}
     if(status_=="checking"){status_="failed";reason_="cancelled";stale_=lastSuccess_!=0;}
 }
@@ -100,7 +104,7 @@ void Manager::poll() {
 }
 void Manager::tick() {
     poll();
-    if(stopped_ || !automatic_ || !autoCheck_ || !info_.release || autoAttempted_ ||
+    if(stopped_ || installRequested() || !automatic_ || !autoCheck_ || !info_.release || autoAttempted_ ||
         steady_()<autoAt_)return;
     const auto now=clock_();
     if(now<retryAt_ || (lastAttempt_>0 && now-lastAttempt_<3600))return;
@@ -110,26 +114,53 @@ void Manager::tick() {
 }
 Json Manager::state() {
     poll();const auto now=clock_();
+    Json download=downloader_?downloader_->state():Json(nullptr);
+    if(downloader_) {
+        const bool superseded=download["releaseId"]!="" && (!selection_.latest || selection_.result!="update_available" ||
+            download["releaseId"]!=selection_.latest->id || download["assetId"]!=selection_.latest->assetId);
+        download["superseded"]=superseded;
+        if(superseded)download["canInstall"]=false;
+    }
     Json latest=nullptr;
     if(selection_.latest) {
         const auto& r=*selection_.latest;
         latest={{"releaseId",r.id},{"assetId",r.assetId},{"version",r.version},{"tag",r.tag},
             {"prerelease",r.prerelease},{"publishedAt",r.publishedAt},{"notes",r.notes},
             {"assetName",r.assetName},{"bytes",r.bytes},
-            {"downloadAvailable",selection_.result=="update_available"}};
+            {"downloadAvailable",selection_.result=="update_available"},
+            {"inAppDownloadAvailable",downloader_ && selection_.result=="update_available" && !r.manifestId.empty()}};
     }
     return {{"current",{{"version",info_.version},{"commit",info_.commit},{"releaseBuild",info_.release},{"architecture","x64"}}},
         {"source","Miloscovo/Musxi-Player"},{"includesPrereleases",true},
-        {"preferences",{{"autoCheck",autoCheck_},{"ignoredReleaseId",ignoredReleaseId_}}},{"automaticCheckEnabled",automatic_ && autoCheck_ && info_.release && !stopped_},
+        {"preferences",{{"autoCheck",autoCheck_},{"ignoredReleaseId",ignoredReleaseId_}}},{"automaticCheckEnabled",automatic_ && autoCheck_ && info_.release && !stopped_ && !installRequested()},
         {"checkStatus",status_},{"result",selection_.result},{"reason",reason_},{"latest",latest},
         {"lastAttemptAt",lastAttempt_},{"lastSuccessAt",lastSuccess_},
         {"stale",stale_ || (lastSuccess_>0 && now-lastSuccess_>=Day)},{"retryAt",retryAt_},
-        {"canCheck",!stopped_ && status_!="checking" && now>=retryAt_}};
+        {"canCheck",!stopped_ && !installRequested() && status_!="checking" && now>=retryAt_},
+        {"capabilities",{{"installerDownload",static_cast<bool>(downloader_)}}},
+        {"download",download}};
 }
 Reply Manager::command(const std::string& name,const Json& params) {
     poll();
     if(!params.is_object())return {400,"invalid_params"};
     if(stopped_)return {409,"shutting_down"};
+    if(installRequested() && name!="updates.getState")return {409,"shutting_down"};
+    if(name=="updates.startDownload" || name=="updates.cancelDownload" || name=="updates.install") {
+        const bool cancel=name=="updates.cancelDownload";
+        if(cancel ? !params.empty() : params.size()!=2 || !params.contains("releaseId") || !params["releaseId"].is_string() ||
+            !params.contains("assetId") || !params["assetId"].is_string())return {400,"invalid_params"};
+        if(!downloader_ || !info_.release)return {409,"download_unavailable"};
+        Reply reply;
+        if(cancel)reply=downloader_->cancel();
+        else {
+            if(!selection_.latest || selection_.result!="update_available" || params["releaseId"]!=selection_.latest->id ||
+                params["assetId"]!=selection_.latest->assetId)return {409,"release_changed"};
+            reply=name=="updates.startDownload"?downloader_->start(*selection_.latest):
+                downloader_->install(params["releaseId"].get<std::string>(),params["assetId"].get<std::string>());
+        }
+        if(reply.code)return reply;
+        return {0,{},state()};
+    }
     if(name=="updates.getState" || name=="updates.check") {
         if(!params.empty())return {400,"invalid_params"};
         if(name=="updates.check" && !future_.valid()) {

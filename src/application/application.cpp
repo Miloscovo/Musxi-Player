@@ -36,6 +36,7 @@
 #include "../lyrics/cache.hpp"
 #include "../lyrics/match.hpp"
 #include "../updates/updates.hpp"
+#include "../updates/download.hpp"
 #include "../cxx17_guard.hpp"
 namespace fs=std::filesystem;
 namespace {
@@ -661,6 +662,8 @@ LibraryReply applicationUpdates(const std::string& command,const std::string& pa
             return {0,{},hostHooks.updateFixture->diagnostics().dump()};
         }
         const auto reply=appUpdates->command(command,Json::parse(params));
+        if(!reply.code && command=="updates.install" && appUpdates->installRequested() && applicationWindow && !hostHooks.updateFixture)
+            PostMessageW(applicationWindow,WM_CLOSE,0,0);
         return {reply.code,reply.reason,reply.state.dump()};
     }catch(const Json::exception&){return {400,"invalid_params",{}};}
     catch(...){return {500,"internal_error",{}};}
@@ -709,6 +712,8 @@ int runApplication(void* nativeInstance){
     else appUpdates=std::make_unique<updates::Manager>(updates::buildInfo(),fs::path{},false,
         [](const std::atomic_bool&){return updates::FetchResult{{},"network_disabled",0};},
         [](const std::string&){return false;});
+    if(hostHooks.connectCloud && !hostHooks.updateFixture && updates::buildInfo().release)
+        appUpdates->setDownloader(std::make_unique<updates::Downloader>(cloud::dataDir()/L"update-downloads"));
     if(hostHooks.connectCloud) {
         loadLocalCatalog(cloud::dataDir()/L"local-music.json");
         restorePlaybackHistory(cloud::dataDir()/L"playback-history.json");playbackSaveAt=GetTickCount64()+5000;

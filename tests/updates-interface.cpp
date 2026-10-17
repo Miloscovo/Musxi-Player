@@ -10,6 +10,7 @@ HWND window=nullptr;
 bool passed=false;
 bool readyPassed=false;
 bool fixtureMode=false;
+bool downloadMode=false,downloadStarted=false;
 void ready(void* handle) {
     window=static_cast<HWND>(handle);
     const auto initial=musxi::applicationUpdates("updates.getState","{}");
@@ -38,6 +39,20 @@ void tick() {
     const auto state=Json::parse(reply.json);
     if(state["checkStatus"]=="checking")return;
     if(fixtureMode) {
+        if(downloadMode) {
+            if(!downloadStarted) {
+                passed=state["capabilities"]["installerDownload"]==true && state["latest"]["inAppDownloadAvailable"]==true &&
+                    musxi::applicationUpdates("updates.startDownload",R"({"releaseId":"20","assetId":"120"})").code==0;
+                downloadStarted=true;if(!passed)PostMessageW(window,WM_CLOSE,0,0);return;
+            }
+            if(state["download"]["canInstall"]!=true)return;
+            const auto installed=musxi::applicationUpdates("updates.install",R"({"releaseId":"20","assetId":"120"})");
+            const auto diagnostics=musxi::applicationUpdates("updates.fixtureDiagnostics","{}");
+            passed=!installed.code && !diagnostics.code &&
+                Json::parse(installed.json)["download"]["status"]=="installing" &&
+                Json::parse(diagnostics.json)["installedReleases"]==Json::array({"20"});
+            PostMessageW(window,WM_CLOSE,0,0);return;
+        }
         const auto ignored=musxi::applicationUpdates("updates.ignoreRelease",R"({"releaseId":"20"})");
         const auto opened=musxi::applicationUpdates("updates.openDownload",R"({"releaseId":"20","assetId":"120"})");
         const auto diagnostics=musxi::applicationUpdates("updates.fixtureDiagnostics","{}");
@@ -53,7 +68,7 @@ void tick() {
 int main(int argc,char** argv) {
     if(musxi::applicationUpdates("updates.getState","{}").code!=409)return 1;
     musxi::HostHooks hooks{};hooks.ready=ready;hooks.tick=tick;hooks.connectCloud=false;hooks.testProfile=true;
-    fixtureMode=argc==2;
+    fixtureMode=argc>=2;downloadMode=argc==3 && std::string(argv[2])=="--download";
     if(fixtureMode)hooks.updateFixture=musxi::updates::Fixture::load(std::filesystem::u8path(argv[1]));
     musxi::setHostHooks(hooks);
     const auto result=musxi::runApplication(GetModuleHandleW(nullptr));
