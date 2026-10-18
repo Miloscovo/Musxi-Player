@@ -16,20 +16,21 @@ import { useDesktopLyrics } from './composables/useDesktopLyrics';
 import { bindWheelRange } from './composables/wheelRange';
 import { useAppUpdates } from './composables/useAppUpdates';
 import UpdateNotice from './components/UpdateNotice';
+import { useShortcuts } from './composables/useShortcuts';
 
 export default function App() {
   const shell = useWindow(); const library = useLibrary();
   const desktop = useDesktopLyrics(); const updates = useAppUpdates();
+  const shortcuts = useShortcuts();
   const [showUpdates, setShowUpdates] = useState(0);
   const currentTrack = library.state?.now;
   const { state, error, loading, busy, connected, pause, resume, seek, setVolume } = usePlayerState();
   const [seekDraft, setSeekDraft] = useState<number | null>(null);
   const [volumeDraft, setVolumeDraft] = useState<number | null>(null);
-  const lastVolume = useRef(50);
-  useEffect(() => { if (state && state.volumePercent > 0) lastVolume.current = state.volumePercent; }, [state?.volumePercent]);
   const [closeOpen, setCloseOpen] = useState(false);
   const [lyricsOpen, setLyricsOpen] = useState(false);
   const compact = !!shell.state.compact;
+  useEffect(() => { if ((lyricsOpen || compact) && shortcuts.recording) void shortcuts.cancel(); }, [lyricsOpen, compact, shortcuts.recording]);
   const playerElement = useRef<HTMLElement>(null);
   const [compactBusy, setCompactBusy] = useState(false);
   async function setCompact(value: boolean) {
@@ -73,10 +74,10 @@ export default function App() {
     action: actionNotice,
     player: { text: error, error: true },
     playback: { text: playbackMessage, error: state?.phase === 'failed' },
-    window: { text: shell.error || desktop.error, error: true },
+    window: { text: shell.error || desktop.error || shortcuts.error, error: true },
     connection: { text: connected ? '' : '正在连接…' },
     updates: updates.message,
-  }), [updates.message, library.error, operation?.status, operation?.error, operation?.id, notice, error, playbackMessage, state?.phase, shell.error, desktop.error, connected, actionNotice]);
+  }), [updates.message, library.error, operation?.status, operation?.error, operation?.id, notice, error, playbackMessage, state?.phase, shell.error, desktop.error, shortcuts.error, connected, actionNotice]);
   useEffect(() => {
     const seekElement = seekInput.current; const volumeElement = volumeInput.current;
     async function seekChanged() {
@@ -95,21 +96,6 @@ export default function App() {
       volumeElement?.removeEventListener('change', volumeChanged);
     };
   }, [hasState, seek, setVolume]);
-  useEffect(() => {
-    function keyboard(event: KeyboardEvent) {
-      if (event.ctrlKey || event.altKey || event.metaKey || event.repeat) return;
-      const target = event.target as HTMLElement;
-      if (target.closest('input, textarea, select, button, [contenteditable], [role=dialog]')) return;
-      if (!state?.opened || !connected) return;
-      if (event.code === 'Space') { event.preventDefault(); void (wantsPlay ? pause() : resume()); }
-      if (event.code === 'ArrowLeft' || event.code === 'ArrowRight') {
-        event.preventDefault(); void seek(Math.max(0, state.positionMs + (event.code === 'ArrowLeft' ? -5000 : 5000)));
-      }
-    }
-    window.addEventListener('keydown', keyboard);
-    return () => window.removeEventListener('keydown', keyboard);
-  }, [state, connected, wantsPlay, pause, resume, seek]);
-
   return <main className={`app-shell${compact ? ' compact-player' : ''}`} onContextMenu={event => {
     if ((event.target as Element).closest('button')) event.preventDefault();
   }}>
@@ -133,7 +119,7 @@ export default function App() {
       </Dialog>
     </div></div>}
     <div className="app-body" hidden={compact}>
-      <div className="library-layer" inert={lyricsOpen}><LibraryView library={library} theme={shell.theme} appearance={shell.appearance} onAppearance={shell.setAppearance} transparency={shell.transparency} onTransparency={shell.setTransparency} updates={updates} showUpdates={showUpdates} /></div>
+      <div className="library-layer" inert={lyricsOpen}><LibraryView library={library} theme={shell.theme} appearance={shell.appearance} onAppearance={shell.setAppearance} transparency={shell.transparency} onTransparency={shell.setTransparency} updates={updates} showUpdates={showUpdates} shortcuts={shortcuts} /></div>
       {lyricsOpen && <LyricsView trackId={state?.opened ? state.trackId : ''} now={currentTrack} positionMs={state?.positionMs ?? 0}
         canSeek={connected && !!state?.opened && !!state.durationMs} onSeek={positionMs => void seek(positionMs)} onClose={closeLyrics} />}
     </div>
@@ -189,7 +175,7 @@ export default function App() {
         <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2.8" y="4.5" width="18.4" height="15" rx="4"/><text x="12" y="16.1" textAnchor="middle">词</text></svg>
       </Button>}{state && <div className="volume-control">
         <Button variant="unstyled" className="icon volume-button" aria-label={state.volumePercent===0 ? '取消静音' : '静音'} aria-pressed={state.volumePercent===0} disabled={busy || !connected}
-          onClick={()=>{if(state.volumePercent>0)lastVolume.current=state.volumePercent;void setVolume(state.volumePercent===0 ? lastVolume.current : 0);}}>
+          onClick={()=>void shortcuts.execute('mute')}>
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 9h4l5-4v14l-5-4H3z" fill="currentColor"/>
           <path d={state.volumePercent===0 ? 'm16 9 6 6m0-6-6 6' : 'M16 8a6 6 0 0 1 0 8m3-11a10 10 0 0 1 0 14'} fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
         </Button>

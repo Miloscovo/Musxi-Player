@@ -1,7 +1,7 @@
 import { AccountDialog, PlatformIcon } from '../components/AccountDialog';
 import { platformNames, type MusicPlatform } from '../native/library';
 import { isDemoMode } from '../demo/context.ts';
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import type { useLibrary } from '../composables/useLibrary';
 import type { Theme } from '../native/window';
@@ -16,6 +16,9 @@ import { ContextMenu, ContextMenuTrigger, ContextMenuContent, ContextMenuItem,
 
 import AppearanceSettings from '../components/AppearanceSettings';
 import PlaybackSettings from '../components/PlaybackSettings';
+import ShortcutSettings from '../components/ShortcutSettings';
+import LyricsSettings from '../components/LyricsSettings';
+import type { ShortcutsController } from '../composables/useShortcuts';
 import UpdateSettings from '../components/UpdateSettings';
 import type { AppUpdates } from '../composables/useAppUpdates';
 import type { Appearance } from '../composables/appearance';
@@ -32,10 +35,11 @@ function appendUnique(previous: Track[], incoming?: Track[]) {
   for (const track of incoming) { const index=indices.get(track.id); if(index!==undefined)rows[index]=track;else {indices.set(track.id,rows.length);rows.push(track);} }
   return rows;
 }
-export default function LibraryView({ library: lib, theme, appearance, onAppearance, transparency = 50, onTransparency, updates, showUpdates = 0 }: {
+export default function LibraryView({ library: lib, theme, appearance, onAppearance, transparency = 50, onTransparency, updates, showUpdates = 0, shortcuts }: {
   library: ReturnType<typeof useLibrary>; theme: Theme; appearance?: Appearance; onAppearance?: (next: Appearance) => void;
   transparency?: number; onTransparency?: (value: number) => void;
   updates?: AppUpdates; showUpdates?: number;
+  shortcuts: ShortcutsController;
 }) {
   const { state, error, pending, page } = lib;
   const playlistRows = state?.tracks || [];
@@ -43,7 +47,7 @@ export default function LibraryView({ library: lib, theme, appearance, onAppeara
   const [view, setView] = useState<'library' | 'search' | 'settings' | 'recent'>('library');
   const [query, setQuery] = useState(''); const [showTracks, setShowTracks] = useState(false);
   const [librarySection, setLibrarySection] = useState<LibrarySection>('created');
-  const [settingsSection, setSettingsSection] = useState<'appearance' | 'playback' | 'updates'>('appearance');
+  const [settingsSection, setSettingsSection] = useState<'appearance' | 'playback' | 'shortcuts' | 'lyrics' | 'updates'>('appearance');
   const [removeFoldersOpen, setRemoveFoldersOpen] = useState(false);
   useEffect(() => {
     // The dock notice asks for the update details page.
@@ -51,6 +55,7 @@ export default function LibraryView({ library: lib, theme, appearance, onAppeara
   }, [showUpdates]);
   const [playlistQuery, setPlaylistQuery] = useState('');
   const content = useRef<HTMLDivElement>(null);
+  const pageScroll = useRef<HTMLDivElement>(null);
   const songScroll = useRef<HTMLDivElement>(null);
   const songList = useRef<HTMLDivElement>(null);
   const [listOffset, setListOffset] = useState(0);
@@ -69,6 +74,8 @@ export default function LibraryView({ library: lib, theme, appearance, onAppeara
   const rows = view === 'recent' ? (state?.recent || []).filter(song=>!playlistFilter || [song.name,song.artist,song.album || ''].some(value=>value.toLocaleLowerCase().includes(playlistFilter))) : view === 'search' ? searchRows : isLocal && state?.playlistId !== 'musxi:local' && !state?.playlistId.startsWith('local-folder:') ? [] : filteredPlaylistRows;
   const busy = pending || !!state?.busy;
   const tracksVisible = view === 'recent' || view === 'search' || (view === 'library' && showTracks);
+  const fixedPageHeader = view === 'settings' || (view === 'library' && !showTracks);
+  const PageBody = fixedPageHeader ? 'div' : Fragment;
   const playSource = view === 'recent' ? 'recent' : view === 'search' ? 'search' : isLocal ? 'local' : 'library';
   const virtualSongs = useVirtualizer({
     count: tracksVisible ? rows.length : 0,
@@ -113,10 +120,10 @@ export default function LibraryView({ library: lib, theme, appearance, onAppeara
     previousKeywords.current = state?.keywords;
     setSearchRows(previous => appendUnique(changed ? [] : previous, state?.search));
   }, [state?.keywords, state?.search]);
-  function resetScroll() { if (content.current) content.current.scrollTop = 0; if (songScroll.current) songScroll.current.scrollTop = 0; setScrollbarVisible(false); }
+  function resetScroll() { if (content.current) content.current.scrollTop = 0; if (pageScroll.current) pageScroll.current.scrollTop = 0; if (songScroll.current) songScroll.current.scrollTop = 0; setScrollbarVisible(false); }
   useEffect(() => {
     function updateScrollbarVisibility(event: PointerEvent) {
-      const element = songScroll.current;
+      const element = songScroll.current || pageScroll.current;
       if (!element) { setScrollbarVisible(false); return; }
       const bounds = element.getBoundingClientRect();
       const edgeWidth = Math.max(14, element.offsetWidth - element.clientWidth + 4);
@@ -178,7 +185,7 @@ export default function LibraryView({ library: lib, theme, appearance, onAppeara
   return <SidebarProvider asChild><section className="library-shell" data-theme={theme}>
     <Sidebar asChild>{sidebar}</Sidebar>
     <SidebarRail/>
-    <div ref={content} className={`library-content${scrollbarVisible ? ' scrollbar-visible' : ''}`} onScroll={checkLoadMore}>
+    <div ref={content} className={`library-content${fixedPageHeader ? ' fixed-page-header' : ''}${scrollbarVisible ? ' scrollbar-visible' : ''}`} onScroll={checkLoadMore}>
       {<header className={view === 'library' ? (showTracks ? 'playlist-header' : 'library-home-header') : ''}><div className="page-heading">
         {view === 'library' && showTracks && <Button variant="unstyled" className="back-button" aria-label="返回歌单" onClick={() => { resetScroll(); setShowTracks(false); }}><svg className="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5-7 7 7 7" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg></Button>}
         <h1 className={view === 'recent' ? 'recent-title' : view === 'search' ? 'discovery-title' : view === 'settings' ? 'settings-title' : ''}>{view === 'recent' ? '最近播放' : view === 'settings' ? '设置' : view === 'search' ? '发现' : showTracks ? (isLocal && state?.playlistId === 'musxi:local' ? '本地歌曲整合' : state?.playlistName) : '音乐库'}</h1>
@@ -200,6 +207,8 @@ export default function LibraryView({ library: lib, theme, appearance, onAppeara
       {view === 'settings' && <nav className="library-sections settings-sections" aria-label="设置分类">
         {([{ id: 'appearance', label: '外观', icon: 'M12 3a9 9 0 1 0 0 18h1a2 2 0 0 0 1.5-3.3l-.2-.2a1.5 1.5 0 0 1 1.1-2.5H18a3 3 0 0 0 3-3 9 9 0 0 0-9-9ZM8 8a.8.8 0 1 0 0-1.6.8.8 0 0 0 0 1.6Zm5-1a.8.8 0 1 0 0-1.6.8.8 0 0 0 0 1.6Zm4 4a.8.8 0 1 0 0-1.6.8.8 0 0 0 0 1.6ZM6 13a.8.8 0 1 0 0-1.6.8.8 0 0 0 0 1.6Z' },
           { id: 'playback', label: '播放', icon: 'M11 4 6 8H3v8h3l5 4V4Zm4 4a6 6 0 0 1 0 8m3-11a10 10 0 0 1 0 14' },
+          { id: 'shortcuts', label: '快捷键', icon: 'M4 4h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2ZM6 8h.01M10 8h.01M14 8h.01M18 8h.01M6 12h.01M10 12h.01M14 12h.01M18 12h.01M7 16h10' },
+          { id: 'lyrics', label: '歌词', icon: 'M6 3h12a3 3 0 0 1 3 3v12a3 3 0 0 1-3 3H6a3 3 0 0 1-3-3V6a3 3 0 0 1 3-3ZM7 12h2m4 0h4M7 16h6m3 0h1' },
           ...(updates && !updates.unsupported ? [{ id: 'updates', label: '关于与更新', icon: 'M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20ZM12 11v6m0-10h.01' }] as const : [])] as const).map(section =>
           <Button key={section.id} variant="secondary" className="library-section" aria-pressed={settingsSection === section.id}
             onClick={() => { resetScroll();setSettingsSection(section.id); }}><svg className="icon" viewBox="0 0 24 24" aria-hidden="true"><path d={section.icon}/></svg>{section.label}</Button>)}
@@ -214,6 +223,7 @@ export default function LibraryView({ library: lib, theme, appearance, onAppeara
           <svg className="icon" viewBox="0 0 24 24" aria-hidden="true"><path d={section.icon}/></svg>{section.label}
         </Button>)}
       </nav>}
+      <PageBody {...(fixedPageHeader ? { ref: pageScroll, className: `page-scroll${scrollbarVisible ? ' scrollbar-visible' : ''}` } : {})}>
       {isLocal && !showTracks && <div className="playlist-grid local-import-grid">
         <Button variant="ghost" className="playlist local-all" disabled={busy} onClick={() => void open('musxi:local')}>
           <CoverImage url=""/><div className="playlist-info"><strong>本地歌曲整合</strong>{state?.playlistId === 'musxi:local' && <span>{state.trackCount} 首</span>}</div>
@@ -250,7 +260,7 @@ export default function LibraryView({ library: lib, theme, appearance, onAppeara
           </DialogContent>
         </Dialog>
       </div>}
-      {view === 'settings' ? settingsSection === 'updates' && updates ? <UpdateSettings updates={updates}/> : settingsSection === 'playback' ? <PlaybackSettings/> : <AppearanceSettings appearance={appearance ?? { mode: theme === 'dark' || theme === 'glass' ? 'dark' : 'light', transparent: theme === 'glass' || theme === 'glass-light', tone: 'green' }} onAppearance={onAppearance ?? (() => {})} transparency={transparency} onTransparency={onTransparency ?? (() => {})}/> : view === 'library' && !showTracks ? <>
+      {view === 'settings' ? settingsSection === 'updates' && updates ? <UpdateSettings updates={updates}/> : settingsSection === 'shortcuts' ? <ShortcutSettings shortcuts={shortcuts}/> : settingsSection === 'lyrics' ? <LyricsSettings/> : settingsSection === 'playback' ? <PlaybackSettings/> : <AppearanceSettings appearance={appearance ?? { mode: theme === 'dark' || theme === 'glass' ? 'dark' : 'light', transparent: theme === 'glass' || theme === 'glass-light', tone: 'green' }} onAppearance={onAppearance ?? (() => {})} transparency={transparency} onTransparency={onTransparency ?? (() => {})}/> : view === 'library' && !showTracks ? <>
         {!isLocal && <>
           <div className="playlist-grid">{librarySection === 'created' && state?.connected && <Button variant="ghost" className="playlist" disabled={busy || !state?.connected} onClick={() => open('musxi:cloud-favorites')}><div className="cover placeholder" aria-hidden="true"><svg className="playlist-heart size-11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1.1-1.1a5.5 5.5 0 0 0-7.8 7.8L12 21l8.8-8.6a5.5 5.5 0 0 0 0-7.8Z"/></svg></div><div className="playlist-info"><strong>云端收藏整合</strong><span>{state?.favoritesCount ?? (state?.playlistId === 'musxi:cloud-favorites' ? state.trackCount : 0)} 首</span></div></Button>}{visiblePlaylists.map(list => <Button variant="ghost" key={list.id} className="playlist" disabled={busy} onClick={() => open(list.id)}><CoverImage url={list.cover}/><div className="playlist-info"><strong>{list.name}</strong><span>{list.count} 首{list.platform && ` · ${platformNames[list.platform]}`}</span></div></Button>)}</div>
           {!state?.connected ? <div className="library-section-empty"><p>登录后查看你的音乐库。</p><Button onClick={() => {setAccountPlatform(null);setAccount(true);}}>扫码登录</Button></div>
@@ -312,6 +322,7 @@ export default function LibraryView({ library: lib, theme, appearance, onAppeara
           </div>
         </div>
       </>}
+      </PageBody>
     </div>
     {account && <AccountDialog key={accountPlatform || 'chooser'} open={account} onOpenChange={setAccount} initialPlatform={accountPlatform} library={lib}/>}
   </section></SidebarProvider>;

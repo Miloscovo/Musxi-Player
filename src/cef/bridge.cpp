@@ -143,6 +143,7 @@ public:
         eventClients.erase(std::remove(eventClients.begin(),eventClients.end(),this),eventClients.end());
         if(eventClients.empty())setApplicationPlayerEvents({});
         router_->OnBeforeClose(browser);subscriptions_.clear();desktopSubscriptions_.clear();
+        if(!lyrics_)resetShortcutInput();
         if(lyrics_)lyricsBrowser=nullptr;else activeBrowser=nullptr;
         if(testWindow_)RemovePropW(testWindow_,DragRegionProperty);
         if(lyrics_) {desktopLyricsClosed();if(shuttingDown)PostMessageW(window_,WM_CLOSE,0,0);return;}
@@ -167,6 +168,7 @@ public:
                                    int,const CefString&) override {
         if(tray_){b->GetHost()->CloseBrowser(true);return;}
         router_->OnRenderProcessTerminated(b);subscriptions_.clear();desktopSubscriptions_.clear();
+        if(!lyrics_ && !tray_)resetShortcutInput();
         if(dragRegion_)SetRectRgn(dragRegion_,0,0,0,0);
         if(closing_)return;
         if(lyrics_) {if(!recovered_){recovered_=true;b->Reload();}else b->GetHost()->CloseBrowser(true);return;}
@@ -247,6 +249,12 @@ public:
             }
             if(command.rfind("updates.",0)==0) {
                 const auto reply=applicationUpdates(command,params.dump());
+                if(reply.code)callback->Failure(reply.code,reply.message);
+                else callback->Success(Json{{"version",1},{"result",Json::parse(reply.json)}}.dump());
+                return true;
+            }
+            if(command.rfind("shortcuts.",0)==0) {
+                const auto reply=shortcutsCommand(command,params.dump());
                 if(reply.code)callback->Failure(reply.code,reply.message);
                 else callback->Success(Json{{"version",1},{"result",Json::parse(reply.json)}}.dump());
                 return true;
@@ -341,6 +349,7 @@ public:
             } else if(command=="player.pause" || command=="player.resume" || volume || seek) {
                 const auto operation=volume?PlayerCommand::SetVolume:seek?PlayerCommand::Seek:
                     command=="player.pause"?PlayerCommand::Pause:PlayerCommand::Resume;
+                if(volume)rememberShortcutVolume(applicationPlayerState().volumePercent);
                 const auto result=applicationPlayerCommand(operation,value);
                 if(!result) {
                     const auto code=result.error==PlayerError::NotReady?409:

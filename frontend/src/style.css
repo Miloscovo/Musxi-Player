@@ -70,6 +70,11 @@ main.app-shell { --sidebar-width:clamp(210px,15.5vw,240px); overflow:hidden; bor
 .sidebar .settings-nav { margin-top:auto!important }
 .library-content { --track-header-top:88px; flex:1; min-width:0; overflow:auto; overflow-anchor:none; padding:32px 34px 30px }
 .library-content>header { position:sticky; top:32px; z-index:6; display:flex; align-items:center; min-height:56px; margin-bottom:16px; gap:18px; background:transparent }
+.library-content.fixed-page-header { display:flex; flex-direction:column; overflow:hidden; padding-bottom:0 }
+.fixed-page-header>header { position:relative; top:32px; flex-shrink:0; margin-bottom:0 }
+.fixed-page-header>.demo-notice { flex-shrink:0; margin:16px 0 0 }
+.page-scroll { padding-bottom:30px }
+.page-scroll>:first-child { margin-top:0 }
 .library-home-header .page-heading,.library-home-header .header-actions { transform:translateY(-8px) }
 .library-sections { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; margin:32px 0 24px; flex-shrink:0 }
 .library-sections .library-section { position:relative; display:flex; align-items:center; justify-content:center; gap:18px; width:100%; min-width:0; height:60px; padding:12px; border-radius:10px; background:var(--search); color:var(--ink); font-size:18px; font-weight:650 }
@@ -142,11 +147,11 @@ main.app-shell { --sidebar-width:clamp(210px,15.5vw,240px); overflow:hidden; bor
 .track-table { display:flex; flex-direction:column; flex:1; min-height:0 }
 .track-table-head { position:relative; top:auto; flex-shrink:0 }
 /* Compensate for the 9px gutter so row edges match the header even in short lists. */
-.song-scroll { flex:1; min-height:0; overflow:auto; overflow-anchor:none; scrollbar-gutter:stable; margin-right:-34px; padding-right:25px }
-.song-scroll::-webkit-scrollbar { width:9px }
-.song-scroll::-webkit-scrollbar-thumb { background:transparent; border-radius:8px; min-height:80px }
-.song-scroll.scrollbar-visible::-webkit-scrollbar-thumb { background:color-mix(in srgb,var(--accent) 40%,transparent) }
-.song-scroll.scrollbar-visible:hover::-webkit-scrollbar-thumb { background:color-mix(in srgb,var(--accent) 67%,transparent) }
+:is(.song-scroll,.page-scroll) { flex:1; min-height:0; overflow:auto; overflow-anchor:none; scrollbar-gutter:stable; margin-right:-34px; padding-right:25px }
+:is(.song-scroll,.page-scroll)::-webkit-scrollbar { width:9px }
+:is(.song-scroll,.page-scroll)::-webkit-scrollbar-thumb { background:transparent; border-radius:8px; min-height:80px }
+:is(.song-scroll,.page-scroll).scrollbar-visible::-webkit-scrollbar-thumb { background:color-mix(in srgb,var(--accent) 40%,transparent) }
+:is(.song-scroll,.page-scroll).scrollbar-visible:hover::-webkit-scrollbar-thumb { background:color-mix(in srgb,var(--accent) 67%,transparent) }
 .song.track-row { min-height:61px; padding-top:5px; padding-bottom:5px; border-bottom:0; border-radius:0 }
 .song.track-row:hover { background:var(--hover-surface) }
 .library-shell:is([data-theme=dark],[data-theme=glass]) .song.track-row:hover { background:var(--hover-surface) }
@@ -169,8 +174,25 @@ main.app-shell { --sidebar-width:clamp(210px,15.5vw,240px); overflow:hidden; bor
 .discover-empty p { margin:0; color:var(--muted); opacity:1 }
 .pagination button { background:var(--soft); color:var(--ink) }
 .settings-content { max-width:560px; width:100%; padding-top:0; padding-bottom:24px }
-.library-sections.settings-sections { grid-template-columns:repeat(2,minmax(0,1fr)) }
-.library-sections.settings-sections:has(> :nth-child(3)) { grid-template-columns:repeat(3,minmax(0,1fr)) }
+.library-sections.settings-sections { grid-template-columns:repeat(5,minmax(0,1fr)) }
+.settings-sections .library-section { min-width:0; gap:10px; padding-inline:10px }
+@media(max-width:1000px) { .library-sections.settings-sections { grid-template-columns:repeat(3,minmax(0,1fr)) } }
+@media(max-width:650px) { .library-sections.settings-sections { grid-template-columns:repeat(2,minmax(0,1fr)) } }
+.shortcut-groups { margin:24px 0 }
+.shortcut-group+.shortcut-group { margin-top:16px; padding-top:16px; border-top:1px solid var(--line) }
+.shortcut-row { display:flex; align-items:center; justify-content:space-between; gap:16px; min-height:58px; font-size:14px }
+.shortcut-binding-actions { display:flex; align-items:center; gap:8px; flex-shrink:0 }
+.shortcut-binding { min-width:154px; height:auto; min-height:36px; white-space:normal; overflow-wrap:anywhere }
+.shortcut-binding[aria-pressed=true] { background:var(--appearance-selected); color:var(--appearance-ink) }
+.shortcut-hint { display:flex; align-items:center; flex-wrap:wrap; gap:8px; color:var(--muted); font-size:13px }
+@media(max-width:650px) { .shortcut-row { flex-wrap:wrap; padding-block:8px; gap:8px } .shortcut-binding-actions { width:100% } .shortcut-binding { flex:1 } }
+.lyrics-font-control { display:flex; align-items:center; gap:16px; margin-top:12px }
+.lyrics-font-control .appearance-slider { flex:1; min-width:0; margin:0 }
+.lyrics-font-control>span { color:var(--muted); font-size:14px }
+.lyrics-font-control>span:last-child { font-size:26px }
+.lyrics-preview { margin-top:28px; padding:20px; border-radius:10px; background:var(--search); color:var(--muted); line-height:1.6; overflow-wrap:anywhere }
+.lyrics-preview p { margin:12px 0; color:inherit; font-size:inherit; opacity:1 }
+.lyrics-preview .current { color:var(--accent); font-weight:700 }
 .playback-setting { margin-bottom:28px }
 .playback-setting label { display:block; margin-bottom:12px; font-size:15px; font-weight:600; color:var(--ink) }
 .settings-content .playback-setting select { width:100%; max-width:360px; min-width:0; height:40px; padding:0 12px; border:1px solid var(--line); border-radius:8px; background:var(--search); color:var(--ink); font:inherit; font-size:14px }
@@ -185,7 +207,7 @@ main.app-shell { --sidebar-width:clamp(210px,15.5vw,240px); overflow:hidden; bor
 .appearance-segment svg { width:18px; height:18px; flex-shrink:0; fill:none; stroke:currentColor; stroke-width:1.7; stroke-linecap:round; stroke-linejoin:round }
 .appearance-segment:hover { background:var(--hover-surface) }
 .appearance-segment[aria-pressed=true] { background:var(--appearance-selected); color:var(--appearance-ink) }
-:root:is([data-theme=dark],[data-theme=glass]) .appearance-segment[aria-pressed=true] { background:var(--soft); color:var(--accent) }
+:root:is([data-theme=dark],[data-theme=glass]) :is(.appearance-segment,.shortcut-binding)[aria-pressed=true] { background:var(--soft); color:var(--accent) }
 .appearance-transparency { margin-top:30px; padding-top:24px; border-top:1px solid var(--line) }
 .appearance-setting-row { display:flex; justify-content:space-between; align-items:center; gap:16px }
 .appearance-setting-row p { margin:5px 0 0; color:var(--muted); opacity:1; font-size:13px; line-height:1.6 }
@@ -265,7 +287,7 @@ input.seek-bar::-webkit-slider-thumb { background:var(--accent) }
   .library-sections .library-section { gap:8px }
   .sidebar>button:not(.avatar-button) { padding-inline:18px }
   .library-content { padding:32px 18px 22px }
-  .song-scroll { margin-right:-18px; padding-right:9px }
+  :is(.song-scroll,.page-scroll) { margin-right:-18px; padding-right:9px }
   .library-content>header::before { left:-18px; right:-18px }
   .collection-search { width:min(300px,42vw) }
   .player,:root[data-theme=dark] .player,:root[data-theme=glass] .player { gap:7px; padding-inline:12px }
@@ -483,6 +505,9 @@ html,body,#app,main.app-shell { background:transparent!important }
 /* Platform translations: one row per original line, translation below it.
    The row stays a single button so clicking either line seeks the original time. */
 .lyrics-lines.dual button,.lyrics-match-preview ol.dual button { display:flex; flex-direction:column; align-items:flex-start; gap:2px }
+.lyrics-page .lyrics-lines :is(button,span) { font-size:var(--lyrics-font-size,20px) }
+.lyrics-page[data-alignment=center] .lyrics-lines :is(button,span) { text-align:center }
+.lyrics-page[data-alignment=center] .lyrics-lines.dual button { align-items:center }
 .lyrics-lines.dual li { margin:6px 0 }
 .lyrics-lines small,.lyrics-match-preview li small { display:block; color:var(--muted); font-size:.78em; font-weight:400; line-height:1.4; opacity:.9 }
 .lyrics-lines li[aria-current=true] small { color:color-mix(in srgb,var(--accent) 75%,var(--muted)) }

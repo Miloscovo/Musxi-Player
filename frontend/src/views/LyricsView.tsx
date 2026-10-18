@@ -1,4 +1,5 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
+import { useLyricsDisplay } from '../composables/useLyricsDisplay';
 import LyricsMatchDialog from '../components/LyricsMatchDialog';
 import CoverImage from '../components/CoverImage';
 import { Button } from '../components/ui/button';
@@ -22,6 +23,7 @@ export default function LyricsView({ trackId, now, positionMs, canSeek, onSeek, 
     [hint.transient, hint.text]);
   const [matching,setMatching]=useState(false);
   const [showTranslation,setShowTranslation]=useLyricsTranslation();
+  const [display] = useLyricsDisplay();
   useEffect(()=>{setMatching(false);},[trackId]);
   const list = useRef<HTMLOListElement>(null); const closeButton = useRef<HTMLButtonElement>(null);
   const userScroll = useRef(0);
@@ -47,14 +49,14 @@ export default function LyricsView({ trackId, now, positionMs, canSeek, onSeek, 
     if (!container || !row || Date.now() - userScroll.current < 3000) return;
     container.scrollTo({ top: row.offsetTop - container.clientHeight / 2 + row.clientHeight / 2, behavior: 'smooth' });
     // Showing or hiding translations changes row heights; re-centre the current line.
-  }, [active, lines, dual]);
+  }, [active, lines, dual, display.alignment, display.fontSize]);
   const markScrolled = () => { userScroll.current = Date.now(); };
   const message = !trackId ? '尚未播放歌曲' : loading ? '正在加载歌词…' : failed ? '歌词加载失败，请检查网络后重试' :
     !lines.length ? (lyrics?.platform && lyrics.platform !== 'local' ? '这首歌在平台上暂无歌词' : '暂无歌词') : '';
   useLayoutEffect(() => {
     if (list.current) return observeLyricDragRegions(list.current);
   }, [lines, message]);
-  return <section className="lyrics-page" aria-label="歌词">
+  return <section className="lyrics-page" aria-label="歌词" data-alignment={display.alignment} style={{ '--lyrics-font-size': `${display.fontSize}px` } as CSSProperties}>
     <Button variant="unstyled" ref={closeButton} className="lyrics-close" aria-label="收起歌词页" title="收起" onClick={onClose}>
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
     </Button>

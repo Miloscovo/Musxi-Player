@@ -2,7 +2,8 @@ import { native } from './client';
 import type { CefTransport } from './transport';
 import { request } from './transport';
 import type { PlayerEvent } from './events';
-import { createElement } from 'react';
+import { createElement, type ComponentProps } from 'react';
+import { useShortcuts } from '../composables/useShortcuts';
 import { createRoot } from 'react-dom/client';
 import LibraryView from '../views/LibraryView';
 import MessageAlerts from '../components/MessageAlerts';
@@ -13,6 +14,11 @@ import type { useLibrary } from '../composables/useLibrary';
 import { verifyDesktopWindow } from './desktopSmoke';
 import { observeLyricDragRegions } from '../composables/lyrics';
 import { verifyUpdatesUI } from './updatesSmoke';
+
+function SmokeLibraryView(props: Omit<ComponentProps<typeof LibraryView>, 'shortcuts'>) {
+  const shortcuts = useShortcuts();
+  return createElement(LibraryView, { ...props, shortcuts });
+}
 
 async function waitFor(check: () => boolean, message = 'Event/UI update timed out') {
   const end = Date.now() + 3000;
@@ -27,6 +33,26 @@ function checkMenuDragRegions(open: boolean) {
     if (getComputedStyle(region).getPropertyValue('-webkit-app-region').trim() !== (open ? 'no-drag' : 'drag'))
       throw new Error(`Menu ${open ? 'blocks outside clicks' : 'did not restore window dragging'}`);
   }
+}
+
+async function checkFixedPageHeader(root: ParentNode) {
+  const viewport = root.querySelector<HTMLElement>('.page-scroll')!;
+  const title = root.querySelector<HTMLElement>('.library-content h1')!;
+  const tabs = root.querySelector<HTMLElement>('.library-sections')!;
+  const maxHeight = viewport.style.maxHeight;
+  try {
+    viewport.style.maxHeight = '200px';
+    await waitFor(() => viewport.scrollHeight > viewport.clientHeight, 'Page content did not become scrollable');
+    const titleBefore = title.getBoundingClientRect(); const tabsBefore = tabs.getBoundingClientRect();
+    const bodyBefore = viewport.firstElementChild!.getBoundingClientRect().top;
+    viewport.scrollTop = viewport.scrollHeight;
+    await new Promise(requestAnimationFrame);
+    const titleAfter = title.getBoundingClientRect(); const tabsAfter = tabs.getBoundingClientRect();
+    if (!viewport.scrollTop || viewport.firstElementChild!.getBoundingClientRect().top >= bodyBefore
+      || Math.abs(titleBefore.top-titleAfter.top)>1 || Math.abs(titleBefore.left-titleAfter.left)>1
+      || Math.abs(tabsBefore.top-tabsAfter.top)>1 || Math.abs(tabsBefore.left-tabsAfter.left)>1
+      || root.querySelector('.library-content')!.scrollTop !== 0) throw new Error('Page scrolling moved the fixed title or navigation');
+  } finally { viewport.scrollTop = 0; viewport.style.maxHeight = maxHeight; }
 }
 
 // Invoked only by the real CEF --cef-smoke run (cloud startup is disabled).
@@ -123,7 +149,7 @@ export async function verifyWebPage() {
     play: async (source, id) => { actions.push(`play:${id}`, `play:${source}:${id}`); },
   };
   try {
-    root.render(createElement(LibraryView, { library: fixtureLibrary, theme: 'light' }));
+    root.render(createElement(SmokeLibraryView, { library: fixtureLibrary, theme: 'light' }));
     await waitFor(() => !!fixture.querySelector('.playlist'));
     const favoritesCard=fixture.querySelector<HTMLButtonElement>('.playlist')!;
     if(favoritesCard.querySelector('strong')?.textContent!=='云端收藏整合' || !favoritesCard.querySelector('svg path'))throw new Error('Cloud favorites entry is missing or not first');
@@ -131,12 +157,18 @@ export async function verifyWebPage() {
     const cardNames=Array.from(fixture.querySelectorAll('.playlist strong')).map(e=>e.textContent);
     if(JSON.stringify(cardNames)!==JSON.stringify(['云端收藏整合','我喜欢','其他歌单']))throw new Error('Created playlist favorites ordering failed');
     if(favoritesCard.querySelector('svg')!.getBoundingClientRect().width!==44)throw new Error('Cloud favorites heart size is incorrect');
+    const shortLibrary = fixtureLibrary.state!;
+    fixtureLibrary.state = { ...shortLibrary, playlists: Array.from({ length:40 }, (_, index) => ({ ...playlist, id:`scroll-${index}`, favorite:false })) };
+    root.render(createElement(SmokeLibraryView, { library:fixtureLibrary, theme:'light' }));
+    await waitFor(() => fixture.querySelectorAll('.playlist').length === 41);
+    await checkFixedPageHeader(fixture);
+    fixtureLibrary.state = shortLibrary;
     fixtureLibrary.state={...fixtureLibrary.state!,connected:false};
-    root.render(createElement(LibraryView,{library:fixtureLibrary,theme:'light'}));
+    root.render(createElement(SmokeLibraryView,{library:fixtureLibrary,theme:'light'}));
     await waitFor(()=>!Array.from(fixture.querySelectorAll('.playlist strong')).some(e=>e.textContent==='云端收藏整合'));
     if(!fixture.querySelector('.library-section-empty')?.textContent?.includes('登录后'))throw new Error('Signed-out library prompt missing');
     fixtureLibrary.state={...fixtureLibrary.state!,connected:true};
-    root.render(createElement(LibraryView,{library:fixtureLibrary,theme:'light'}));
+    root.render(createElement(SmokeLibraryView,{library:fixtureLibrary,theme:'light'}));
     await waitFor(()=>fixture.querySelector('.playlist strong')?.textContent==='云端收藏整合');
     const playlistCard=Array.from(fixture.querySelectorAll<HTMLButtonElement>('.playlist')).find(card=>card.querySelector('strong')?.textContent===playlist.name)!;
     checkPlaylistText(playlistCard);
@@ -145,11 +177,11 @@ export async function verifyWebPage() {
     // Resizing a long playlist must retain row height and the current scroll anchor.
     const fixtureState = fixtureLibrary.state!;
     fixtureLibrary.state = { ...fixtureState, tracks: [{ ...song, id: 'remaining', name: 'Remaining favorite' }], trackCount: 1 };
-    root.render(createElement(LibraryView, { library: fixtureLibrary, theme: 'light' }));
+    root.render(createElement(SmokeLibraryView, { library: fixtureLibrary, theme: 'light' }));
     await waitFor(() => fixture.querySelectorAll('.song.track-row').length === 1
       && fixture.querySelector('.track-title')?.textContent === 'Remaining favorite', 'Favorite removal retained a stale song row');
     fixtureLibrary.state = { ...fixtureState, tracks: Array.from({ length: 1000 }, (_, index) => ({ ...song, id: index ? `resize-${index}` : song.id })), trackCount: 1000 };
-    root.render(createElement(LibraryView, { library: fixtureLibrary, theme: 'light' }));
+    root.render(createElement(SmokeLibraryView, { library: fixtureLibrary, theme: 'light' }));
     await waitFor(() => fixture.querySelector('.song-list')!.getBoundingClientRect().height > 50000, 'Long resize fixture did not load');
     const songViewport = fixture.querySelector<HTMLElement>('.song-scroll')!;
     songViewport.scrollTop = 10000;
@@ -169,7 +201,7 @@ export async function verifyWebPage() {
     fixtureLibrary.state = fixtureState;
     root.render(null);
     await waitFor(() => !fixture.querySelector('.library-shell'));
-    root.render(createElement(LibraryView, { library: fixtureLibrary, theme: 'light' }));
+    root.render(createElement(SmokeLibraryView, { library: fixtureLibrary, theme: 'light' }));
     await waitFor(() => !!fixture.querySelector('.playlist'));
     Array.from(fixture.querySelectorAll<HTMLButtonElement>('.playlist')).find(card => card.querySelector('strong')?.textContent === playlist.name)!.click();
     await waitFor(() => fixture.querySelectorAll('.song.track-row').length === 1, 'Single-song fixture did not restore');
@@ -236,7 +268,7 @@ export async function verifyWebPage() {
     await waitFor(() => actions.includes('importLocal'), 'Import button did not dispatch');
     const localPlaylist={...playlist,id:'local-folder:1',name:'本地文件夹',editable:false};
     fixtureLibrary.state = { ...fixtureLibrary.state!, playlistId: 'musxi:local', playlistName: '本地音乐', localPlaylists:[localPlaylist], connected: false };
-    root.render(createElement(LibraryView, { library: fixtureLibrary, theme: 'light' }));
+    root.render(createElement(SmokeLibraryView, { library: fixtureLibrary, theme: 'light' }));
     await waitFor(() => Array.from(fixture.querySelectorAll('.playlist')).some(button=>button.textContent?.includes(localPlaylist.name)), 'Local folder card did not render');
     checkPlaylistText(Array.from(fixture.querySelectorAll('.playlist')).find(button=>button.textContent?.includes(localPlaylist.name))!);
     if(fixture.querySelector('.track-table'))throw new Error('Local home still shows the song table');
@@ -255,12 +287,12 @@ export async function verifyWebPage() {
     removeOption.click();await waitFor(()=>actions.includes(`removeLocalFolder:${localPlaylist.id}`));
     if(!document.querySelector('.local-folder-dialog'))throw new Error('Folder removal unexpectedly closed the dialog');
     fixtureLibrary.state={...fixtureLibrary.state!,localPlaylists:[]};
-    root.render(createElement(LibraryView,{library:fixtureLibrary,theme:'light'}));
+    root.render(createElement(SmokeLibraryView,{library:fixtureLibrary,theme:'light'}));
     await waitFor(()=>!!document.querySelector('.local-folder-options p'));
     document.querySelector('.local-folder-dialog')!.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}));
     await waitFor(()=>!document.querySelector('.local-folder-dialog'));
     fixtureLibrary.state={...fixtureLibrary.state!,localPlaylists:[localPlaylist]};
-    root.render(createElement(LibraryView,{library:fixtureLibrary,theme:'light'}));
+    root.render(createElement(SmokeLibraryView,{library:fixtureLibrary,theme:'light'}));
     await waitFor(()=>fixture.querySelectorAll('.local-import-grid .playlist').length===localCards.length);
     localCards[0].click();
     await waitFor(() => !!fixture.querySelector('.song.track-row'), 'All-local playlist did not show songs');
@@ -271,7 +303,7 @@ export async function verifyWebPage() {
     await waitFor(() => !!fixture.querySelector('.local-all'));
     Array.from(fixture.querySelectorAll<HTMLButtonElement>('.playlist')).find(button=>button.textContent?.includes(localPlaylist.name))!.click();
     fixtureLibrary.state={...fixtureLibrary.state!,playlistId:localPlaylist.id,playlistName:localPlaylist.name};
-    root.render(createElement(LibraryView, { library: fixtureLibrary, theme: 'light' }));
+    root.render(createElement(SmokeLibraryView, { library: fixtureLibrary, theme: 'light' }));
     await waitFor(() => !!fixture.querySelector('.song.track-row'), 'Local song did not render');
     fixture.querySelector<HTMLElement>('.song.track-row')!.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
     if (!actions.includes(`play:local:${song.id}`)) throw new Error('Local double-click did not play offline');
@@ -284,9 +316,9 @@ export async function verifyWebPage() {
     await waitFor(()=>!document.querySelector('[data-slot=context-menu-content]'));
     const localSongState=fixtureLibrary.state!;
     fixtureLibrary.state={...localSongState,tracks:[],trackCount:0,localPlaylists:[{...localPlaylist,count:0}]};
-    root.render(createElement(LibraryView,{library:fixtureLibrary,theme:'light'}));
+    root.render(createElement(SmokeLibraryView,{library:fixtureLibrary,theme:'light'}));
     await waitFor(()=>!fixture.querySelector('.song.track-row'));
-    fixtureLibrary.state=localSongState;root.render(createElement(LibraryView,{library:fixtureLibrary,theme:'light'}));
+    fixtureLibrary.state=localSongState;root.render(createElement(SmokeLibraryView,{library:fixtureLibrary,theme:'light'}));
     await waitFor(()=>!!fixture.querySelector('.song.track-row'));
     const sidebarToggle=fixture.querySelector<HTMLButtonElement>('[data-slot=sidebar-rail]')!;
     sidebarToggle.click();
@@ -395,7 +427,7 @@ export async function verifyWebPage() {
     if(!document.querySelector('.player-action-menu')?.textContent?.includes('原始音质'))throw new Error('Local quality menu does not use original quality');
     document.querySelector<HTMLButtonElement>('.player-action-menu button')!.click();
     fixtureLibrary.state={...fixtureLibrary.state!,recent:[{...song,platform:'qq',platforms:['netease','kugou','qq']}]};
-    root.render(createElement(LibraryView,{library:fixtureLibrary,theme:'light'}));
+    root.render(createElement(SmokeLibraryView,{library:fixtureLibrary,theme:'light'}));
     await waitFor(()=>!!fixture.querySelector('.sidebar'));
     Array.from(fixture.querySelectorAll<HTMLButtonElement>('.sidebar button')).find(button=>button.textContent?.includes('最近播放'))!.click();
     await waitFor(()=>fixture.querySelectorAll('.song-platform-tag').length===3);
@@ -433,14 +465,14 @@ export async function verifyWebPage() {
     await waitFor(() => fixture.querySelector('[data-slot=alert-description]')?.textContent === '导入完成', 'New message did not display');
   } finally { root.unmount(); fixture.remove(); }
   document.querySelector<HTMLButtonElement>('.settings-nav')?.click();
-  // 外观 / 播放 / 关于与更新 (the third tab appears once updates.getState answers).
-  await waitFor(() => document.querySelectorAll('.settings-sections button').length === 3, 'Update settings tab is missing');
+  // The updates tab appears once updates.getState answers.
+  await waitFor(() => document.querySelectorAll('.settings-sections button').length === 5, 'Settings tabs are missing');
   const settingsTabs = document.querySelectorAll<HTMLButtonElement>('.settings-sections button');
   if (Array.from(settingsTabs).some(tab => Math.abs(tab.getBoundingClientRect().width-settingsTabs[0].getBoundingClientRect().width)>1
-      || Math.abs(tab.getBoundingClientRect().top-settingsTabs[0].getBoundingClientRect().top)>1)
+      || tab.getBoundingClientRect().height !== settingsTabs[0].getBoundingClientRect().height)
     || document.querySelector('.settings-content h2')) throw new Error('Settings tabs or removed subtitle are incorrect');
   // Smoke runs a development build with network disabled: no notice, no download, no automatic check.
-  settingsTabs[2].click();
+  settingsTabs[4].click();
   await waitFor(() => !!document.querySelector('.update-settings .update-status'), 'Update settings did not load');
   const updates = await native.updates.getState();
   if (updates.current.releaseBuild || updates.result !== 'development_build' || updates.automaticCheckEnabled
@@ -452,6 +484,58 @@ export async function verifyWebPage() {
   await waitFor(() => !!document.querySelector('#audio-output-device'), 'Playback settings did not load');
   if (document.querySelector('.settings-content h2') || document.querySelectorAll('#default-audio-quality option').length !== 4)
     throw new Error('Playback settings structure is incorrect');
+  settingsTabs[2].click();
+  await waitFor(() => document.querySelectorAll('.shortcut-binding').length === 10 && !document.querySelector<HTMLButtonElement>('.shortcut-binding')?.disabled, 'Shortcut settings did not load');
+  await checkFixedPageHeader(document);
+  const originalVolume = (await native.player.getState()).volumePercent;
+  const bind = async (index: number, code: string, key: string) => {
+    document.querySelectorAll<HTMLButtonElement>('.shortcut-binding')[index].click();
+    await waitFor(() => document.querySelector('.shortcut-binding[aria-pressed=true]')?.textContent === '请按下要绑定快捷键', 'Shortcut recorder did not start');
+    window.dispatchEvent(new KeyboardEvent('keydown', { code, key, bubbles: true, cancelable: true }));
+    window.dispatchEvent(new KeyboardEvent('keyup', { code, key, bubbles: true, cancelable: true }));
+    await waitFor(() => !document.querySelector('.shortcut-binding[aria-pressed=true]'), 'Shortcut recording did not finish');
+  };
+  try {
+    if ((await native.shortcuts.getState()).global || Array.from(document.querySelectorAll('.shortcut-binding')).some(button => button.textContent !== '未绑定')) throw new Error('Shortcuts have unwanted defaults');
+    await bind(5, 'F9', 'F9');
+    if ((await native.shortcuts.getState()).bindings.volumeUp?.key !== 120) throw new Error('Shortcut recording was not saved');
+    await native.player.setVolume(40);
+    document.body.dispatchEvent(new KeyboardEvent('keydown', { key:'F9', code:'F9', bubbles:true, cancelable:true }));
+    await waitFor(() => document.querySelector('#volume')?.textContent === '45%', 'Local shortcut did not execute');
+    document.body.dispatchEvent(new KeyboardEvent('keydown', { key:'F9', code:'F9', repeat:true, bubbles:true, cancelable:true }));
+    await new Promise(resolve => setTimeout(resolve, 50));
+    if ((await native.player.getState()).volumePercent !== 45) throw new Error('Shortcut autorepeat was not ignored');
+    await bind(6, 'F9', 'F9');
+    if ((await native.shortcuts.getState()).bindings.volumeDown || !document.querySelector('.shortcut-settings [role=alert]')?.textContent?.includes('已用于')) throw new Error('Duplicate shortcut overwrote a binding');
+    const setting = await native.shortcuts.getState();
+    await native.shortcuts.setSettings({ ...setting, global: true });
+    await native.shortcuts.suspend(true, false);
+    if (!(await native.shortcuts.getState()).suspended) throw new Error('Global shortcuts did not suspend for recording');
+    await native.shortcuts.suspend(false, false);
+    await native.shortcuts.setSettings({ ...setting, global: false });
+    const reset = Array.from(document.querySelectorAll<HTMLButtonElement>('.shortcut-settings button')).find(button => button.textContent === '恢复默认')!;
+    reset.click();await waitFor(() => !!document.querySelector('[role=dialog]'));
+    Array.from(document.querySelectorAll<HTMLButtonElement>('[role=dialog] button')).find(button => button.textContent === '确认恢复')!.click();
+    await waitFor(() => !document.querySelector('[role=dialog]'));
+    const cleared = await native.shortcuts.getState();
+    if (cleared.global || Object.values(cleared.bindings).some(Boolean)) throw new Error('Restore defaults did not clear shortcuts');
+  } finally { await native.player.setVolume(originalVolume); }
+  settingsTabs[3].click();
+  await waitFor(() => !!document.querySelector('.lyrics-preview'), 'Lyrics settings did not load');
+  const savedLyrics = localStorage.getItem('musxi-lyrics-display');
+  try {
+    const left = document.querySelector<HTMLButtonElement>('[aria-labelledby=lyrics-alignment-label] button')!;
+    left.click();
+    await waitFor(() => getComputedStyle(document.querySelector('.lyrics-preview')!).textAlign === 'left', 'Lyrics alignment did not update');
+    const font = document.querySelector<HTMLInputElement>('#lyrics-font-size')!;
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(font, '32');
+    font.dispatchEvent(new Event('input', { bubbles:true }));
+    await waitFor(() => { const style=getComputedStyle(document.querySelector('.lyrics-preview')!);return style.fontSize === '32px' && style.textAlign === 'left'; }, 'Lyrics preview did not reflect display settings');
+    if (JSON.parse(localStorage.getItem('musxi-lyrics-display') || '{}').fontSize !== 32) throw new Error('Lyrics display settings were not saved');
+  } finally {
+    if (savedLyrics === null) localStorage.removeItem('musxi-lyrics-display'); else localStorage.setItem('musxi-lyrics-display', savedLyrics);
+    window.dispatchEvent(new Event('musxi-lyrics-display'));
+  }
   settingsTabs[0].click();
   // Tone buttons share .appearance-segment; only the mode group is under test here.
   const modeSegments = '[aria-labelledby=appearance-mode-label] .appearance-segment';

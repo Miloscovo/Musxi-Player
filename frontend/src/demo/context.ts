@@ -5,6 +5,7 @@ import { createDemoLibrary, createDemoPlayer, demoPlaylistSongs, demoSongs } fro
 import { createDemoLyricsMatch } from './lyricsMatch.ts';
 import { createDemoTranslation } from './translation.ts';
 import { createDemoUpdates, type DemoUpdateScenario } from './updates.ts';
+import { emptyShortcuts, parseShortcuts } from '../native/shortcuts.ts';
 
 export function isDemoMode(host: CefTransport = globalThis as CefTransport, search = globalThis.location?.search || '') {
   const query = new URLSearchParams(search);
@@ -16,6 +17,7 @@ export function createDemoTransport(): CefTransport {
   const library = createDemoLibrary();
   library.recent=[];
   let player = { ...createDemoPlayer() };
+  let shortcutSettings = emptyShortcuts(), lastVolume = 50;
   const desktopListeners = new Map<number, (text: string) => void>();
   const desktop = { enabled: false, visible: false, locked: false, dual: true, panel: false, hover: false, fontSize: 30, color: 'theme' };
   const songs = demoSongs();
@@ -90,6 +92,23 @@ export function createDemoTransport(): CefTransport {
     return song;
   }
   function run(command: string, p: Record<string, any>): unknown {
+    if (command === 'shortcuts.getState') return shortcutSettings;
+    if (command === 'shortcuts.setSettings') {
+      shortcutSettings = parseShortcuts({ ...p, failed: [], suspended: shortcutSettings.suspended });return shortcutSettings;
+    }
+    if (command === 'shortcuts.suspend') { shortcutSettings = { ...shortcutSettings, suspended: !!p.recording || !!p.editing };return shortcutSettings; }
+    if (command === 'shortcuts.execute') {
+      if (player.volumePercent > 0) lastVolume = player.volumePercent;
+      if (p.action === 'visibility') return true;
+      if (p.action === 'mute') return run('player.setVolume', { volumePercent: player.volumePercent ? 0 : lastVolume });
+      if (p.action === 'volumeUp' || p.action === 'volumeDown') return run('player.setVolume', { volumePercent: Math.max(0, Math.min(100, player.volumePercent + (p.action === 'volumeUp' ? 5 : -5))) });
+      if (!player.opened) return true;
+      if (p.action === 'playPause') return run(player.requestedPlaying ? 'player.pause' : 'player.resume', {});
+      if (p.action === 'next' || p.action === 'previous') return run('library.skip', { delta: p.action === 'next' ? 1 : -1 });
+      if (p.action === 'forward' || p.action === 'backward') return run('player.seek', { positionMs: Math.max(0, Math.min(player.durationMs, player.positionMs + (p.action === 'forward' ? 5000 : -5000))) });
+      if (p.action === 'playbackOrder') return run('library.setPlaybackOrder', { order: library.playbackOrder === 'sequential' ? 'random' : library.playbackOrder === 'random' ? 'repeat-one' : 'sequential' });
+      fail('无效快捷键功能', 400);
+    }
     // The browser demo cannot open a native floating window; it keeps and pushes preferences.
     if (command.startsWith('desktopLyrics.')) {
       if (command === 'desktopLyrics.setVisible') desktop.enabled = true; // Lets screenshots show the dock toggle.
@@ -106,7 +125,7 @@ export function createDemoTransport(): CefTransport {
         case 'player.pause': player.playing = false; player.requestedPlaying = false; player.phase = 'paused'; break;
         case 'player.resume': player.playing = true; player.requestedPlaying = true; player.phase = 'playing'; lastTick = Date.now(); break;
         case 'player.seek': if (!Number.isInteger(p.positionMs) || p.positionMs < 0) fail('无效播放位置', 400); player.positionMs = Math.min(p.positionMs, player.durationMs); lastTick = Date.now(); break;
-        case 'player.setVolume': if (!Number.isInteger(p.volumePercent) || p.volumePercent < 0 || p.volumePercent > 100) fail('无效音量', 400); player.volumePercent = p.volumePercent; break;
+        case 'player.setVolume': if (!Number.isInteger(p.volumePercent) || p.volumePercent < 0 || p.volumePercent > 100) fail('无效音量', 400); if (player.volumePercent > 0) lastVolume = player.volumePercent; player.volumePercent = p.volumePercent; break;
         default: fail('不支持的演示命令', 404);
       }
       // Match the native event names so subscribers see the same stream as in CEF.

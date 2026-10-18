@@ -20,6 +20,7 @@
 #include <climits>
 #include <map>
 #include <vector>
+#include "shortcuts.hpp"
 
 namespace {
 std::wstring pagePath;
@@ -150,6 +151,7 @@ LRESULT hostHitTest(HWND hwnd,LPARAM lp) {
     return region && PtInRegion(region,p.x,p.y)?HTCAPTION:HTCLIENT;
 }
 #include "desktop_lyrics.inc"
+#include "shortcuts.inc"
 // Main window placement, remembered across launches in the native profile.
 std::filesystem::path mainSettingsPath;
 RECT mainBounds{};bool mainMaximized=false;
@@ -220,7 +222,15 @@ LRESULT CALLBACK testProc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp) {
         if(LOWORD(lp)==WM_LBUTTONDBLCLK || LOWORD(lp)==NIN_KEYSELECT)showFromTray(hwnd);
         if(LOWORD(lp)==WM_CONTEXTMENU || LOWORD(lp)==WM_RBUTTONUP)trayMenu(hwnd);
         return 0;
-    case WM_DESTROY: removeTray(hwnd);return 0;
+    case WM_DESTROY: shortcutRegistry.clear();removeTray(hwnd);return 0;
+    case WM_HOTKEY: {
+        const auto index=static_cast<int>(wp)-0x5100;
+        if(index>=0 && index<10 && shortcutRegistry.registered[index] && !shortcutRegistry.suspended) {
+            const auto binding=shortcutRegistry.settings.bindings[index];
+            if(HIWORD(lp)==binding.key && LOWORD(lp)==binding.modifiers)executeShortcut(musxi::shortcuts::actions[index]);
+        }
+        return 0;
+    }
     case WM_SETFOCUS: if(browser)browser->SetFocus(true);return 0;
     case WM_KILLFOCUS: if(browser){browser->SetFocus(false);if(imeActive)browser->ImeCancelComposition();}imeActive=false;return 0;
     case WM_SETCURSOR: if(LOWORD(lp)==HTCLIENT){SetCursor(webCursor?webCursor:LoadCursorW(nullptr,IDC_ARROW));return TRUE;}break;
@@ -410,6 +420,7 @@ void ready(void* window) {
     if(!browser) {createFailed=true;PostMessageW(nativeWindow,WM_CLOSE,0,0);}
     else if(smoke && preview)ShowWindow(browser->GetHost()->GetWindowHandle(),SW_HIDE);
     if(browser && !preview) {
+        shortcutRegistry.restore();
         SendMessageW(testWindow,WM_SIZE,0,0);
         if(!smoke) {
             ShowWindow(testWindow,mainMaximized?SW_SHOWMAXIMIZED:SW_SHOW);
@@ -420,11 +431,12 @@ void ready(void* window) {
     if(browser && !preview && desktopVisible && !showDesktopLyrics())desktopVisible=false;
 }
 void tick() {
+    if(testWindow)refreshShortcutSuspension();
     CefDoMessageLoopWork();
     if(smoke && GetTickCount64()-startTick>(updatesUiSmoke.empty()?30000:90000))PostMessageW(nativeWindow,WM_CLOSE,0,0);
 }
 bool canClose() {
-    if(!hostClosing){saveDesktopSettings();saveMainWindow();hostClosing=true;}
+    if(!hostClosing){shortcutRegistry.clear();saveDesktopSettings();saveMainWindow();hostClosing=true;}
     if(!musxi::cef_adapter::closeBrowsers())return false;
     // The windowless browser is gone. Remove its frozen surface before blocking
     // native cleanup and CefShutdown, rather than leaving a dead window visible.
@@ -477,6 +489,7 @@ int run(HINSTANCE instance,int show,void* sandbox) {
     const auto data=std::filesystem::path(local)/(preview?L"MusxiPlayer-Preview":testApp?L"MusxiPlayer-Test":L"MusxiPlayer");
     std::error_code ec;std::filesystem::create_directories(data,ec);if(ec)return 2;
     if(!preview && !updateFixture){loadDesktopSettings(data);loadMainWindow(data);}
+    initShortcuts(data);
     CefString(&settings.root_cache_path)=(data/(updateFixture?L"cef-update-fixture-cache":smoke?L"cef-smoke-cache":L"cef-cache")).wstring();
     CefString(&settings.log_file)=(data/L"cef.log").wstring();
     settings.log_severity=LOGSEVERITY_WARNING;
@@ -496,6 +509,28 @@ int run(HINSTANCE instance,int show,void* sandbox) {
 }
 }
 namespace musxi::cef_adapter {
+void rememberShortcutVolume(int volume) {if(volume>0)shortcutLastVolume=volume;}
+void resetShortcutInput() {shortcutEditing=false;shortcutRecording=false;if(hostClosing)shortcutRegistry.clear();else refreshShortcutSuspension();}
+musxi::LibraryReply shortcutsCommand(const std::string& command,const std::string& params) {
+    try {
+        const auto data=ShortcutJson::parse(params);
+        if(command=="shortcuts.getState" && data.is_object() && data.empty())return {0,{},shortcutSnapshot().dump()};
+        if(command=="shortcuts.setSettings") {
+            const auto next=musxi::shortcuts::parse(data);
+            if(next.global && !testWindow)return {409,"此预览窗口不支持全局快捷键",{}};
+            if(!shortcutRegistry.change(next,saveShortcuts))return {409,"无法保存快捷键：组合键可能已被系统或其他程序占用，或配置无法写入；已保留原设置。",{}};
+        } else if(command=="shortcuts.suspend") {
+            if(!data.is_object() || data.size()!=2 || !data.at("recording").is_boolean() || !data.at("editing").is_boolean())return {400,"无效录制状态",{}};
+            shortcutRecording=data.at("recording");shortcutEditing=data.at("editing");refreshShortcutSuspension();
+        } else if(command=="shortcuts.execute") {
+            if(!data.is_object() || data.size()!=1 || !data.at("action").is_string())return {400,"无效快捷键操作",{}};
+            const auto action=data.at("action").get<std::string>();
+            if(std::none_of(musxi::shortcuts::actions.begin(),musxi::shortcuts::actions.end(),[&](const char* item){return action==item;}))return {400,"无效快捷键功能",{}};
+            return executeShortcut(action);
+        } else return {404,"未知快捷键操作",{}};
+        return {0,{},shortcutSnapshot().dump()};
+    }catch(const std::exception&){return {400,"无效快捷键参数",{}};}
+}
 bool mainWindowCompact() {return mainCompact;}
 bool setMainWindowCompact(bool compact,int height) {
     if(!testWindow)return false;
