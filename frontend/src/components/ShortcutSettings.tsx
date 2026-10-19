@@ -7,7 +7,7 @@ import type { ShortcutsController } from '../composables/useShortcuts';
 
 export default function ShortcutSettings({ shortcuts: keys }: { shortcuts: ShortcutsController }) {
   const [confirm, setConfirm] = useState(false);
-  const pending = useRef<{ code: string; binding: KeyBinding } | null>(null);
+  const pending = useRef<KeyBinding | null>(null);
   const cancel = useRef(keys.cancel); cancel.current = keys.cancel;
   useEffect(() => () => { void cancel.current(); }, []);
   useEffect(() => {
@@ -18,16 +18,16 @@ export default function ShortcutSettings({ shortcuts: keys }: { shortcuts: Short
       if (event.key === 'Escape') { void keys.cancel(); return; }
       if (!keys.ready || event.repeat || pending.current) return;
       const binding = recordedKey(event);
-      if (binding) pending.current = { code: event.code, binding };
+      if (binding) pending.current = binding;
     }
     async function up(event: KeyboardEvent) {
       event.preventDefault(); event.stopImmediatePropagation();
       const value = pending.current;
-      if (!value || event.code !== value.code || !keys.recording) return;
+      if (!value || recordedKey(event)?.key !== value.key || !keys.recording) return;
       pending.current = null;
-      const conflict = shortcutActions.find(([id]) => id !== keys.recording && sameBinding(keys.state.bindings[id], value.binding));
+      const conflict = shortcutActions.find(([id]) => id !== keys.recording && sameBinding(keys.state.bindings[id], value));
       if (conflict) { keys.setError(`此快捷键已用于“${conflict[1]}”，请重新设置。`); await keys.cancel(); return; }
-      await keys.save({ ...keys.state, bindings: { ...keys.state.bindings, [keys.recording]: value.binding } });
+      await keys.save({ ...keys.state, bindings: { ...keys.state.bindings, [keys.recording]: value } });
       await keys.cancel();
     }
     const blur = () => { void keys.cancel(); };

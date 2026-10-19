@@ -14,6 +14,7 @@ import type { useLibrary } from '../composables/useLibrary';
 import { verifyDesktopWindow } from './desktopSmoke';
 import { observeLyricDragRegions } from '../composables/lyrics';
 import { verifyUpdatesUI } from './updatesSmoke';
+import { verifyWallpaperUI } from './wallpaperSmoke';
 
 function SmokeLibraryView(props: Omit<ComponentProps<typeof LibraryView>, 'shortcuts'>) {
   const shortcuts = useShortcuts();
@@ -513,6 +514,28 @@ export async function verifyWebPage() {
     if (!(await native.shortcuts.getState()).suspended) throw new Error('Global shortcuts did not suspend for recording');
     await native.shortcuts.suspend(false, false);
     await native.shortcuts.setSettings({ ...setting, global: false });
+    const nativeSpaces: KeyboardEvent[] = [];
+    const observeSpace = (event: KeyboardEvent) => { if (event.keyCode === 32) nativeSpaces.push(event); };
+    window.addEventListener('keydown', observeSpace, true); window.addEventListener('keyup', observeSpace, true);
+    try {
+      const binding = document.querySelector<HTMLButtonElement>('.shortcut-binding')!;
+      binding.focus(); binding.click();
+      await waitFor(() => binding.textContent === '请按下要绑定快捷键');
+      await request(window as unknown as CefTransport, 'test.pressSpace', {});
+      await waitFor(() => binding.textContent === 'Space', 'Native CEF Space key was not recorded');
+      if (nativeSpaces.length !== 2 || nativeSpaces.some(event => !event.isTrusted)
+        || (await native.shortcuts.getState()).bindings.playPause?.key !== 32) throw new Error('Space test did not use native CEF keyboard input');
+    } finally { window.removeEventListener('keydown', observeSpace, true); window.removeEventListener('keyup', observeSpace, true); }
+    document.querySelectorAll<HTMLButtonElement>('.shortcut-binding')[6].click();
+    await waitFor(() => document.querySelector('.shortcut-binding[aria-pressed=true]')?.textContent === '请按下要绑定快捷键');
+    window.dispatchEvent(new KeyboardEvent('keydown', { key:' ', code:'', keyCode:32, ctrlKey:true, bubbles:true, cancelable:true }));
+    window.dispatchEvent(new KeyboardEvent('keyup', { key:'Control', code:'', keyCode:17, bubbles:true, cancelable:true }));
+    await new Promise(resolve => setTimeout(resolve, 50));
+    if (!document.querySelector('.shortcut-binding[aria-pressed=true]')) throw new Error('Modifier release prematurely finished recording');
+    window.dispatchEvent(new KeyboardEvent('keyup', { key:' ', code:'', keyCode:32, bubbles:true, cancelable:true }));
+    await waitFor(() => !document.querySelector('.shortcut-binding[aria-pressed=true]'));
+    const spaceCombo = (await native.shortcuts.getState()).bindings.volumeDown;
+    if (spaceCombo?.key !== 32 || spaceCombo.modifiers !== 2) throw new Error('Space combination lost its original modifiers');
     const reset = Array.from(document.querySelectorAll<HTMLButtonElement>('.shortcut-settings button')).find(button => button.textContent === '恢复默认')!;
     reset.click();await waitFor(() => !!document.querySelector('[role=dialog]'));
     Array.from(document.querySelectorAll<HTMLButtonElement>('[role=dialog] button')).find(button => button.textContent === '确认恢复')!.click();
@@ -548,7 +571,7 @@ export async function verifyWebPage() {
   }
   cards[0].click();
   await waitFor(() => document.documentElement.dataset.theme === 'light');
-  if (document.querySelector('.appearance-slider')) throw new Error('Disabled transparency did not hide slider');
+  if (!document.querySelector<HTMLInputElement>('.appearance-slider')?.disabled) throw new Error('Disabled transparency must keep a disabled slider visible');
   toggle.click();
   await waitFor(() => document.documentElement.dataset.theme === 'glass-light' && cards[0].getAttribute('aria-pressed') === 'true');
   cards[1].click();
@@ -561,6 +584,7 @@ export async function verifyWebPage() {
   cards[0].click();
   await waitFor(() => document.documentElement.dataset.theme === 'light');
   const state = await native.player.getState();
+
   const windowState = await native.window.getState();
   if (windowState.enabled) {
     const settledWindowSize=async () => {
@@ -580,6 +604,7 @@ export async function verifyWebPage() {
     };
     const resizeTheme=document.documentElement.dataset.theme;
     const resizeOpacity=document.documentElement.style.getPropertyValue('--background-opacity');
+    const resizeDockOpacity=document.documentElement.style.getPropertyValue('--player-background-opacity');
     const timeAxis=document.querySelector('.player-progress')!.getBoundingClientRect();
     try {
       await resizeTest('begin',Math.max(800,expandedWidth-64),Math.max(560,expandedHeight-40));
@@ -598,6 +623,7 @@ export async function verifyWebPage() {
       await checkResizeCorners();
       document.documentElement.dataset.theme='glass-light';
       document.documentElement.style.setProperty('--background-opacity','0.5');
+      document.documentElement.style.setProperty('--player-background-opacity','0.5');
       const glassDeadline=Date.now()+2000;
       while(Math.abs(await resizeAlpha(Math.floor(expandedWidth/2),20)-128)>1) {
         if(Date.now()>glassDeadline)throw new Error('Translucent resize frame did not arrive');
@@ -614,6 +640,8 @@ export async function verifyWebPage() {
       if(resizeTheme===undefined)delete document.documentElement.dataset.theme;else document.documentElement.dataset.theme=resizeTheme;
       if(resizeOpacity)document.documentElement.style.setProperty('--background-opacity',resizeOpacity);
       else document.documentElement.style.removeProperty('--background-opacity');
+      if(resizeDockOpacity)document.documentElement.style.setProperty('--player-background-opacity',resizeDockOpacity);
+      else document.documentElement.style.removeProperty('--player-background-opacity');
       try {await resizeTest('end',expandedWidth,expandedHeight);}
       catch {await resizeTest('begin',expandedWidth,expandedHeight);await resizeTest('end',expandedWidth,expandedHeight);}
       await settledWindowSize();
@@ -720,7 +748,7 @@ export async function verifyWebPage() {
     cards[0].click();
     await waitFor(() => document.documentElement.dataset.theme === 'glass-light');
     toggle.click();
-    await waitFor(() => document.documentElement.dataset.theme === 'light' && !document.querySelector('.appearance-slider'));
+    await waitFor(() => document.documentElement.dataset.theme === 'light' && document.querySelector<HTMLInputElement>('.appearance-slider')?.disabled === true);
     toggle.click();
     await waitFor(() => document.querySelector<HTMLInputElement>('.appearance-slider')?.value === saved);
     toggle.click();
@@ -799,6 +827,7 @@ export async function verifyWebPage() {
       if (events.length !== count) throw new Error('Cancelled subscription received an event');
       await native.player.setVolume(target);
       await waitFor(() => document.querySelector('#volume')?.textContent === `${target}%`);
+      await verifyWallpaperUI();
       window.name = prefix + JSON.stringify({ trackId: state.trackId, volumePercent: target,
         originalVolume: state.volumePercent, opened: state.opened });
     } catch (e) { await native.player.setVolume(state.volumePercent); throw e; }

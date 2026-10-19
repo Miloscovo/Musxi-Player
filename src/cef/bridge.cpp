@@ -259,6 +259,12 @@ public:
                 else callback->Success(Json{{"version",1},{"result",Json::parse(reply.json)}}.dump());
                 return true;
             }
+            if(command.rfind("wallpaper.",0)==0) {
+                const auto reply=wallpaperCommand(command,params.dump());
+                if(reply.code)callback->Failure(reply.code,reply.message);
+                else callback->Success(Json{{"version",1},{"result",Json::parse(reply.json)}}.dump());
+                return true;
+            }
             if(command.rfind("window.",0)==0) {
                 const bool theme=command=="window.setTheme";
                 if(theme) {
@@ -324,6 +330,15 @@ public:
             if(smoke_ && testWindow_ && command=="test.windowSize" && params.empty()) {
                 RECT bounds{};GetClientRect(testWindow_,&bounds);const auto dpi=GetDpiForWindow(testWindow_);
                 callback->Success(Json{{"version",1},{"result",{{"width",MulDiv(bounds.right,96,dpi)},{"height",MulDiv(bounds.bottom,96,dpi)}}}}.dump());return true;
+            }
+            if(smoke_ && testWindow_ && command=="test.pressSpace" && params.empty()) {
+                const LPARAM keyData=(static_cast<LPARAM>(MapVirtualKeyW(VK_SPACE,MAPVK_VK_TO_VSC))<<16)|1;
+                browserHost()->SetFocus(true);
+                if(!PostMessageW(testWindow_,WM_KEYDOWN,VK_SPACE,keyData) ||
+                   !PostMessageW(testWindow_,WM_KEYUP,VK_SPACE,keyData|static_cast<LPARAM>(0xc0000000UL))) {
+                    callback->Failure(500,"Native space key test failed");return true;
+                }
+                callback->Success(Json{{"version",1},{"result",true}}.dump());return true;
             }
             if(smoke_ && command=="test.pixelAlpha") {
                 if(params.size()!=2 || !params.contains("x") || !params.contains("y") ||

@@ -17,9 +17,11 @@ import { bindWheelRange } from './composables/wheelRange';
 import { useAppUpdates } from './composables/useAppUpdates';
 import UpdateNotice from './components/UpdateNotice';
 import { useShortcuts } from './composables/useShortcuts';
+import { useWallpaper } from './composables/useWallpaper';
 
 export default function App() {
   const shell = useWindow(); const library = useLibrary();
+  const wallpaper = useWallpaper(shell);
   const desktop = useDesktopLyrics(); const updates = useAppUpdates();
   const shortcuts = useShortcuts();
   const [showUpdates, setShowUpdates] = useState(0);
@@ -34,9 +36,9 @@ export default function App() {
   const playerElement = useRef<HTMLElement>(null);
   const [compactBusy, setCompactBusy] = useState(false);
   async function setCompact(value: boolean) {
-    if(compactBusy)return;
+    if(compactBusy || wallpaper.busy)return;
     setCompactBusy(true);
-    try { await shell.setCompact(value, Math.ceil(playerElement.current?.getBoundingClientRect().height ?? 110) + 16); }
+    try { if(value)wallpaper.cancel();await shell.setCompact(value, Math.ceil(playerElement.current?.getBoundingClientRect().height ?? 110) + 16); }
     finally { setCompactBusy(false); }
   }
   const closeLyrics = useCallback(() => setLyricsOpen(false), []);
@@ -75,9 +77,10 @@ export default function App() {
     player: { text: error, error: true },
     playback: { text: playbackMessage, error: state?.phase === 'failed' },
     window: { text: shell.error || desktop.error || shortcuts.error, error: true },
+    wallpaper: { text:wallpaper.error,error:true },
     connection: { text: connected ? '' : '正在连接…' },
     updates: updates.message,
-  }), [updates.message, library.error, operation?.status, operation?.error, operation?.id, notice, error, playbackMessage, state?.phase, shell.error, desktop.error, shortcuts.error, connected, actionNotice]);
+  }), [updates.message, library.error, operation?.status, operation?.error, operation?.id, notice, error, playbackMessage, state?.phase, shell.error, desktop.error, shortcuts.error, wallpaper.error, connected, actionNotice]);
   useEffect(() => {
     const seekElement = seekInput.current; const volumeElement = volumeInput.current;
     async function seekChanged() {
@@ -96,9 +99,11 @@ export default function App() {
       volumeElement?.removeEventListener('change', volumeChanged);
     };
   }, [hasState, seek, setVolume]);
-  return <main className={`app-shell${compact ? ' compact-player' : ''}`} onContextMenu={event => {
+  const showWallpaper=!!wallpaper.image && (!compact || shell.playerTransparent);
+  return <main className={`app-shell${compact ? ' compact-player' : ''}${showWallpaper?' has-wallpaper':''}`} onContextMenu={event => {
     if ((event.target as Element).closest('button')) event.preventDefault();
   }}>
+    {showWallpaper && <div className="app-wallpaper-layer" aria-hidden="true"><img src={wallpaper.image!.url} alt="" onError={wallpaper.imageFailed}/></div>}
     {shell.state.enabled && !compact && <div className="window-bar"><div className="window-buttons">
       <Button variant="unstyled" aria-label="最小化" onClick={shell.minimize}>─</Button>
       <Button variant="unstyled" className="window-maximize" aria-label={shell.state.maximized ? '还原' : '最大化'} onClick={shell.maximize}>
@@ -119,7 +124,8 @@ export default function App() {
       </Dialog>
     </div></div>}
     <div className="app-body" hidden={compact}>
-      <div className="library-layer" inert={lyricsOpen}><LibraryView library={library} theme={shell.theme} appearance={shell.appearance} onAppearance={shell.setAppearance} transparency={shell.transparency} onTransparency={shell.setTransparency} updates={updates} showUpdates={showUpdates} shortcuts={shortcuts} /></div>
+      <div className="library-layer" inert={lyricsOpen}><LibraryView library={library} theme={shell.theme} appearance={shell.appearance} onAppearance={shell.setAppearance} transparency={shell.transparency} onTransparency={shell.setTransparency} updates={updates} showUpdates={showUpdates} shortcuts={shortcuts}
+        wallpaper={wallpaper} wallpaperEnabled={shell.wallpaperEnabled} onWallpaperEnabled={shell.setWallpaperEnabled} playerTransparent={shell.playerTransparent} onPlayerTransparent={shell.setPlayerTransparent}/></div>
       {lyricsOpen && <LyricsView trackId={state?.opened ? state.trackId : ''} now={currentTrack} positionMs={state?.positionMs ?? 0}
         canSeek={connected && !!state?.opened && !!state.durationMs} onSeek={positionMs => void seek(positionMs)} onClose={closeLyrics} />}
     </div>
@@ -188,6 +194,10 @@ export default function App() {
       </div>
       {!compact && !lyricsOpen && <UpdateNotice updates={updates} onDetails={() => setShowUpdates(n => n + 1)} />}
       <MessageAlerts messages={messages} />
+      {shell.preview && <div className="wallpaper-preview-bar" role="status"><span>正在预览壁纸</span>
+        <Button variant="secondary" disabled={wallpaper.busy} onClick={wallpaper.cancel}>取消预览</Button>
+        <Button disabled={wallpaper.busy} onClick={()=>void wallpaper.apply()}>应用壁纸</Button>
+      </div>}
     </section>
   </main>;
 }

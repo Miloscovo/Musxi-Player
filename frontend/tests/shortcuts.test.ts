@@ -36,3 +36,16 @@ test('invalid native bindings and duplicates are rejected before use', () => {
   assert.throws(() => parseShortcuts(state));
   state.bindings.mute = { key: 65, modifiers: 16 };assert.throws(() => parseShortcuts(state));
 });
+
+test('CEF native keys remain recordable when code is empty, without accepting modifier-only or reserved keys', () => {
+  const space = recordedKey({ ...event(' ', ''), keyCode: 32 });
+  assert.deepEqual(space, { key: 32, modifiers: 0 });
+  assert.equal(bindingLabel(space), 'Space');
+  assert.deepEqual(recordedKey({ ...event(' ', '', { ctrlKey:true }), keyCode:32 }), { key:32, modifiers:2 });
+  assert.deepEqual(recordedKey({ ...event('1', ''), keyCode:49 }), { key:49, modifiers:0 });
+  assert.deepEqual(recordedKey({ ...event('Enter', ''), keyCode:13 }), { key:13, modifiers:0 });
+  assert.equal(recordedKey({ ...event('Control', ''), keyCode:17 }), null);
+  assert.equal(recordedKey({ ...event('Escape', ''), keyCode:27 }), null);
+  assert.equal(recordedKey({ ...event(' ', '', { isComposing:true }), keyCode:32 }), null);
+  assert.equal(recordedKey({ ...event('Unidentified', ''), keyCode:255 }), null);
+});

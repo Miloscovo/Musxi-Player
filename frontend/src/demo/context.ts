@@ -6,6 +6,7 @@ import { createDemoLyricsMatch } from './lyricsMatch.ts';
 import { createDemoTranslation } from './translation.ts';
 import { createDemoUpdates, type DemoUpdateScenario } from './updates.ts';
 import { emptyShortcuts, parseShortcuts } from '../native/shortcuts.ts';
+import type { WallpaperImage } from '../native/wallpaper.ts';
 
 export function isDemoMode(host: CefTransport = globalThis as CefTransport, search = globalThis.location?.search || '') {
   const query = new URLSearchParams(search);
@@ -18,6 +19,7 @@ export function createDemoTransport(): CefTransport {
   library.recent=[];
   let player = { ...createDemoPlayer() };
   let shortcutSettings = emptyShortcuts(), lastVolume = 50;
+  let savedWallpaper:WallpaperImage|null=null, candidateWallpaper:WallpaperImage|null=null, wallpaperNumber=0;
   const desktopListeners = new Map<number, (text: string) => void>();
   const desktop = { enabled: false, visible: false, locked: false, dual: true, panel: false, hover: false, fontSize: 30, color: 'theme' };
   const songs = demoSongs();
@@ -92,6 +94,13 @@ export function createDemoTransport(): CefTransport {
     return song;
   }
   function run(command: string, p: Record<string, any>): unknown {
+    if(command === 'wallpaper.getState')return savedWallpaper;
+    if(command === 'wallpaper.choose')return candidateWallpaper={ id:`candidate-${++wallpaperNumber}`,width:1,height:1,
+      url:'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAAANSURBVBhXYwievPY/AAVjApNpAv3rAAAAAElFTkSuQmCC' };
+    if(command === 'wallpaper.accept') { if(candidateWallpaper?.id!==p.id)fail('候选图片已变化');return true; }
+    if(command === 'wallpaper.discard')return true;
+    if(command === 'wallpaper.apply') { if(p.id==='saved')return savedWallpaper;if(candidateWallpaper?.id!==p.id)fail('候选图片已变化');return savedWallpaper={ ...candidateWallpaper!,id:'saved' }; }
+    if(command === 'wallpaper.reset'){savedWallpaper=null;candidateWallpaper=null;return true;}
     if (command === 'shortcuts.getState') return shortcutSettings;
     if (command === 'shortcuts.setSettings') {
       shortcutSettings = parseShortcuts({ ...p, failed: [], suspended: shortcutSettings.suspended });return shortcutSettings;

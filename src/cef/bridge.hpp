@@ -23,6 +23,7 @@ void trayMenuClosed();
 bool minimizeToTray();
 void toggleTrayWindow();
 musxi::LibraryReply shortcutsCommand(const std::string& command,const std::string& params);
+musxi::LibraryReply wallpaperCommand(const std::string& command,const std::string& params);
 void resetShortcutInput();
 void rememberShortcutVolume(int volume);
 void dismissTrayMenu();

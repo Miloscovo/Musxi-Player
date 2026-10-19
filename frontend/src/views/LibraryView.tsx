@@ -19,6 +19,7 @@ import PlaybackSettings from '../components/PlaybackSettings';
 import ShortcutSettings from '../components/ShortcutSettings';
 import LyricsSettings from '../components/LyricsSettings';
 import type { ShortcutsController } from '../composables/useShortcuts';
+import type { WallpaperController } from '../composables/useWallpaper';
 import UpdateSettings from '../components/UpdateSettings';
 import type { AppUpdates } from '../composables/useAppUpdates';
 import type { Appearance } from '../composables/appearance';
@@ -35,11 +36,14 @@ function appendUnique(previous: Track[], incoming?: Track[]) {
   for (const track of incoming) { const index=indices.get(track.id); if(index!==undefined)rows[index]=track;else {indices.set(track.id,rows.length);rows.push(track);} }
   return rows;
 }
-export default function LibraryView({ library: lib, theme, appearance, onAppearance, transparency = 50, onTransparency, updates, showUpdates = 0, shortcuts }: {
+export default function LibraryView({ library: lib, theme, appearance, onAppearance, transparency = 50, onTransparency, updates, showUpdates = 0, shortcuts,
+  wallpaper,wallpaperEnabled,onWallpaperEnabled,playerTransparent,onPlayerTransparent }: {
   library: ReturnType<typeof useLibrary>; theme: Theme; appearance?: Appearance; onAppearance?: (next: Appearance) => void;
   transparency?: number; onTransparency?: (value: number) => void;
   updates?: AppUpdates; showUpdates?: number;
   shortcuts: ShortcutsController;
+  wallpaper?:WallpaperController;wallpaperEnabled?:boolean;onWallpaperEnabled?:(value:boolean)=>void;
+  playerTransparent?:boolean;onPlayerTransparent?:(value:boolean)=>void;
 }) {
   const { state, error, pending, page } = lib;
   const playlistRows = state?.tracks || [];
@@ -260,7 +264,8 @@ export default function LibraryView({ library: lib, theme, appearance, onAppeara
           </DialogContent>
         </Dialog>
       </div>}
-      {view === 'settings' ? settingsSection === 'updates' && updates ? <UpdateSettings updates={updates}/> : settingsSection === 'shortcuts' ? <ShortcutSettings shortcuts={shortcuts}/> : settingsSection === 'lyrics' ? <LyricsSettings/> : settingsSection === 'playback' ? <PlaybackSettings/> : <AppearanceSettings appearance={appearance ?? { mode: theme === 'dark' || theme === 'glass' ? 'dark' : 'light', transparent: theme === 'glass' || theme === 'glass-light', tone: 'green' }} onAppearance={onAppearance ?? (() => {})} transparency={transparency} onTransparency={onTransparency ?? (() => {})}/> : view === 'library' && !showTracks ? <>
+      {view === 'settings' ? settingsSection === 'updates' && updates ? <UpdateSettings updates={updates}/> : settingsSection === 'shortcuts' ? <ShortcutSettings shortcuts={shortcuts}/> : settingsSection === 'lyrics' ? <LyricsSettings/> : settingsSection === 'playback' ? <PlaybackSettings/> : <AppearanceSettings appearance={appearance ?? { mode: theme === 'dark' || theme === 'glass' ? 'dark' : 'light', transparent: theme === 'glass' || theme === 'glass-light', tone: 'green' }} onAppearance={onAppearance ?? (() => {})} transparency={transparency} onTransparency={onTransparency ?? (() => {})}
+        wallpaper={wallpaper} wallpaperEnabled={wallpaperEnabled} onWallpaperEnabled={onWallpaperEnabled} playerTransparent={playerTransparent} onPlayerTransparent={onPlayerTransparent}/> : view === 'library' && !showTracks ? <>
         {!isLocal && <>
           <div className="playlist-grid">{librarySection === 'created' && state?.connected && <Button variant="ghost" className="playlist" disabled={busy || !state?.connected} onClick={() => open('musxi:cloud-favorites')}><div className="cover placeholder" aria-hidden="true"><svg className="playlist-heart size-11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1.1-1.1a5.5 5.5 0 0 0-7.8 7.8L12 21l8.8-8.6a5.5 5.5 0 0 0 0-7.8Z"/></svg></div><div className="playlist-info"><strong>云端收藏整合</strong><span>{state?.favoritesCount ?? (state?.playlistId === 'musxi:cloud-favorites' ? state.trackCount : 0)} 首</span></div></Button>}{visiblePlaylists.map(list => <Button variant="ghost" key={list.id} className="playlist" disabled={busy} onClick={() => open(list.id)}><CoverImage url={list.cover}/><div className="playlist-info"><strong>{list.name}</strong><span>{list.count} 首{list.platform && ` · ${platformNames[list.platform]}`}</span></div></Button>)}</div>
           {!state?.connected ? <div className="library-section-empty"><p>登录后查看你的音乐库。</p><Button onClick={() => {setAccountPlatform(null);setAccount(true);}}>扫码登录</Button></div>

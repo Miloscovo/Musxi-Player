@@ -21,6 +21,7 @@
 #include <map>
 #include <vector>
 #include "shortcuts.hpp"
+#include "wallpaper_store.hpp"
 
 namespace {
 std::wstring pagePath;
@@ -152,6 +153,7 @@ LRESULT hostHitTest(HWND hwnd,LPARAM lp) {
 }
 #include "desktop_lyrics.inc"
 #include "shortcuts.inc"
+#include "wallpaper.inc"
 // Main window placement, remembered across launches in the native profile.
 std::filesystem::path mainSettingsPath;
 RECT mainBounds{};bool mainMaximized=false;
@@ -490,6 +492,7 @@ int run(HINSTANCE instance,int show,void* sandbox) {
     std::error_code ec;std::filesystem::create_directories(data,ec);if(ec)return 2;
     if(!preview && !updateFixture){loadDesktopSettings(data);loadMainWindow(data);}
     initShortcuts(data);
+    initWallpaper(data);
     CefString(&settings.root_cache_path)=(data/(updateFixture?L"cef-update-fixture-cache":smoke?L"cef-smoke-cache":L"cef-cache")).wstring();
     CefString(&settings.log_file)=(data/L"cef.log").wstring();
     settings.log_severity=LOGSEVERITY_WARNING;
@@ -509,6 +512,41 @@ int run(HINSTANCE instance,int show,void* sandbox) {
 }
 }
 namespace musxi::cef_adapter {
+musxi::LibraryReply wallpaperCommand(const std::string& command,const std::string& params) {
+    using Json=nlohmann::json;
+    try {
+        if(wallpaperChoosing)return {409,"正在选择壁纸，请完成当前操作",{}};
+        const auto data=Json::parse(params);
+        if(!data.is_object())return {400,"无效壁纸参数",{}};
+        if(smoke && command=="wallpaper.testNextChoice" && data.size()==1 && data.contains("format") && data["format"].is_string()) {
+            const auto format=data["format"].get<std::string>();
+            if(format!="png" && format!="jpg" && format!="webp" && format!="cancel" && format!="invalid")return {400,"无效测试图片",{}};
+            wallpaperTestChoice=format;return {0,{},"true"};
+        }
+        if(command=="wallpaper.getState" && data.empty())return {0,{},wallpaperImage(wallpaperStore->current()).dump()};
+        if(command=="wallpaper.choose" && data.empty()) {
+            if(smoke && !wallpaperTestChoice.empty()) {
+                const auto format=wallpaperTestChoice;wallpaperTestChoice.clear();if(format=="cancel")return {0,{},"null"};
+                wchar_t executable[32768];GetModuleFileNameW(nullptr,executable,32768);
+                const auto file=std::filesystem::path(executable).parent_path()/L"wallpaper-fixtures"/(format=="invalid"?"invalid.png":"test."+format);
+                return {0,{},wallpaperImage(wallpaperStore->select(file)).dump()};
+            }
+            wallpaperChoosing=true;
+            try {const auto reply=chooseWallpaper();wallpaperChoosing=false;return {0,{},reply.dump()};}
+            catch(...){wallpaperChoosing=false;throw;}
+        }
+        if(command=="wallpaper.reset" && data.empty()){wallpaperStore->reset();return {0,{},"true"};}
+        if((command=="wallpaper.accept" || command=="wallpaper.discard" || command=="wallpaper.apply") && data.size()==1 && data.contains("id") && data["id"].is_string()) {
+            const auto id=data["id"].get<std::string>();if(id.size()>64)return {400,"无效壁纸标识",{}};
+            if(command=="wallpaper.apply")return {0,{},wallpaperImage(wallpaperStore->apply(id)).dump()};
+            if(command=="wallpaper.accept")wallpaperStore->accept(id);else wallpaperStore->discard(id);
+            return {0,{},"true"};
+        }
+        return {400,"无效壁纸操作或参数",{}};
+    }catch(const Json::exception&){return {400,"无效壁纸参数",{}};}
+    catch(const std::filesystem::filesystem_error&){return {500,"无法读取或保存壁纸，请重新选择图片",{}};}
+    catch(const std::exception& error){return {400,error.what(),{}};}
+}
 void rememberShortcutVolume(int volume) {if(volume>0)shortcutLastVolume=volume;}
 void resetShortcutInput() {shortcutEditing=false;shortcutRecording=false;if(hostClosing)shortcutRegistry.clear();else refreshShortcutSuspension();}
 musxi::LibraryReply shortcutsCommand(const std::string& command,const std::string& params) {
