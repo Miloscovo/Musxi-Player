@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false" />
+    <!-- Official v5 standard audio CDN currently returns HTTP and has no matching TLS certificate.
+         Exact hosts only; login, library and every other origin remain HTTPS. -->
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">fs.youthandroid2.kugou.com</domain>
+        <domain includeSubdomains="false">fs.youthandroid.kugou.com</domain>
+    </domain-config>
+</network-security-config>

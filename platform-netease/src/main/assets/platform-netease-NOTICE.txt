@@ -1,0 +1,30 @@
+Musxi Player NetEase Music Android Login PoC
+Based on Musxi Player, Copyright (c) 2026 Miloscovo and contributors.
+Android login experiment additions: 2026-10-18. GPL-3.0-or-later.
+
+Protocol compatibility code adapted from NeteaseCloudMusicApiEnhanced/api-enhanced,
+pinned revision 2aab9957dfd5231e5b192aecdb177f93ace4c92e already vendored in Musxi.
+Copyright (c) 2013-2022 Binaryify. MIT license retained in
+licenses/NeteaseCloudMusicApi-MIT.txt. Musxi GPL license retained in
+licenses/Musxi-GPL-3.0.txt.
+References: module/login_qr_{key,check,create}.js, module/login_status.js,
+util/crypto.js and util/request.js. The Java implementation selects the
+upstream-supported WEAPI request profile and runs on the phone directly.
+Read-only song search additionally adapts module/cloudsearch.js using its
+fixed /api/cloudsearch/pc route through the existing EAPI request profile.
+Song metadata adapts module/song_detail.js using its WEAPI request profile.
+No Node runtime, remote gateway or platform SDK is bundled.
+
+QR image generation uses unchanged Java source from Project Nayuki's
+QR-Code-generator, MIT, commit 3c6d0b3cefb4e049dc337e82237c9644399716a8.
+Original notices remain in src/io/nayuki/qrcodegen; license text is in
+licenses/QR-Code-generator-MIT.txt. https://github.com/nayuki/QR-Code-generator
+
+Official public pages and installed application routes are compatibility
+research references, not copied application code or API approval.
+No credentials, QR contents, authorization URLs or official application
+private files are included in this source or APK.
+
+Matching source and build recipe: android/netease-login-poc/ in the
+accompanying Musxi Player checkout. Local debug APK, not a public release.
+JSON-java 20240303 is a Public Domain host-test dependency, not in the APK.

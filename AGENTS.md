@@ -1,56 +1,14 @@
-# Development guidance for Musxi Player
+# Musxi Android 开发约定
 
-## Project shape
-
-- The UI is React + TypeScript, built with Vite from `frontend/`. Keep UI work in the existing React components, hooks, native API client, and CSS unless the task requires a wider change.
-- The UI runs inside CEF and calls the native application through the existing CEF bridge. C++ owns playback and library state. Treat the bridge method names, payloads, and behavior as compatibility contracts.
-- The native core and application use C++17; the CEF host uses C++20. The project targets Windows x64 with MSVC.
-- Some CMake and script names still say `Vue` for compatibility. The actual frontend is React; do not reintroduce Vue or rename compatibility settings as unrelated cleanup.
-- Song rows use `@tanstack/react-virtual`. Keep virtualization limited to the song list; other collections are ordinary React lists.
-
-## Change boundaries
-
-- First trace the affected UI or native flow and inspect its callers before editing. Make the smallest change that fully fixes the requested behavior.
-- Keep UI-only requests in `frontend/`. Do not change C++, audio/FFmpeg/WASAPI, CEF host code, or bridge contracts to achieve a visual result.
-- For native or bridge work, preserve existing public interfaces and behavior unless the task explicitly requires a change. Explain any necessary compatibility change before implementing it.
-- Avoid unrelated refactors, dependency additions, generated-file edits, project-structure changes, and packaging or installation work unless requested.
-- Preserve unrelated working-tree changes. Do not reset, revert, or overwrite user changes outside the task scope.
-- Keep theme transparency on background colors only. Do not lower the opacity of containers that hold text, controls, or album art.
-- Use the shared `--hover-surface` token for hover backgrounds. Dark and translucent dark themes use a translucent white highlight, not green. Preserve controls that intentionally have no hover background.
-- Do not log credentials, session data, or private service responses.
-
-## Frontend and CEF constraints
-
-- Use the existing React/TypeScript patterns and CSS. Keep player and library state sourced through the existing native API client rather than duplicating native state in the UI.
-- Preserve the current Vite output expected by CEF: relative asset paths, the local-file content security policy, and the classic `app.js` bundle. Check `frontend/vite.config.ts` before changing build behavior.
-- Keep CEF bridge calls behind `frontend/src/native/`; do not call native APIs directly from unrelated components.
-- Preserve song row height, interactions, and virtual-scroll measurements when changing song-list rendering or styles.
-
-## Build and verification
-
-- Frontend type-check and production build: run `npm run build` from `frontend/`.
-- Frontend tests: run `npm test` from `frontend/` when the change affects tested frontend behavior.
-- The Windows CEF build requires the configured CEF and FFmpeg SDKs. `build.ps1` accepts `-CefRoot` and `-FfmpegRoot`; it builds the frontend and native targets. `-Test` also runs CTest.
-- When the existing build tree is configured, a focused native rebuild can use `cmake --build build/cef-msvc --config Release --target cef_host`; relevant CTest cases can be selected from that build tree.
-- Choose checks that cover the changed behavior. Do not build installers or publish artifacts unless asked.
-
-## Third-party license policy
-
-When adding a new production dependency:
-
-- Check its license before adding it; do not assume a license from memory.
-- Preserve required copyright, `LICENSE`, `COPYING`, and `NOTICE` files.
-- Update `THIRD_PARTY_NOTICES.md` when necessary.
-- Add required license texts to `licenses/`.
-- Distinguish development-only dependencies from dependencies distributed with the application.
-- Flag GPL, AGPL, SSPL, nonfree, proprietary, or unclear licenses for manual review before adding the dependency.
-- Do not change the project's own `LICENSE` unless explicitly requested.
-
-## AI collaboration attribution for future commits
-
-- For future commits that OpenAI Codex helps create and that contain substantive Codex-assisted development, append exactly one `Co-authored-by: Codex <codex@openai.com>` trailer, as explicitly requested by the project owner. Do not add it to commits without such assistance.
-- Keep the trailer at the end of the commit message, with one blank line between the body and trailer block. Preserve other contributors' trailers; do not duplicate the Codex trailer if it is already present.
-- If native Codex attribution supplies a different Codex trailer, normalize it to the exact project-owner-requested trailer before creating the new commit. Do not also add the former `AI-assisted-by: OpenAI Codex` fallback.
-- Preserve the actual developer's Git `user.name`, `user.email`, Author, and Committer. Do not rewrite existing commits, amend pushed history, or force-push to apply this policy retroactively.
-- Before creating a qualifying commit, check its prepared message with `git interpret-trailers --parse` and confirm the exact Codex trailer appears once. After creating it, inspect `git log -1 --format=fuller` and the message to verify the primary identities remain unchanged and the trailer is present once.
-- This is AI collaboration attribution, not a claim that Codex is an independent human contributor. The requested email's association with a GitHub account must be verified separately; do not claim that contributor-list visibility is guaranteed.
+- 当前安卓工作根目录为 `C:\text\Musxi-Player安卓`。旧目录 `C:\text\Musxi-Player\Musxi-Player\android\player` 是迁移前副本，不同步开发两份。
+- 当前 Git 分支为 `android/development`，origin 为 `qwt1011/Musxi-Player`；本分支根目录仅承载安卓工程。PC 上游同步在 fork 的 `main` 进行，两分支目录结构不同，安卓按需移植相关变更，不直接合并整套 PC 根目录。
+- 七个 Gradle 模块：app、core、accounts、playback、platform-kugou、platform-qq、platform-netease。后端基础与临时 DeveloperActivity 已实现，正式前端交由 cc 接线。
+- 开工先阅读 README.md、安卓端适配规划.md 的最新章节和 docs/frontend-contract.md；历史 `android/player/` 路径现对应本目录。保留既有账号、曲库和播放接口，避免为视觉需求改协议或队列语义。
+- 平台请求由手机本地直连，不新增业务服务器。不记录或展示凭证、Cookie、原始私有响应、签名音频 URL。保留三平台账号、缓存及用户歌单，不自行退出、换号或改平台歌单。
+- 跨平台换源保留原歌单 mediaId/索引/顺序；候选就绪后 5 秒尝试首个同名项，允许手选，最多 3 个替代来源；同名不等于同录音。服务拥有计时、取流与恢复，前端只订阅状态并提交命令。
+- 设备验收使用固定 debug 入口，不用坐标点按。需要验证码、官方登录确认或真实听音时请用户亲自完成。不把模拟错误、状态增长、旧包听音或未执行的检查当作本轮实际证据。
+- 构建使用 JDK 17 / SDK 36，运行 `./build.ps1 -Test -Lint`。中文路径使用 android.overridePathCheck=true；Gradle daemon 保持系统默认编码以正确写入 JDK 17 Windows 参数文件，JavaCompile 与 Test 内容单独固定 UTF-8，勿恢复原强制 daemon UTF-8 导致测试 classpath 误读。以实际构建为准。
+- 保留 LICENSE、THIRD_PARTY_NOTICES.md、模块 assets 中原始声明/许可与 test-licenses。新增生产依赖须核对许可，保留必要声明，不改项目许可。
+- 不覆盖他人改动；完成相应验证并更新本目录规划记录。未经授权不提交、推送、发布或发送外部消息。
+- 用户已长期授权按需自主调用子代理；任务边界清楚、文件所有权不重叠，主代理负责整合与验证。指定 DS 时使用 deepseek_flash 对应强度角色、独立上下文并传递完整子任务；不可用须报告真实错误，不静默换模型。按进展证据监督，避免空转重复调用。
+- 若获授权创建包含实质 Codex 协助的提交，按项目所有者约定只追加一次 `Co-authored-by: Codex <codex@openai.com>`，保留真实作者与提交者身份。提交前通过 `git interpret-trailers --parse` 核对该 trailer 恰好一次，提交后检查作者、提交者与消息；不改写既有历史。

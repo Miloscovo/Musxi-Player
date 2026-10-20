@@ -1,43 +1,18 @@
-# Build and packaging outputs
-/build/
-/dist/
-/frontend/dist/
-/frontend/node_modules/
-
-# Python source-delivery checks and discontinued local CEF experiments
-__pycache__/
-*.py[cod]
-/CEF-Official-Build-Evidence/
-
-# Local package manager and IDE state
-/.npmcache/
-.vs/
-*.user
-
-# Downloaded/runtime-only dependencies (restored by setup-cloud.ps1)
-/services/node_modules/
-/services/vendor/*
-!/services/vendor/NeteaseCloudMusicApi-2aab9957dfd5231e5b192aecdb177f93ace4c92e/
-/services/*.zip
-
-# Local account state and playback cache
-**/kugou-session.dat
-**/kugou-library.json
-**/playback-history.json
-**/local-music.json
-**/cloud-cache/
-
-# OS/editor noise
-.DS_Store
-Thumbs.db
-
-# Three MIT authorization modules supplement the pinned KuGou source.
-!/services/vendor/KuGouMusicApi-a5a98013cce79fe0ae2ad65fc84b68176ebcfc1e/
-/services/vendor/KuGouMusicApi-a5a98013cce79fe0ae2ad65fc84b68176ebcfc1e/*
-!/services/vendor/KuGouMusicApi-a5a98013cce79fe0ae2ad65fc84b68176ebcfc1e/LICENSE
-!/services/vendor/KuGouMusicApi-a5a98013cce79fe0ae2ad65fc84b68176ebcfc1e/MUSXI-MODIFICATIONS.md
-!/services/vendor/KuGouMusicApi-a5a98013cce79fe0ae2ad65fc84b68176ebcfc1e/module/
-/services/vendor/KuGouMusicApi-a5a98013cce79fe0ae2ad65fc84b68176ebcfc1e/module/*
-!/services/vendor/KuGouMusicApi-a5a98013cce79fe0ae2ad65fc84b68176ebcfc1e/module/user_verify.js
-!/services/vendor/KuGouMusicApi-a5a98013cce79fe0ae2ad65fc84b68176ebcfc1e/module/song_auth.js
-!/services/vendor/KuGouMusicApi-a5a98013cce79fe0ae2ad65fc84b68176ebcfc1e/module/song_url_auth.js
+.gradle/
+.kotlin/
+**/build/
+local.properties
+*.jks
+*.keystore
+.idea/
+.vscode/
+*.iml
+*.apk
+*.aab
+*.apks
+*.p12
+*.pfx
+keystore.properties
+signing.properties
+.env
+.env.*

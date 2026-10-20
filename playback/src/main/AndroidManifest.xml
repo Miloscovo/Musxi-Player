@@ -1,0 +1,8 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <service android:name="tech.musxi.playback.MusxiPlaybackService"
+            android:foregroundServiceType="mediaPlayback" android:exported="true">
+            <intent-filter><action android:name="androidx.media3.session.MediaSessionService" /></intent-filter>
+        </service>
+    </application>
+</manifest>
