@@ -16,6 +16,10 @@ interface PlaybackHost {
     fun findAlternativeSources(original: SongSummary, result: (Result<AlternativeSources>) -> Unit): Job
     /** Ordinary MediaSession STOP cancels a pending playlist read, without issuing another STOP. */
     fun onPlaybackStopRequested()
+    /** Original account-owned metadata only; capabilities and candidate tickets never persist. */
+    fun onPlaybackCheckpoint(generation: Long, snapshot: tech.musxi.core.playback.SavedPlaybackQueue,
+        recent: tech.musxi.core.playback.RecentPlay?) = Unit
+    fun onPlaybackQueueCleared(platform: tech.musxi.core.account.Platform, generation: Long) = Unit
 }
 
 interface PlaybackSourceProvider {
@@ -59,6 +63,20 @@ class QueueSources(private val provider: PlaybackSourceProvider) {
     }
 
     fun clear() = synchronized(gate) { tickets = emptyMap(); leases.clear() }
+    /** Keep surviving slots and their selected-source capabilities; revoke removed slots immediately. */
+    fun retain(uris: Set<String>) = synchronized(gate) {
+        require(uris.all(tickets::containsKey))
+        tickets = tickets.filterKeys { it in uris }
+        leases.keys.retainAll(uris)
+    }
+    fun append(mediaId: String, generation: Long): String = synchronized(gate) {
+        require(tickets.size < MAX_QUEUE_SIZE && PlaybackSourcePolicy.acceptsMediaId(mediaId))
+        require(tickets.values.all { it.mediaId.substringBefore(':') == mediaId.substringBefore(':') && it.generation == generation })
+        if (provider.generationFor(mediaId) != generation) throw PlaybackSourceException(PlaybackFailure.AUTH_REQUIRED)
+        val uri = "musxi://queue/${UUID.randomUUID()}/0"
+        tickets = tickets + (uri to Ticket(mediaId, generation))
+        uri
+    }
     fun invalidate(uri: String) { synchronized(gate) { leases.remove(uri) } }
     fun selectSource(uri: String, mediaId: String, generation: Long) = synchronized(gate) {
         require(PlaybackSourcePolicy.acceptsMediaId(mediaId))

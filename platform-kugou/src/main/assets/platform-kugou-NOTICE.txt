@@ -25,3 +25,15 @@ The read-only library adapter also adapts module/user_playlist.js,
 module/playlist_track_all_new.js, module/search.js, module/song_url.js and util/helper/request
 from the same pinned MIT source. Standard account-authorized playback only;
 trial media is rejected. No new production dependency is included.
+
+2026-10-20 favorite synchronization additionally adapts
+module/playlist_tracks_add.js and module/playlist_tracks_del.js from the same
+pinned MIT source for supported single-track favorite add/remove operations.
+No new production dependency or license change is included.
+
+2026-10-20 standard LRC requests additionally adapt module/search_lyric.js
+and module/lyric.js from the same pinned source, with fmt=lrc and bounded
+Base64/UTF-8 decoding. KRC/word-level decryption is not included.
+Local compatibility change: use the same official HTTPS host's /search route
+instead of /v1/search (empty HTTP 200 response observed on host and device).
+Source identifiers, signing and standard LRC download/decoding are retained.

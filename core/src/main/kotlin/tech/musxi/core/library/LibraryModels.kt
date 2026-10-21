@@ -9,5 +9,5 @@ data class MediaKey(val platform: Platform, val id: String) {
 
 data class PlaylistSummary(val key: MediaKey, val title: String, val coverUrl: String?, val trackCount: Int)
 data class SongSummary(val key: MediaKey, val title: String, val artists: List<String>,
-    val album: String, val durationMs: Long)
+    val album: String, val durationMs: Long, val coverUrl: String? = null)
 data class Page<T>(val items: List<T>, val nextOffset: Int?, val total: Int?)

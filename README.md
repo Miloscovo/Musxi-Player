@@ -2,6 +2,18 @@
 
 **当前分支 `android/development` 专门保存独立安卓工程，仓库根目录就是 Android Studio / Gradle 工程入口。正式 Compose 前端仍待接入，当前为开发版本，未发布正式 APK。**
 
+2026-10-21 增量 PR：承接上游已合并的 [#23](https://github.com/Miloscovo/Musxi-Player/pull/23)，提交 P0/P1/P2 后端、测试、接线约定及验收记录。cc 未完成的 Compose UI、截图测试与其 Gradle 插件/依赖未包含在此提交；下文提到的 cc 工作区内容是历史背景，保留于本地开发工作区。提交范围及本轮验证见[增量 PR 记录](docs/backend-pr-20261021.md)。
+
+2026-10-21 接续入口：[前后端推进与工程收尾记录](docs/development-handoff.md)。汇总 P0/P1/P2 当前能力、正式前端接线顺序、后端连接恢复/收藏刷新/耗时测量待办、验收边界及 Git/正式包收尾；后续会话先读此文，待办不代表已经实现。
+
+2026-10-20 后端 P0 增量：歌曲封面、兼容旧版的封面元数据缓存、当前播放专辑及原平台/实际来源平台、可取消的三平台分页搜索、搜索单曲起播。接线见 [docs/frontend-backend-contract-v2.md](docs/frontend-backend-contract-v2.md)，验证和边界见规划第 30 节。cc 的 Compose 主题与截图改动保留，正式页面仍待接入。
+
+2026-10-20 P0 已补充本机 Android 16 真机检查，结果见 [docs/p0-device-acceptance.md](docs/p0-device-acceptance.md) 与规划第 31 节，包含三平台分页搜索/封面、搜索单曲播放、换源及曲尾接续、封面字段冷缓存回读。听音、模拟失败和实际网络结果分别记录，正式前端视觉仍待接入验收。
+
+2026-10-20 P1 后端现提供随机/循环、本人队列/位置/模式持久化与显式暂停恢复、最近播放，以及按实际播放来源同步的标准歌词。无需等待正式前端。接口见 [docs/frontend-backend-contract-p1.md](docs/frontend-backend-contract-p1.md)，证据与平台限制见 [播放模式验收](docs/p1-playback-modes-acceptance.md) 和 [P1 数据验收](docs/p1-data-acceptance.md)。冷启动只展示快照，点恢复后仍暂停，用户点播放才重新取流；不保存音频地址。
+
+同日酷狗歌词空响应已修复：歌词搜索切到同一官方 HTTPS 域名的 `/search`，按实际来源标识查询，三首真机标准歌词及跳转同步已通过。正式前端接线与视觉验收仍待完成。
+
 | GitHub 分支 | 用途 |
 | --- | --- |
 | [android/development](https://github.com/qwt1011/Musxi-Player/tree/android/development) | 安卓账号、曲库、缓存、Media3 播放与跨平台换源开发 |
@@ -50,7 +62,7 @@ git clone --branch android/development --single-branch https://github.com/qwt101
 ./build.ps1 -Install
 ```
 
-也可使用标准 `gradlew.bat` / `gradlew`。APK 为 `app/build/outputs/apk/debug/app-debug.apk`；本地 SDK 配置、Gradle 缓存、APK、签名文件和测试输出均忽略。不在此阶段生成或发布 release APK。
+本机 Windows 中文目录统一使用 `build.ps1`；不要通过强制 UTF-8 客户端的 `gradlew.bat` 运行测试，否则 JDK 17 参数文件可能误读中文 classpath。APK 为 `app/build/outputs/apk/debug/app-debug.apk`；本地 SDK 配置、Gradle 缓存、APK、签名文件和测试输出均忽略。不在此阶段生成或发布 release APK。
 
 原协议回归测试移入 Gradle，覆盖酷狗 527、QQ 188、网易云 393 项既有离线检查；保留原 PoC 测试。新增账号状态、会话失效、网易云音乐库解析与媒体来源策略测试。测试数量与真机验收分别记录，不以离线 fixture 代替平台兼容结论。
 
@@ -103,6 +115,7 @@ debug 专用 `DebugMusxiApplication` 另提供固定 `fault_expired_once` / `fau
 曲库缓存固定步骤：`cache_playlists` / `cache_tracks` 先读取缓存再刷新；`cache_playlists_only` / `cache_tracks_only` 仅读磁盘；先执行歌单步骤再选首个非空歌单的歌曲。`cache_refresh` 刷新当前页，`cache_network_off` / `cache_network_on` 仅模拟此调试包的曲库请求失败/恢复，不改变账号或手机网络。`cache_snapshot` 只保存来源、项目数、分页、时间是否存在、验证布尔、固定错误和请求计数，不输出缓存文件内容。真实离线冷启动验收另行记录，不将模拟故障当作断网。
 
 账号前端接入说明见 [docs/frontend-contract.md](docs/frontend-contract.md)。依赖许可与改编来源见 APK assets 和仓库 THIRD_PARTY_NOTICES；未包含 LoveACE 代码、品牌图案或官方音乐 App 实现。
+
 
 ## 酷狗缓存与刷新（2026-10-19 增量）
 
@@ -159,3 +172,9 @@ QQ 缓存与高频使用验收已完成；跨平台来源闭环及 5 秒自动�
 核心真机闭环已完成：QQ 7 项歌单 AIZO→自动网易云来源，用户确认声音及歌曲正确；手选第二项、替代曲中后段和曲尾接回原 QQ 下一首通过。模拟原曲加 3 候选全部拒绝后稳定停止、原队列保留，重试先恢复原平台；暂停/取消/真实 STOP/导航使旧计时失效。选源等待统一映射为媒体会话 BUFFERING，修复本机连续失败时 legacy 控制器额外 STOP 的复现，保留主动停止。debug 增加 `system_play_current` / `system_stop_current`，不构成业务 API。
 
 142 项 JUnit 全通过，六个 Android 模块 Lint 0 errors，debug APK v2 签名及 release 清单隔离通过。最终 debug APK SHA-256：`083542d04d7859b63698f177c156f21e2750111e191335062f2c06081e98b016`。HOME 后自动选择已观测，但一次新取流 NETWORK，显式重试成功；已开始的替代音频经页面重建/HOME 短时继续。未证明所有后台起播、长时 Doze、所有歌曲或录音一致性，完整证据见 cross-platform-sources.md。正式前端尚待 cc 接线。
+
+## 2026-10-20 后端增量
+
+P0 封面、分页搜索及单曲播放见 [v2 接线约定](docs/frontend-backend-contract-v2.md)；P1 循环/随机、持久队列与暂停恢复、实际来源标准歌词、最近播放见 [P1 接线约定](docs/frontend-backend-contract-p1.md)。酷狗标准歌词空响应兼容已修复。
+
+P2 已提供三平台喜欢集合同步/单曲变更与当前播放队列移动、删除、下一首插入、追加和清空，见 [P2 接线约定](docs/frontend-backend-contract-p2.md) 和 [真机验收](docs/p2-acceptance.md)。三平台各一首真实收藏切换及恢复均已通过，完整集合回到测试前状态。后端不依赖正式前端即可验收；Compose 接线、页面交互及视觉验收继续由前端推进。

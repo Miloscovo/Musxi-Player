@@ -12,7 +12,8 @@ class KugouLibraryRepository(private val accounts: AccountRepository) : LibraryP
     private val metadata = linkedMapOf<MediaKey, SongSummary>()
     private var metadataGeneration = -1L
     private fun summary(song: KugouLibraryApi.Song) =
-        SongSummary(MediaKey(Platform.KUGOU, song.id), song.name, song.artists, song.album, song.durationMs)
+        SongSummary(MediaKey(Platform.KUGOU, song.id), song.name, song.artists, song.album, song.durationMs,
+            ArtworkPolicy.sanitize(Platform.KUGOU, song.coverUrl))
     private fun remember(songs: List<SongSummary>, generation: Long): List<SongSummary> {
         if (!accounts.isKugouGenerationConnected(generation)) throw LibraryFailure("account_changed")
         synchronized(metadata) {
@@ -41,7 +42,8 @@ class KugouLibraryRepository(private val accounts: AccountRepository) : LibraryP
     override fun playlists(offset: Int, result: (Result<Page<PlaylistSummary>>) -> Unit) {
         accounts.withKugouSession({ api, session ->
             val page = KugouLibraryApi(api).playlists(session, offset, 30)
-            Page(page.items.map { PlaylistSummary(MediaKey(Platform.KUGOU, it.id), it.name, it.coverUrl, it.trackCount) },
+            Page(page.items.map { PlaylistSummary(MediaKey(Platform.KUGOU, it.id), it.name,
+                ArtworkPolicy.sanitize(Platform.KUGOU, it.coverUrl), it.trackCount) },
                 page.nextOffset.takeIf { it >= 0 }, page.total.takeIf { it >= 0 })
         }, safe(result))
     }
@@ -58,6 +60,18 @@ class KugouLibraryRepository(private val accounts: AccountRepository) : LibraryP
         val generation = accounts.states.value.getValue(Platform.KUGOU).generation
         accounts.withKugouSession({ api, session ->
             remember(KugouLibraryApi(api).search(session, keywords).map(::summary), generation)
+        }, safe(result))
+    }
+    fun searchPage(keywords: String, offset: Int, result: (Result<Page<SongSummary>>) -> Unit,
+        isCurrent: () -> Boolean = { true }) {
+        val generation = accounts.states.value.getValue(Platform.KUGOU).generation
+        accounts.withKugouSession({ api, session ->
+            if (!isCurrent()) throw LibraryFailure("cancelled")
+            if (offset !in 0..19_980 || offset % 30 != 0) throw LibraryFailure("limit")
+            val page = KugouLibraryApi(api).search(session, keywords, offset, 30)
+            if (!isCurrent()) throw LibraryFailure("cancelled")
+            Page(remember(page.items.map(::summary), generation),
+                page.nextOffset.takeIf { it >= 0 }, page.total.takeIf { it >= 0 })
         }, safe(result))
     }
     /** The pinned vendor has no general song-detail module. Reuse known metadata only. */

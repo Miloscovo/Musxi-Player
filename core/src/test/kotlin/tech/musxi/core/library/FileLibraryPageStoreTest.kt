@@ -40,6 +40,62 @@ class FileLibraryPageStoreTest {
         assertEquals("FileLibraryPageStore(redacted)", restored.toString())
     }
 
+    @Test fun publicArtworkSurvivesColdReadAndUnsafeSongArtworkNeverReachesDisk() {
+        val dir = directory(); val store = FileLibraryPageStore(dir)
+        val cover = "https://p1.music.126.net/fixture.jpg"
+        store.writePlaylists(ownerA, 0, playlists(cover = cover))
+        val songPage = tracks().let { saved -> saved.copy(page = saved.page.copy(items = saved.page.items.map {
+            it.copy(coverUrl = cover)
+        })) }
+        store.writeTracks(ownerA, playlist, 0, songPage)
+        val restored = FileLibraryPageStore(dir)
+        assertEquals(cover, restored.readPlaylists(ownerA, 0)!!.page.items.single().coverUrl)
+        assertEquals(songPage, restored.readTracks(ownerA, playlist, 0))
+        store.writeTracks(ownerA, playlist, 0, songPage.let { saved -> saved.copy(page = saved.page.copy(items = saved.page.items.map {
+            it.copy(coverUrl = "https://p1.music.126.net/image?credential=private-fixture")
+        })) })
+        assertNull(restored.readTracks(ownerA, playlist, 0)!!.page.items.single().coverUrl)
+        assertFalse(dir.listFiles()!!.any { it.readBytes().toString(Charsets.ISO_8859_1).contains("private-fixture") })
+    }
+
+    @Test fun legacyVersionOneCollectionsRemainReadableAndUpgradeOnWrite() {
+        val dir = directory(); val store = FileLibraryPageStore(dir)
+        store.writePlaylists(ownerA, 0, playlists())
+        val file = collection(dir)
+        val payload = java.io.ByteArrayOutputStream().also { bytes -> java.io.DataOutputStream(bytes).use { data ->
+            data.writeUTF(ownerA); data.writeUTF(""); data.writeInt(1)
+            data.writeInt(0); data.writeLong(1234); data.writeInt(-1); data.writeInt(1); data.writeInt(1)
+            data.writeUTF(playlist.id); data.writeUTF("Legacy"); data.writeInt(5)
+        } }.toByteArray()
+        val oldMagic = ByteBuffer.wrap(file.readBytes()).int
+        java.io.DataOutputStream(file.outputStream()).use { data ->
+            data.writeInt(oldMagic); data.writeInt(1); data.writeInt(payload.size)
+            data.writeLong(CRC32().apply { update(payload) }.value); data.write(payload)
+        }
+        assertEquals("Legacy", FileLibraryPageStore(dir).readPlaylists(ownerA, 0)!!.page.items.single().title)
+        store.writePlaylists(ownerA, 0, playlists(cover = "https://p1.music.126.net/image.jpg"))
+        assertEquals(2, ByteBuffer.wrap(file.readBytes()).getInt(4))
+        assertNotNull(FileLibraryPageStore(dir).readPlaylists(ownerA, 0)!!.page.items.single().coverUrl)
+    }
+
+    @Test fun legacySongPagesPreserveArtistsAlbumDurationAndTimestampWithoutArtwork() {
+        val dir = directory(); val store = FileLibraryPageStore(dir)
+        store.writeTracks(ownerA, playlist, 0, tracks())
+        val file = collection(dir)
+        val payload = java.io.ByteArrayOutputStream().also { bytes -> java.io.DataOutputStream(bytes).use { data ->
+            data.writeUTF(ownerA); data.writeUTF(playlist.id); data.writeInt(1)
+            data.writeInt(0); data.writeLong(5678); data.writeInt(-1); data.writeInt(1); data.writeInt(1)
+            data.writeUTF("1"); data.writeUTF("Song"); data.writeInt(1); data.writeUTF("Artist")
+            data.writeUTF("Album"); data.writeLong(12345)
+        } }.toByteArray()
+        val oldMagic = ByteBuffer.wrap(file.readBytes()).int
+        java.io.DataOutputStream(file.outputStream()).use { data ->
+            data.writeInt(oldMagic); data.writeInt(1); data.writeInt(payload.size)
+            data.writeLong(CRC32().apply { update(payload) }.value); data.write(payload)
+        }
+        assertEquals(tracks(), FileLibraryPageStore(dir).readTracks(ownerA, playlist, 0))
+    }
+
     @Test fun switchingOwnerErasesPreviousOwnerAndClearOnlyRemovesOwnedFiles() {
         val dir = directory(); val foreign = File(dir, "unrelated.txt").apply { writeText("keep") }
         val store = FileLibraryPageStore(dir)

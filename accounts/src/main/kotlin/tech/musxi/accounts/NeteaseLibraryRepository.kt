@@ -8,6 +8,9 @@ import tech.musxi.neteaseloginpoc.NeteaseApi
 
 /** Read-only library facade. UI receives DTOs and fixed failure codes, never platform sessions. */
 class NeteaseLibraryRepository(private val accounts: AccountRepository) : LibraryPageFetch {
+    private fun summary(song: NeteaseLibraryApi.Track) = SongSummary(
+        MediaKey(Platform.NETEASE, song.id), song.name, song.artists, song.album, song.durationMs,
+        ArtworkPolicy.sanitize(Platform.NETEASE, song.coverUrl))
     class LibraryFailure(category: String) : LibraryPageFailure(category)
     private fun <T> safeCallback(result: (Result<T>) -> Unit): (Result<T>) -> Unit = { response ->
         result(response.fold({ Result.success(it) }, { error ->
@@ -20,7 +23,8 @@ class NeteaseLibraryRepository(private val accounts: AccountRepository) : Librar
     override fun playlists(offset: Int, result: (Result<Page<PlaylistSummary>>) -> Unit) {
         accounts.withNeteaseSession({ api, session ->
             val page = NeteaseLibraryApi(api).playlists(session, offset, 30)
-            Page(page.items.map { PlaylistSummary(MediaKey(Platform.NETEASE, it.id), it.name, it.coverUrl, it.trackCount) },
+            Page(page.items.map { PlaylistSummary(MediaKey(Platform.NETEASE, it.id), it.name,
+                ArtworkPolicy.sanitize(Platform.NETEASE, it.coverUrl), it.trackCount) },
                 page.nextOffset.takeIf { it >= 0 }, page.total.takeIf { it >= 0 })
         }, safeCallback(result))
     }
@@ -29,16 +33,25 @@ class NeteaseLibraryRepository(private val accounts: AccountRepository) : Librar
         require(playlist.platform == Platform.NETEASE)
         accounts.withNeteaseSession({ api, session ->
             val page = NeteaseLibraryApi(api).tracks(session, playlist.id, offset, 50)
-            Page(page.items.map { SongSummary(MediaKey(Platform.NETEASE, it.id), it.name, it.artists, it.album, it.durationMs) },
+            Page(page.items.map(::summary),
                 page.nextOffset.takeIf { it >= 0 }, page.total.takeIf { it >= 0 })
         }, safeCallback(result))
     }
 
     fun search(keywords: String, result: (Result<List<SongSummary>>) -> Unit) {
         accounts.withNeteaseSession({ api, session ->
-            NeteaseLibraryApi(api).search(session, keywords).map {
-                SongSummary(MediaKey(Platform.NETEASE, it.id), it.name, it.artists, it.album, it.durationMs)
-            }
+            NeteaseLibraryApi(api).search(session, keywords).map(::summary)
+        }, safeCallback(result))
+    }
+
+    fun searchPage(keywords: String, offset: Int, result: (Result<Page<SongSummary>>) -> Unit,
+        isCurrent: () -> Boolean = { true }) {
+        accounts.withNeteaseSession({ api, session ->
+            if (!isCurrent()) throw LibraryFailure("cancelled")
+            if (offset !in 0..19_980 || offset % 30 != 0) throw LibraryFailure("limit")
+            val page = NeteaseLibraryApi(api).search(session, keywords, offset, 30)
+            if (!isCurrent()) throw LibraryFailure("cancelled")
+            Page(page.items.map(::summary), page.nextOffset.takeIf { it >= 0 }, page.total.takeIf { it >= 0 })
         }, safeCallback(result))
     }
 
@@ -46,7 +59,7 @@ class NeteaseLibraryRepository(private val accounts: AccountRepository) : Librar
         require(key.platform == Platform.NETEASE)
         accounts.withNeteaseSession({ api, session ->
             val track = NeteaseLibraryApi(api).song(session, key.id)
-            SongSummary(key, track.name, track.artists, track.album, track.durationMs)
+            summary(track)
         }, safeCallback(result))
     }
 
@@ -69,7 +82,7 @@ class NeteaseLibraryRepository(private val accounts: AccountRepository) : Librar
             val library = NeteaseLibraryApi(api)
             val track = library.song(session, song.id)
             val audio = library.audio(session, song.id, SystemClock.elapsedRealtime())
-            AudioCapability(song, SongSummary(song, track.name, track.artists, track.album, track.durationMs), audio.url, audio.expiresAtElapsedMs) {
+            AudioCapability(song, summary(track), audio.url, audio.expiresAtElapsedMs) {
                 accounts.isNeteaseGenerationConnected(generation)
             }
         }, safeCallback(result))

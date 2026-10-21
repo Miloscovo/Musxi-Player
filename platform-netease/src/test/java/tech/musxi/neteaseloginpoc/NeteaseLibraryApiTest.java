@@ -127,6 +127,10 @@ public class NeteaseLibraryApiTest {
     }
 
     private static JSONObject searchPayload(NeteaseApi.Request request) throws Exception {
+        return eapiPayload(request, "/api/cloudsearch/pc");
+    }
+
+    private static JSONObject eapiPayload(NeteaseApi.Request request, String uri) throws Exception {
         String hex = java.net.URLDecoder.decode(request.body.substring("params=".length()), "UTF-8");
         byte[] encrypted = new byte[hex.length() / 2];
         for (int i = 0; i < encrypted.length; i++) encrypted[i] = (byte) Integer.parseInt(hex.substring(i * 2, i * 2 + 2), 16);
@@ -134,7 +138,7 @@ public class NeteaseLibraryApiTest {
         cipher.init(javax.crypto.Cipher.DECRYPT_MODE, new javax.crypto.spec.SecretKeySpec(
                 "e82ckenh8dichen8".getBytes(java.nio.charset.StandardCharsets.US_ASCII), "AES"));
         String[] payload = new String(cipher.doFinal(encrypted), java.nio.charset.StandardCharsets.UTF_8).split("-36cd479b6b5-", -1);
-        assertEquals("/api/cloudsearch/pc", payload[0]);
+        assertEquals(uri, payload[0]);
         return j(payload[1]);
     }
 
@@ -203,6 +207,165 @@ public class NeteaseLibraryApiTest {
         fails("unavailable", () -> new NeteaseLibraryApi(api).song(session, "1"));
         assertEquals(1, calls[0]);
     }
+    private static JSONObject searchPage(int offset, int count, int total) throws Exception {
+        JSONArray rows = new JSONArray();
+        for (int i = 1; i <= count; i++) rows.put(j("{id:" + (offset + i) +
+                ",name:'Song',dt:1000,ar:[],al:{name:'Album',picUrl:'http://p1.music.126.net/public.jpg'}}"));
+        return new JSONObject().put("code", 200).put("result", new JSONObject().put("songCount", total).put("songs", rows));
+    }
+
+    @Test public void pagedSearchSendsOffsetAndLimitAndPreservesFinalTotal() throws Exception {
+        java.util.List<NeteaseApi.Request> requests = new java.util.ArrayList<>();
+        JSONObject fixture = searchPage(30, 2, 32);
+        NeteaseApi api = new NeteaseApi(request -> {
+            requests.add(request); return new NeteaseApi.Response(fixture, Collections.emptyMap());
+        });
+        NeteaseApi.Session session = NeteaseApi.Session.fromJson(j("{userId:'7',nickname:'User',cookies:{MUSIC_U:'fixture',__csrf:'csrf'}}"));
+        NeteaseLibraryApi library = new NeteaseLibraryApi(api);
+        NeteaseLibraryApi.Page<NeteaseLibraryApi.Track> page = library.search(session, "Song", 30, 30);
+        JSONObject payload = searchPayload(requests.get(0));
+        assertEquals(30, payload.getInt("offset")); assertEquals(30, payload.getInt("limit"));
+        assertEquals(32, page.total); assertEquals(-1, page.nextOffset); assertEquals("31", page.items.get(0).id);
+        assertEquals("https://p1.music.126.net/public.jpg", page.items.get(0).coverUrl);
+        for (int offset : new int[]{-30, 1, 20_010}) fails("limit", () -> library.search(session, "Song", offset, 30));
+        fails("limit", () -> library.search(session, "Song", 0, 0));
+        assertEquals(1, requests.size());
+    }
+
+    @Test public void pagedSearchValidatesCountsAndNeverFakesCompletionAtTheBound() throws Exception {
+        assertEquals(30, NeteaseLibraryApi.parseSearch(searchPage(0, 30, 100_000), 0, 30).nextOffset);
+        assertEquals(-1, NeteaseLibraryApi.parseSearch(searchPage(30, 0, 30), 30, 30).nextOffset);
+        fails("incomplete", () -> NeteaseLibraryApi.parseSearch(searchPage(30, 1, 100), 30, 30));
+        fails("incomplete", () -> NeteaseLibraryApi.parseSearch(searchPage(30, 2, 31), 30, 30));
+        fails("incomplete", () -> NeteaseLibraryApi.parseSearch(searchPage(30, 0, 31), 30, 30));
+        fails("limit", () -> NeteaseLibraryApi.parseSearch(searchPage(0, 31, 100), 0, 30));
+        assertEquals(-1, NeteaseLibraryApi.parseSearch(searchPage(19_980, 20, 20_000), 19_980, 30).nextOffset);
+        fails("limit", () -> NeteaseLibraryApi.parseSearch(searchPage(19_980, 30, 100_000), 19_980, 30));
+        fails("limit", () -> NeteaseLibraryApi.parseSearch(searchPage(19_980, 1, 100_000), 19_980, 30));
+        fails("limit", () -> NeteaseLibraryApi.parseSearch(searchPage(19_980, 21, 20_001), 19_980, 30));
+    }
+
+    @Test public void artworkUsesOnlyPublicImageFieldsAndKeepsOldConstructors() throws Exception {
+        JSONObject body = searchPage(0, 1, 1);
+        JSONObject album = body.getJSONObject("result").getJSONArray("songs").getJSONObject(0).getJSONObject("al");
+        for (String url : new String[]{"https://p1.music.126.net/a?token=fixture", "https://p1.music.126.net/a#f",
+                "https://user@p1.music.126.net/a", "https://p1.music.126.net:443/a", "https://p1.music.126.net.evil/a",
+                "https://m7.music.126.net/audio.mp3"}) {
+            album.put("picUrl", url);
+            assertNull(NeteaseLibraryApi.parseSearch(body, 0, 30).items.get(0).coverUrl);
+        }
+        album.remove("picUrl");
+        assertNull(NeteaseLibraryApi.parseSearch(body, 0, 30).items.get(0).coverUrl);
+        assertNull(new NeteaseLibraryApi.Track("1", "Song", "Album", Collections.emptyList(), 0, true).coverUrl);
+        JSONObject playlist = j("{playlist:[{id:1,name:'List',trackCount:0,coverImgUrl:'http://p9.music.126.net/list.jpg'}],more:false}");
+        assertEquals("https://p9.music.126.net/list.jpg", NeteaseLibraryApi.parsePlaylists(playlist, 0, 30).items.get(0).coverUrl);
+    }
+
+    @Test public void lyricsUseStrictEapiWhitelistAndReturnOnlyStandardLrc() throws Exception {
+        final String standard = "[00:01.00]First\n[00:02.50]Second";
+        final java.util.List<NeteaseApi.Request> requests = new java.util.ArrayList<>();
+        NeteaseApi api = new NeteaseApi(request -> {
+            requests.add(request);
+            return new NeteaseApi.Response(jUnchecked("{code:200,lrc:{lyric:'" +
+                    standard.replace("\n", "\\n") + "'}}"), Collections.emptyMap());
+        });
+        NeteaseApi.Session session = NeteaseApi.Session.fromJson(
+                j("{userId:'7',nickname:'User',cookies:{MUSIC_U:'fixture',__csrf:'csrf'}}"));
+        assertEquals(standard, new NeteaseLibraryApi(api).lyrics(session, "12345"));
+        assertEquals(1, requests.size());
+        NeteaseApi.Request request = requests.get(0);
+        assertEquals(NeteaseApi.LYRIC, request.endpoint);
+        NeteaseApi.requireEndpoint(new URL(request.endpoint));
+        JSONObject payload = eapiPayload(request, "/api/song/lyric");
+        assertEquals("12345", payload.getString("id"));
+        assertEquals(-1, payload.getInt("tv"));
+        assertEquals(-1, payload.getInt("lv"));
+        assertEquals(-1, payload.getInt("rv"));
+        assertEquals(-1, payload.getInt("kv"));
+        assertEquals(1, payload.getInt("_nmclfl"));
+        fails("endpoint", () -> NeteaseApi.requireEndpoint(new URL(NeteaseApi.LYRIC + "?id=private")));
+        fails("endpoint", () -> NeteaseApi.requireEndpoint(new URL(
+                "https://interfacepc.music.163.com/eapi/song/lyric/other")));
+
+        assertEquals("", NeteaseLibraryApi.parseLyrics(j("{code:200,nolyric:true}")));
+        assertEquals("", NeteaseLibraryApi.parseLyrics(j("{code:200,uncollected:true}")));
+        assertEquals("", NeteaseLibraryApi.parseLyrics(j("{code:200,lrc:{lyric:''}}")));
+        for (String malformed : new String[]{"{code:201,lrc:{lyric:'secret'}}",
+                "{code:200,nolyric:'true'}", "{code:200,lrc:{lyric:3}}",
+                "{code:200,lrc:'secret'}", "{code:200}"})
+            fails("protocol", () -> NeteaseLibraryApi.parseLyrics(j(malformed)));
+        char[] oversized = new char[512 * 1024 + 1];
+        Arrays.fill(oversized, 'x');
+        JSONObject tooLarge = new JSONObject().put("code", 200)
+                .put("lrc", new JSONObject().put("lyric", new String(oversized)));
+        fails("limit", () -> NeteaseLibraryApi.parseLyrics(tooLarge));
+    }
+
+    @Test public void likedIdsUsesSessionUidAndStrictBoundedUniqueParsing() throws Exception {
+        final java.util.List<NeteaseApi.Request> requests = new java.util.ArrayList<>();
+        JSONObject fixture = j("{code:200,ids:[1,'2',9007199254740991]}");
+        NeteaseApi api = new NeteaseApi(request -> {
+            requests.add(request);
+            return new NeteaseApi.Response(fixture, Collections.emptyMap());
+        });
+        NeteaseApi.Session session = NeteaseApi.Session.fromJson(
+                j("{userId:'7',nickname:'User',cookies:{MUSIC_U:'secret',__csrf:'csrf'}}"));
+        java.util.List<String> ids = new NeteaseLibraryApi(api).likedIds(session);
+        assertEquals(Arrays.asList("1", "2", "9007199254740991"), ids);
+        assertEquals(1, requests.size());
+        NeteaseApi.Request request = requests.get(0);
+        assertEquals(NeteaseApi.LIKED_IDS, request.endpoint);
+        NeteaseApi.requireEndpoint(new URL(request.endpoint));
+        JSONObject payload = eapiPayload(request, "/api/song/like/get");
+        assertEquals("7", payload.getString("uid"));
+        assertFalse(payload.getBoolean("e_r"));
+        try { ids.clear(); fail("Must be immutable"); } catch (UnsupportedOperationException expected) { }
+        fails("endpoint", () -> NeteaseApi.requireEndpoint(new URL(NeteaseApi.LIKED_IDS + "?uid=8")));
+
+        assertEquals(Collections.emptyList(), NeteaseLibraryApi.parseLikedIds(j("{code:200,ids:[]}")));
+        for (String malformed : new String[]{"{}", "{code:200}", "{code:200,ids:null}",
+                "{code:200,ids:[0]}", "{code:200,ids:[-1]}", "{code:200,ids:[1.5]}",
+                "{code:200,ids:['01']}", "{code:200,ids:[1,1]}"})
+            fails("protocol", () -> NeteaseLibraryApi.parseLikedIds(j(malformed)));
+        fails("protocol", () -> NeteaseLibraryApi.parseLikedIds(j("{code:201,ids:[1]}")));
+        JSONArray tooMany = new JSONArray();
+        for (int i = 1; i <= 20_001; i++) tooMany.put(i);
+        fails("limit", () -> NeteaseLibraryApi.parseLikedIds(
+                new JSONObject().put("code", 200).put("ids", tooMany)));
+    }
+
+    @Test public void setLikedSubmitsExactPinnedPayloadOnceAndRequiresSuccess() throws Exception {
+        final java.util.List<NeteaseApi.Request> requests = new java.util.ArrayList<>();
+        NeteaseApi api = new NeteaseApi(request -> {
+            requests.add(request);
+            return new NeteaseApi.Response(jUnchecked("{code:200}"), Collections.emptyMap());
+        });
+        NeteaseApi.Session session = NeteaseApi.Session.fromJson(
+                j("{userId:'7',nickname:'User',cookies:{MUSIC_U:'secret',__csrf:'csrf'}}"));
+        NeteaseLibraryApi library = new NeteaseLibraryApi(api);
+        library.setLiked(session, "123", true);
+        library.setLiked(session, "456", false);
+        assertEquals(2, requests.size());
+        assertEquals(NeteaseApi.SET_LIKE, requests.get(0).endpoint);
+        NeteaseApi.requireEndpoint(new URL(requests.get(0).endpoint));
+        JSONObject liked = eapiPayload(requests.get(0), "/api/radio/like");
+        assertEquals("itembased", liked.getString("alg"));
+        assertEquals("123", liked.getString("trackId"));
+        assertTrue(liked.getBoolean("like"));
+        assertEquals("3", liked.getString("time"));
+        assertFalse(liked.getBoolean("e_r"));
+        JSONObject unliked = eapiPayload(requests.get(1), "/api/radio/like");
+        assertEquals("456", unliked.getString("trackId"));
+        assertFalse(unliked.getBoolean("like"));
+        fails("endpoint", () -> NeteaseApi.requireEndpoint(new URL(NeteaseApi.SET_LIKE + "?id=1")));
+        for (String bad : new String[]{null, "", "0", "01", "-1", "1.5", "9223372036854775808"})
+            fails("protocol", () -> library.setLiked(session, bad, true));
+
+        NeteaseApi rejected = new NeteaseApi(request ->
+                new NeteaseApi.Response(jUnchecked("{code:500}"), Collections.emptyMap()));
+        fails("platform", () -> new NeteaseLibraryApi(rejected).setLiked(session, "1", true));
+    }
+
     private static JSONObject jUnchecked(String text) {
         try { return new JSONObject(text); } catch (org.json.JSONException e) { throw new AssertionError(e); }
     }

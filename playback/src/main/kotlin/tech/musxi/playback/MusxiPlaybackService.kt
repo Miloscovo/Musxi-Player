@@ -54,6 +54,13 @@ class MusxiPlaybackService : MediaSessionService() {
     private val host get() = application as PlaybackHost
     private val selection get() = host.sourceSelection
     private var queueSongs: List<SongSummary> = emptyList()
+    private var editingQueue = false
+    private fun publishQueue(force: Boolean = false) {
+        if (editingQueue) return
+        val previous = queueSnapshot.value
+        if (force || previous.songs != queueSongs) queueSnapshot.value = PlaybackQueueState(previous.revision + 1,
+            java.util.Collections.unmodifiableList(queueSongs.map { it.copy(artists = java.util.Collections.unmodifiableList(it.artists.toList())) }))
+    }
     private var searchJob: Job? = null
     private var selectionTimer: Job? = null
     private val attemptedSources = mutableSetOf<String>()
@@ -62,6 +69,43 @@ class MusxiPlaybackService : MediaSessionService() {
     /** Invalidates delayed recovery work after a user pause/stop/navigation. */
     private var recoveryEpoch = 0L
     private var playbackWanted = false
+    private var checkpointReady = false
+    private var historyTicket: String? = null
+    private val checkpointTask = Runnable {
+        checkpoint()
+        if (!destroyed && player.isPlaying) scheduleCheckpoint(15_000)
+    }
+
+    private fun scheduleCheckpoint(delayMs: Long = 200) {
+        if (!checkpointReady || destroyed) return
+        main.removeCallbacks(checkpointTask)
+        main.postDelayed(checkpointTask, delayMs)
+    }
+
+    private fun checkpoint() {
+        if (!checkpointReady || queueSongs.isEmpty() || player.currentMediaItemIndex !in queueSongs.indices) return
+        val generation = activeGeneration ?: return
+        val index = player.currentMediaItemIndex
+        val time = System.currentTimeMillis().coerceAtLeast(0)
+        val position = if (player.playbackState == Player.STATE_ENDED) 0 else player.currentPosition.coerceIn(0, 86_400_000)
+        val saved = SavedPlaybackQueue(queueSongs, index, position, when (player.repeatMode) {
+            Player.REPEAT_MODE_ONE -> "ONE"; Player.REPEAT_MODE_ALL -> "ALL"; else -> "OFF"
+        }, player.shuffleModeEnabled, time)
+        val ticket = currentTicket()
+        val original = queueSongs[index]
+        val selected = selection.state.value.selected?.song ?: original
+        val metadata = player.currentMediaItem?.mediaMetadata
+        val source = selected.copy(title = metadata?.title?.toString() ?: selected.title,
+            album = metadata?.albumTitle?.toString() ?: selected.album,
+            durationMs = player.duration.takeIf { it > 0 } ?: selected.durationMs,
+            coverUrl = metadata?.artworkUri?.toString() ?: selected.coverUrl)
+        val historyKey = ticket?.let { it + ":" + source.key.stableId }
+        val recent = if (player.isPlaying && historyTicket != historyKey) {
+            historyTicket = historyKey
+            RecentPlay(original, source, time)
+        } else null
+        host.onPlaybackCheckpoint(generation, saved, recent)
+    }
 
 
     override fun onCreate() {
@@ -78,12 +122,13 @@ class MusxiPlaybackService : MediaSessionService() {
                     val index = (0 until player.mediaItemCount).firstOrNull {
                         player.getMediaItemAt(it).localConfiguration?.uri?.toString() == ticket
                     } ?: return@post
-                    val item = player.getMediaItemAt(index)
-                    val artist = metadata.artists.joinToString(" / ")
-                    if (item.mediaMetadata.title?.toString() != metadata.title || item.mediaMetadata.artist?.toString() != artist) {
-                        player.replaceMediaItem(index, item.buildUpon().setMediaMetadata(item.mediaMetadata.buildUpon()
-                            .setTitle(metadata.title).setArtist(artist).setAlbumTitle(metadata.album).build()).build())
+                    // Keep resolved original metadata for every later restoration/search.
+                    // This runs only after the ticket fence; candidates cannot enter this slot.
+                    queueSongs.getOrNull(index)?.let { original ->
+                        val refreshed = PlaybackMetadataSnapshot.refreshOriginal(original, metadata)
+                        if (refreshed !== original) queueSongs = queueSongs.toMutableList().apply { this[index] = refreshed }
                     }
+                    updateMetadata(index, metadata)
                 }
             }
             request.withUri(Uri.parse(resolved.url))
@@ -98,18 +143,16 @@ class MusxiPlaybackService : MediaSessionService() {
                 override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
                     val ticket = mediaItem?.localConfiguration?.uri?.toString()
                     if (ticket != lastTicket) {
+                        historyTicket = null
                         val previousTicket = lastTicket
                         lastTicket = ticket
                         if (selectedTicket == previousTicket) {
                             val previous = (0 until player.mediaItemCount).firstOrNull {
                                 player.getMediaItemAt(it).localConfiguration?.uri?.toString() == previousTicket
                             }
-                            val original = selection.state.value.original ?: previous?.let(queueSongs::getOrNull)
-                            if (original != null && previous != null) {
-                                val oldItem = player.getMediaItemAt(previous)
-                                player.replaceMediaItem(previous, oldItem.buildUpon().setMediaMetadata(
-                                    oldItem.mediaMetadata.buildUpon().setTitle(original.title)
-                                        .setArtist(original.artists.joinToString(" / ")).setAlbumTitle(original.album).build()).build())
+                            val original = previous?.let(queueSongs::getOrNull)
+                            if (original != null) {
+                                updateMetadata(previous, original)
                             }
                         }
                         previousTicket?.let(sources::resetSource)
@@ -118,12 +161,19 @@ class MusxiPlaybackService : MediaSessionService() {
                         recovery.reset(); failure = null
                         if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO) automaticTransitions++
                         publish()
+                    } else if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_REPEAT) {
+                        // Repeating a queue slot keeps its selected source and bounded retry budget.
+                        automaticTransitions++
+                        historyTicket = null
+                        publish()
                     }
                 }
                 override fun onTimelineChanged(timeline: Timeline, reason: Int) {
                     if (timeline.isEmpty) { cancelSelection(); sources.clear(); queueSongs = emptyList(); activeGeneration = null; lastTicket = null }
                 }
-                override fun onIsPlayingChanged(isPlaying: Boolean) { if (isPlaying) consecutiveSkips = 0 }
+                override fun onIsPlayingChanged(isPlaying: Boolean) {
+                    if (isPlaying) { consecutiveSkips = 0; checkpoint() }
+                }
                 override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
                     trace("ready=$playWhenReady reason=$reason")
                     if (!playWhenReady && reason in setOf(Player.PLAY_WHEN_READY_CHANGE_REASON_AUDIO_FOCUS_LOSS,
@@ -132,6 +182,7 @@ class MusxiPlaybackService : MediaSessionService() {
                     }
                 }
                 override fun onPlayerError(error: PlaybackException) = recover(error)
+                override fun onEvents(player: Player, events: Player.Events) { publishQueue(); scheduleCheckpoint() }
             })
         }
         // STOP takes effect synchronously in the request callback, alongside cancellation.
@@ -151,6 +202,7 @@ class MusxiPlaybackService : MediaSessionService() {
             override fun handleSetPlayWhenReady(playWhenReady: Boolean): ListenableFuture<*> {
                 playbackWanted = playWhenReady
                 if (!playWhenReady) cancelPendingSelection()
+                else retryFromCommand()
                 // A controller may send play() without prepare(), including while
                 // the session presents an outstanding source selection as buffering.
                 if (playWhenReady && player.playerError != null) player.prepare()
@@ -167,6 +219,8 @@ class MusxiPlaybackService : MediaSessionService() {
                 return Futures.immediateVoidFuture()
             }
         }
+        // Media3's default CacheBitmapLoader(DataSourceBitmapLoader(context)) uses its
+        // own public HTTP data source, independent of the opaque audio resolver above.
         session = MediaSession.Builder(this, sessionPlayer).setCallback(object : MediaSession.Callback {
             override fun onMediaButtonEvent(session: MediaSession, controllerInfo: MediaSession.ControllerInfo,
                 intent: android.content.Intent): Boolean {
@@ -178,7 +232,6 @@ class MusxiPlaybackService : MediaSessionService() {
             override fun onConnect(session: MediaSession, controller: MediaSession.ControllerInfo): MediaSession.ConnectionResult {
                 if (!isAppController(controller) && !controller.isTrusted) return MediaSession.ConnectionResult.reject()
                 val commands = MediaSession.ConnectionResult.DEFAULT_PLAYER_COMMANDS.buildUpon()
-                    .remove(Player.COMMAND_SET_REPEAT_MODE).remove(Player.COMMAND_SET_SHUFFLE_MODE)
                 commands.remove(Player.COMMAND_SET_MEDIA_ITEM).remove(Player.COMMAND_CHANGE_MEDIA_ITEMS)
                 val accepted = MediaSession.ConnectionResult.AcceptedResultBuilder(session).setAvailablePlayerCommands(commands.build())
                 if (isAppController(controller)) accepted.setAvailableSessionCommands(MediaSession.ConnectionResult.DEFAULT_SESSION_COMMANDS
@@ -187,10 +240,7 @@ class MusxiPlaybackService : MediaSessionService() {
             }
             override fun onPlayerCommandRequest(session: MediaSession, controller: MediaSession.ControllerInfo, playerCommand: Int): Int {
                 trace("command=$playerCommand app=${isAppController(controller)} notification=${session.isMediaNotificationController(controller)}")
-                val retryOriginal = selection.state.value.phase in setOf(SourceSelectionPhase.SEARCHING,
-                    SourceSelectionPhase.CHOOSING, SourceSelectionPhase.FAILED) ||
-                    failure in setOf(PlaybackFailure.PERMISSION, PlaybackFailure.UNAVAILABLE) ||
-                    selectedTicket?.let { !sources.sourceAuthorized(it) } == true
+                val retryOriginal = shouldRetryOriginal()
                 if (playerCommand == Player.COMMAND_SET_MEDIA_ITEM || playerCommand == Player.COMMAND_CHANGE_MEDIA_ITEMS)
                     return SessionError.ERROR_PERMISSION_DENIED
                 if (playerCommand in setOf(Player.COMMAND_STOP, Player.COMMAND_SEEK_TO_NEXT,
@@ -199,10 +249,12 @@ class MusxiPlaybackService : MediaSessionService() {
                         Player.COMMAND_SEEK_IN_CURRENT_MEDIA_ITEM, Player.COMMAND_SEEK_TO_DEFAULT_POSITION,
                         Player.COMMAND_PLAY_PAUSE, Player.COMMAND_PREPARE)) {
                     recoveryEpoch++
-                    if (selection.state.value.phase in setOf(SourceSelectionPhase.SEARCHING, SourceSelectionPhase.CHOOSING))
+                    if (playerCommand != Player.COMMAND_PLAY_PAUSE &&
+                        selection.state.value.phase in setOf(SourceSelectionPhase.SEARCHING, SourceSelectionPhase.CHOOSING))
                         cancelSelection()
                 }
                 if (playerCommand == Player.COMMAND_STOP) {
+                    checkpoint()
                     queueCommands.invalidate()
                     playbackWanted = false
                     recoveryEpoch++
@@ -211,22 +263,9 @@ class MusxiPlaybackService : MediaSessionService() {
                     failure = null; lastSkipped = null; publish()
                     (application as PlaybackHost).onPlaybackStopRequested()
                 }
-                if ((playerCommand == Player.COMMAND_PREPARE || playerCommand == Player.COMMAND_PLAY_PAUSE) &&
-                    (player.playerError != null || (retryOriginal && selectedTicket != null))) {
-                    trace("retry_from_command")
-                    recovery.reset(); consecutiveSkips = 0; failure = null
-                    if (retryOriginal) {
-                        currentTicket()?.let(sources::resetSource)
-                        val original = offeredSources?.original ?: queueSongs.getOrNull(player.currentMediaItemIndex)
-                        val item = player.currentMediaItem
-                        if (original != null && item != null) player.replaceMediaItem(player.currentMediaItemIndex,
-                            item.buildUpon().setMediaMetadata(item.mediaMetadata.buildUpon().setTitle(original.title)
-                                .setArtist(original.artists.joinToString(" / ")).setAlbumTitle(original.album).build()).build())
-                        selectedTicket = null; attemptedSources.clear(); offeredSources = null
-                        selection.clear()
-                    }
-                    currentTicket()?.let(sources::invalidate); publish()
-                }
+                // PLAY_PAUSE identifies both play and pause. Only its actual play handler
+                // may restore the original source; a pause must retain the selected source.
+                if (playerCommand == Player.COMMAND_PREPARE) retryFromCommand(retryOriginal)
                 return super.onPlayerCommandRequest(session, controller, playerCommand)
             }
             override fun onCustomCommand(session: MediaSession, controller: MediaSession.ControllerInfo, customCommand: SessionCommand, args: Bundle): ListenableFuture<SessionResult> {
@@ -263,12 +302,14 @@ class MusxiPlaybackService : MediaSessionService() {
                 }
             }
         }
+        checkpointReady = true
     }
 
     private fun applyQueue(token: Long): SessionResult {
         when (val action = queueCommands.take(token)) {
             null -> return SessionResult(SessionError.ERROR_INVALID_STATE)
             QueueCommandMailbox.Action.Clear -> {
+                checkpoint()
                 playbackWanted = false
                 cancelSelection(); queueSongs = emptyList(); offeredSources = null; attemptedSources.clear(); selectedTicket = null
                 failure = null; lastSkipped = null; recovery.reset()
@@ -277,18 +318,20 @@ class MusxiPlaybackService : MediaSessionService() {
             }
             is QueueCommandMailbox.Action.Replace -> {
                 val queue = action.queue
-                if (queue.songs.isEmpty()) return SessionResult(SessionError.ERROR_BAD_VALUE)
+                if (queue.songs.isEmpty() || action.positionMs !in 0..86_400_000 ||
+                    (action.repeatMode != null && action.repeatMode !in setOf("OFF", "ONE", "ALL")))
+                    return SessionResult(SessionError.ERROR_BAD_VALUE)
                 val mediaId = queue.songs.first().key.stableId
                 val generation = provider.generationFor(mediaId)
                 if (generation == null || queue.accountGeneration != generation ||
                     queue.songs.any { !PlaybackSourcePolicy.acceptsMediaId(it.key.stableId) || it.key.platform != queue.songs.first().key.platform })
                     return SessionResult(SessionError.ERROR_BAD_VALUE)
+                checkpoint()
                 val uris = try { sources.replace(queue.songs.map { it.key.stableId }, generation) }
                     catch (_: Exception) { return SessionResult(SessionError.ERROR_BAD_VALUE) }
                 val items = queue.songs.mapIndexed { index, song ->
                     MediaItem.Builder().setMediaId(song.key.stableId).setUri(uris[index])
-                        .setMediaMetadata(MediaMetadata.Builder().setTitle(song.title)
-                            .setArtist(song.artists.joinToString(" / ")).setAlbumTitle(song.album).build()).build()
+                        .setMediaMetadata(metadataFor(PlaybackMetadataSnapshot.fromSong(song, song.key.platform))).build()
                 }
                 cancelSelection(); offeredSources = null; attemptedSources.clear(); selectedTicket = null
                 activeGeneration = generation
@@ -296,12 +339,89 @@ class MusxiPlaybackService : MediaSessionService() {
                 failure = null; lastSkipped = null; skippedCount = 0; refreshCount = 0
                 automaticTransitions = 0; consecutiveSkips = 0; recovery.reset()
                 queueSongs = queue.songs
-                playbackWanted = true
-                player.setMediaItems(items, queue.startIndex, 0)
-                player.prepare(); player.play(); publish()
+                historyTicket = null
+                playbackWanted = action.playWhenReady
+                player.pause(); player.stop()
+                action.repeatMode?.let { player.repeatMode = when (it) {
+                    "ONE" -> Player.REPEAT_MODE_ONE; "ALL" -> Player.REPEAT_MODE_ALL; else -> Player.REPEAT_MODE_OFF
+                } }
+                action.shuffleEnabled?.let { player.shuffleModeEnabled = it }
+                player.setMediaItems(items, queue.startIndex, action.positionMs)
+                if (action.playWhenReady) { player.prepare(); player.play() }
+                publish()
                 trace("queue_applied")
             }
+            is QueueCommandMailbox.Action.Edit -> return editQueue(action)
+            is QueueCommandMailbox.Action.Insert -> return insertQueue(action)
         }
+        publishQueue(force = true)
+        return SessionResult(SessionResult.RESULT_SUCCESS)
+    }
+
+    private fun editable(revision: Long): Boolean = revision == queueSnapshot.value.revision &&
+        queueSongs.isNotEmpty() && player.mediaItemCount == queueSongs.size &&
+        activeGeneration != null && activeGeneration == activeMediaId?.let(provider::generationFor)
+
+    private fun editQueue(action: QueueCommandMailbox.Action.Edit): SessionResult {
+        if (!editable(action.expectedRevision)) return SessionResult(SessionError.ERROR_INVALID_STATE)
+        val plan = try { QueueEdits.plan(queueSongs.size, player.currentMediaItemIndex, action.edit) }
+            catch (_: IllegalArgumentException) { return SessionResult(SessionError.ERROR_BAD_VALUE) }
+        if (plan.order == queueSongs.indices.toList()) return SessionResult(SessionResult.RESULT_SUCCESS)
+        host.onPlaybackStopRequested()
+        val platform = queueSongs.first().key.platform
+        val generation = activeGeneration!!
+        val nextSongs = plan.order.map(queueSongs::get)
+        val keepUris = plan.order.map { player.getMediaItemAt(it).localConfiguration!!.uri.toString() }.toSet()
+        // Invalidate delayed recovery only when its actual slot is removed. Edits around a
+        // playing/substituted slot retain its ticket, position, selection and retry budget.
+        if (plan.currentRemoved) {
+            playbackWanted = false; recoveryEpoch++; cancelSelection()
+            offeredSources = null; attemptedSources.clear(); selectedTicket = null
+            failure = null; lastSkipped = null; recovery.reset()
+            player.pause()
+        }
+        editingQueue = true
+        try {
+            queueSongs = nextSongs
+            when (val edit = action.edit) {
+                is QueueEdit.Move -> player.moveMediaItem(edit.from, edit.to)
+                is QueueEdit.Remove -> player.removeMediaItem(edit.index)
+                QueueEdit.Clear -> { player.stop(); player.clearMediaItems() }
+            }
+            sources.retain(keepUris)
+            if (plan.currentRemoved && nextSongs.isNotEmpty()) {
+                // Explicit removal chooses the original next/previous item and leaves it paused.
+                player.seekTo(plan.currentIndex!!, 0)
+            }
+        } finally { editingQueue = false }
+        publishQueue(force = true); publish()
+        if (nextSongs.isEmpty()) {
+            activeGeneration = null; activeMediaId = null; lastTicket = null; historyTicket = null
+            host.onPlaybackQueueCleared(platform, generation)
+        } else checkpoint()
+        return SessionResult(SessionResult.RESULT_SUCCESS)
+    }
+
+    private fun insertQueue(action: QueueCommandMailbox.Action.Insert): SessionResult {
+        if (!editable(action.expectedRevision)) return SessionResult(SessionError.ERROR_INVALID_STATE)
+        val song = action.song
+        if (queueSongs.size >= QueueSources.MAX_QUEUE_SIZE || song.key.platform != queueSongs.first().key.platform ||
+            !PlaybackSourcePolicy.acceptsMediaId(song.key.stableId) || song.title.length > 4096 ||
+            song.album.length > 4096 || song.artists.size > 100 || song.artists.any { it.length > 4096 } ||
+            song.durationMs !in 0..86_400_000) return SessionResult(SessionError.ERROR_BAD_VALUE)
+        val safe = song.copy(artists = song.artists.toList(), coverUrl = tech.musxi.core.library.ArtworkPolicy.sanitize(song.key.platform, song.coverUrl))
+        val uri = try { sources.append(song.key.stableId, activeGeneration!!) }
+            catch (_: Exception) { return SessionResult(SessionError.ERROR_BAD_VALUE) }
+        host.onPlaybackStopRequested()
+        val index = if (action.playNext) player.currentMediaItemIndex + 1 else queueSongs.size
+        val item = MediaItem.Builder().setMediaId(safe.key.stableId).setUri(uri)
+            .setMediaMetadata(metadataFor(PlaybackMetadataSnapshot.fromSong(safe, safe.key.platform))).build()
+        editingQueue = true
+        try {
+            queueSongs = queueSongs.toMutableList().apply { add(index, safe) }
+            player.addMediaItem(index, item)
+        } finally { editingQueue = false }
+        publishQueue(force = true); checkpoint()
         return SessionResult(SessionResult.RESULT_SUCCESS)
     }
 
@@ -359,11 +479,7 @@ class MusxiPlaybackService : MediaSessionService() {
             catch (_: Exception) { failure = PlaybackFailure.AUTH_REQUIRED; selection.clear(); publish(); return@begin }
             attemptedSources += candidate.song.key.stableId
             selectedTicket = ticket
-            val index = player.currentMediaItemIndex
-            val item = player.currentMediaItem
-            if (item != null) player.replaceMediaItem(index, item.buildUpon().setMediaMetadata(
-                item.mediaMetadata.buildUpon().setTitle(candidate.song.title)
-                    .setArtist(candidate.song.artists.joinToString(" / ")).setAlbumTitle(candidate.song.album).build()).build())
+            updateMetadata(player.currentMediaItemIndex, candidate.song)
             recovery.reset(); failure = null; publish()
             player.seekTo(player.currentMediaItemIndex, 0); player.prepare(); player.play()
         }, onDismiss = {
@@ -384,6 +500,16 @@ class MusxiPlaybackService : MediaSessionService() {
             }
             if (destroyed || currentTicket() != ticket || selection.state.value.revision != token) return@launch
             response.onSuccess { found ->
+                // A denied original stream never delivers resolver metadata. The bounded
+                // alternative search may still resolve its display data before searching.
+                val index = player.currentMediaItemIndex
+                queueSongs.getOrNull(index)?.let { original ->
+                    val refreshed = PlaybackMetadataSnapshot.refreshOriginal(original, found.original)
+                    if (refreshed !== original) {
+                        queueSongs = queueSongs.toMutableList().apply { this[index] = refreshed }
+                        if (selectedTicket != ticket) updateMetadata(index, refreshed)
+                    }
+                }
                 offeredSources = found
                 val remaining = if (attemptedSources.size >= 3) emptyList() else found.candidates.filter {
                     it.song.key.stableId !in attemptedSources && provider.generationFor(it.song.key.stableId) == it.accountGeneration
@@ -400,6 +526,51 @@ class MusxiPlaybackService : MediaSessionService() {
                 playbackWanted = false; selection.fail(token, "search_unavailable"); failure = reason; publish()
             }
         }
+    }
+
+    private fun shouldRetryOriginal() = selection.state.value.phase in setOf(SourceSelectionPhase.SEARCHING,
+        SourceSelectionPhase.CHOOSING, SourceSelectionPhase.FAILED) ||
+        failure in setOf(PlaybackFailure.PERMISSION, PlaybackFailure.UNAVAILABLE) ||
+        player.playerError?.let(::isSourceSelectionError) == true ||
+        selectedTicket?.let { !sources.sourceAuthorized(it) } == true
+
+    private fun retryFromCommand(retryOriginal: Boolean = shouldRetryOriginal()) {
+        if (player.playerError == null && !(retryOriginal && selectedTicket != null)) return
+        trace("retry_from_command")
+        recovery.reset(); consecutiveSkips = 0; failure = null
+        if (retryOriginal) {
+            cancelSelection()
+            currentTicket()?.let(sources::resetSource)
+            queueSongs.getOrNull(player.currentMediaItemIndex)?.let { updateMetadata(player.currentMediaItemIndex, it) }
+            selectedTicket = null; attemptedSources.clear(); offeredSources = null
+        }
+        currentTicket()?.let(sources::invalidate); publish()
+    }
+
+    private fun metadataFor(snapshot: PlaybackMetadataSnapshot): MediaMetadata = MediaMetadata.Builder()
+        .setTitle(snapshot.title).setArtist(snapshot.artist).setAlbumTitle(snapshot.album)
+        .setArtworkUri(snapshot.coverUrl?.let(Uri::parse))
+        .setExtras(Bundle().apply {
+            putString(PlaybackMetadataSnapshot.EXTRA_QUEUE_PLATFORM, snapshot.queuePlatform?.name)
+            putString(PlaybackMetadataSnapshot.EXTRA_SOURCE_PLATFORM, snapshot.sourcePlatform?.name)
+            putString(PlaybackMetadataSnapshot.EXTRA_SOURCE_ID, snapshot.sourceId)
+        }).build()
+
+    /** All service metadata writes use the same public snapshot, including source restoration. */
+    private fun updateMetadata(index: Int, song: SongSummary) {
+        val queuePlatform = queueSongs.getOrNull(index)?.key?.platform ?: return
+        val item = player.getMediaItemAt(index)
+        val metadata = item.mediaMetadata
+        val previous = PlaybackMetadataSnapshot(metadata.title?.toString().orEmpty(),
+            metadata.artist?.toString().orEmpty(), metadata.albumTitle?.toString().orEmpty(),
+            metadata.artworkUri?.toString(),
+            PlaybackMetadataSnapshot.platform(metadata.extras?.getString(PlaybackMetadataSnapshot.EXTRA_QUEUE_PLATFORM)),
+            PlaybackMetadataSnapshot.platform(metadata.extras?.getString(PlaybackMetadataSnapshot.EXTRA_SOURCE_PLATFORM)),
+            metadata.extras?.getString(PlaybackMetadataSnapshot.EXTRA_SOURCE_ID))
+        val next = PlaybackMetadataSnapshot.fromSong(song, queuePlatform)
+        // Includes album/cover/platform changes even when title and artist are identical.
+        if (previous != next) player.replaceMediaItem(index,
+            item.buildUpon().setMediaMetadata(metadataFor(next)).build())
     }
 
     private fun classify(error: PlaybackException): PlaybackFailure {
@@ -439,6 +610,7 @@ class MusxiPlaybackService : MediaSessionService() {
 
 
     private fun publish() {
+        publishQueue()
         session?.setSessionExtras(Bundle().apply {
             putString(EXTRA_FAILURE, failure?.name); putString(EXTRA_SKIPPED, lastSkipped?.name)
             putInt(EXTRA_SKIP_COUNT, skippedCount); putInt(EXTRA_REFRESH_COUNT, refreshCount); putInt(EXTRA_AUTO_COUNT, automaticTransitions)
@@ -453,8 +625,10 @@ class MusxiPlaybackService : MediaSessionService() {
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? = session
     override fun onTaskRemoved(rootIntent: android.content.Intent?) { if (!playbackWanted) stopSelf() }
     override fun onDestroy() {
+        checkpoint()
         destroyed = true; cancelSelection(); queueCommands.invalidate(); scope.cancel(); sources.clear(); main.removeCallbacksAndMessages(null)
         session?.run { player.release(); release() }; session = null
+        queueSnapshot.value = PlaybackQueueState(queueSnapshot.value.revision + 1)
         super.onDestroy()
     }
 

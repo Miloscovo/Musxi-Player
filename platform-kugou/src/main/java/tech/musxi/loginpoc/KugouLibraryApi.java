@@ -24,16 +24,24 @@ public final class KugouLibraryApi {
     }
     public static final class Playlist {
         public final String id, name, coverUrl; public final int trackCount;
-        Playlist(String id, String name, String coverUrl, int count) { this.id=id; this.name=name; this.coverUrl=coverUrl; trackCount=count; }
+        public final boolean favorite;
+        Playlist(String id, String name, String coverUrl, int count) { this(id,name,coverUrl,count,false); }
+        Playlist(String id, String name, String coverUrl, int count, boolean favorite) { this.id=id; this.name=name; this.coverUrl=coverUrl; trackCount=count; this.favorite=favorite; }
     }
     public static class Song {
-        public final String id, name, album; public final List<String> artists; public final long durationMs;
+        public final String id, name, album, coverUrl; public final List<String> artists; public final long durationMs;
         Song(String id,String name,String album,List<String> artists,long durationMs) {
+            this(id,name,album,artists,durationMs,null);
+        }
+        Song(String id,String name,String album,List<String> artists,long durationMs,String coverUrl) {
             this.id=id; this.name=name; this.album=album; this.artists=Collections.unmodifiableList(new ArrayList<>(artists)); this.durationMs=durationMs;
+            this.coverUrl=coverUrl;
         }
     }
     public static final class Track extends Song {
+        String fileId;
         Track(String id,String name,String album,List<String> artists,long durationMs) { super(id,name,album,artists,durationMs); }
+        Track(String id,String name,String album,List<String> artists,long durationMs,String coverUrl) { super(id,name,album,artists,durationMs,coverUrl); }
     }
     public static final class Audio {
         public final String url; public final long expiresAtElapsedMs;
@@ -55,17 +63,180 @@ public final class KugouLibraryApi {
             JSONObject.quote(session.token)+",\"page\":"+(offset/limit+1)+"}";
         return parseTracks(api.libraryCall("/v4/get_list_all_file",session,Collections.emptyMap(),body,false),offset,limit);
     }
+    /** A complete, bounded snapshot of the platform-designated editable favorite list. */
+    public List<String> likedIds(KugouApi.Session session, java.util.function.BooleanSupplier current) throws IOException {
+        FavoriteList favorite = favoriteList(session, current);
+        List<String> ids = new ArrayList<>();
+        for (Track track : favorite.tracks) ids.add(track.id);
+        return Collections.unmodifiableList(ids);
+    }
+    private static final class FavoriteList {
+        final String id; final List<Track> tracks;
+        FavoriteList(String id,List<Track> tracks) { this.id=id;this.tracks=tracks; }
+    }
+    private FavoriteList favoriteList(KugouApi.Session session, java.util.function.BooleanSupplier current) throws IOException {
+        long deadline = System.nanoTime() + 60_000_000_000L;
+        String favorite = null; int offset=0; Integer expected=null;
+        Set<String> lists=new HashSet<>();
+        while (true) {
+            favoriteCurrent(current,deadline);
+            Page<Playlist> page=playlists(session,offset,100);
+            if(page.total>=0) { if(expected!=null && expected!=page.total)throw error("incomplete");expected=page.total; }
+            for(Playlist p:page.items) {
+                if(!lists.add(p.id) || lists.size()>20_000)throw error("incomplete");
+                if(p.favorite) { if(favorite!=null)throw error("identity");favorite=p.id; }
+            }
+            if(page.nextOffset<0)break;
+            if(page.nextOffset<=offset || page.nextOffset>20_000)throw error("limit");
+            offset=page.nextOffset;
+        }
+        if(expected!=null && expected!=lists.size())throw error("incomplete");
+        if(favorite==null)throw error("unavailable");
+        List<Track> result=new ArrayList<>(); Set<String> keys=new HashSet<>(); offset=0;expected=null;
+        while(true) {
+            favoriteCurrent(current,deadline);
+            Page<Track> page=tracks(session,favorite,offset,100);
+            if(page.total>=0) { if(expected!=null && expected!=page.total)throw error("incomplete");expected=page.total; }
+            for(Track t:page.items) { if(!keys.add(t.id) || result.size()>=20_000)throw error("incomplete");result.add(t); }
+            if(page.nextOffset<0)break;
+            if(page.nextOffset<=offset || page.nextOffset>20_000)throw error("limit");offset=page.nextOffset;
+        }
+        if(expected!=null && expected!=result.size())throw error("incomplete");
+        favoriteCurrent(current,deadline);
+        return new FavoriteList(favorite,result);
+    }
+    private static void favoriteCurrent(java.util.function.BooleanSupplier current,long deadline) throws IOException {
+        if(!current.getAsBoolean() || Thread.currentThread().isInterrupted())throw error("account_changed");
+        if(System.nanoTime()>deadline)throw error("timeout");
+    }
+    /** One explicit favorite mutation, never an arbitrary user-supplied playlist target. */
+    public void setLiked(KugouApi.Session session,String songId,String name,long durationMs,boolean liked,
+        java.util.function.BooleanSupplier current) throws IOException {
+        String[] parts=songId.split("_",-1);
+        if(parts.length!=3 || !parts[0].matches("[a-f0-9]{32}"))throw error("identity");
+        numeric(parts[1],true);numeric(parts[2],true);
+        if(name==null || name.isEmpty() || name.length()>4096 || durationMs<0 || durationMs>86_400_000)throw error("protocol");
+        FavoriteList favorite=favoriteList(session,current);
+        List<Track> matches=new ArrayList<>();
+        for(Track t:favorite.tracks) if(t.id.equals(songId))matches.add(t);
+        if(liked==!matches.isEmpty())return;
+        if(!current.getAsBoolean())throw error("account_changed");
+        try {
+            JSONObject body=new JSONObject().put("userid",session.userId).put("token",session.token)
+                .put("listid",favorite.id).put("list_ver",0).put("type",0);
+            String path; Map<String,String> query=Collections.emptyMap();
+            if(liked) {
+                JSONObject resource=new JSONObject().put("number",1).put("name",name).put("hash",parts[0])
+                    .put("size",0).put("sort",0).put("timelen",durationMs).put("bitrate",0)
+                    .put("album_id",Long.parseLong(parts[1])).put("mixsongid",Long.parseLong(parts[2]));
+                body.put("slow_upload",1).put("scene","false;null").put("data",new JSONArray().put(resource));
+                path="/cloudlist.service/v6/add_song";
+                query=map("last_time",String.valueOf(System.currentTimeMillis()/1000),"last_area","gztx");
+            } else {
+                JSONArray ids=new JSONArray();
+                for(Track t:matches)ids.put(new JSONObject().put("fileid",Long.parseLong(numeric(t.fileId,false))));
+                body.put("data",ids);path="/v4/delete_songs";
+            }
+            JSONObject response=api.libraryCall(path,session,query,body.toString(),false);
+            successAudio(response);
+            if(!Arrays.asList("1","200").contains(text(response.opt("status"))))throw error("protocol");
+        } catch(org.json.JSONException malformed) { throw error("protocol"); }
+    }
+    /** Standard LRC only. Hash and album-audio ID identify the actual selected source. */
+    public String lyrics(KugouApi.Session session, String songKey) throws IOException {
+        if (session == null || songKey == null) throw error("identity");
+        String[] parts = songKey.split("_", -1);
+        if (parts.length != 3 || !parts[0].matches("[a-f0-9]{32}")) throw error("identity");
+        numeric(parts[1], true); numeric(parts[2], true);
+        JSONObject search = api.lyricsCall("/search", map("hash", parts[0], "album_audio_id", parts[2],
+            "keyword", "", "duration", "0", "lrctxt", "1", "man", "no"));
+        lyricStatus(search, "lyrics_search_status");
+        JSONArray rows = search.optJSONArray("candidates");
+        if (rows == null || rows.length() > 100) throw lyricError("lyrics_search_rows");
+        if (rows.length() == 0) return "";
+        JSONObject candidate = rows.optJSONObject(0);
+        if (candidate == null) throw lyricError("lyrics_search_candidate");
+        String id = numeric(candidate.opt("id"), false);
+        Object access = candidate.opt("accesskey");
+        if (!(access instanceof String) || !((String)access).matches("[A-Za-z0-9_-]{1,256}")) throw lyricError("lyrics_search_key");
+        JSONObject downloaded = api.lyricsCall("/download", map("ver", "1", "client", "android", "id", id,
+            "accesskey", (String)access, "fmt", "lrc", "charset", "utf8"));
+        lyricStatus(downloaded, "lyrics_download_status");
+        return parseLyrics(downloaded);
+    }
+    private static void lyricStatus(JSONObject root, String diagnostic) throws IOException {
+        if (root == null || !(root.opt("status") instanceof Number)) throw lyricError(diagnostic);
+        if (root.optInt("status") != 200) throw error("unavailable");
+    }
+    static String parseLyrics(JSONObject root) throws IOException {
+        Object value = root.opt("content");
+        if (value == null || value == JSONObject.NULL || "".equals(value)) return "";
+        if (!(value instanceof String)) throw lyricError("lyrics_content_type");
+        String encoded = (String)value;
+        if (encoded.length() > 700 * 1024) throw error("limit");
+        try {
+            byte[] bytes = java.util.Base64.getDecoder().decode(encoded);
+            if (bytes.length > 512 * 1024) throw error("limit");
+            return java.nio.charset.StandardCharsets.UTF_8.newDecoder()
+                .onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
+                .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT)
+                .decode(java.nio.ByteBuffer.wrap(bytes)).toString();
+        } catch (IllegalArgumentException | java.nio.charset.CharacterCodingException invalid) {
+            throw lyricError("lyrics_content_encoding");
+        }
+    }
+
+    private static KugouApi.ApiException lyricError(String diagnostic) {
+        return new KugouApi.ApiException("protocol", "Kugou lyrics request unavailable", diagnostic);
+    }
+
     /** Only the first official search page; this never resolves or probes audio. */
     public List<Song> search(KugouApi.Session session,String keywords) throws IOException {
+        return parseSearch(searchResponse(session,keywords,0,10));
+    }
+    public Page<Song> search(KugouApi.Session session,String keywords,int offset,int limit) throws IOException {
+        searchBounds(offset,limit);
+        return parseSearch(searchResponse(session,keywords,offset,limit),offset,limit);
+    }
+    private JSONObject searchResponse(KugouApi.Session session,String keywords,int offset,int limit) throws IOException {
         if(keywords==null || keywords.length()<1 || keywords.length()>128 ||
             keywords.codePoints().anyMatch(Character::isISOControl) || keywords.trim().isEmpty())throw error("protocol");
         Map<String,String> params=map("albumhide","0","iscorrection","1","keyword",keywords.trim(),
-            "nocollect","0","page","1","pagesize","10","platform","AndroidFilter");
-        return parseSearch(api.libraryCall("/v3/search/song",session,params,null,false));
+            "nocollect","0","page",Integer.toString(offset/limit+1),"pagesize",Integer.toString(limit),"platform","AndroidFilter");
+        return api.libraryCall("/v3/search/song",session,params,null,false);
     }
     static List<Song> parseSearch(JSONObject root) throws IOException {
-        JSONObject data=success(root); JSONArray rows=rows(data,"lists","info");
-        if(rows.length()>10)throw error("limit");
+        return searchSongs(success(root),10);
+    }
+    static Page<Song> parseSearch(JSONObject root,int offset,int limit) throws IOException {
+        searchBounds(offset,limit);
+        JSONObject data=success(root);
+        for(String field:new String[]{"page","page_num"})
+            if(data.has(field) && nonnegative(data.opt(field),Integer.MAX_VALUE)!=offset/limit+1)throw error("protocol");
+        if(data.has("pagesize") && nonnegative(data.opt("pagesize"),Integer.MAX_VALUE)!=limit)throw error("protocol");
+        List<Song> songs=searchSongs(data,limit);
+        Object count=first(data,"total","total_count");
+        int total=count==null?-1:(int)nonnegative(count,Integer.MAX_VALUE);
+        int end=offset+songs.size();
+        boolean more=total>=0?end<total:!songs.isEmpty();
+        Object flag=first(data,"hasmore","has_more");
+        if(flag!=null){
+            String text=text(flag);
+            boolean hasMore=Boolean.TRUE.equals(flag) || text.equals("1");
+            if(!hasMore && !Boolean.FALSE.equals(flag) && !text.equals("0"))throw error("protocol");
+            if(total>=0 && more!=hasMore)throw error("incomplete");more=hasMore;
+        }
+        if(end>20_000 || (more && offset+limit>19_980))throw error("limit");
+        if((total>=0 && ((songs.size()>0 && end>total) || (songs.size()<limit && end<total))) ||
+            (more && songs.isEmpty()))throw error("incomplete");
+        return new Page<>(songs,more?offset+limit:-1,total);
+    }
+    private static void searchBounds(int offset,int limit) throws IOException {
+        if(offset<0 || offset>19_980 || limit<1 || limit>100 || offset%limit!=0)throw error("limit");
+    }
+    private static List<Song> searchSongs(JSONObject data,int limit) throws IOException {
+        JSONArray rows=rows(data,"lists","info");
+        if(rows.length()>limit)throw error("limit");
         List<Song> out=new ArrayList<>(); Set<String> ids=new HashSet<>();
         for(int i=0;i<rows.length();i++) {
             JSONObject row=rows.optJSONObject(i); if(row==null)throw error("protocol");
@@ -91,7 +262,7 @@ public final class KugouLibraryApi {
             Object millis=first(row,"timelen");
             long duration=seconds!=null?nonnegative(seconds,86_400)*1000:nonnegative(millis==null?0:millis,86_400_000);
             out.add(new Song(id,clean(name,""),searchText(first(row,"AlbumName","album_name","albumname","album")),
-                artist.isEmpty()?Collections.emptyList():Collections.singletonList(artist),duration));
+                artist.isEmpty()?Collections.emptyList():Collections.singletonList(artist),duration,cover(row)));
         }
         return Collections.unmodifiableList(out);
     }
@@ -120,7 +291,8 @@ public final class KugouLibraryApi {
             String id=numeric(row.opt("listid"),false); if(!ids.add(id))throw error("identity");
             Object count=first(row,"count","songcount","song_count");
             int tracks=count==null?0:(int)nonnegative(count,1_000_000);
-            out.add(new Playlist(id,clean(row.opt("name"),"未命名歌单"),null,tracks));
+            out.add(new Playlist(id,clean(row.opt("name"),"未命名歌单"),cover(row),tracks,
+                "2".equals(text(row.opt("is_def"))) && "1".equals(text(row.opt("is_edit")))));
         }
         int total=total(data); return new Page<>(out,next(offset,rows.length(),total,limit),total);
     }
@@ -149,8 +321,11 @@ public final class KugouLibraryApi {
             Object time=first(row,"timelen"); if(time==null)time=first(audio,"timelen");
             Object seconds=first(row,"duration");
             long duration=time!=null?nonnegative(time,86_400_000):nonnegative(seconds==null?0:seconds,86_400)*1000;
-            out.add(new Track(id,name,clean(first(row,"AlbumName","album_name","albumname","album"),""),
-                artist.isEmpty()?Collections.emptyList():Collections.singletonList(artist),duration));
+            Track track=new Track(id,name,clean(first(row,"AlbumName","album_name","albumname","album"),""),
+                artist.isEmpty()?Collections.emptyList():Collections.singletonList(artist),duration,cover(row));
+            Object fileId=first(row,"fileid","file_id");
+            track.fileId=fileId==null?null:numeric(fileId,true);
+            out.add(track);
         }
         int total=total(data); return new Page<>(out,next(offset,rows.length(),total,limit),total);
     }
@@ -248,6 +423,21 @@ public final class KugouLibraryApi {
     }
     private static int total(JSONObject data) throws IOException {
         Object value=first(data,"total","count"); return value==null?-1:(int)nonnegative(value,1_000_000);
+    }
+    private static String cover(JSONObject row) {
+        Object value=first(row,"coverUrl","cover_url","cover","imgurl","img_url","pic","picurl","Pic","Image");
+        JSONObject album=row.optJSONObject("album_info");
+        if(value==null && album!=null)value=first(album,"cover","imgurl","img_url");
+        if(!(value instanceof String))return null;
+        String url=((String)value).replace("{size}","400");
+        try{URI uri=new URI(url);String host=uri.getHost();
+            if(host==null || !Arrays.asList("imge.kugou.com","imgessl.kugou.com").contains(host.toLowerCase(Locale.ROOT)) ||
+                url.length()>2048 || url.codePoints().anyMatch(c->Character.isWhitespace(c) || Character.isISOControl(c)) ||
+                !("https".equals(uri.getScheme()) || "http".equals(uri.getScheme())) || uri.getRawUserInfo()!=null ||
+                uri.getPort()!=-1 || uri.getRawQuery()!=null || uri.getRawFragment()!=null || !host.equalsIgnoreCase(uri.getRawAuthority()) ||
+                uri.getRawPath()==null || uri.getRawPath().length()<=1 || !uri.normalize().getRawPath().equals(uri.getRawPath()))return null;
+            return "https://"+host.toLowerCase(Locale.ROOT)+uri.getRawPath();
+        }catch(Exception invalid){return null;}
     }
     private static int next(int offset,int length,int total,int limit) throws IOException {
         if(total>=0 && offset+length>total)throw error("incomplete");

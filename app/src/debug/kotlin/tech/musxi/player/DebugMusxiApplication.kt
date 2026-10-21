@@ -6,6 +6,10 @@ import tech.musxi.core.library.*
 
 /** Fixed synthetic loader failures for device acceptance. Entire class is absent from release. */
 class DebugMusxiApplication : MusxiApplication() {
+    override fun onFavoriteDiagnostic(platform: tech.musxi.core.account.Platform, operation: String, category: String) {
+        getSharedPreferences("p2-favorite-diagnostic", MODE_PRIVATE).edit()
+            .putString(platform.name.lowercase(), "${operation}_$category").apply()
+    }
     var validationActivity: android.app.Activity? = null
         private set
     override fun onCreate() {
@@ -66,10 +70,12 @@ class ValidationSources(private val delegate: PlaybackSourceProvider) : Playback
     var injectedCount = 0; private set
     var resolveCount = 0; private set
     @Volatile var lastPlatform = "NONE"; private set
+    @Volatile var lastMetadata: SongSummary? = null; private set
 
     fun arm(step: String) = synchronized(gate) {
         injectedCount = 0; resolveCount = 0
         lastPlatform = "NONE"
+        lastMetadata = null
         delayFailure = step == "fault_permission_delayed"
         when (step) {
             "fault_expired_once" -> { failure = PlaybackFailure.SOURCE_EXPIRED; remaining = 1 }
@@ -94,6 +100,6 @@ class ValidationSources(private val delegate: PlaybackSourceProvider) : Playback
             if (delayed) try { Thread.sleep(2_000) } catch (_: InterruptedException) { Thread.currentThread().interrupt() }
             throw PlaybackSourceException(reason)
         }
-        return delegate.resolve(mediaId, generation)
+        return delegate.resolve(mediaId, generation).also { lastMetadata = it.metadata }
     }
 }

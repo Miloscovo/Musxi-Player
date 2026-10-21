@@ -48,6 +48,9 @@ public final class NeteaseApi {
     static final String SONG_DETAIL = ORIGIN + "/weapi/v3/song/detail";
     static final String SEARCH = "https://interfacepc.music.163.com/eapi/cloudsearch/pc";
     static final String SONG_URL = "https://interfacepc.music.163.com/eapi/song/enhance/player/url/v1";
+    static final String LYRIC = "https://interfacepc.music.163.com/eapi/song/lyric";
+    static final String LIKED_IDS = "https://interfacepc.music.163.com/eapi/song/like/get";
+    static final String SET_LIKE = "https://interfacepc.music.163.com/eapi/radio/like";
     private final Transport transport;
     private final SecureRandom random = new SecureRandom();
     private final String deviceId = java.util.UUID.randomUUID().toString().replace("-", "");
@@ -175,10 +178,11 @@ public final class NeteaseApi {
     JSONObject authenticatedCall(String endpoint, JSONObject input, Session session) throws IOException {
         if (session == null || !validId(session.userId)) throw error("credentials", "请先完成网易云登录");
         if (!USER_PLAYLIST.equals(endpoint) && !PLAYLIST_DETAIL.equals(endpoint)
-                && !SONG_DETAIL.equals(endpoint) && !SONG_URL.equals(endpoint) && !SEARCH.equals(endpoint))
+                && !SONG_DETAIL.equals(endpoint) && !SONG_URL.equals(endpoint) && !SEARCH.equals(endpoint)
+                && !LYRIC.equals(endpoint) && !LIKED_IDS.equals(endpoint) && !SET_LIKE.equals(endpoint))
             throw error("endpoint", "请求目标不在允许的网易云官方接口范围内");
         Response response = call(endpoint, input, session.cookies);
-        requireSuccess(response.body);
+        if (!LYRIC.equals(endpoint)) requireSuccess(response.body);
         return response.body;
     }
 
@@ -341,7 +345,9 @@ public final class NeteaseApi {
         String endpoint = url.getProtocol() + "://" + url.getHost() + url.getPath();
         if ((!KEY.equals(endpoint) && !POLL.equals(endpoint) && !STATUS.equals(endpoint)
                 && !USER_PLAYLIST.equals(endpoint) && !PLAYLIST_DETAIL.equals(endpoint)
-                && !SONG_DETAIL.equals(endpoint) && !SONG_URL.equals(endpoint) && !SEARCH.equals(endpoint)) || url.getUserInfo() != null
+                && !SONG_DETAIL.equals(endpoint) && !SONG_URL.equals(endpoint) && !SEARCH.equals(endpoint)
+                && !LYRIC.equals(endpoint) && !LIKED_IDS.equals(endpoint) && !SET_LIKE.equals(endpoint))
+                || url.getUserInfo() != null
                 || url.getQuery() != null || url.getRef() != null || (url.getPort() != -1 && url.getPort() != 443))
             throw error("endpoint", "请求目标不在允许的网易云官方接口范围内");
     }

@@ -36,10 +36,15 @@ class FileLibraryPageStore(
         (read(file(owner, playlist), owner, playlist)?.pages?.get(offset) as? SavedLibraryPage<SongSummary>)
     }
     @Synchronized override fun writePlaylists(owner: String, offset: Int, value: SavedLibraryPage<PlaylistSummary>) = access {
-        write(owner, null, offset, SavedLibraryPage(value.page.copy(items = value.page.items.map { it.copy(coverUrl = null) }), value.fetchedAtEpochMs))
+        write(owner, null, offset, SavedLibraryPage(value.page.copy(items = value.page.items.map {
+            it.copy(coverUrl = ArtworkPolicy.sanitize(platform, it.coverUrl))
+        }), value.fetchedAtEpochMs))
     }
     @Synchronized override fun writeTracks(owner: String, playlist: MediaKey, offset: Int, value: SavedLibraryPage<SongSummary>) = access {
-        key(playlist, song = false); write(owner, playlist, offset, value)
+        key(playlist, song = false)
+        write(owner, playlist, offset, SavedLibraryPage(value.page.copy(items = value.page.items.map {
+            it.copy(coverUrl = ArtworkPolicy.sanitize(platform, it.coverUrl))
+        }), value.fetchedAtEpochMs))
     }
     @Synchronized override fun clear() = access { ensureDirectory(); ownedFiles().forEach(::erase) }
     override fun toString() = "FileLibraryPageStore(redacted)"
@@ -90,7 +95,9 @@ class FileLibraryPageStore(
         return try {
             if (bytes.size < 20) throw Invalid()
             val input = DataInputStream(ByteArrayInputStream(bytes))
-            if (input.readInt() != magic || input.readInt() != VERSION) throw Invalid()
+            if (input.readInt() != magic) throw Invalid()
+            val version = input.readInt()
+            if (version !in 1..VERSION) throw Invalid()
             val length = input.readInt()
             if (length != bytes.size - 20 || length < 0) throw Invalid()
             val checksum = input.readLong()
@@ -107,12 +114,16 @@ class FileLibraryPageStore(
                 val total = data.readInt().let { if (it == -1) null else it }
                 val size = data.readInt(); if (size !in 0..if (playlist == null) 30 else pageLimit) throw Invalid()
                 val items: List<*> = if (playlist == null) List(size) {
-                    PlaylistSummary(MediaKey(platform, data.readUTF()), data.readUTF(), null, data.readInt())
+                    val id = data.readUTF(); val title = data.readUTF(); val count = data.readInt()
+                    PlaylistSummary(MediaKey(platform, id), title,
+                        if (version >= 2) ArtworkPolicy.sanitize(platform, data.readUTF().ifEmpty { null }) else null, count)
                 } else List(size) {
                     val id = data.readUTF(); val title = data.readUTF()
                     val artists = data.readInt(); if (artists !in 0..100) throw Invalid()
                     val names = Collections.unmodifiableList(List(artists) { data.readUTF() })
-                    SongSummary(MediaKey(platform, id), title, names, data.readUTF(), data.readLong())
+                    val album = data.readUTF(); val duration = data.readLong()
+                    SongSummary(MediaKey(platform, id), title, names, album, duration,
+                        if (version >= 2) ArtworkPolicy.sanitize(platform, data.readUTF().ifEmpty { null }) else null)
                 }
                 val page = SavedLibraryPage(Page(Collections.unmodifiableList(items), next, total), time)
                 validatePage(playlist, offset, page)
@@ -143,10 +154,14 @@ class FileLibraryPageStore(
                 data.writeInt(offset); data.writeLong(saved.fetchedAtEpochMs)
                 data.writeInt(saved.page.nextOffset ?: -1); data.writeInt(saved.page.total ?: -1); data.writeInt(saved.page.items.size)
                 saved.page.items.forEach { item -> when (item) {
-                    is PlaylistSummary -> { data.writeUTF(item.key.id); data.writeUTF(item.title); data.writeInt(item.trackCount) }
+                    is PlaylistSummary -> {
+                        data.writeUTF(item.key.id); data.writeUTF(item.title); data.writeInt(item.trackCount)
+                        data.writeUTF(ArtworkPolicy.sanitize(platform, item.coverUrl).orEmpty())
+                    }
                     is SongSummary -> {
                         data.writeUTF(item.key.id); data.writeUTF(item.title); data.writeInt(item.artists.size)
                         item.artists.forEach(data::writeUTF); data.writeUTF(item.album); data.writeLong(item.durationMs)
+                        data.writeUTF(ArtworkPolicy.sanitize(platform, item.coverUrl).orEmpty())
                     }
                     else -> throw Invalid()
                 } }
@@ -255,7 +270,7 @@ class FileLibraryPageStore(
         private const val MAGIC = 0x4d585043
         private const val KUGOU_MAGIC = 0x4d584b43
         private const val QQ_MAGIC = 0x4d585143
-        private const val VERSION = 1
+        private const val VERSION = 2
         private const val MAX_FILE_BYTES = 2 * 1024 * 1024
         private const val MAX_TOTAL_BYTES = 16L * 1024 * 1024
         private const val MAX_COLLECTIONS = 128

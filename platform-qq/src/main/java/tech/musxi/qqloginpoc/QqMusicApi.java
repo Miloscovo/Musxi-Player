@@ -2,6 +2,7 @@ package tech.musxi.qqloginpoc;
 
 import org.json.JSONException;
 import org.json.JSONObject;
+import org.json.JSONArray;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -229,19 +230,42 @@ public final class QqMusicApi {
         }
     }
 
-    // Package-private bounded read-only music surface; login exchange retains its original limit.
+    // Package-private bounded music surface. The sole write exception is one-song favorites.
     JSONObject library(Session session, String module, String method, JSONObject param) throws IOException {
         String endpoint = module + ":" + method;
-        if (session == null || !java.util.Arrays.asList(
+        boolean favoriteWrite = favoriteWrite(module, method, param);
+        if (session == null || (!favoriteWrite && !java.util.Arrays.asList(
             "music.musicasset.PlaylistBaseRead:GetPlaylistByUin",
             "music.musicasset.PlaylistFavRead:CgiGetPlaylistFavInfo",
             "music.srfDissInfo.DissInfo:CgiGetDiss",
             "music.search.SearchCgiService:DoSearchForQQMusicMobile",
             "music.pf_song_detail_svr:get_song_detail_yqq",
+            "music.musichallSong.PlayLyricInfo:GetPlayLyricInfo",
             "music.vkey.GetVkey:UrlGetVkey",
-            "music.audioCdnDispatch.cdnDispatch:GetCdnDispatch").contains(endpoint))
+            "music.audioCdnDispatch.cdnDispatch:GetCdnDispatch").contains(endpoint)))
             throw error("endpoint", "Unsupported music operation");
         return cgi(module, method, param, session, 4 * 1024 * 1024);
+    }
+    private static boolean favoriteWrite(String module, String method, JSONObject param) {
+        if (!"music.musicasset.PlaylistDetailWrite".equals(module) ||
+            !("AddSonglist".equals(method) || "DelSonglist".equals(method)) ||
+            param == null || param.length() != 4) return false;
+        Object dirId = param.opt("dirId"), tid = param.opt("tid"), utf8 = param.opt("bFmtUtf8");
+        JSONArray songs = param.optJSONArray("v_songInfo");
+        if (!integer(dirId, 201, 201) || !integer(tid, 0, 0) ||
+            !Boolean.TRUE.equals(utf8) || songs == null || songs.length() != 1) return false;
+        JSONObject song = songs.optJSONObject(0);
+        if (song == null || song.length() != 2) return false;
+        Object songId = song.opt("songId"), songType = song.opt("songType");
+        return integer(songId, 1, 9_007_199_254_740_991L) && integer(songType, 0, 1_000_000);
+    }
+    private static boolean integer(Object value, long minimum, long maximum) {
+        if (!(value instanceof Number)) return false;
+        String raw = String.valueOf(value);
+        if (!raw.matches("(?:0|[1-9][0-9]{0,15})")) return false;
+        long number;
+        try { number = Long.parseLong(raw); } catch (NumberFormatException invalid) { return false; }
+        return number >= minimum && number <= maximum;
     }
     String encryptedUin(Session session) { return scalar(session.credential, "encryptUin"); }
     private JSONObject cgi(String module, String method, JSONObject param, Session session) throws IOException {
@@ -259,6 +283,15 @@ public final class QqMusicApi {
             put(comm, "qq", session.musicId); put(comm, "authst", key);
             String type = scalar(session.credential, "loginType");
             if (!type.isEmpty()) put(comm, "tmeLoginType", type);
+        }
+        // Upstream song detail explicitly selects WEB; favorites write uses the
+        // default Android profile. Keep this change confined to the single-song
+        // 201 write exception rather than changing already-verified read calls.
+        if (favoriteWrite(module, method, param)) {
+            comm = object("ct", "11", "cv", "20090008", "v", "20090008", "chid", "10003505",
+                "qq", session.musicId, "authst", key, "tmeAppID", "qqmusic",
+                "tmeLoginType", scalar(session.credential, "loginType"),
+                "traceid", "10002_" + session.musicId + "_" + (System.currentTimeMillis() / 1000));
         }
         JSONObject payload = object("comm", comm, "req_0", object("module", module, "method", method, "param", param));
         Map<String, String> headers = baseHeaders();
@@ -286,7 +319,7 @@ public final class QqMusicApi {
         if (code == 1000 || code == 104400 || code == 104401) throw error("expired", "QQ 音乐凭证无效或已过期，请重新登录");
         if (code == 2000) throw error("signature", "音乐接口要求额外签名，当前候选方案尚未通过");
         if (code == 104604 || code == 2001 || code == 100001) throw error("rate", "请求过于频繁，请稍后重试");
-        throw error(fallback, "QQ 音乐未接受请求，请在官方客户端检查账号状态");
+        throw new ApiException(fallback, "QQ 音乐未接受请求，请在官方客户端检查账号状态", "cgi_code_" + code);
     }
 
     private Response execute(Request request) throws IOException {
