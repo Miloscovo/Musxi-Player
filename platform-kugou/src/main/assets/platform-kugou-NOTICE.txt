@@ -1,0 +1,27 @@
+Musxi Player KuGou Android Login PoC
+Based on Musxi Player, Copyright (c) 2026 Miloscovo and contributors.
+Android login PoC additions: 2026-10-18. GPL-3.0-or-later.
+
+Request parameter/signature and RSA compatibility code is adapted from
+MakcRe/KuGouMusicApi 1.6.0, commit a5a98013cce79fe0ae2ad65fc84b68176ebcfc1e.
+Copyright (c) 2023 MakcRe. MIT license retained in licenses/KuGouMusicApi-MIT.txt.
+The included public protocol constants and public RSA key are upstream protocol
+material, not a user's private credentials. Platform authorization is separate
+from the source-code license. No account material is included in this APK.
+
+The optional direct-open URI follows the official public authorization page's
+openKugouApp script observed on 2026-10-18. This is a compatibility experiment,
+not a claim of official SDK integration or authorization by KuGou.
+
+Source for this work belongs with the matching APK:
+android/player/platform-kugou/ in the accompanying Musxi Player source checkout.
+This local experimental build has not been published as an official release.
+
+No additional third-party runtime library is bundled. Android framework classes
+are supplied by the device. JSON-java 20240303 is a host-test-only dependency,
+is public domain, and is not bundled in the APK.
+
+The read-only library adapter also adapts module/user_playlist.js,
+module/playlist_track_all_new.js, module/search.js, module/song_url.js and util/helper/request
+from the same pinned MIT source. Standard account-authorized playback only;
+trial media is rejected. No new production dependency is included.

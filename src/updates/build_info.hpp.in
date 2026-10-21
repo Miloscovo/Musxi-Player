@@ -1,6 +1,0 @@
-#pragma once
-namespace musxi::updates::configured {
-inline constexpr char Version[]="@PROJECT_VERSION@";
-inline constexpr char Commit[]="@MUSXI_UPDATE_COMMIT@";
-inline constexpr bool Release=@MUSXI_UPDATE_RELEASE@;
-}
