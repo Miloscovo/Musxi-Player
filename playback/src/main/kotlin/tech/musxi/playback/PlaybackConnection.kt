@@ -14,9 +14,12 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import java.util.concurrent.Executor
 import tech.musxi.core.library.PlaybackQueue
+import tech.musxi.core.account.Platform
+import tech.musxi.core.library.ArtworkPolicy
 import tech.musxi.core.playback.PlaybackFailure
 
 enum class PlaybackSuppression { NONE, AUDIO_FOCUS, OUTPUT, OTHER }
+enum class PlaybackRepeatMode { OFF, ONE, ALL }
 
 data class PlaybackState(
     val connected: Boolean = false,
@@ -40,6 +43,14 @@ data class PlaybackState(
     val title: String = "",
     val artist: String = "",
     val suppression: PlaybackSuppression = PlaybackSuppression.NONE,
+    val album: String = "",
+    val coverUrl: String? = null,
+    val queuePlatform: Platform? = null,
+    val sourcePlatform: Platform? = null,
+    val repeatMode: PlaybackRepeatMode = PlaybackRepeatMode.OFF,
+    val shuffleEnabled: Boolean = false,
+    val canSetPlaybackModes: Boolean = false,
+    val sourceKey: tech.musxi.core.library.MediaKey? = null,
 )
 
 /** Main-thread facade. Signed stream URLs stay in memory; diagnostics never include them. */
@@ -48,6 +59,7 @@ class PlaybackConnection(context: Context) {
     private val app = context.applicationContext
     private val mutable = MutableStateFlow(PlaybackState())
     val state = mutable.asStateFlow()
+    val queueState = queueSnapshot.asStateFlow()
     private var controller: MediaController? = null
     private val main = Handler(Looper.getMainLooper())
     private val progressTick = Runnable { controller?.let(::update) }
@@ -81,8 +93,40 @@ class PlaybackConnection(context: Context) {
         dispatch(player, QueueCommandMailbox.Action.Replace(queue), callback)
     }
 
+    /** Restores original queue metadata as paused/idle. No signed capability is restored or prepared. */
+    fun restoreQueue(queue: PlaybackQueue, saved: tech.musxi.core.playback.SavedPlaybackQueue,
+        callback: (Result<Unit>) -> Unit) {
+        val player = controller ?: return callback(Result.failure(IllegalStateException("Player unavailable")))
+        dispatch(player, QueueCommandMailbox.Action.Replace(queue, saved.positionMs, false,
+            saved.repeatMode, saved.shuffleEnabled), callback)
+    }
+
     fun toggle() { controller?.let { if (it.playbackState == Player.STATE_ENDED || !it.playWhenReady) resume() else it.pause() } }
     fun pause() { controller?.pause() }
+    fun removeQueueItem(index: Int, expectedRevision: Long, callback: (Result<Unit>) -> Unit = {}) =
+        editQueue(QueueCommandMailbox.Action.Edit(expectedRevision, tech.musxi.core.playback.QueueEdit.Remove(index)), callback)
+    fun moveQueueItem(from: Int, to: Int, expectedRevision: Long, callback: (Result<Unit>) -> Unit = {}) =
+        editQueue(QueueCommandMailbox.Action.Edit(expectedRevision, tech.musxi.core.playback.QueueEdit.Move(from, to)), callback)
+    fun clearQueue(expectedRevision: Long, callback: (Result<Unit>) -> Unit = {}) =
+        editQueue(QueueCommandMailbox.Action.Edit(expectedRevision, tech.musxi.core.playback.QueueEdit.Clear), callback)
+    /** Only same-platform, account-bound active queues; this never starts an empty queue. */
+    fun enqueue(song: tech.musxi.core.library.SongSummary, expectedRevision: Long, playNext: Boolean = false,
+        callback: (Result<Unit>) -> Unit = {}) = editQueue(QueueCommandMailbox.Action.Insert(expectedRevision, song, playNext), callback)
+
+    private fun editQueue(action: QueueCommandMailbox.Action, callback: (Result<Unit>) -> Unit) {
+        val player = controller ?: return callback(Result.failure(IllegalStateException("Player unavailable")))
+        dispatch(player, action, callback)
+    }
+    fun setRepeatMode(mode: PlaybackRepeatMode) {
+        controller?.takeIf { it.isCommandAvailable(Player.COMMAND_SET_REPEAT_MODE) }?.repeatMode = when (mode) {
+            PlaybackRepeatMode.OFF -> Player.REPEAT_MODE_OFF
+            PlaybackRepeatMode.ONE -> Player.REPEAT_MODE_ONE
+            PlaybackRepeatMode.ALL -> Player.REPEAT_MODE_ALL
+        }
+    }
+    fun setShuffleEnabled(enabled: Boolean) {
+        controller?.takeIf { it.isCommandAvailable(Player.COMMAND_SET_SHUFFLE_MODE) }?.shuffleModeEnabled = enabled
+    }
     fun resume() { controller?.let {
         if (it.playerError != null || (it.playbackState == Player.STATE_IDLE && it.mediaItemCount > 0)) it.prepare()
         if (it.playbackState == Player.STATE_ENDED) it.seekToDefaultPosition()
@@ -120,6 +164,11 @@ class PlaybackConnection(context: Context) {
         val extras = (player as? MediaController)?.sessionExtras ?: Bundle.EMPTY
         fun category(key: String) = extras.getString(key)?.let { name -> PlaybackFailure.entries.firstOrNull { it.name == name } }
         val failure = category(MusxiPlaybackService.EXTRA_FAILURE)
+        // Read one item's service-owned snapshot. In-band stream tags and session extras
+        // may describe a different source/item while the controller changes its timeline.
+        val metadata = player.currentMediaItem?.mediaMetadata
+        val queuePlatform = PlaybackMetadataSnapshot.platform(metadata?.extras?.getString(PlaybackMetadataSnapshot.EXTRA_QUEUE_PLATFORM))
+        val sourcePlatform = PlaybackMetadataSnapshot.platform(metadata?.extras?.getString(PlaybackMetadataSnapshot.EXTRA_SOURCE_PLATFORM))
         mutable.value = PlaybackState(true, player.isPlaying,
             player.playbackState == Player.STATE_BUFFERING, player.currentMediaItem?.mediaId,
             if (failure != null || player.playerError != null) "播放未完成，请重试或选择其他歌曲" else null,
@@ -128,13 +177,30 @@ class PlaybackConnection(context: Context) {
             player.playWhenReady, player.playbackState == Player.STATE_ENDED,
             player.hasNextMediaItem(), player.hasPreviousMediaItem(), failure, category(MusxiPlaybackService.EXTRA_SKIPPED),
             extras.getInt(MusxiPlaybackService.EXTRA_SKIP_COUNT), extras.getInt(MusxiPlaybackService.EXTRA_REFRESH_COUNT),
-            extras.getInt(MusxiPlaybackService.EXTRA_AUTO_COUNT), player.mediaMetadata.title?.toString().orEmpty(), player.mediaMetadata.artist?.toString().orEmpty(),
+            extras.getInt(MusxiPlaybackService.EXTRA_AUTO_COUNT), metadata?.title?.toString().orEmpty(), metadata?.artist?.toString().orEmpty(),
             when (player.playbackSuppressionReason) {
                 Player.PLAYBACK_SUPPRESSION_REASON_NONE -> PlaybackSuppression.NONE
                 Player.PLAYBACK_SUPPRESSION_REASON_TRANSIENT_AUDIO_FOCUS_LOSS -> PlaybackSuppression.AUDIO_FOCUS
                 Player.PLAYBACK_SUPPRESSION_REASON_UNSUITABLE_AUDIO_OUTPUT -> PlaybackSuppression.OUTPUT
                 else -> PlaybackSuppression.OTHER
-            })
+            },
+            album = metadata?.albumTitle?.toString().orEmpty(),
+            coverUrl = sourcePlatform?.let { ArtworkPolicy.sanitize(it, metadata?.artworkUri?.toString()) },
+            queuePlatform = queuePlatform,
+            sourcePlatform = sourcePlatform,
+            repeatMode = when (player.repeatMode) {
+                Player.REPEAT_MODE_ONE -> PlaybackRepeatMode.ONE
+                Player.REPEAT_MODE_ALL -> PlaybackRepeatMode.ALL
+                else -> PlaybackRepeatMode.OFF
+            },
+            shuffleEnabled = player.shuffleModeEnabled,
+            sourceKey = sourcePlatform?.let { platform ->
+                metadata?.extras?.getString(PlaybackMetadataSnapshot.EXTRA_SOURCE_ID)?.let { id ->
+                    runCatching { tech.musxi.core.library.MediaKey(platform, id) }.getOrNull()
+                }
+            },
+            canSetPlaybackModes = player.isCommandAvailable(Player.COMMAND_SET_REPEAT_MODE) &&
+                player.isCommandAvailable(Player.COMMAND_SET_SHUFFLE_MODE))
         if (player.isPlaying) main.postDelayed(progressTick, 500)
     }
 }

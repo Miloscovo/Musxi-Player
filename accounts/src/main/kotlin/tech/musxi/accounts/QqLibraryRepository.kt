@@ -8,6 +8,9 @@ import tech.musxi.qqloginpoc.QqLibraryApi
 
 /** Official account-bound requests. No session or raw platform response reaches a page. */
 class QqLibraryRepository(private val accounts: AccountRepository) : LibraryPageFetch {
+    private fun summary(song: QqLibraryApi.Song) = SongSummary(
+        MediaKey(Platform.QQ, song.id), song.name, song.artists, song.album, song.durationMs,
+        ArtworkPolicy.sanitize(Platform.QQ, song.coverUrl))
     private val queueRevision = java.util.concurrent.atomic.AtomicLong()
     fun cancelQueueLoading() { queueRevision.incrementAndGet() }
     class LibraryFailure(category: String, val diagnostic: String? = null) : LibraryPageFailure(category)
@@ -16,7 +19,7 @@ class QqLibraryRepository(private val accounts: AccountRepository) : LibraryPage
             val code = (it as? LibraryFailure)?.category ?: (it as? QqMusicApi.ApiException)?.code
             val detail = (it as? QqMusicApi.ApiException)?.diagnostic?.takeIf { fixed -> fixed in setOf(
                 "vkey_denied_104003", "vkey_denied_104004", "vkey_denied_104013", "vkey_denied_other",
-                "filename_mismatch", "encrypted_audio", "preview_audio", "purl_path_mismatch") }
+                "filename_mismatch", "encrypted_audio", "preview_audio", "purl_path_mismatch") || fixed.matches(Regex("cgi_code_-?[0-9]{1,10}")) }
             Result.failure(LibraryFailure(if (code in setOf("expired", "network", "risk", "rate", "protocol", "identity", "limit",
                     "incomplete", "permission", "unavailable", "endpoint", "platform", "http", "timeout", "source_expired",
                     "signature", "request", "account_changed")) code!! else "unclassified", detail))
@@ -26,7 +29,8 @@ class QqLibraryRepository(private val accounts: AccountRepository) : LibraryPage
         val generation = accounts.states.value.getValue(Platform.QQ).generation
         accounts.withQqSession({ api, session ->
             val page = QqLibraryApi(api) { accounts.isQqGenerationConnected(generation) }.playlists(session, offset, 30)
-            Page(page.items.map { PlaylistSummary(MediaKey(Platform.QQ, it.id), it.name, null, it.trackCount) },
+            Page(page.items.map { PlaylistSummary(MediaKey(Platform.QQ, it.id), it.name,
+                ArtworkPolicy.sanitize(Platform.QQ, it.coverUrl), it.trackCount) },
                 page.nextOffset.takeIf { it >= 0 }, page.total.takeIf { it >= 0 })
         }, safe(result))
     }
@@ -35,7 +39,7 @@ class QqLibraryRepository(private val accounts: AccountRepository) : LibraryPage
         val generation = accounts.states.value.getValue(Platform.QQ).generation
         accounts.withQqSession({ api, session ->
             val page = QqLibraryApi(api) { accounts.isQqGenerationConnected(generation) }.tracks(session, playlist.id, offset, 30)
-            Page(page.items.map { SongSummary(MediaKey(Platform.QQ, it.id), it.name, it.artists, it.album, it.durationMs) },
+            Page(page.items.map(::summary),
                 page.nextOffset.takeIf { it >= 0 }, page.total.takeIf { it >= 0 })
         }, safe(result))
     }
@@ -44,7 +48,19 @@ class QqLibraryRepository(private val accounts: AccountRepository) : LibraryPage
         accounts.withQqSession({ api, session ->
             QqLibraryApi(api) { accounts.isQqGenerationConnected(generation) }.search(session, keywords)
                 .take(10)
-                .map { SongSummary(MediaKey(Platform.QQ, it.id), it.name, it.artists, it.album, it.durationMs) }
+                .map(::summary)
+        }, safe(result))
+    }
+    fun searchPage(keywords: String, offset: Int, result: (Result<Page<SongSummary>>) -> Unit,
+        isCurrent: () -> Boolean = { true }) {
+        val generation = accounts.states.value.getValue(Platform.QQ).generation
+        accounts.withQqSession({ api, session ->
+            if (!isCurrent()) throw LibraryFailure("cancelled")
+            if (offset !in 0..19_980 || offset % 30 != 0) throw LibraryFailure("limit")
+            val page = QqLibraryApi(api) { accounts.isQqGenerationConnected(generation) }
+                .search(session, keywords, offset, 30)
+            if (!isCurrent()) throw LibraryFailure("cancelled")
+            Page(page.items.map(::summary), page.nextOffset.takeIf { it >= 0 }, page.total.takeIf { it >= 0 })
         }, safe(result))
     }
     fun song(key: MediaKey, result: (Result<SongSummary>) -> Unit) {
@@ -52,7 +68,7 @@ class QqLibraryRepository(private val accounts: AccountRepository) : LibraryPage
         val generation = accounts.states.value.getValue(Platform.QQ).generation
         accounts.withQqSession({ api, session ->
             val item = QqLibraryApi(api) { accounts.isQqGenerationConnected(generation) }.song(session, key.id)
-            SongSummary(MediaKey(Platform.QQ, item.id), item.name, item.artists, item.album, item.durationMs)
+            summary(item)
         }, safe(result))
     }
     fun queue(playlist: MediaKey, startSong: MediaKey, result: (Result<PlaybackQueue>) -> Unit) {
@@ -74,7 +90,7 @@ class QqLibraryRepository(private val accounts: AccountRepository) : LibraryPage
                     expectedTotal = page.total
                     if (page.total > 20_000) throw LibraryFailure("limit")
                 }
-                songs += page.items.map { SongSummary(MediaKey(Platform.QQ, it.id), it.name, it.artists, it.album, it.durationMs) }
+                songs += page.items.map(::summary)
                 if (songs.size > 20_000) throw LibraryFailure("limit")
                 if (page.nextOffset < 0) break
                 if (page.items.isEmpty() || page.nextOffset != offset + page.items.size) throw LibraryFailure("incomplete")

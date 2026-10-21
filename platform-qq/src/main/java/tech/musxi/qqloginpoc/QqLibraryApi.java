@@ -5,23 +5,34 @@ import org.json.JSONObject;
 import java.io.IOException;
 import java.net.URI;
 import java.net.HttpURLConnection;
+import java.nio.ByteBuffer;
+import java.nio.charset.CharacterCodingException;
+import java.nio.charset.CodingErrorAction;
+import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.function.BooleanSupplier;
 
-/** Read-only native adapter of QQMusicApi 0.8.1 modules/{user,songlist,song}.py,
+/** Read-only native adapter of QQMusicApi 0.8.1 modules/{user,songlist,song,lyric}.py,
  * commit 3fc57f02e4eddb68a069bba4e0e12a7893f2a814, GPL-3.0-or-later.
  * Credentials and signed URLs never become library DTOs. */
 public final class QqLibraryApi {
     public static final class Playlist {
-        public final String id, name; public final int trackCount;
-        Playlist(String id,String name,int count){this.id=id;this.name=name;trackCount=count;}
+        public final String id, name, coverUrl; public final int trackCount;
+        Playlist(String id,String name,int count){this(id,name,count,null);}
+        Playlist(String id,String name,int count,String coverUrl){this.id=id;this.name=name;trackCount=count;this.coverUrl=coverUrl;}
     }
     public static final class Song {
-        public final String id,name,album; public final List<String> artists; public final long durationMs;
-        final String mediaMid; final int type;
+        public final String id,name,album,coverUrl; public final List<String> artists; public final long durationMs;
+        final String mediaMid; final int type; final long numericId;
         Song(String id,String name,List<String> artists,String album,long duration,String mediaMid,int type){
+            this(id,name,artists,album,duration,mediaMid,type,null);
+        }
+        Song(String id,String name,List<String> artists,String album,long duration,String mediaMid,int type,String coverUrl){
+            this(id,0,name,artists,album,duration,mediaMid,type,coverUrl);
+        }
+        Song(String id,long numericId,String name,List<String> artists,String album,long duration,String mediaMid,int type,String coverUrl){
             this.id=id;this.name=name;this.artists=Collections.unmodifiableList(new ArrayList<>(artists));this.album=album;
-            durationMs=duration;this.mediaMid=mediaMid;this.type=type;
+            durationMs=duration;this.mediaMid=mediaMid;this.type=type;this.numericId=numericId;this.coverUrl=coverUrl;
         }
     }
     public static final class Page<T> {
@@ -86,7 +97,8 @@ public final class QqLibraryApi {
             int dir=number(first(row,"dirId","dirid"),1_000_000);
             if(tid.equals("0") && dir!=201)throw error("identity");
             String id=tid+"_"+dir;playlistParts(id);
-            Playlist list=new Playlist(id,clean(first(row,"title","dirName","dissname","name"),"未命名歌单"),number(first(row,"songNum","songnum","song_cnt"),1_000_000));
+            Playlist list=new Playlist(id,clean(first(row,"title","dirName","dissname","name"),"未命名歌单"),number(first(row,"songNum","songnum","song_cnt"),1_000_000),
+                image(first(row,"cover_url_big","cover_url_medium","cover_url_small","picurl","picUrl","logo","cover","coverUrl")));
             lists.putIfAbsent(id,list);
         }
     }
@@ -102,6 +114,7 @@ public final class QqLibraryApi {
         if(data.has("subcode") && number(data.opt("subcode"),Integer.MAX_VALUE)!=0)throw error("permission");
         JSONObject info=data.optJSONObject("dirinfo");if(info==null)throw error("protocol");
         Object echoed=first(info,"id","tid","dissid");
+        // tid=0 is QQ's own-likes alias; its response may echo the real backing TID.
         if(echoed!=null && !expected[0].equals("0") && !numeric(echoed,true).equals(expected[0]))throw error("identity");
         Object dir=first(info,"dirid","dirId");
         if(dir!=null && number(dir,1_000_000)!=Integer.parseInt(expected[1]))throw error("identity");
@@ -122,19 +135,27 @@ public final class QqLibraryApi {
         List<String> artists=new ArrayList<>();JSONArray singer=row.optJSONArray("singer");
         if(singer!=null){if(singer.length()>100)throw error("limit");for(int i=0;i<singer.length();i++){
             JSONObject artist=singer.optJSONObject(i);if(artist==null)throw error("protocol");artists.add(clean(artist.opt("name"),"未知歌手"));}}
-        return new Song(mid,clean(first(row,"name","title"),"暂不可用歌曲"),artists,album==null?"":clean(album.opt("name"),""),
-            (long)number(row.opt("interval"),604_800)*1000,media,row.has("type")?number(row.opt("type"),100):0);
+        long numericId=row.has("id")?Long.parseLong(numeric(row.opt("id"),false)):0;
+        return new Song(mid,numericId,clean(first(row,"name","title"),"暂不可用歌曲"),artists,album==null?"":clean(album.opt("name"),""),
+            (long)number(row.opt("interval"),604_800)*1000,media,row.has("type")?number(row.opt("type"),100):0,albumCover(row,album));
     }
     public List<Song> search(QqMusicApi.Session session,String keywords) throws IOException {
+        return parseSearch(searchResponse(session,keywords,0,10));
+    }
+    public Page<Song> search(QqMusicApi.Session session,String keywords,int offset,int limit) throws IOException {
+        searchBounds(offset,limit);
+        return parseSearch(searchResponse(session,keywords,offset,limit),offset,limit);
+    }
+    private JSONObject searchResponse(QqMusicApi.Session session,String keywords,int offset,int limit) throws IOException {
         if(session==null)throw error("identity");
         if(keywords==null)throw error("request");
         String query=keywords.trim();
         if(query.isEmpty() || query.codePoints().anyMatch(Character::isISOControl) || query.codePointCount(0,query.length())>120)
             throw error("request");
         String searchid=Long.toString(new java.security.SecureRandom().nextLong() & Long.MAX_VALUE);
-        JSONObject param=obj("query",query,"search_type",0,"num_per_page",10,"page_num",1,
+        JSONObject param=obj("query",query,"search_type",0,"num_per_page",limit,"page_num",offset/limit+1,
             "highlight",false,"grp",true,"selectors",new JSONObject(),"vec_selectors",new JSONArray(),"searchid",searchid);
-        return parseSearch(call(session,"music.search.SearchCgiService","DoSearchForQQMusicMobile",param));
+        return call(session,"music.search.SearchCgiService","DoSearchForQQMusicMobile",param);
     }
     static List<Song> parseSearch(JSONObject data) throws IOException {
         JSONObject body=data.optJSONObject("body");if(body==null)throw error("protocol");
@@ -152,6 +173,51 @@ public final class QqLibraryApi {
         }
         return Collections.unmodifiableList(songs);
     }
+    static Page<Song> parseSearch(JSONObject data,int offset,int limit) throws IOException {
+        searchBounds(offset,limit);
+        JSONObject body=data.optJSONObject("body"),meta=data.optJSONObject("meta");
+        if(body==null || meta==null)throw error("protocol");
+        JSONArray rows=array(body,"item_song");if(rows.length()>limit)throw error("limit");
+        if(number(meta.opt("perpage"),Integer.MAX_VALUE)!=limit)throw error("protocol");
+        int page=offset/limit+1;
+        String next=text(meta.opt("nextpage"));
+        if(!next.equals("-1") && !next.equals(Integer.toString(page+1)))throw error("protocol");
+        for(String field:new String[]{"curpage","page_num"})
+            if(meta.has(field) && number(meta.opt(field),Integer.MAX_VALUE)!=page)throw error("protocol");
+        int total=meta.has("sum")?number(meta.opt("sum"),Integer.MAX_VALUE):-1;
+        int end=offset+rows.length();boolean more=!next.equals("-1");
+        if(end>20_000 || (more && offset+limit>19_980))throw error("limit");
+        if((more && rows.length()==0) || (more && rows.length()<limit) ||
+            (total>=0 && ((rows.length()>0 && end>total) || (more && end>=total) || (!more && end<total))))throw error("incomplete");
+        List<Song> songs=new ArrayList<>();Set<String> ids=new HashSet<>();
+        for(int i=0;i<rows.length();i++){
+            JSONObject row=rows.optJSONObject(i);if(row==null)throw error("protocol");
+            Song item=song(row);if(!ids.add(item.id))throw error("identity");songs.add(item);
+        }
+        return new Page<>(songs,more?offset+limit:-1,total);
+    }
+    private static void searchBounds(int offset,int limit) throws IOException {
+        if(offset<0 || offset>19_980 || limit<1 || limit>100 || offset%limit!=0)throw error("limit");
+    }
+    private static String albumCover(JSONObject row,JSONObject album) {
+        String cover=album==null?null:image(first(album,"picUrl","picurl","cover_url","cover"));
+        if(cover==null)cover=image(first(row,"album_pic","albumPic","cover_url","picurl"));
+        if(cover!=null)return cover;
+        String mid=text(album==null?null:first(album,"mid","pmid"));
+        if(mid.isEmpty())mid=text(first(row,"albummid","albumMID"));
+        return mid.matches("[A-Za-z0-9]{14}")?"https://y.gtimg.cn/music/photo_new/T002R300x300M000"+mid+".jpg":null;
+    }
+    private static String image(Object value) {
+        if(!(value instanceof String))return null;String url=(String)value;
+        try{URI uri=new URI(url);String host=uri.getHost();
+            if(host==null || !Arrays.asList("y.gtimg.cn","qpic.y.qq.com","i.gtimg.cn").contains(host.toLowerCase(Locale.ROOT)) ||
+                url.length()>2048 || url.codePoints().anyMatch(c->Character.isWhitespace(c) || Character.isISOControl(c)) ||
+                !("https".equals(uri.getScheme()) || "http".equals(uri.getScheme())) || uri.getRawUserInfo()!=null ||
+                uri.getPort()!=-1 || uri.getRawQuery()!=null || uri.getRawFragment()!=null || !host.equalsIgnoreCase(uri.getRawAuthority()) ||
+                uri.getRawPath()==null || uri.getRawPath().length()<=1 || !uri.normalize().getRawPath().equals(uri.getRawPath()))return null;
+            return "https://"+host.toLowerCase(Locale.ROOT)+uri.getRawPath();
+        }catch(Exception invalid){return null;}
+    }
     public Song song(QqMusicApi.Session session,String mid) throws IOException {
         if(session==null)throw error("identity");
         requireMid(mid);
@@ -159,6 +225,120 @@ public final class QqLibraryApi {
         JSONObject track=detail.optJSONObject("track_info");if(track==null)throw error("protocol");
         Song song=song(track);if(!mid.equals(song.id))throw error("identity");
         return song;
+    }
+    public List<String> likedIds(QqMusicApi.Session session) throws IOException {
+        if(session==null)throw error("identity");
+        ArrayList<String> ids=new ArrayList<>();HashSet<String> seen=new HashSet<>();
+        int offset=0;int expectedTotal=-1;
+        while(true){
+            Page<Song> page=tracks(session,"0_201",offset,100);
+            if(expectedTotal<0)expectedTotal=page.total;
+            else if(expectedTotal!=page.total)throw error("incomplete");
+            if(page.total>20_000)throw error("limit");
+            if(page.items.isEmpty() && expectedTotal!=0)throw error("incomplete");
+            for(Song item:page.items){if(!seen.add(item.id))throw error("incomplete");ids.add(item.id);}
+            if(ids.size()>20_000)throw error("limit");
+            if(page.nextOffset<0){
+                if(ids.size()!=expectedTotal)throw error("incomplete");
+                return Collections.unmodifiableList(ids);
+            }
+            if(page.nextOffset!=offset+page.items.size())throw error("protocol");
+            offset=page.nextOffset;
+        }
+    }
+    public void setLiked(QqMusicApi.Session session,String songMid,boolean liked) throws IOException {
+        if(session==null)throw error("identity");
+        requireMid(songMid);
+        JSONObject detail=call(session,"music.pf_song_detail_svr","get_song_detail_yqq",obj("song_mid",songMid));
+        JSONObject track=detail.optJSONObject("track_info");if(track==null)throw error("protocol");
+        Song song=song(track);if(!songMid.equals(song.id) || song.numericId<=0 || !track.has("type"))throw error("identity");
+        JSONArray info=new JSONArray().put(obj("songId",song.numericId,"songType",song.type));
+        JSONObject param=obj("dirId",201,"tid",0,"bFmtUtf8",true,"v_songInfo",info);
+        JSONObject result=call(session,"music.musicasset.PlaylistDetailWrite",liked?"AddSonglist":"DelSonglist",param);
+        Object ret=result.opt("retCode");
+        if(!(ret instanceof Number))throw error("protocol");
+        String raw=String.valueOf(ret);
+        if(!raw.matches("(?:0|80092)"))throw error("permission");
+        int code=Integer.parseInt(raw);
+        if(code==80092)throw error("permission");
+    }
+    public String lyrics(QqMusicApi.Session session,String songMid) throws IOException {
+        if(session==null)throw error("identity");
+        requireMid(songMid);
+        JSONObject response=call(session,"music.musichallSong.PlayLyricInfo","GetPlayLyricInfo",
+            obj("crypt",0,"lrc_t",0,"qrc",0,"qrc_t",0,"roma",0,"roma_t",0,
+                "trans",0,"trans_t",0,"needSingingAnnotations",false,"type",1,"songMid",songMid));
+        Object value=response.opt("lyric");
+        if(value==null || value==JSONObject.NULL || "".equals(value))return "";
+        if(!(value instanceof String))throw error("protocol");
+        return parseLyrics((String)value);
+    }
+    static String parseLyrics(String value) throws IOException {
+        if(value==null)throw error("protocol");
+        if(value.length()>700*1024)throw error("limit");
+        int bytes=value.getBytes(StandardCharsets.UTF_8).length;
+        if(bytes>700*1024 || bytes>512*1024 && !base64Alphabet(value))throw error("limit");
+        if(looksHexCipher(value))throw error("protocol");
+        if(bytes<=512*1024){
+            String decoded=decodeLyricBase64(value,false);
+            return decoded!=null?decoded:value;
+        }
+        if(bytes>700*1024)throw error("limit");
+        String decoded=decodeLyricBase64(value,true);
+        if(decoded==null)throw error("limit");
+        return decoded;
+    }
+    private static String decodeLyricBase64(String value,boolean required) throws IOException {
+        if(!base64Alphabet(value)) {
+            if(required)throw error("protocol");
+            return null;
+        }
+        byte[] decoded;
+        try{decoded=Base64.getDecoder().decode(value);}
+        catch(IllegalArgumentException invalid){
+            if(required || value.endsWith("="))throw error("protocol");
+            return null;
+        }
+        if(decoded.length>512*1024)throw error("limit");
+        String text;
+        try{
+            text=StandardCharsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT)
+                .onUnmappableCharacter(CodingErrorAction.REPORT).decode(ByteBuffer.wrap(decoded)).toString();
+        }catch(CharacterCodingException invalid){
+            if(required)throw error("protocol");
+            return null;
+        }
+        if(text.startsWith("\uFEFF"))text=text.substring(1);
+        if(!timestampedLrc(text)){
+            if(required)throw error("protocol");
+            return null;
+        }
+        return text;
+    }
+    private static boolean base64Alphabet(String value) {
+        if(value.length()<4 || value.length()%4==1)return false;
+        int padding=0;
+        for(int i=0;i<value.length();i++){
+            char c=value.charAt(i);
+            if(c=='='){padding++;if(padding>2)return false;}
+            else if(padding!=0 || !(c>='A'&&c<='Z' || c>='a'&&c<='z' || c>='0'&&c<='9' || c=='+' || c=='/'))return false;
+        }
+        return true;
+    }
+    private static boolean timestampedLrc(String value) {
+        return java.util.regex.Pattern.compile("(?m)^\\s*\\[[0-9]{1,3}:[0-5][0-9](?:[.:][0-9]{1,3})?\\]")
+            .matcher(value).find();
+    }
+    private static boolean looksHexCipher(String value) {
+        String text=value.trim();int digits=0;
+        if(text.startsWith("0x") || text.startsWith("0X"))text=text.substring(2);
+        for(int i=0;i<text.length();i++){
+            char c=text.charAt(i);
+            if(Character.isWhitespace(c))continue;
+            if(!(c>='0'&&c<='9' || c>='a'&&c<='f' || c>='A'&&c<='F'))return false;
+            digits++;
+        }
+        return digits>=32 && digits%2==0;
     }
     public Audio audio(QqMusicApi.Session session,String mid,long now) throws IOException {
         Song song=song(session,mid);

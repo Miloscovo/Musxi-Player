@@ -36,12 +36,16 @@ public final class NeteaseLibraryApi {
         }
     }
     public static final class Track {
-        public final String id, name, album;
+        public final String id, name, album, coverUrl;
         public final List<String> artists;
         public final long durationMs;
         public final boolean available;
         Track(String id, String name, String album, List<String> artists, long durationMs, boolean available) {
+            this(id, name, album, artists, durationMs, available, null);
+        }
+        Track(String id, String name, String album, List<String> artists, long durationMs, boolean available, String coverUrl) {
             this.id = id; this.name = name; this.album = album;
+            this.coverUrl = coverUrl;
             this.artists = Collections.unmodifiableList(new ArrayList<>(artists));
             this.durationMs = durationMs; this.available = available;
         }
@@ -97,12 +101,20 @@ public final class NeteaseLibraryApi {
      * Pinned module/cloudsearch.js: /api/cloudsearch/pc, using the existing EAPI transport.
      */
     public List<Track> search(NeteaseApi.Session session, String keywords) throws IOException {
+        return parseSearch(searchResponse(session, keywords, 0, 10));
+    }
+
+    public Page<Track> search(NeteaseApi.Session session, String keywords, int offset, int limit) throws IOException {
+        searchBounds(offset, limit);
+        return parseSearch(searchResponse(session, keywords, offset, limit), offset, limit);
+    }
+
+    private JSONObject searchResponse(NeteaseApi.Session session, String keywords, int offset, int limit) throws IOException {
         if (keywords == null) throw error("request");
         String query = keywords.replaceAll("[\\p{Cc}]", "").trim();
         if (query.isEmpty() || query.length() > 128) throw error("request");
-        JSONObject body = api.authenticatedCall(NeteaseApi.SEARCH,
-                json("s", query, "type", 1, "limit", 10, "offset", 0, "total", true), session);
-        return parseSearch(body);
+        return api.authenticatedCall(NeteaseApi.SEARCH,
+                json("s", query, "type", 1, "limit", limit, "offset", offset, "total", true), session);
     }
 
     public Audio audio(NeteaseApi.Session session, String trackId, long nowElapsedMs) throws IOException {
@@ -110,6 +122,28 @@ public final class NeteaseLibraryApi {
         JSONObject body = api.authenticatedCall(NeteaseApi.SONG_URL,
                 json("ids", "[" + trackId + "]", "level", "standard", "encodeType", "flac"), session);
         return parseAudio(body, trackId, nowElapsedMs);
+    }
+
+    /** Standard LRC only, using the pinned module/lyric.js EAPI request. */
+    public String lyrics(NeteaseApi.Session session, String trackId) throws IOException {
+        id(trackId);
+        JSONObject body = api.authenticatedCall(NeteaseApi.LYRIC,
+                json("id", trackId, "tv", -1, "lv", -1, "rv", -1, "kv", -1, "_nmclfl", 1), session);
+        return parseLyrics(body);
+    }
+
+    /** Read the pinned module/likelist.js EAPI snapshot for the current session account. */
+    public List<String> likedIds(NeteaseApi.Session session) throws IOException {
+        if (session == null) throw error("credentials");
+        JSONObject body = api.authenticatedCall(NeteaseApi.LIKED_IDS, json("uid", session.userId), session);
+        return parseLikedIds(body);
+    }
+
+    /** Submit one pinned module/like.js EAPI change; callers re-read likedIds to confirm it. */
+    public void setLiked(NeteaseApi.Session session, String songId, boolean liked) throws IOException {
+        id(songId);
+        api.authenticatedCall(NeteaseApi.SET_LIKE,
+                json("alg", "itembased", "trackId", songId, "like", liked, "time", "3"), session);
     }
 
     static Page<Playlist> parsePlaylists(JSONObject body, int offset, int limit) throws IOException {
@@ -170,7 +204,7 @@ public final class NeteaseLibraryApi {
             JSONObject album = row.optJSONObject("al");
             if (album == null) throw error("protocol");
             out.put(key, new Track(key, name(row.opt("name"), "未命名歌曲"), name(album.opt("name"), "未知专辑"),
-                    artists, nonNegative(row.opt("dt"), 86_400_000), true));
+                    artists, nonNegative(row.opt("dt"), 86_400_000), true, image(album.opt("picUrl"))));
         }
         List<Track> ordered = new ArrayList<>();
         for (String key : selected) ordered.add(out.containsKey(key) ? out.get(key)
@@ -197,6 +231,34 @@ public final class NeteaseLibraryApi {
         return Collections.unmodifiableList(parseTracks(result, selected));
     }
 
+    static Page<Track> parseSearch(JSONObject body, int offset, int limit) throws IOException {
+        searchBounds(offset, limit);
+        JSONObject result = body.optJSONObject("result");
+        if (result == null) throw error("protocol");
+        int total = (int) nonNegative(result.opt("songCount"), Integer.MAX_VALUE);
+        JSONArray rows = result.optJSONArray("songs");
+        if (rows == null && !result.has("songs") && total == 0) rows = new JSONArray();
+        if (rows == null) throw error("protocol");
+        if (rows.length() > limit) throw error("limit");
+        int end = offset + rows.length();
+        boolean more = end < total;
+        if (end > 20_000 || (more && offset + limit > 19_980)) throw error("limit");
+        if ((rows.length() > 0 && end > total) || (rows.length() == 0 && offset < total) ||
+                (rows.length() < limit && end < total)) throw error("incomplete");
+        List<String> selected = new ArrayList<>();
+        for (int i = 0; i < rows.length(); i++) {
+            JSONObject row = rows.optJSONObject(i);
+            if (row == null) throw error("protocol");
+            selected.add(id(row.opt("id")));
+        }
+        List<Track> items = rows.length() == 0 ? Collections.emptyList() : parseTracks(result, selected);
+        return new Page<>(items, more ? offset + limit : -1, total);
+    }
+
+    private static void searchBounds(int offset, int limit) throws IOException {
+        if (limit < 1 || limit > 100 || offset < 0 || offset > 19_980 || offset % limit != 0) throw error("limit");
+    }
+
     static Audio parseAudio(JSONObject body, String trackId, long nowElapsedMs) throws IOException {
         id(trackId);
         JSONArray rows = body.optJSONArray("data");
@@ -211,6 +273,40 @@ public final class NeteaseLibraryApi {
         long expires = nonNegative(row.opt("expi"), 86_400);
         if (expires == 0 || nowElapsedMs < 0 || nowElapsedMs > Long.MAX_VALUE - expires * 1000L) throw error("protocol");
         return new Audio(trackId, url, bitrate, nowElapsedMs + expires * 1000L);
+    }
+
+    static String parseLyrics(JSONObject body) throws IOException {
+        if (body == null || NeteaseApi.responseCode(body) != 200) throw error("protocol");
+        for (String flag : new String[]{"nolyric", "uncollected"})
+            if (body.has(flag) && !(body.opt(flag) instanceof Boolean)) throw error("protocol");
+        boolean flagged = Boolean.TRUE.equals(body.opt("nolyric"))
+                || Boolean.TRUE.equals(body.opt("uncollected"));
+        JSONObject lrc = body.optJSONObject("lrc");
+        if (lrc == null) {
+            if (flagged) return "";
+            throw error("protocol");
+        }
+        Object value = lrc.opt("lyric");
+        if (!(value instanceof String)) throw error("protocol");
+        String lyric = (String)value;
+        if (lyric.getBytes(java.nio.charset.StandardCharsets.UTF_8).length > 512 * 1024)
+            throw error("limit");
+        return flagged || lyric.isEmpty() ? "" : lyric;
+    }
+
+    static List<String> parseLikedIds(JSONObject body) throws IOException {
+        if (body == null || NeteaseApi.responseCode(body) != 200) throw error("protocol");
+        JSONArray rows = body.optJSONArray("ids");
+        if (rows == null) throw error("protocol");
+        if (rows.length() > 20_000) throw error("limit");
+        List<String> ids = new ArrayList<>();
+        java.util.HashSet<String> seen = new java.util.HashSet<>();
+        for (int i = 0; i < rows.length(); i++) {
+            String key = id(rows.opt(i));
+            if (!seen.add(key)) throw error("protocol");
+            ids.add(key);
+        }
+        return Collections.unmodifiableList(ids);
     }
 
     private static String mediaUrl(Object value) throws IOException {
@@ -234,7 +330,18 @@ public final class NeteaseLibraryApi {
     }
     private static String image(Object value) {
         if (!(value instanceof String)) return null;
-        try { return mediaUrl(value); } catch (IOException ignored) { return null; }
+        String url = (String)value;
+        try {
+            URI uri = new URI(url);
+            String host = uri.getHost();
+            if (host == null || !host.toLowerCase(java.util.Locale.ROOT).matches("p[1-9]\\.music\\.126\\.net") ||
+                    url.length() > 2048 || url.codePoints().anyMatch(c -> Character.isWhitespace(c) || Character.isISOControl(c)) ||
+                    !("https".equals(uri.getScheme()) || "http".equals(uri.getScheme())) || uri.getRawUserInfo() != null ||
+                    uri.getPort() != -1 || uri.getRawQuery() != null || uri.getRawFragment() != null ||
+                    !host.equalsIgnoreCase(uri.getRawAuthority()) || uri.getRawPath() == null || uri.getRawPath().length() <= 1 ||
+                    !uri.normalize().getRawPath().equals(uri.getRawPath())) return null;
+            return "https://" + host.toLowerCase(java.util.Locale.ROOT) + uri.getRawPath();
+        } catch (Exception ignored) { return null; }
     }
     private static String id(Object value) throws IOException {
         if (!(value instanceof String || value instanceof Integer || value instanceof Long || value instanceof java.math.BigInteger)) throw error("protocol");

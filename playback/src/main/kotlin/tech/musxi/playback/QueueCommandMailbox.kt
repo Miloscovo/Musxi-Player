@@ -5,8 +5,12 @@ import tech.musxi.core.library.PlaybackQueue
 /** One in-process payload, never a large Binder bundle. Latest intent wins before dispatch. */
 internal class QueueCommandMailbox {
     sealed interface Action {
-        class Replace(val queue: PlaybackQueue) : Action
+        class Replace(val queue: PlaybackQueue, val positionMs: Long = 0, val playWhenReady: Boolean = true,
+            val repeatMode: String? = null, val shuffleEnabled: Boolean? = null) : Action
         data object Clear : Action
+        class Edit(val expectedRevision: Long, val edit: tech.musxi.core.playback.QueueEdit) : Action
+        class Insert(val expectedRevision: Long, val song: tech.musxi.core.library.SongSummary,
+            val playNext: Boolean) : Action
     }
     private var revision = 0L
     private var pending: Action? = null

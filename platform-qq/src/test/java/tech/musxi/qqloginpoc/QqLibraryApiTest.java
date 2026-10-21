@@ -7,6 +7,56 @@ import java.nio.charset.StandardCharsets;
 import java.util.*;
 
 public class QqLibraryApiTest {
+    @Test public void favoriteReadsAcceptOwnAliasAndWritesOnly201WithResolvedNumericSong() throws Exception {
+        Fixture f=new Fixture();
+        JSONObject page=tracks(1,false);page.getJSONObject("dirinfo").put("dirid",201);
+        f.data.add(page);
+        assertEquals(Collections.singletonList(MID),new QqLibraryApi(f.api).likedIds(session()));
+        assertEquals(0,f.param(0).getLong("disstid"));assertEquals(201,f.param(0).getInt("dirid"));
+        assertEquals("fixture-euin",f.param(0).getString("enc_host_uin"));
+        for(boolean liked:new boolean[]{true,false}) {
+            Fixture write=new Fixture();write.data.add(new JSONObject().put("track_info",song().put("id",99).put("type",0)));
+            write.data.add(new JSONObject().put("retCode",0));
+            new QqLibraryApi(write.api).setLiked(session(),MID,liked);
+            assertEquals(2,write.requests.size());
+            JSONObject params=write.param(1);
+            assertEquals(201,params.getInt("dirId"));assertEquals(0,params.getInt("tid"));
+            assertTrue(params.getBoolean("bFmtUtf8"));
+            assertEquals(99,params.getJSONArray("v_songInfo").getJSONObject(0).getInt("songId"));
+            JSONObject request=new JSONObject(write.requests.get(1).body).getJSONObject("req_0");
+            assertEquals(liked?"AddSonglist":"DelSonglist",request.getString("method"));
+            JSONObject comm=new JSONObject(write.requests.get(1).body).getJSONObject("comm");
+            assertEquals("11",comm.getString("ct"));assertEquals("20090008",comm.getString("cv"));
+            assertEquals("qqmusic",comm.getString("tmeAppID"));
+            assertFalse(comm.has("platform"));
+            assertEquals("24",new JSONObject(write.requests.get(0).body).getJSONObject("comm").getString("ct"));
+        }
+    }
+    @Test public void favoriteWritesRejectOtherListsAndUnknownResponseWithoutRetry() throws Exception {
+        Fixture f=new Fixture();
+        JSONObject valid=new JSONObject().put("dirId",201).put("tid",0).put("bFmtUtf8",true)
+            .put("v_songInfo",new JSONArray().put(new JSONObject().put("songId",99).put("songType",0)));
+        for(String field:new String[]{"dirId","tid","bFmtUtf8"}) {
+            JSONObject invalid=new JSONObject(valid.toString()).put(field,field.equals("bFmtUtf8")?false:1);
+            rejects("endpoint",()->f.api.library(session(),"music.musicasset.PlaylistDetailWrite","AddSonglist",invalid));
+        }
+        assertTrue(f.requests.isEmpty());
+        f.data.add(new JSONObject().put("track_info",song().put("id",99).put("type",0)));
+        f.data.add(new JSONObject());
+        rejects("protocol",()->new QqLibraryApi(f.api).setLiked(session(),MID,true));
+        assertEquals(2,f.requests.size());
+    }
+    @Test public void favoriteSyncRejectsDuplicateMidAndChangingTotal() throws Exception {
+        Fixture f=new Fixture();
+        JSONObject first=tracks(2,true);first.getJSONObject("dirinfo").put("dirid",201);
+        JSONObject second=tracks(2,false);second.getJSONObject("dirinfo").put("dirid",201);
+        f.data.add(first);f.data.add(second);
+        rejects("incomplete",()->new QqLibraryApi(f.api).likedIds(session()));
+        Fixture changed=new Fixture();changed.data.add(first);
+        JSONObject changedPage=tracks(3,true);changedPage.getJSONObject("dirinfo").put("dirid",201);
+        changed.data.add(changedPage);
+        rejects("incomplete",()->new QqLibraryApi(changed.api).likedIds(session()));
+    }
     private static final String MID="003abcDEF01234", MEDIA="001abcDEF01234001abcDEF01234";
     private static JSONObject json(String value) throws Exception { return new JSONObject(value); }
     private static QqMusicApi.Session session() throws Exception {return QqMusicApi.Session.fromJson(json(
@@ -163,6 +213,55 @@ public class QqLibraryApiTest {
         JSONObject malformed=search(1);malformed.getJSONObject("body").getJSONArray("item_song").put(0,"not-an-object");
         rejects("protocol",()->QqLibraryApi.parseSearch(malformed));
     }
+    private static JSONObject searchPage(int offset,int count,Integer total,boolean more) throws Exception {
+        JSONArray rows=new JSONArray();
+        for(int i=0;i<count;i++)rows.put(song().put("mid",String.format(Locale.ROOT,"%014d",offset+i+1)));
+        JSONObject meta=new JSONObject().put("perpage",30).put("curpage",offset/30+1).put("nextpage",more?offset/30+2:-1);
+        if(total!=null)meta.put("sum",total);
+        return new JSONObject().put("body",new JSONObject().put("item_song",rows)).put("meta",meta);
+    }
+    @Test public void pagedSearchUsesRealPageNumbersAndValidatesBoundsBeforeTransport() throws Exception {
+        Fixture f=new Fixture();f.data.add(searchPage(30,2,32,false));
+        QqLibraryApi library=new QqLibraryApi(f.api);
+        QqLibraryApi.Page<QqLibraryApi.Song> page=library.search(session(),"Song",30,30);
+        assertEquals(2,f.param(0).getInt("page_num"));assertEquals(30,f.param(0).getInt("num_per_page"));
+        assertEquals(32,page.total);assertEquals(-1,page.nextOffset);assertEquals("00000000000031",page.items.get(0).id);
+        for(int offset:new int[]{-30,1,20_010})rejects("limit",()->library.search(session(),"Song",offset,30));
+        rejects("limit",()->library.search(session(),"Song",0,0));assertEquals(1,f.requests.size());
+    }
+    @Test public void pagedSearchChecksContinuationTotalsAndTheTwentyThousandBound() throws Exception {
+        assertEquals(30,QqLibraryApi.parseSearch(searchPage(0,30,100_000,true),0,30).nextOffset);
+        QqLibraryApi.Page<QqLibraryApi.Song> unknown=QqLibraryApi.parseSearch(searchPage(30,2,null,false),30,30);
+        assertEquals(-1,unknown.total);assertEquals(-1,unknown.nextOffset);
+        assertEquals(60,QqLibraryApi.parseSearch(searchPage(30,30,null,true),30,30).nextOffset);
+        rejects("incomplete",()->QqLibraryApi.parseSearch(searchPage(30,2,100,false),30,30));
+        rejects("incomplete",()->QqLibraryApi.parseSearch(searchPage(30,2,32,true),30,30));
+        rejects("incomplete",()->QqLibraryApi.parseSearch(searchPage(30,0,100,true),30,30));
+        rejects("limit",()->QqLibraryApi.parseSearch(searchPage(0,31,100,true),0,30));
+        JSONObject repeated=searchPage(30,30,100,true);repeated.getJSONObject("meta").put("nextpage",2);
+        rejects("protocol",()->QqLibraryApi.parseSearch(repeated,30,30));
+        JSONObject firstPage=searchPage(30,30,100,true);firstPage.getJSONObject("meta").put("curpage",1);
+        rejects("protocol",()->QqLibraryApi.parseSearch(firstPage,30,30));
+        assertEquals(-1,QqLibraryApi.parseSearch(searchPage(19_980,20,20_000,false),19_980,30).nextOffset);
+        rejects("limit",()->QqLibraryApi.parseSearch(searchPage(19_980,30,100_000,true),19_980,30));
+        rejects("limit",()->QqLibraryApi.parseSearch(searchPage(19_980,1,100_000,true),19_980,30));
+        rejects("limit",()->QqLibraryApi.parseSearch(searchPage(19_980,21,20_001,false),19_980,30));
+    }
+    @Test public void artworkParsesOfficialFieldsOrValidAlbumMidWithoutAudioRequests() throws Exception {
+        JSONObject row=song();row.getJSONObject("album").put("mid",MID);
+        assertEquals("https://y.gtimg.cn/music/photo_new/T002R300x300M000"+MID+".jpg",QqLibraryApi.song(row).coverUrl);
+        row.getJSONObject("album").put("mid","bad").put("picUrl","http://y.gtimg.cn/album.jpg");
+        assertEquals("https://y.gtimg.cn/album.jpg",QqLibraryApi.song(row).coverUrl);
+        for(String url:new String[]{"https://y.gtimg.cn/a?key=fixture","https://y.gtimg.cn/a#f","https://user@y.gtimg.cn/a",
+                "https://y.gtimg.cn:443/a","https://y.gtimg.cn.evil/a","https://dl.stream.qqmusic.qq.com/a.mp3"}){
+            row.getJSONObject("album").put("picUrl",url);assertNull(QqLibraryApi.song(row).coverUrl);
+        }
+        assertNull(new QqLibraryApi.Song(MID,"Song",Collections.emptyList(),"",0,"",0).coverUrl);
+        LinkedHashMap<String,QqLibraryApi.Playlist> lists=new LinkedHashMap<>();
+        QqLibraryApi.appendLists(new JSONArray().put(json("{tid:9,dirId:0,title:'List',songNum:1,cover_url_big:'http://qpic.y.qq.com/list.jpg'}")),lists,true);
+        assertEquals("https://qpic.y.qq.com/list.jpg",lists.get("9_0").coverUrl);
+        assertNull(new QqLibraryApi.Playlist("9_0","List",0).coverUrl);
+    }
     @Test public void detailUsesFixedReadOnlyEndpointAndRejectsMidMismatch() throws Exception {
         Fixture f=new Fixture();f.data.add(new JSONObject().put("track_info",song()));
         QqLibraryApi.Song result=new QqLibraryApi(f.api).song(session(),MID);
@@ -174,6 +273,42 @@ public class QqLibraryApiTest {
         Fixture mismatch=new Fixture();JSONObject wrong=song();wrong.put("mid","009abcDEF01234");
         mismatch.data.add(new JSONObject().put("track_info",wrong));
         rejects("identity",()->new QqLibraryApi(mismatch.api).song(session(),MID));
+    }
+    @Test public void lyricsUseFixedPlainCgiAndDecodeOnlyStandardBase64Lrc() throws Exception {
+        Fixture f=new Fixture();String lrc="[00:01.00]Hello\n[00:02.00]世界";
+        f.data.add(new JSONObject().put("lyric",lrc));
+        assertEquals(lrc,new QqLibraryApi(f.api).lyrics(session(),MID));
+        JSONObject request=new JSONObject(f.requests.get(0).body).getJSONObject("req_0");
+        assertEquals("music.musichallSong.PlayLyricInfo",request.getString("module"));
+        assertEquals("GetPlayLyricInfo",request.getString("method"));
+        JSONObject param=request.getJSONObject("param");
+        assertEquals(0,param.getInt("crypt"));assertEquals(0,param.getInt("lrc_t"));
+        assertEquals(0,param.getInt("qrc"));assertEquals(0,param.getInt("qrc_t"));
+        assertEquals(0,param.getInt("roma"));assertEquals(0,param.getInt("roma_t"));
+        assertEquals(0,param.getInt("trans"));assertEquals(0,param.getInt("trans_t"));
+        assertEquals(false,param.getBoolean("needSingingAnnotations"));
+        assertEquals(1,param.getInt("type"));assertEquals(MID,param.getString("songMid"));
+        String encoded=Base64.getEncoder().encodeToString(lrc.getBytes(StandardCharsets.UTF_8));
+        assertEquals(lrc,QqLibraryApi.parseLyrics(encoded));
+        assertEquals("plain words",QqLibraryApi.parseLyrics("plain words"));
+    }
+    @Test public void lyricsReturnEmptyAndRejectInvalidOrOversizedContent() throws Exception {
+        for(Object empty:new Object[]{"",JSONObject.NULL}){
+            Fixture f=new Fixture();f.data.add(new JSONObject().put("lyric",empty));
+            assertEquals("",new QqLibraryApi(f.api).lyrics(session(),MID));
+        }
+        Fixture invalid=new Fixture();invalid.data.add(new JSONObject().put("lyric",7));
+        rejects("protocol",()->new QqLibraryApi(invalid.api).lyrics(session(),MID));
+        rejects("protocol",()->QqLibraryApi.parseLyrics("0123456789abcdef0123456789abcdef"));
+        rejects("limit",()->QqLibraryApi.parseLyrics(String.join("",Collections.nCopies(512*1024+1,"x"))));
+        String lrc="[00:00.00]"+String.join("",Collections.nCopies(512*1024,"x"));
+        String encoded=Base64.getEncoder().encodeToString(lrc.getBytes(StandardCharsets.UTF_8));
+        rejects("limit",()->QqLibraryApi.parseLyrics(encoded));
+        rejects("protocol",()->QqLibraryApi.parseLyrics(String.join("",Collections.nCopies(512*1024+4,"A"))));
+        rejects("limit",()->QqLibraryApi.parseLyrics(String.join("",Collections.nCopies(700*1024+1,"A"))));
+        String exactLyric="[00:00.00]"+String.join("",Collections.nCopies(512*1024-10,"x"));
+        String exactEncoded=Base64.getEncoder().encodeToString(exactLyric.getBytes(StandardCharsets.UTF_8));
+        assertEquals(exactLyric,QqLibraryApi.parseLyrics(exactEncoded));
     }
 
 }

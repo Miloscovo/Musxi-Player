@@ -29,6 +29,10 @@ class AccountRepository(context: Context) {
         Platform.QQ to FileLibraryPageStore(java.io.File(app.noBackupFilesDir, "qq-library-pages-v1"), Platform.QQ),
     )
     private val cacheQueue = Executors.newSingleThreadExecutor()
+    private val playbackJournals = Platform.entries.associateWith { platform ->
+        tech.musxi.core.playback.FilePlaybackJournalStore(java.io.File(app.noBackupFilesDir,
+            "playback-journal-${platform.name.lowercase()}-v1"), platform)
+    }
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private val temporaryImage = TemporaryLoginImage(app)
     private val drivers by lazy {
@@ -355,6 +359,12 @@ class AccountRepository(context: Context) {
         return state.phase == AccountPhase.CONNECTED && state.generation == generation
     }
 
+    fun createSearchBrowser(fetch: SearchPageFetch): SearchBrowser {
+        val browser = SearchBrowser({ states.value.getValue(it) }, fetch)
+        scope.launch { states.collect { browser.accountChanged() } }
+        return browser
+    }
+
     /** Independent disk executor permits cached display while restore is waiting on the network. */
     fun createLibraryBrowser(fetch: LibraryPageFetch, platform: Platform = Platform.NETEASE): LibraryBrowser {
         val store = libraryCaches.getValue(platform)
@@ -373,7 +383,33 @@ class AccountRepository(context: Context) {
     /** Only the account worker waits; cacheQueue never waits for the account worker or UI. */
     private fun clearLibraryCache(platform: Platform) {
         val store = libraryCaches[platform] ?: return
-        cacheQueue.submit { store.clear() }.get()
+        cacheQueue.submit { store.clear(); playbackJournals.getValue(platform).clear() }.get()
+    }
+
+    /** Opaque account ownership for public playback metadata; never exposes session material. */
+    fun playbackIdentity(platform: Platform): LibraryCacheIdentity? = libraryCacheIdentity(platform)
+
+    /** Same disk queue as disconnect/identity cleanup: stale writes cannot resurrect erased data. */
+    fun playbackJournal(platform: Platform, expected: LibraryCacheIdentity,
+        change: ((tech.musxi.core.playback.PlaybackJournal) -> tech.musxi.core.playback.PlaybackJournal)? = null,
+        result: (Result<tech.musxi.core.playback.PlaybackJournal>) -> Unit) {
+        cacheQueue.execute {
+            val response = runCatching {
+                if (expected != playbackIdentity(platform)) throw LibraryPageFailure("account_changed")
+                val store = playbackJournals.getValue(platform)
+                val previous = store.read(expected.owner)
+                val next = change?.invoke(previous) ?: previous
+                if (expected != playbackIdentity(platform)) throw LibraryPageFailure("account_changed")
+                if (change != null) store.write(expected.owner, next)
+                next
+            }.recoverCatching { error ->
+                throw LibraryPageFailure(if (error is LibraryPageFailure) error.category else "storage")
+            }
+            main.post {
+                result(if (expected == playbackIdentity(platform)) response
+                    else Result.failure(LibraryPageFailure("account_changed")))
+            }
+        }
     }
 
     private fun libraryCacheIdentity(platform: Platform): LibraryCacheIdentity? {

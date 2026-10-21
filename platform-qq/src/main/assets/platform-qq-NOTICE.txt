@@ -13,6 +13,18 @@ adaptations additionally reference modules/{user,songlist,song,search}.py and th
 models from the same pinned source. This Java adapter uses the WEB
 request profile; it does not bundle the Python runtime or its dependencies.
 
+2026-10-20 favorite synchronization additionally adapts
+qqmusic_api/modules/songlist.py from the PyPI qqmusic-api-python 0.8.1 wheel
+at the same pinned revision. Its add_songs, del_songs, like_song and
+unlike_song functions support single-track favorite add/remove operations.
+The existing GPL-3.0-or-later source and license are retained; no new
+production dependency or license change is included.
+
+2026-10-20 standard lyrics additionally adapt modules/lyric.py and
+models/lyric.py from qqmusic-api-python 0.8.1 at the same pinned revision.
+The Android adapter requests crypt=0/qrc=0 and handles standard text/LRC;
+it does not include QRC decryption or the upstream Python dependencies.
+
 The direct-open URI follows the official public PTLogin mobile page and
 login_10.js observed on 2026-10-18. The callback restores Musxi via
 musxiplayer://login-return; it only resumes checking the original attempt,

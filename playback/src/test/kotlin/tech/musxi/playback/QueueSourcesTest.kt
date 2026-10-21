@@ -13,6 +13,31 @@ import tech.musxi.core.library.*
 import tech.musxi.core.playback.PlaybackFailure
 
 class QueueSourcesTest {
+    @Test fun editsKeepSurvivingCapabilitiesAndRevokeRemovedDuplicateSlots() {
+        val provider = Provider(); val sources = QueueSources(provider)
+        val tickets = sources.replace(listOf("netease:1", "netease:1", "netease:2"), 1)
+        val first = sources.resolve(tickets[0]); val second = sources.resolve(tickets[1])
+        sources.retain(setOf(tickets[1], tickets[2]))
+        assertFalse(first.isCurrent()); assertTrue(second.isCurrent())
+        assertEquals(PlaybackFailure.AUTH_REQUIRED, failure { sources.resolve(tickets[0]) })
+        assertEquals(fixtureUrl, sources.resolve(tickets[1]).url)
+        assertEquals(2, provider.calls.get())
+        val appended = sources.append("netease:3", 1)
+        assertEquals(fixtureUrl, sources.resolve(appended).url)
+        assertEquals(3, provider.calls.get())
+        sources.retain(emptySet())
+        assertFalse(second.isCurrent())
+        assertEquals(PlaybackFailure.AUTH_REQUIRED, failure { sources.resolve(appended) })
+    }
+    @Test fun insertRejectsOtherPlatformAndStaleAuthorization() {
+        val provider = Provider(); val sources = QueueSources(provider)
+        val ticket = sources.replace(listOf("netease:1"), 1).single()
+        try { sources.append("qq:A0000000000001", 1); fail("Mixed platform accepted") }
+        catch (_: IllegalArgumentException) { }
+        provider.generation = 2
+        assertEquals(PlaybackFailure.AUTH_REQUIRED, failure { sources.append("netease:2", 1) })
+        assertEquals(PlaybackFailure.AUTH_REQUIRED, failure { sources.resolve(ticket) })
+    }
     @Test fun substituteBindsBothAccountsAndReturnsToOriginalWithoutChangingQueueTickets() {
         val provider = Provider()
         var qqGeneration: Long? = 9

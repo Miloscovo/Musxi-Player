@@ -18,7 +18,8 @@ import java.util.concurrent.Executor
 class ValidationReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         val app = context.applicationContext as MusxiApplication
-        ValidationRunner.run(app, intent.getStringExtra("step").orEmpty())
+        val step = intent.getStringExtra("step").orEmpty()
+        if (!P2ValidationRunner.run(app, step) && !P1DataValidationRunner.run(app, step) && !P1ValidationRunner.run(app, step) && !P0ValidationRunner.run(app, step)) ValidationRunner.run(app, step)
     }
 }
 

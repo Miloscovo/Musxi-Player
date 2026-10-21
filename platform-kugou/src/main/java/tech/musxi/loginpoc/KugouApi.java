@@ -115,6 +115,21 @@ public final class KugouApi {
         this.transport = transport;
     }
 
+    JSONObject lyricsCall(String path, Map<String, String> extra) throws IOException {
+        if (!java.util.Arrays.asList("/search", "/download").contains(path))
+            throw error("endpoint", "Unsupported lyrics endpoint");
+        long time = now();
+        Map<String, String> params = "/search".equals(path) ? new LinkedHashMap<>() : defaults(device, time);
+        // Official /search compatibility route: /v1/search returned HTTP 200 with an
+        // empty body on both host and device (2026-10-20). Keep exact source identifiers;
+        // never retry by keyword or use another song's lyrics.
+        params.put("appid", "1005"); params.put("clientver", "20489");
+        params.putAll(extra);
+        // The pinned wrapper checks notSignature; search_lyric.js's notSign has no effect.
+        params.put("signature", androidSignature(params, null));
+        return transport.execute(new Request("https://lyrics.kugou.com" + path, params, null, headers(device, time)));
+    }
+
     public String createLogin() throws IOException {
         return parseCreate(transport.execute(createRequest(device, now())));
     }
@@ -131,7 +146,7 @@ public final class KugouApi {
     }
 
     JSONObject libraryCall(String path, Session session, Map<String, String> extra, String body, boolean audio) throws IOException {
-        if (!java.util.Arrays.asList("/v7/get_all_list", "/v4/get_list_all_file", "/v5/url", "/v3/search/song").contains(path)
+        if (!java.util.Arrays.asList("/v7/get_all_list", "/v4/get_list_all_file", "/v5/url", "/v3/search/song", "/cloudlist.service/v6/add_song", "/v4/delete_songs").contains(path)
             || audio != "/v5/url".equals(path))
             throw error("endpoint", "Unsupported library endpoint");
         long time = now();
@@ -141,7 +156,10 @@ public final class KugouApi {
         if (audio) params.put("key", md5(params.get("hash") + "185672dd44712f60bb1736df5a377e82" + "3116" + device.mid + session.userId));
         params.put("signature", androidSignature(params, body));
         Map<String, String> requestHeaders = headers(device, time);
-        requestHeaders.put("x-router", audio ? "trackercdn.kugou.com" : "/v3/search/song".equals(path) ? "complexsearch.kugou.com" : "cloudlist.service.kugou.com");
+        // This endpoint carries the gateway route in its path, as in the pinned upstream.
+        // An x-router override sends the prefixed path to the service and returns HTTP 404.
+        if (!"/cloudlist.service/v6/add_song".equals(path))
+            requestHeaders.put("x-router", audio ? "trackercdn.kugou.com" : "/v3/search/song".equals(path) ? "complexsearch.kugou.com" : "cloudlist.service.kugou.com");
         return transport.execute(new Request("https://gateway.kugou.com" + path, params, body, requestHeaders));
     }
 
@@ -460,12 +478,16 @@ public final class KugouApi {
             if (risk != null && !risk.isEmpty() && !"0".equals(risk))
                 throw error("risk", "账号需要在酷狗官方客户端完成安全验证，请验证后重试");
             if (status >= 300 && status < 400) throw error("redirect", "酷狗返回重定向，当前验证已停止");
-            if (status < 200 || status >= 300) throw error("http", "酷狗服务暂时拒绝请求，请稍后重试");
-            int responseLimit = request.endpoint.endsWith("/get_all_list") || request.endpoint.endsWith("/get_list_all_file") ? 2 * 1024 * 1024 : RESPONSE_LIMIT;
+            if (status < 200 || status >= 300) throw new ApiException("http", "酷狗服务暂时拒绝请求，请稍后重试", "http_status_" + status);
+            boolean lyricsRequest = "lyrics.kugou.com".equals(url.getHost());
+            int responseLimit = lyricsRequest || request.endpoint.endsWith("/get_all_list") || request.endpoint.endsWith("/get_list_all_file") ? 2 * 1024 * 1024 : RESPONSE_LIMIT;
             if (connection.getContentLengthLong() > responseLimit)
-                throw error("protocol", "酷狗响应超过验证程序限制");
+                throw new ApiException("protocol", "酷狗响应超过验证程序限制", lyricsRequest ? "lyrics_transport_limit" : null);
             String body;
-            try (InputStream in = connection.getInputStream()) {
+            String encoding = connection.getHeaderField("Content-Encoding");
+            try (InputStream raw = connection.getInputStream();
+                 InputStream in = lyricsRequest && "gzip".equalsIgnoreCase(encoding)
+                    ? new java.util.zip.GZIPInputStream(raw) : raw) {
                 ByteArrayOutputStream out = new ByteArrayOutputStream();
                 byte[] chunk = new byte[4096];
                 int count;
@@ -473,13 +495,21 @@ public final class KugouApi {
                 while ((count = in.read(chunk)) != -1) {
                     if (Thread.currentThread().isInterrupted()) throw error("cancelled", "当前请求已停止");
                     if (System.nanoTime() > deadline) throw error("timeout", "酷狗请求超时，请检查网络后重试");
-                    if (count > responseLimit - out.size()) throw error("protocol", "酷狗响应超过验证程序限制");
+                    if (count > responseLimit - out.size()) throw new ApiException("protocol", "酷狗响应超过验证程序限制", lyricsRequest ? "lyrics_transport_limit" : null);
                     out.write(chunk, 0, count);
                 }
                 body = new String(out.toByteArray(), StandardCharsets.UTF_8);
             }
             try { return new JSONObject(body); }
-            catch (JSONException malformed) { throw error("protocol", "酷狗未返回有效数据，请稍后重试"); }
+            catch (JSONException malformed) {
+                String trimmed = body.trim();
+                String kind = trimmed.isEmpty() ? "empty" : trimmed.equals("null") ? "null" :
+                    trimmed.startsWith("<") ? "html" : trimmed.startsWith("[") ? "array" :
+                    trimmed.startsWith("\uFEFF") ? "bom" : trimmed.startsWith("\u001f\uFFFD") ? "compressed" :
+                    trimmed.matches("(?s)^[A-Za-z_$][A-Za-z0-9_$]*\\s*\\(.*") ? "jsonp" : "other";
+                String diagnostic = lyricsRequest ? (request.endpoint.endsWith("/download") ? "lyrics_download_json_" : "lyrics_search_json_") + kind : null;
+                throw new ApiException("protocol", "酷狗未返回有效数据，请稍后重试", diagnostic);
+            }
         } catch (ApiException safe) { throw safe; }
         catch (SocketTimeoutException timeout) { throw error("timeout", "酷狗请求超时，请检查网络后重试"); }
         catch (IOException network) {
@@ -494,8 +524,10 @@ public final class KugouApi {
         boolean login = "login-user.kugou.com".equals(url.getHost())
             && ("/v2/qrcode".equals(url.getPath()) || "/v2/get_userinfo_qrcode".equals(url.getPath()));
         boolean profile = "gateway.kugou.com".equals(url.getHost()) && "/v3/get_my_info".equals(url.getPath());
-        boolean library = "gateway.kugou.com".equals(url.getHost()) && java.util.Arrays.asList("/v7/get_all_list", "/v4/get_list_all_file", "/v5/url", "/v3/search/song").contains(url.getPath());
-        if (!"https".equals(url.getProtocol()) || (!login && !profile && !library)
+        boolean library = "gateway.kugou.com".equals(url.getHost()) && java.util.Arrays.asList("/v7/get_all_list", "/v4/get_list_all_file", "/v5/url", "/v3/search/song", "/cloudlist.service/v6/add_song", "/v4/delete_songs").contains(url.getPath());
+        boolean lyrics = "lyrics.kugou.com".equals(url.getHost()) &&
+            java.util.Arrays.asList("/search", "/download").contains(url.getPath());
+        if (!"https".equals(url.getProtocol()) || (!login && !profile && !library && !lyrics)
             || url.getUserInfo() != null || (url.getPort() != -1 && url.getPort() != 443) || url.getRef() != null)
             throw error("endpoint", "请求目标不在允许的酷狗官方接口范围内");
     }

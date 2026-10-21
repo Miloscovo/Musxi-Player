@@ -13,6 +13,12 @@ upstream-supported WEAPI request profile and runs on the phone directly.
 Read-only song search additionally adapts module/cloudsearch.js using its
 fixed /api/cloudsearch/pc route through the existing EAPI request profile.
 Song metadata adapts module/song_detail.js using its WEAPI request profile.
+Standard LRC lyrics additionally adapt module/lyric.js using the existing
+EAPI request profile (2026-10-20).
+Favorite synchronization additionally adapts module/likelist.js and
+module/like.js from the same pinned MIT source for supported single-track
+favorite add/remove operations. No new production dependency or license
+change is included.
 No Node runtime, remote gateway or platform SDK is bundled.
 
 QR image generation uses unchanged Java source from Project Nayuki's
