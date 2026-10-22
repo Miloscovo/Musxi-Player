@@ -2,12 +2,14 @@ param(
     [Parameter(Mandatory=$true)][string]$CefRoot,
     [Parameter(Mandatory=$true)][string]$FfmpegRoot,
     [string]$Compiler = "$PSScriptRoot\build\tools\package\bin\ISCC.exe",
+    [string]$Extractor = "$PSScriptRoot\build\tools\innounp-2\innounp.exe",
     [string]$FixtureTool
 )
 $ErrorActionPreference='Stop'
 Set-Location $PSScriptRoot
 & "$PSScriptRoot/verify-ffmpeg.ps1" -FfmpegRoot $FfmpegRoot -CefRoot $CefRoot -SourceMaterials
 if (-not (Test-Path -LiteralPath $Compiler)) { throw 'Provide Inno Setup ISCC.exe using -Compiler.' }
+if (-not (Test-Path -LiteralPath $Extractor)) { throw 'Provide innounp.exe using -Extractor for installer payload verification.' }
 if (-not (Test-Path -LiteralPath (Join-Path $FfmpegRoot 'LICENSE.txt'))) { throw 'FfmpegRoot must contain the validated LGPL shared SDK and LICENSE.txt.' }
 foreach ($required in @('build/runtime/node.exe','build/services/node_modules','build/services/vendor')) {
     if (-not (Test-Path -LiteralPath $required)) { throw "Missing $required; run setup-cloud.ps1 first." }
@@ -18,6 +20,7 @@ Copy-Item -LiteralPath (Join-Path $FfmpegRoot 'LICENSE.txt') -Destination 'build
 & $Compiler installer/MusxiPlayerTest.iss
 if ($LASTEXITCODE -ne 0) { throw 'Test installer compilation failed.' }
 $artifact=Join-Path $PSScriptRoot 'dist/MusxiPlayer-Test-0.2-Setup-x64.exe'
+& "$PSScriptRoot/scripts/test-packaged-services.ps1" -Installer $artifact -Extractor $Extractor
 $hash=Get-FileHash -LiteralPath $artifact -Algorithm SHA256
 [System.IO.File]::WriteAllText("$artifact.sha256", "$($hash.Hash.ToLower())  $([System.IO.Path]::GetFileName($artifact))`n")
 Write-Host "Test installer: $artifact"

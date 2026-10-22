@@ -45,6 +45,16 @@ Source: "..\licenses\*"; DestDir: "{app}\licenses"; Flags: ignoreversion recurse
 Source: "..\third_party\LICENSE-json.txt"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\build\runtime\*"; DestDir: "{app}\runtime"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\services\bridge.cjs"; DestDir: "{app}\services"; Flags: ignoreversion
+Source: "..\services\kugou-audio.cjs"; DestDir: "{app}\services"; Flags: ignoreversion
+Source: "..\services\multi-platform.cjs"; DestDir: "{app}\services"; Flags: ignoreversion
+Source: "..\services\netease.cjs"; DestDir: "{app}\services"; Flags: ignoreversion
+Source: "..\services\lyrics.cjs"; DestDir: "{app}\services"; Flags: ignoreversion
+Source: "..\services\lyrics-result.cjs"; DestDir: "{app}\services"; Flags: ignoreversion
+Source: "..\services\krc.cjs"; DestDir: "{app}\services"; Flags: ignoreversion
+Source: "..\services\qq.cjs"; DestDir: "{app}\services"; Flags: ignoreversion
+Source: "..\services\qq_bridge.py"; DestDir: "{app}\services"; Flags: ignoreversion
+Source: "..\services\python-runtime.json"; DestDir: "{app}\services"; Flags: ignoreversion
+Source: "..\services\python-requirements.lock"; DestDir: "{app}\services"; Flags: ignoreversion
 Source: "..\services\package.json"; DestDir: "{app}\services"; Flags: ignoreversion
 Source: "..\services\package-lock.json"; DestDir: "{app}\services"; Flags: ignoreversion
 Source: "..\build\services\node_modules\*"; DestDir: "{app}\services\node_modules"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: ".cache\*,*.log"

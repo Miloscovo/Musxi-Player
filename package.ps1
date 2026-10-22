@@ -2,6 +2,7 @@ param(
     [Parameter(Mandatory=$true)][string]$CefRoot,
     [Parameter(Mandatory=$true)][string]$FfmpegRoot,
     [string]$Compiler="$PSScriptRoot\build\tools\package\bin\ISCC.exe",
+    [string]$Extractor="$PSScriptRoot\build\tools\innounp-2\innounp.exe",
     [string]$FixtureTool,
     [string]$Python="python.exe",
     [switch]$RequireCleanSource,
@@ -18,6 +19,7 @@ $ffmpegManifest=Get-Content "$PSScriptRoot/licenses/FFmpeg-build.json" -Raw | Co
 if (-not $PublicSourceRevision) { throw 'Provide a verified fixed public source revision; source delivery cannot be disabled.' }
 & "$PSScriptRoot/verify-ffmpeg.ps1" -FfmpegRoot $FfmpegRoot -CefRoot $CefRoot -PublicSourceRevision $PublicSourceRevision
 if (-not (Test-Path -LiteralPath $Compiler)) { throw 'Provide Inno Setup ISCC.exe using -Compiler.' }
+if (-not (Test-Path -LiteralPath $Extractor)) { throw 'Provide innounp.exe using -Extractor for installer payload verification.' }
 if (-not (Test-Path -LiteralPath (Join-Path $FfmpegRoot 'LICENSE.txt'))) { throw 'FfmpegRoot must contain the validated LGPL shared SDK and LICENSE.txt.' }
 foreach ($required in @('LICENSE','THIRD_PARTY_NOTICES.md','licenses/Microsoft-Windows-SDK-LICENSE.rtf','licenses/CEF-Chromium-CREDITS.html','licenses/FFmpeg-LICENSE.txt',$ffmpegManifest.source_bundle_path,"$($ffmpegManifest.source_bundle_path).sha256")) {
     if (-not (Test-Path -LiteralPath $required)) { throw "Missing release license/source material: $required" }
@@ -90,6 +92,7 @@ if ($status.Count -gt 0) { Write-Warning 'Uncommitted source: this installer is 
 if ($LASTEXITCODE -ne 0) { throw 'Installer compilation failed.' }
 $appVersion=(Get-Content "$PSScriptRoot/frontend/package.json" -Raw | ConvertFrom-Json).version
 $artifact=Join-Path $PSScriptRoot "dist/MusxiPlayer-Setup-$appVersion.exe"
+& "$PSScriptRoot/scripts/test-packaged-services.ps1" -Installer $artifact -Extractor $Extractor
 $hash=Get-FileHash -LiteralPath $artifact -Algorithm SHA256
 [System.IO.File]::WriteAllText("$artifact.sha256", "$($hash.Hash.ToLower())  $([System.IO.Path]::GetFileName($artifact))`n")
 $updateManifest=& "$PSScriptRoot/scripts/write-update-manifest.ps1" -Installer $artifact -Version $appVersion -OutputDirectory "$PSScriptRoot/dist"

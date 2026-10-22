@@ -1,5 +1,13 @@
 # Musxi fixed FFmpeg source delivery
 
+## v0.5.1
+
+The v0.5.1 installer fixes missing application service files. The audited CEF
+and FFmpeg binaries and fixed source directions below remain unchanged.
+Application source is available at v0.5.1; the installed
+`release-source-record.json` identifies the exact clean application commit.
+Release uploads contain the Windows x64 installer and its update manifest.
+
 ## v0.5.0
 
 The v0.5.0 installer retains the audited CEF and both FFmpeg binary sets used

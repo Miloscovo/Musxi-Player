@@ -1,9 +1,9 @@
-#define AppVersion "0.5.0"
+#define AppVersion "0.5.1"
 [Setup]
 AppId={{A696A45D-3218-45C2-A565-EAC5642B976E}
 AppName=Musxi Player 测试版
 AppVersion={#AppVersion}
-VersionInfoVersion=0.5.0.0
+VersionInfoVersion=0.5.1.0
 DefaultDirName={localappdata}\Programs\Musxi Player
 DefaultGroupName=Musxi Player
 PrivilegesRequired=lowest
@@ -47,6 +47,7 @@ Source: "..\licenses\*"; DestDir: "{app}\licenses"; Flags: ignoreversion recurse
 Source: "..\third_party\LICENSE-json.txt"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\build\runtime\*"; DestDir: "{app}\runtime"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\services\bridge.cjs"; DestDir: "{app}\services"; Flags: ignoreversion
+Source: "..\services\kugou-audio.cjs"; DestDir: "{app}\services"; Flags: ignoreversion
 Source: "..\services\multi-platform.cjs"; DestDir: "{app}\services"; Flags: ignoreversion
 Source: "..\services\netease.cjs"; DestDir: "{app}\services"; Flags: ignoreversion
 Source: "..\services\lyrics.cjs"; DestDir: "{app}\services"; Flags: ignoreversion
