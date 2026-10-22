@@ -33,6 +33,7 @@ foreach ($version in @('0.4.0','0.5.0')) {
     $directives=[regex]::Replace($directives,'(?m)^DefaultGroupName=.*$','DefaultGroupName=Musxi isolated upgrade probe')
     $directives=[regex]::Replace($directives,'(?m)^OutputDir=.*$',"OutputDir=$probeRoot")
     $directives=[regex]::Replace($directives,'(?m)^OutputBaseFilename=.*$',"OutputBaseFilename=upgrade-probe-$version")
+    $directives=[regex]::Replace($directives,'(?m)^SetupIconFile=.*$',"SetupIconFile=$repo\assets\icons\musxi.ico")
     $directives=[regex]::Replace($directives,'(?m)^UninstallDisplayIcon=.*\r?\n','')
     $iss=Join-Path $probeRoot "probe-$version.iss"
     [IO.File]::WriteAllText($iss,"[Setup]`n$directives`n[Files]`nSource: `"$payload`"; DestDir: `"{app}`"; DestName: `"payload.bin`"; Flags: ignoreversion`n",$utf8)

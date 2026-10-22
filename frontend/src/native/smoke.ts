@@ -472,15 +472,15 @@ export async function verifyWebPage() {
   if (Array.from(settingsTabs).some(tab => Math.abs(tab.getBoundingClientRect().width-settingsTabs[0].getBoundingClientRect().width)>1
       || tab.getBoundingClientRect().height !== settingsTabs[0].getBoundingClientRect().height)
     || document.querySelector('.settings-content h2')) throw new Error('Settings tabs or removed subtitle are incorrect');
-  // Smoke runs a development build with network disabled: no notice, no download, no automatic check.
+  // Smoke disables network access for both tagged releases and development builds.
   settingsTabs[4].click();
   await waitFor(() => !!document.querySelector('.update-settings .update-status'), 'Update settings did not load');
   const updates = await native.updates.getState();
-  if (updates.current.releaseBuild || updates.result !== 'development_build' || updates.automaticCheckEnabled
+  if (updates.result !== (updates.current.releaseBuild ? 'not_checked' : 'development_build') || updates.automaticCheckEnabled
     || document.querySelector('.update-notice') || document.querySelector('.update-primary')
-    || !document.querySelector('.update-status')?.textContent?.includes('开发版本')
+    || (!updates.current.releaseBuild && !document.querySelector('.update-status')?.textContent?.includes('开发版本'))
     || !document.querySelector('.update-current')?.textContent?.includes(updates.current.version))
-    throw new Error('Development-build update settings are incorrect');
+    throw new Error('Network-disabled update settings are incorrect');
   settingsTabs[1].click();
   await waitFor(() => !!document.querySelector('#audio-output-device'), 'Playback settings did not load');
   if (document.querySelector('.settings-content h2') || document.querySelectorAll('#default-audio-quality option').length !== 4)
