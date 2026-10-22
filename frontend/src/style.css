@@ -333,6 +333,8 @@ input.seek-bar::-webkit-slider-thumb { background:var(--accent) }
   --dock:color-mix(in srgb,var(--opaque-dock) calc(var(--player-background-opacity,var(--background-opacity,1))*100%),transparent);
 }
 html,body,#app,main.app-shell { background:transparent!important }
+:root[data-theme=glass-light] .sidebar { background:color-mix(in srgb,color-mix(in srgb,var(--opaque-side) 90%,#000) calc(var(--background-opacity,1)*100%),transparent) }
+:root[data-theme=glass] .sidebar { background:color-mix(in srgb,color-mix(in srgb,var(--opaque-side) 25%,#000) calc(var(--background-opacity,1)*100%),transparent) }
 .library-shell,.library-shell[data-theme=dark],.library-shell[data-theme=glass],.library-shell[data-theme=glass-light] { --surface:var(--surface-alpha); background:transparent }
 .library-content { background:var(--surface-alpha) }
 .library-shell:is([data-theme=glass],[data-theme=glass-light]) .welcome { background:transparent }
@@ -566,6 +568,7 @@ html,body,#app,main.app-shell { background:transparent!important }
 .player-rail[data-state=collapsed]::after { top:auto; bottom:0 }
 .player-rail:hover::after,.player-rail:focus-visible::after { background:var(--line) }
 .compact-player .player { margin-top:16px; -webkit-app-region:drag }
+.compact-player .app-wallpaper-layer { top:16px }
 .compact-player .player :is(button,input,.track) { -webkit-app-region:no-drag }
 body:has([data-slot="popover-content"],[data-slot="context-menu-content"]) .compact-player .player { -webkit-app-region:no-drag }
 .player-progress { position:absolute; top:7px; left:25px; right:25px; display:flex; align-items:center; gap:12px; height:16px; z-index:2 }

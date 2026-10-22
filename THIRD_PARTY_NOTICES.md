@@ -1,5 +1,9 @@
 # Third-party notices and license audit
 
+## Application launcher artwork (2026-10-22)
+
+The custom Musxi Player artwork in `assets/icons/` was supplied by the project owner. The Windows build copies the pinned CEF `bootstrap.exe` and replaces its icon resources with this artwork; the resulting application EXE differs from the SDK bootstrap. The original SDK file, other PE resources, CEF startup mechanism, and existing copyrights and license materials are retained.
+
 ## Music platform identification artwork (2026-10-06)
 
 The bundled 512×512 NetEase Cloud Music, QQ Music and KuGou Concept icons in `frontend/src/assets/platforms/` are the official publisher application artwork obtained through Apple's public App Store lookup API. Copyright and trademark rights remain with Hangzhou Netease Cloud Music Technology Co., Ltd., Tencent Technology (Shenzhen) Company Limited, and Guangzhou KuGou Technology CO., LTD respectively. These product marks identify the connected services; they are not licensed under the project's GPL or third-party MIT licenses. Application IDs, publisher names and original artwork URLs are recorded in `frontend/src/assets/platforms/SOURCES.md`.

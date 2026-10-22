@@ -404,12 +404,16 @@ void ready(void* window) {
     CefWindowInfo info;
     if(!preview) {
         WNDCLASSW wc{};wc.style=CS_DBLCLKS;wc.lpfnWndProc=testProc;wc.hInstance=GetModuleHandleW(nullptr);
+        wc.hIcon=LoadIconW(wc.hInstance,IDI_APPLICATION);
         wc.lpszClassName=L"MusxiPlayerTestHost";wc.hCursor=LoadCursorW(nullptr,IDC_ARROW);
         wc.hbrBackground=nullptr;RegisterClassW(&wc);
         const auto bounds=initialMainBounds();
         testWindow=CreateWindowExW(WS_EX_NOREDIRECTIONBITMAP,wc.lpszClassName,L"Musxi Player 测试版",WS_POPUP|WS_THICKFRAME|WS_MINIMIZEBOX|WS_MAXIMIZEBOX|WS_SYSMENU|WS_CLIPCHILDREN,
             bounds.left,bounds.top,bounds.right-bounds.left,bounds.bottom-bounds.top,nullptr,nullptr,wc.hInstance,nullptr);
         if(!testWindow){createFailed=true;PostMessageW(nativeWindow,WM_CLOSE,0,0);return;}
+        SendMessageW(testWindow,WM_SETICON,ICON_BIG,reinterpret_cast<LPARAM>(wc.hIcon));
+        SendMessageW(testWindow,WM_SETICON,ICON_SMALL,reinterpret_cast<LPARAM>(LoadImageW(wc.hInstance,IDI_APPLICATION,
+            IMAGE_ICON,GetSystemMetrics(SM_CXSMICON),GetSystemMetrics(SM_CYSMICON),LR_SHARED)));
         SetWindowPos(testWindow,nullptr,0,0,0,0,SWP_NOMOVE|SWP_NOSIZE|SWP_NOZORDER|SWP_FRAMECHANGED);
         info.SetAsWindowless(testWindow);
     } else info.SetAsPopup(nullptr,"Musxi Player - CEF Preview");

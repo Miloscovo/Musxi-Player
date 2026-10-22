@@ -1,5 +1,15 @@
 # Musxi fixed FFmpeg source delivery
 
+## v0.5.0
+
+The v0.5.0 installer retains the audited CEF and both FFmpeg binary sets used
+by v0.4.0. The fixed third-party source directions below continue to apply.
+Application source is available at the v0.5.0 tag; the installed
+`release-source-record.json` identifies the exact clean application commit.
+Release uploads contain the Windows x64 installer and its update manifest.
+The Windows launcher uses the application artwork documented in
+`THIRD_PARTY_NOTICES.md`; the original SDK remains unchanged.
+
 ## v0.4.0
 
 The v0.4.0 installer retains the audited CEF and both FFmpeg binary sets used

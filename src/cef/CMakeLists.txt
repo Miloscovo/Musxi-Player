@@ -42,7 +42,17 @@ set_target_properties(cef_host PROPERTIES OUTPUT_NAME MusxiPlayerWeb)
 set(CEF_TARGET cef_host)
 SET_CEF_TARGET_OUT_DIR()
 set_target_properties(cef_host PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CEF_TARGET_OUT_DIR}")
-COPY_SINGLE_FILE(cef_host "${CEF_BINARY_DIR}/bootstrap.exe" "${CEF_TARGET_OUT_DIR}/MusxiPlayerWeb.exe")
+set(MUSXI_APPLICATION_ICON "${PROJECT_SOURCE_DIR}/assets/icons/musxi.ico")
+add_custom_command(OUTPUT "${CEF_TARGET_OUT_DIR}/MusxiPlayerWeb.exe"
+  COMMAND "${MUSXI_POWERSHELL}" -NoProfile -ExecutionPolicy Bypass
+    -File "${PROJECT_SOURCE_DIR}/scripts/set-application-icon.ps1"
+    -BootstrapPath "${CEF_BINARY_DIR}/bootstrap.exe"
+    -OutputPath "${CEF_TARGET_OUT_DIR}/MusxiPlayerWeb.exe" -IconPath "${MUSXI_APPLICATION_ICON}"
+  DEPENDS "${CEF_BINARY_DIR}/bootstrap.exe" "${MUSXI_APPLICATION_ICON}"
+    "${PROJECT_SOURCE_DIR}/scripts/set-application-icon.ps1"
+  VERBATIM)
+add_custom_target(cef_bootstrap DEPENDS "${CEF_TARGET_OUT_DIR}/MusxiPlayerWeb.exe")
+add_dependencies(cef_host cef_bootstrap)
 COPY_FILES(cef_host "${CEF_BINARY_FILES}" "${CEF_BINARY_DIR}" "${CEF_TARGET_OUT_DIR}")
 COPY_FILES(cef_host "${CEF_RESOURCE_FILES}" "${CEF_RESOURCE_DIR}" "${CEF_TARGET_OUT_DIR}")
 option(MUSXI_BUILD_VUE_UI "Build and deploy the Vue application" ON)
@@ -66,6 +76,11 @@ if(MUSXI_BUILD_VUE_UI)
 endif()
 add_dependencies(cef_host cef_ui_assets)
 if(BUILD_TESTING)
+  add_test(NAME application-icon COMMAND "${MUSXI_POWERSHELL}" -NoProfile -ExecutionPolicy Bypass
+    -File "${PROJECT_SOURCE_DIR}/tests/application-icon.ps1"
+    -BootstrapPath "${CEF_BINARY_DIR}/bootstrap.exe" -IconPath "${MUSXI_APPLICATION_ICON}"
+    -WorkRoot "${PROJECT_BINARY_DIR}/icon-test" -ApplicationPath "${CEF_TARGET_OUT_DIR}/MusxiPlayerWeb.exe")
+  set_tests_properties(application-icon PROPERTIES TIMEOUT 30)
   add_custom_command(TARGET cef_ui_assets POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_directory
     "${CMAKE_SOURCE_DIR}/tests/fixtures/updates-smoke" "${CEF_TARGET_OUT_DIR}/updates-smoke")
   add_custom_command(TARGET cef_ui_assets POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_directory

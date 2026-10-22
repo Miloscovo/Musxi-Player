@@ -15,6 +15,7 @@ OutputBaseFilename=MusxiPlayer-Test-0.2-Setup-x64
 Compression=lzma2/fast
 SolidCompression=yes
 WizardStyle=modern
+SetupIconFile=..\assets\icons\musxi.ico
 UninstallDisplayIcon={app}\MusxiPlayerTest.exe
 CloseApplications=yes
 CloseApplicationsFilter=MusxiPlayerTest.exe

@@ -31,6 +31,16 @@ public class TrayCheck {
  [DllImport("user32.dll")] public static extern uint GetDpiForWindow(IntPtr window);
  [DllImport("user32.dll")] public static extern IntPtr SetThreadDpiAwarenessContext(IntPtr context);
  [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr window,uint msg,IntPtr wp,IntPtr lp);
+ [DllImport("shell32.dll",CharSet=CharSet.Unicode)] public static extern bool Shell_NotifyIcon(uint message,ref NotifyIconData data);
+ [StructLayout(LayoutKind.Sequential,CharSet=CharSet.Unicode)] public struct NotifyIconData {
+  public uint size;public IntPtr window;public uint id,flags,message;public IntPtr icon;
+  [MarshalAs(UnmanagedType.ByValTStr,SizeConst=128)]public string tip;
+  public uint state,stateMask;
+  [MarshalAs(UnmanagedType.ByValTStr,SizeConst=256)]public string info;
+  public uint timeout;
+  [MarshalAs(UnmanagedType.ByValTStr,SizeConst=64)]public string title;
+  public uint infoFlags;public Guid guid;public IntPtr balloonIcon;
+ }
  public struct Rect {public int left,top,right,bottom;}
  public struct Point {public int x,y;}
  public struct MonitorInfo {public int size;public Rect monitor,work;public uint flags;}
@@ -115,6 +125,8 @@ $originalCursor=New-Object TrayCheck+Point;[void][TrayCheck]::GetCursorPos([ref]
 try {
  Wait-For { (Find-TestWindow 'MusxiPlayerTestHost') -ne [IntPtr]::Zero } 'No test window (close an existing test instance before running)'
  $window=Find-TestWindow 'MusxiPlayerTestHost';Start-Sleep -Seconds 2
+ if([TrayCheck]::SendMessage($window,0x7F,[IntPtr]0,[IntPtr]::Zero) -eq [IntPtr]::Zero -or
+    [TrayCheck]::SendMessage($window,0x7F,[IntPtr]1,[IntPtr]::Zero) -eq [IntPtr]::Zero) {throw 'Main window application icons were not assigned'}
  # Keep the page and its hit regions fixed until interactive resize ends.
  $beforeResize=New-Object TrayCheck+Rect;[void][TrayCheck]::GetWindowRect($window,[ref]$beforeResize)
  $resizeScale=[TrayCheck]::GetDpiForWindow($window)/96.0
@@ -178,10 +190,13 @@ try {
  }
  $icon=New-Object TrayCheck+IconIdentifier
  $icon.size=[Runtime.InteropServices.Marshal]::SizeOf($icon);$icon.window=$window;$icon.id=1
+ $tray=New-Object TrayCheck+NotifyIconData
+ $tray.size=[Runtime.InteropServices.Marshal]::SizeOf($tray);$tray.window=$window;$tray.id=1
  Wait-For {
   $bounds=New-Object TrayCheck+Rect
-  [TrayCheck]::Shell_NotifyIconGetRect([ref]$icon,[ref]$bounds) -eq 0
- } 'Tray icon is missing before the first minimize'
+  # Overflow-hidden icons may have no rectangle; a no-op NIM_MODIFY still confirms registration.
+  [TrayCheck]::Shell_NotifyIconGetRect([ref]$icon,[ref]$bounds) -eq 0 -or [TrayCheck]::Shell_NotifyIcon(1,[ref]$tray)
+ } 'Tray icon was not registered before the first minimize'
  if([TrayCheck]::IsIconic($window)){throw 'Startup unexpectedly minimized the main window'}
  Click-Close;Key 27;Start-Sleep -Milliseconds 200
  if(-not [TrayCheck]::IsWindowVisible($window)){throw 'Cancel hid the window'}
