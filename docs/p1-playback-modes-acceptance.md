@@ -1,10 +1,12 @@
 # P1 随机/循环验收（2026-10-20）
 
+> 历史专项记录：以下只对应文中日期、包和测试范围；当前状态以 [0.1 验收](android-0.1-acceptance.md) 为准。本机证据路径仅用于本地复查，不随仓库分发。
+
 本文件保留 P1 播放模式阶段的验收记录，当时持久队列、歌词和最近播放尚未实现；同日后续实现和当前限制见 [P1数据验收](p1-data-acceptance.md)。接口见 [P1 后端接线](frontend-backend-contract-p1.md)。正式前端无需先接通，后端可通过固定 debug 命令与真实 MediaSession 独立验收。
 
 ## 构建
 
-在 `C:\text\Musxi-Player安卓` 执行 `./build.ps1 -Test -Lint` 成功：173 项既有 JUnit 全通过、0 failures/errors/skipped；六个 Android 模块 Lint 0 errors，warnings：app 35、accounts 1、playback 2、酷狗 1、QQ 1、网易云 5。本轮没有新增生产依赖，没有改 cc 的 UI 或主题。
+在 `<project-root>` 执行 `./build.ps1 -Test -Lint` 成功：173 项既有 JUnit 全通过、0 failures/errors/skipped；六个 Android 模块 Lint 0 errors，warnings：app 35、accounts 1、playback 2、酷狗 1、QQ 1、网易云 5。本轮没有新增生产依赖，没有改 cc 的 UI 或主题。
 
 debug APK SHA-256：`da47c35f1bfc06e95c49bac53097d996cd34e56b7a243b0a50d5c81209b7b358`。v2 签名验证通过，覆盖安装至 OPPO PJF110 / Android 16。核对既有 release 合并清单无本项目 debug Application/Receiver/FocusActivity；P1ValidationRunner 只存在于 debug 源集。本轮没有发布 release 包或提交/推送。
 

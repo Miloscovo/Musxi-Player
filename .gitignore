@@ -16,3 +16,6 @@ keystore.properties
 signing.properties
 .env
 .env.*
+
+# Local source checkpoints, device evidence and maintenance records
+/.local/

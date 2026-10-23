@@ -1,5 +1,11 @@
 # P1 后端接线（2026-10-20）
 
+2026-10-22 B1-08 最新：前台资格门禁已实现并同步主工程，先由 Media3 建立前台服务，再单次请求音频焦点；等待最多3秒，暂停/停止/换队列使旧请求失效，系统拒绝前台启动时返回 `BACKGROUND_RESTRICTED`，须前台明确重试。隔离后端392项、主工程515项测试全通过，Lint均无错误（分别9/76条警告，范围不同）。最终后端包酷狗实际播放、受控超时/暂停取消/显式重试通过；最终包两次真实QQ→网易云换源均因NETWORK停止，未将完整闭环记为通过。前一候选包后台换源及用户听音证据保留其包归属。见[B1-08修复与验收](backend-b108-acceptance-20261022.md)。
+
+2026-10-22 晚间：原文先显示、译文随后补入与 `app.lyrics.refreshTranslation()` 已实现，`LyricsState.canRefreshTranslation` 已可接线。酷狗实际 KUGOU 来源 Amazing Grace 搜索样本18/17行、播放及seek已补；三平台真实收藏切换均完整恢复（5/7/746）。控制器恢复与服务丢队列等注入边界、369项测试/Lint 0 errors/12 warnings及主工程编译见 [今晚验收](backend-evening-acceptance-20261022.md)。锁屏/长Doze/真实系统Binder回收/独立应用焦点和正式页面仍待补；前端继续由DS主导、cc辅助。
+
+2026-10-22增量：三平台行级译文均已接入，酷狗KRC的有界解码与LRC全量兼容校验已完成；统一接口见[翻译契约](frontend-backend-contract-lyrics-translation.md)，酷狗阶段350项测试和设备证据见[酷狗验收](lyrics-translation-kugou-acceptance-20261022.md)。以下标准歌词阶段描述保留历史背景；原文先发/译文后补与独立刷新已在晚间实现，见当前翻译契约；逐字/QRC仍未实现。
+
 P1 可以独立于正式前端推进。现提供随机/循环、持久队列显式恢复、最近播放、实际来源歌词。P0 继续使用 [v2 接口](frontend-backend-contract-v2.md)，未修改 cc 的 Compose 页面。所有入口在主线程调用、订阅 StateFlow；平台网络与磁盘工作在后台执行。
 
 ## 接口与状态
@@ -66,6 +72,8 @@ app.playbackJournal.clearRecent(Platform.QQ)
 
 ## 歌词
 
+2026-10-22增量：LyricLine可选translation、ParsedLyrics/LyricsState文档状态及三平台译文均已落地；网易云/QQ同响应、酷狗同候选KRC均有真机样本，详见[翻译契约](frontend-backend-contract-lyrics-translation.md)。按实际sourceKey加载原文及译文，独立译文刷新仍待做。
+
 ```kotlin
 val lyrics = app.lyrics.state // StateFlow<LyricsState>，自动跟随当前播放
 app.lyrics.refresh()         // 用户显式重试
@@ -73,7 +81,7 @@ app.lyrics.refresh()         // 用户显式重试
 
 `LyricsState` 提供 `sourceKey`、`status`（IDLE/LOADING/TIMED/PLAIN/EMPTY/ERROR）、`lines: List<LyricLine(timeMs,text)>`、`plainText`、`activeIndex`（无当前行时 -1）、`error`。`PlaybackState.sourceKey` 是实际播放来源的公开歌曲 key；原 `mediaId` 和 `queuePlatform` 仍指原队列。歌词按 sourceKey 请求，换源候选搜索/选择期间清掉旧歌词；源/原队列/任一相关账号代数或验证状态变化均拒绝迟到请求。歌词失败不影响音频，也不会每 500ms 自动重试。
 
-三平台仅支持标准逐行 LRC/纯文本，不包含翻译、逐字、卡拉 OK、QRC/KRC 解密。QQ 使用固定 CGI 的 `crypt=0,qrc=0` 标准路线；酷狗按实际 hash+album_audio_id 搜索，再以 `fmt=lrc` 下载并严格 Base64/UTF-8 解码；网易云使用固定 song/lyric EAPI。具体平台成功证据与兼容性限制见本轮验收文档。
+三平台支持逐行LRC/纯文本与可选行级译文，逐字/卡拉OK/QRC仍未实现。QQ使用固定CGI的crypt=0/qrc=0并同响应取trans，网易云固定song/lyric EAPI取tlyric；酷狗实际hash+album_audio_id同候选下载LRC/KRC，有界解码及全文/时间兼容后附译文。具体限制与当前设备结果见翻译契约及酷狗阶段验收。
 
 三平台已实际返回标准歌词。酷狗空响应已通过改用同一官方 HTTPS 主机的 `/search` 修复，保留实际来源hash+album_audio_id查询及 `fmt=lrc` 下载；三首真机63/46/53行及seek同步通过。空响应仍显示ERROR/protocol，不将它当作EMPTY/无歌词，也不阻塞音频。证据与范围见 [P1数据验收](p1-data-acceptance.md)。
 

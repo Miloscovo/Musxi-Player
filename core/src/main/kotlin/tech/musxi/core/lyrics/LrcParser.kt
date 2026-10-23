@@ -4,15 +4,19 @@ import java.util.Collections
 
 data class LyricLine(
     val timeMs: Long,
-    val text: String
+    val text: String,
+    /** Optional, already aligned to this original row; null means no displayable translation. */
+    val translation: String? = null,
 )
 
 data class ParsedLyrics(
     val lines: List<LyricLine>,
-    val plainText: String
+    val plainText: String,
+    val translation: LyricsTranslation = LyricsTranslation(),
 )
 
 object LrcParser {
+    internal data class Timeline(val lyrics: ParsedLyrics, val signedTimes: List<Long>)
     private const val MAX_UTF8_BYTES = 512 * 1024
     private const val MAX_SOURCE_LINES = 10_000
     private const val MAX_LINE_CHARACTERS = 4_096
@@ -24,7 +28,10 @@ object LrcParser {
         RegexOption.IGNORE_CASE
     )
 
-    fun parse(text: String): ParsedLyrics {
+    fun parse(text: String): ParsedLyrics = timeline(text).lyrics
+
+    /** Keeps pre-clamp times alongside display rows so negative offsets cannot create false matches. */
+    internal fun timeline(text: String): Timeline {
         validateInput(text)
 
         val normalized = text.replace("\r\n", "\n").replace('\r', '\n')
@@ -68,28 +75,30 @@ object LrcParser {
             }
         }
 
+        var signedTimes: List<Long> = emptyList()
         val sortedLines = if (hasValidTimestamp) {
             val adjustedLines = timedLines.mapTo(ArrayList(timedLines.size)) { line ->
                 val adjusted = (line.timeMs + offsetMs).coerceAtLeast(0L)
                 if (adjusted > MAX_TIME_MS) invalidLyrics()
-                line.copy(timeMs = adjusted)
+                line
             }
             adjustedLines.sortWith(
-                compareBy<TimedLine> { it.timeMs }.thenBy { it.sequence }
+                compareBy<TimedLine> { (it.timeMs + offsetMs).coerceAtLeast(0L) }.thenBy { it.sequence }
             )
+            signedTimes = adjustedLines.map { it.timeMs + offsetMs }
             Collections.unmodifiableList(
                 adjustedLines.mapTo(ArrayList(adjustedLines.size)) {
-                    LyricLine(it.timeMs, it.text)
+                    LyricLine((it.timeMs + offsetMs).coerceAtLeast(0L), it.text)
                 }
             )
         } else {
             Collections.emptyList()
         }
 
-        return ParsedLyrics(
+        return Timeline(ParsedLyrics(
             lines = sortedLines,
             plainText = cleanPlainText(plainLines)
-        )
+        ), signedTimes)
     }
 
     fun activeIndex(lines: List<LyricLine>, positionMs: Long): Int {

@@ -290,4 +290,142 @@ class LibraryBrowserTest {
         assertEquals(1, f.playlistCalls.size)
     }
 
+    @Test fun invalidationRejectsChangedAndUnverifiedIdentityWithoutCancel() {
+        val f = Fixture()
+        val identity = f.identity!!
+        f.identity = identity.copy(generation = 2)
+        f.browser.invalidate(identity)
+        f.identity = identity.copy(verified = false)
+        f.browser.invalidate(identity)
+        assertEquals(0L, f.browser.state.value.invalidationRevision)
+        assertFalse(f.browser.state.value.stale)
+    }
+
+    @Test fun invalidationSkipsCacheAndLateOldRequestCannotOverwrite() {
+        val f = Fixture()
+        f.store.playlists = saved
+        f.browser.playlists()
+        f.flush()
+        val old = f.playlistCalls.single()
+        val identity = f.identity!!
+
+        f.browser.invalidate(identity)
+        assertTrue(f.browser.state.value.stale)
+        assertEquals(1L, f.browser.state.value.invalidationRevision)
+        assertEquals("Saved", (f.browser.state.value.content as LibraryContent.Playlists).page.items.single().title)
+        assertEquals(2, f.playlistCalls.size)
+        old(Result.success(fresh))
+        assertEquals("Saved", (f.browser.state.value.content as LibraryContent.Playlists).page.items.single().title)
+        assertEquals(2, f.playlistCalls.size)
+    }
+
+    @Test fun invalidationFailureKeepsContentAndStaleThenOrdinaryOpenCannotUseOldCache() {
+        val f = Fixture()
+        f.store.playlists = saved
+        f.browser.playlists()
+        f.flush()
+        f.playlistCalls.single()(Result.success(fresh))
+        f.flush()
+        val identity = f.identity!!
+
+        f.browser.invalidate(identity)
+        f.playlistCalls.last()(Result.failure(LibraryPageFailure("network")))
+        var state = f.browser.state.value
+        assertEquals("Fresh", (state.content as LibraryContent.Playlists).page.items.single().title)
+        assertEquals(LibrarySource.NETWORK, state.source)
+        assertEquals(200L, state.fetchedAtEpochMs)
+        assertEquals("network", state.error)
+        assertTrue(state.stale)
+        assertEquals(1L, state.invalidationRevision)
+
+        f.store.playlists = saved
+        f.browser.playlists(refresh = false)
+        f.flush()
+        state = f.browser.state.value
+        assertEquals("Saved", (state.content as LibraryContent.Playlists).page.items.single().title)
+        assertTrue(state.stale)
+        assertEquals(LibrarySource.CACHE, state.source)
+    }
+
+    @Test fun successfulInvalidationClearsStaleAndKeepsRevisionAcrossOpen() {
+        val f = Fixture()
+        f.store.playlists = saved
+        f.browser.playlists()
+        f.flush()
+        waitForSuccessfulNetwork(f, "Fresh")
+        val identity = f.identity!!
+
+        f.browser.invalidate(identity)
+        f.playlistCalls.last()(Result.success(fresh))
+        f.flush()
+        var state = f.browser.state.value
+        assertFalse(state.stale)
+        assertEquals(1L, state.invalidationRevision)
+
+        f.browser.playlists()
+        f.flush()
+        state = f.browser.state.value
+        assertEquals(1L, state.invalidationRevision)
+        assertFalse(state.stale)
+        f.playlistCalls.last()(Result.success(fresh))
+        f.flush()
+        assertEquals(1L, f.browser.state.value.invalidationRevision)
+        assertFalse(f.browser.state.value.stale)
+
+        f.identity = identity.copy(generation = 2, verified = false)
+        f.browser.accountChanged()
+        assertEquals(1L, f.browser.state.value.invalidationRevision)
+    }
+
+    @Test fun invalidationBeforeAccountCollectorRunsNeverRetainsOtherOwnersTracks() {
+        val f = Fixture()
+        f.browser.tracks(playlist); f.flush()
+        f.trackCalls.single()(Result.success(Page(listOf(SongSummary(
+            MediaKey(Platform.NETEASE, "1"), "Private old song", emptyList(), "", 1000)), null, 1)))
+        f.flush()
+        val old = f.trackCalls.single()
+        f.identity = LibraryCacheIdentity("b".repeat(64), 2, true)
+        // Favorites can deliver before the account StateFlow collector.
+        f.browser.invalidate(f.identity!!)
+        assertNull(f.browser.state.value.content)
+        assertNull(f.browser.state.value.query.playlist)
+        assertEquals(1L, f.browser.state.value.invalidationRevision)
+        assertEquals(1, f.playlistCalls.size)
+        old(Result.success(Page(emptyList(), null, 0))); f.flush()
+        assertNull(f.browser.state.value.content)
+    }
+
+    @Test fun anotherOwnerDoesNotInheritPreviousOwnersStaleFlag() {
+        val f = Fixture()
+        f.browser.playlists(); f.flush()
+        f.browser.invalidate(f.identity!!)
+        assertTrue(f.browser.state.value.stale)
+        f.identity = LibraryCacheIdentity("b".repeat(64), 2, true)
+        f.browser.accountChanged(); f.flush()
+        assertFalse(f.browser.state.value.stale)
+        assertNull(f.browser.state.value.content)
+        assertEquals(1L, f.browser.state.value.invalidationRevision)
+    }
+
+    @Test fun failedCacheWriteAfterInvalidationCannotMakeOldDiskPageFresh() {
+        val f = Fixture(); f.store.playlists = saved
+        f.browser.playlists(); f.flush()
+        f.browser.invalidate(f.identity!!)
+        f.store.fail = true
+        f.playlistCalls.last()(Result.success(fresh)); f.flush()
+        assertFalse(f.browser.state.value.stale)
+        assertTrue(f.browser.state.value.storageError)
+        assertEquals("Fresh", (f.browser.state.value.content as LibraryContent.Playlists).page.items.single().title)
+        f.store.fail = false
+        f.browser.playlists(refresh = false); f.flush()
+        assertTrue(f.browser.state.value.stale)
+        assertEquals("Saved", (f.browser.state.value.content as LibraryContent.Playlists).page.items.single().title)
+    }
+
+    private fun waitForSuccessfulNetwork(f: Fixture, title: String) {
+        f.playlistCalls.last()(Result.success(fresh))
+        f.flush()
+        assertEquals(title, ((f.browser.state.value.content as LibraryContent.Playlists).page.items.single()).title)
+    }
+
 }

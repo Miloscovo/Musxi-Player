@@ -6,6 +6,20 @@ import tech.musxi.core.library.*
 
 /** Fixed synthetic loader failures for device acceptance. Entire class is absent from release. */
 class DebugMusxiApplication : MusxiApplication() {
+    var translationDelayOnce = false
+    var translationFailureOnce = false
+    override fun fetchLyricsTranslation(key: MediaKey, original: tech.musxi.core.lyrics.ParsedLyrics,
+        refresh: Boolean, result: (Result<tech.musxi.core.lyrics.ParsedLyrics>) -> Unit) {
+        val delayed = translationDelayOnce
+        val failed = translationFailureOnce
+        translationDelayOnce = false; translationFailureOnce = false
+        val task = Runnable {
+            if (failed) result(Result.failure(LibraryPageFailure("network")))
+            else super.fetchLyricsTranslation(key, original, refresh, result)
+        }
+        if (delayed) android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(task, 4_500)
+        else task.run()
+    }
     override fun onFavoriteDiagnostic(platform: tech.musxi.core.account.Platform, operation: String, category: String) {
         getSharedPreferences("p2-favorite-diagnostic", MODE_PRIVATE).edit()
             .putString(platform.name.lowercase(), "${operation}_$category").apply()

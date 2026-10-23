@@ -39,9 +39,15 @@ class SourceSelection(private val now: () -> Long) {
     }
     fun offer(token: Long, result: AlternativeSources) {
         if (token != revision || mutable.value.phase != SourceSelectionPhase.SEARCHING) return
+        // The active original owns the search; a mismatched response cannot replace its identity.
+        val activeOriginal = mutable.value.original ?: return
+        if (result.original.key != activeOriginal.key) return
+        // The repository may enrich an unavailable original's missing display metadata.
+        val original = result.original
         val items = result.candidates.filter { it.song.key.platform != result.original.key.platform }
             .distinctBy { it.song.key }.take(20).toList()
-        val first = items.indexOfFirst { sameTitle(result.original.title, it.song.title) }.takeIf { it >= 0 }
+        val first = items.indexOfFirst { SourceMatchPolicy.assess(original, it.song) == SourceMatchReason.ELIGIBLE }
+            .takeIf { it >= 0 }
         mutable.value = SourceSelectionState(token,
             if (items.isEmpty()) SourceSelectionPhase.FAILED else SourceSelectionPhase.CHOOSING,
             result.original, items, deadlineElapsedMs = first?.let { now() + AUTO_SELECT_MS },

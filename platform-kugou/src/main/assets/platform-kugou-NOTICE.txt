@@ -33,7 +33,15 @@ No new production dependency or license change is included.
 
 2026-10-20 standard LRC requests additionally adapt module/search_lyric.js
 and module/lyric.js from the same pinned source, with fmt=lrc and bounded
-Base64/UTF-8 decoding. KRC/word-level decryption is not included.
+Base64/UTF-8 decoding. This historical LRC entry was extended below.
 Local compatibility change: use the same official HTTPS host's /search route
 instead of /v1/search (empty HTTP 200 response observed on host and device).
 Source identifiers, signing and standard LRC download/decoding are retained.
+
+2026-10-22 optional KRC translation uses the same pinned module/lyric.js
+request with fmt=krc and the same hash-scoped candidate as the LRC request.
+The KRC1 XOR/zlib container and language metadata are decoded with bounded
+JDK/Android facilities, following this project's services/krc.cjs and
+src/lyrics/krc.cpp reference. Only validated v1 type=1/language=0 line
+translations are exposed after original-text/timeline compatibility checks.
+Romanization is excluded. No new runtime dependency or word-level UI API.

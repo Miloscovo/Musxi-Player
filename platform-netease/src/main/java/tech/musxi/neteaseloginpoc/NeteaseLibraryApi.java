@@ -59,6 +59,18 @@ public final class NeteaseLibraryApi {
             this.id = id; this.url = url; this.bitrate = bitrate; this.expiresAtElapsedMs = expiresAtElapsedMs;
         }
     }
+    public enum TranslationStatus { PRESENT, ABSENT, INVALID }
+    public static final class LyricsDocument {
+        public final String original;
+        public final String translation;
+        public final TranslationStatus translationStatus;
+        LyricsDocument(String original, String translation, TranslationStatus translationStatus) {
+            this.original = original;
+            this.translation = translation;
+            this.translationStatus = translationStatus;
+        }
+        @Override public String toString() { return "LyricsDocument{redacted}"; }
+    }
 
     public Page<Playlist> playlists(NeteaseApi.Session session, int offset, int limit) throws IOException {
         pageBounds(offset, limit);
@@ -126,10 +138,15 @@ public final class NeteaseLibraryApi {
 
     /** Standard LRC only, using the pinned module/lyric.js EAPI request. */
     public String lyrics(NeteaseApi.Session session, String trackId) throws IOException {
+        return lyricsDocument(session, trackId).original;
+    }
+
+    /** Fetch standard lyrics and an optional translation with one pinned LYRIC request. */
+    public LyricsDocument lyricsDocument(NeteaseApi.Session session, String trackId) throws IOException {
         id(trackId);
         JSONObject body = api.authenticatedCall(NeteaseApi.LYRIC,
                 json("id", trackId, "tv", -1, "lv", -1, "rv", -1, "kv", -1, "_nmclfl", 1), session);
-        return parseLyrics(body);
+        return parseLyricsDocument(body);
     }
 
     /** Read the pinned module/likelist.js EAPI snapshot for the current session account. */
@@ -292,6 +309,53 @@ public final class NeteaseLibraryApi {
         if (lyric.getBytes(java.nio.charset.StandardCharsets.UTF_8).length > 512 * 1024)
             throw error("limit");
         return flagged || lyric.isEmpty() ? "" : lyric;
+    }
+
+    static LyricsDocument parseLyricsDocument(JSONObject body) throws IOException {
+        String original = parseLyrics(body);
+        if (original.isEmpty()) return new LyricsDocument(original, null, TranslationStatus.ABSENT);
+        if (!body.has("tlyric") || body.isNull("tlyric"))
+            return new LyricsDocument(original, null, TranslationStatus.ABSENT);
+        JSONObject translated = body.optJSONObject("tlyric");
+        if (translated == null) return new LyricsDocument(original, null, TranslationStatus.INVALID);
+        if (!translated.has("lyric") || translated.isNull("lyric"))
+            return new LyricsDocument(original, null, TranslationStatus.ABSENT);
+        Object value = translated.opt("lyric");
+        if (!(value instanceof String)) return new LyricsDocument(original, null, TranslationStatus.INVALID);
+        String translation = (String)value;
+        if (!validLyricText(translation, 256 * 1024))
+            return new LyricsDocument(original, null, TranslationStatus.INVALID);
+        if (isBlank(translation)) return new LyricsDocument(original, null, TranslationStatus.ABSENT);
+        return new LyricsDocument(original, translation, TranslationStatus.PRESENT);
+    }
+
+    private static boolean isBlank(String value) {
+        for (int i = 0; i < value.length();) {
+            int codePoint = value.codePointAt(i);
+            if (!Character.isWhitespace(codePoint) && !Character.isSpaceChar(codePoint)) return false;
+            i += Character.charCount(codePoint);
+        }
+        return true;
+    }
+
+    private static boolean validLyricText(String value, int maximumBytes) {
+        long bytes = 0;
+        for (int i = 0; i < value.length();) {
+            char current = value.charAt(i);
+            if (Character.isHighSurrogate(current)) {
+                if (i + 1 >= value.length() || !Character.isLowSurrogate(value.charAt(i + 1))) return false;
+                bytes += 4;
+                i += 2;
+                continue;
+            }
+            if (Character.isLowSurrogate(current)) return false;
+            if (Character.isISOControl(current) && current != '\n' && current != '\r' && current != '\t')
+                return false;
+            bytes += current < 0x80 ? 1 : current < 0x800 ? 2 : 3;
+            if (bytes > maximumBytes) return false;
+            i++;
+        }
+        return bytes <= maximumBytes;
     }
 
     static List<String> parseLikedIds(JSONObject body) throws IOException {

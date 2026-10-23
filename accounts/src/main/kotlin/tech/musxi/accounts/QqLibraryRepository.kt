@@ -3,6 +3,7 @@ package tech.musxi.accounts
 import android.os.SystemClock
 import tech.musxi.core.account.Platform
 import tech.musxi.core.library.*
+import tech.musxi.core.diagnostics.RequestOperation
 import tech.musxi.qqloginpoc.QqMusicApi
 import tech.musxi.qqloginpoc.QqLibraryApi
 
@@ -32,7 +33,7 @@ class QqLibraryRepository(private val accounts: AccountRepository) : LibraryPage
             Page(page.items.map { PlaylistSummary(MediaKey(Platform.QQ, it.id), it.name,
                 ArtworkPolicy.sanitize(Platform.QQ, it.coverUrl), it.trackCount) },
                 page.nextOffset.takeIf { it >= 0 }, page.total.takeIf { it >= 0 })
-        }, safe(result))
+        }, safe(result), RequestOperation.PLAYLISTS)
     }
     override fun tracks(playlist: MediaKey, offset: Int, result: (Result<Page<SongSummary>>) -> Unit) {
         require(playlist.platform == Platform.QQ)
@@ -41,7 +42,7 @@ class QqLibraryRepository(private val accounts: AccountRepository) : LibraryPage
             val page = QqLibraryApi(api) { accounts.isQqGenerationConnected(generation) }.tracks(session, playlist.id, offset, 30)
             Page(page.items.map(::summary),
                 page.nextOffset.takeIf { it >= 0 }, page.total.takeIf { it >= 0 })
-        }, safe(result))
+        }, safe(result), RequestOperation.TRACKS)
     }
     fun search(keywords: String, result: (Result<List<SongSummary>>) -> Unit) {
         val generation = accounts.states.value.getValue(Platform.QQ).generation
@@ -49,7 +50,7 @@ class QqLibraryRepository(private val accounts: AccountRepository) : LibraryPage
             QqLibraryApi(api) { accounts.isQqGenerationConnected(generation) }.search(session, keywords)
                 .take(10)
                 .map(::summary)
-        }, safe(result))
+        }, safe(result), RequestOperation.SEARCH)
     }
     fun searchPage(keywords: String, offset: Int, result: (Result<Page<SongSummary>>) -> Unit,
         isCurrent: () -> Boolean = { true }) {
@@ -61,7 +62,7 @@ class QqLibraryRepository(private val accounts: AccountRepository) : LibraryPage
                 .search(session, keywords, offset, 30)
             if (!isCurrent()) throw LibraryFailure("cancelled")
             Page(page.items.map(::summary), page.nextOffset.takeIf { it >= 0 }, page.total.takeIf { it >= 0 })
-        }, safe(result))
+        }, safe(result), RequestOperation.SEARCH)
     }
     fun song(key: MediaKey, result: (Result<SongSummary>) -> Unit) {
         require(key.platform == Platform.QQ)
@@ -69,7 +70,7 @@ class QqLibraryRepository(private val accounts: AccountRepository) : LibraryPage
         accounts.withQqSession({ api, session ->
             val item = QqLibraryApi(api) { accounts.isQqGenerationConnected(generation) }.song(session, key.id)
             summary(item)
-        }, safe(result))
+        }, safe(result), RequestOperation.SONG)
     }
     fun queue(playlist: MediaKey, startSong: MediaKey, result: (Result<PlaybackQueue>) -> Unit) {
         require(playlist.platform == Platform.QQ && startSong.platform == Platform.QQ)
@@ -102,7 +103,7 @@ class QqLibraryRepository(private val accounts: AccountRepository) : LibraryPage
             val index = songs.indexOfFirst { it.key == startSong }
             if (index < 0) throw LibraryFailure("incomplete")
             PlaybackQueue(songs, index, generation)
-        }, safe(result))
+        }, safe(result), RequestOperation.QUEUE)
     }
     fun resolveAudio(song: MediaKey, result: (Result<AudioCapability>) -> Unit) {
         require(song.platform == Platform.QQ)
@@ -110,7 +111,7 @@ class QqLibraryRepository(private val accounts: AccountRepository) : LibraryPage
         accounts.withQqSession({ api, session ->
             val audio = QqLibraryApi(api) { accounts.isQqGenerationConnected(generation) }.audio(session, song.id, SystemClock.elapsedRealtime())
             AudioCapability(audio.url, audio.expiresAtElapsedMs) { accounts.isQqGenerationConnected(generation) }
-        }, safe(result))
+        }, safe(result), RequestOperation.AUDIO)
     }
     class AudioCapability internal constructor(private val url: String, private val expiresAt: Long, private val current: () -> Boolean) {
         fun deliverToPlayer(deliver: (String) -> Unit) {

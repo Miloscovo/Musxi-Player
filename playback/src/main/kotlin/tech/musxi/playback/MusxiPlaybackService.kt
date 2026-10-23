@@ -5,6 +5,7 @@ import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.ForwardingSimpleBasePlayer
@@ -70,6 +71,26 @@ class MusxiPlaybackService : MediaSessionService() {
     private var recoveryEpoch = 0L
     private var playbackWanted = false
     private var checkpointReady = false
+    private var refreshSessionState: (() -> Unit)? = null
+    private var validationHoldForeground = false
+    private val foregroundGate = ForegroundPlaybackGate(
+        now = { SystemClock.elapsedRealtime() },
+        isForeground = { isPlaybackOngoing && !validationHoldForeground },
+        schedule = { delayMs, action ->
+            val runnable = Runnable(action)
+            main.postDelayed(runnable, delayMs)
+            val cancel: () -> Unit = { main.removeCallbacks(runnable) }
+            cancel
+        },
+        changed = { refreshSessionState?.invoke() },
+        ready = {
+            trace("foreground_gate_ready foreground=$isPlaybackOngoing")
+            player.play()
+        },
+        denied = {
+            foregroundStartDenied()
+        }
+    )
     private var historyTicket: String? = null
     private val checkpointTask = Runnable {
         checkpoint()
@@ -110,6 +131,13 @@ class MusxiPlaybackService : MediaSessionService() {
 
     override fun onCreate() {
         super.onCreate()
+        setListener(object : MediaSessionService.Listener {
+            override fun onForegroundServiceStartNotAllowedException() {
+                if (foregroundGate.pending) foregroundStartDenied()
+            }
+        })
+        if (applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE != 0)
+            validationService = java.lang.ref.WeakReference(this)
         provider = (application as PlaybackHost).playbackSources
         sources = QueueSources(provider)
         val dataSource = ResolvingDataSource.Factory(DefaultHttpDataSource.Factory()
@@ -193,8 +221,9 @@ class MusxiPlaybackService : MediaSessionService() {
             override fun getState(): SimpleBasePlayer.State {
                 val state = super.getState()
                 val waiting = playbackWanted && failure == null &&
-                    selection.state.value.phase != SourceSelectionPhase.FAILED &&
-                    state.playerError?.let(::isSourceSelectionError) == true
+                    (foregroundGate.pending ||
+                        (selection.state.value.phase != SourceSelectionPhase.FAILED &&
+                            state.playerError?.let(::isSourceSelectionError) == true))
                 return if (waiting) state.buildUpon().setPlayerError(null)
                     .setPlaybackState(Player.STATE_BUFFERING)
                     .setPlayWhenReady(true, Player.PLAY_WHEN_READY_CHANGE_REASON_USER_REQUEST).build() else state
@@ -205,20 +234,29 @@ class MusxiPlaybackService : MediaSessionService() {
                 else retryFromCommand()
                 // A controller may send play() without prepare(), including while
                 // the session presents an outstanding source selection as buffering.
-                if (playWhenReady && player.playerError != null) player.prepare()
+                if (playWhenReady) {
+                    beginGatedPlayback()
+                    return Futures.immediateVoidFuture()
+                }
                 return super.handleSetPlayWhenReady(playWhenReady)
             }
             override fun handleSeek(mediaItemIndex: Int, positionMs: Long, seekCommand: Int): ListenableFuture<*> {
-                val resume = playbackWanted && player.playbackState == Player.STATE_IDLE
+                val resume = playbackWanted && (foregroundGate.pending || player.playbackState == Player.STATE_IDLE)
                 val result = super.handleSeek(mediaItemIndex, positionMs, seekCommand)
-                if (resume) { player.prepare(); player.play() }
+                if (resume) beginGatedPlayback()
                 return result
+            }
+            override fun handlePrepare(): ListenableFuture<*> {
+                if (playbackWanted) beginGatedPlayback()
+                else { player.pause(); player.prepare() }
+                return Futures.immediateVoidFuture()
             }
             override fun handleStop(): ListenableFuture<*> {
                 trace("stop_batch_ignored")
                 return Futures.immediateVoidFuture()
             }
         }
+        refreshSessionState = sessionPlayer::refresh
         // Media3's default CacheBitmapLoader(DataSourceBitmapLoader(context)) uses its
         // own public HTTP data source, independent of the opaque audio resolver above.
         session = MediaSession.Builder(this, sessionPlayer).setCallback(object : MediaSession.Callback {
@@ -347,10 +385,11 @@ class MusxiPlaybackService : MediaSessionService() {
                 } }
                 action.shuffleEnabled?.let { player.shuffleModeEnabled = it }
                 player.setMediaItems(items, queue.startIndex, action.positionMs)
-                if (action.playWhenReady) { player.prepare(); player.play() }
+                if (action.playWhenReady) beginGatedPlayback()
                 publish()
                 trace("queue_applied")
             }
+            is QueueCommandMailbox.Action.Jump -> return jumpToQueueIndex(action)
             is QueueCommandMailbox.Action.Edit -> return editQueue(action)
             is QueueCommandMailbox.Action.Insert -> return insertQueue(action)
         }
@@ -361,6 +400,28 @@ class MusxiPlaybackService : MediaSessionService() {
     private fun editable(revision: Long): Boolean = revision == queueSnapshot.value.revision &&
         queueSongs.isNotEmpty() && player.mediaItemCount == queueSongs.size &&
         activeGeneration != null && activeGeneration == activeMediaId?.let(provider::generationFor)
+
+    private fun jumpToQueueIndex(action: QueueCommandMailbox.Action.Jump): SessionResult {
+        if (!editable(action.expectedRevision)) return SessionResult(SessionError.ERROR_INVALID_STATE)
+        if (action.index !in queueSongs.indices) return SessionResult(SessionError.ERROR_BAD_VALUE)
+        val targetTicket = player.getMediaItemAt(action.index).localConfiguration?.uri?.toString()
+            ?: return SessionResult(SessionError.ERROR_INVALID_STATE)
+        host.onPlaybackStopRequested()
+        // A same-slot click is an explicit retry, retaining a healthy selected source.
+        // Read retry intent before cancelling a pending search/selection.
+        if (action.index == player.currentMediaItemIndex) retryFromCommand()
+        cancelPendingSelection()
+        player.pause()
+        // Keep every slot URI and the timeline intact, including duplicate media IDs.
+        // The normal transition listener restores the source of the slot we leave.
+        player.seekTo(action.index, 0)
+        recovery.reset(); consecutiveSkips = 0; failure = null; lastSkipped = null
+        playbackWanted = true
+        beginGatedPlayback(targetTicket)
+        publish(); checkpoint()
+        // Navigation does not edit the queue or advance its revision.
+        return SessionResult(SessionResult.RESULT_SUCCESS)
+    }
 
     private fun editQueue(action: QueueCommandMailbox.Action.Edit): SessionResult {
         if (!editable(action.expectedRevision)) return SessionResult(SessionError.ERROR_INVALID_STATE)
@@ -426,10 +487,16 @@ class MusxiPlaybackService : MediaSessionService() {
     }
 
     private fun recover(error: PlaybackException) {
+        foregroundGate.cancel()
         val ticket = currentTicket() ?: return
         val epoch = recoveryEpoch
         val selectedFailure = classify(error)
-        if (!playbackWanted) { failure = selectedFailure; player.pause(); publish(); return }
+        if (!playbackWanted) {
+            // A resolver may finish after foreground start was refused. Preserve the actionable
+            // restriction until an explicit retry, rather than replacing it with that late error.
+            if (failure != PlaybackFailure.BACKGROUND_RESTRICTED) failure = selectedFailure
+            player.pause(); publish(); return
+        }
         val action = recovery.decide(selectedFailure, player.hasNextMediaItem())
         trace("failure=${selectedFailure.name} action=${action.name}")
         main.post {
@@ -440,11 +507,11 @@ class MusxiPlaybackService : MediaSessionService() {
                 }
                 action == RecoveryAction.REFRESH_SOURCE -> {
                     sources.invalidate(ticket); refreshCount++; failure = null; publish()
-                    player.seekTo(player.currentMediaItemIndex, player.currentPosition); player.prepare()
+                    player.seekTo(player.currentMediaItemIndex, player.currentPosition); beginGatedPlayback()
                 }
                 action == RecoveryAction.SKIP_NEXT && consecutiveSkips < MAX_AUTO_SKIPS -> {
                     consecutiveSkips++; skippedCount++; lastSkipped = selectedFailure; failure = null; publish()
-                    player.seekToNextMediaItem(); player.prepare()
+                    player.seekToNextMediaItem(); beginGatedPlayback()
                 }
                 else -> { playbackWanted = false; failure = selectedFailure; player.pause(); publish() }
             }
@@ -454,6 +521,7 @@ class MusxiPlaybackService : MediaSessionService() {
 
     private fun cancelSelection() {
         recoveryEpoch++
+        foregroundGate.cancel()
         searchJob?.cancel(); searchJob = null
         selectionTimer?.cancel(); selectionTimer = null
         selection.clear()
@@ -461,6 +529,7 @@ class MusxiPlaybackService : MediaSessionService() {
 
     private fun cancelPendingSelection() {
         recoveryEpoch++
+        foregroundGate.cancel()
         if (selection.state.value.phase in setOf(SourceSelectionPhase.SEARCHING, SourceSelectionPhase.CHOOSING))
             cancelSelection()
     }
@@ -481,7 +550,7 @@ class MusxiPlaybackService : MediaSessionService() {
             selectedTicket = ticket
             updateMetadata(player.currentMediaItemIndex, candidate.song)
             recovery.reset(); failure = null; publish()
-            player.seekTo(player.currentMediaItemIndex, 0); player.prepare(); player.play()
+            player.seekTo(player.currentMediaItemIndex, 0); beginGatedPlayback(ticket)
         }, onDismiss = {
             if (currentTicket() == ticket) { playbackWanted = false; cancelSelection(); failure = reason; player.pause(); publish() }
         })
@@ -528,6 +597,37 @@ class MusxiPlaybackService : MediaSessionService() {
         }
     }
 
+    /** Request focus only after Media3 has established a foreground service, within a fixed budget. */
+    private fun beginGatedPlayback(ticket: String? = currentTicket()) {
+        if (destroyed || !playbackWanted || ticket == null) return
+        val epoch = recoveryEpoch
+        foregroundGate.cancel()
+        player.pause()
+        // prepare() must run with raw playWhenReady=false: it may request focus internally.
+        player.prepare()
+        trace("foreground_gate_wait foreground=$isPlaybackOngoing")
+        foregroundGate.start {
+            !destroyed && playbackWanted && recoveryEpoch == epoch && currentTicket() == ticket &&
+                activeGeneration != null && activeGeneration == activeMediaId?.let(provider::generationFor) &&
+                (selectedTicket != ticket || sources.sourceAuthorized(ticket))
+        }
+    }
+
+    private fun foregroundStartDenied() {
+        trace("foreground_gate_denied")
+        playbackWanted = false
+        cancelPendingSelection()
+        failure = PlaybackFailure.BACKGROUND_RESTRICTED
+        player.pause()
+        publish()
+    }
+
+    override fun onUpdateNotification(session: MediaSession, startInForegroundRequired: Boolean) {
+        trace("notification required=$startInForegroundRequired foreground=$isPlaybackOngoing gate=${foregroundGate.pending}")
+        super.onUpdateNotification(session, startInForegroundRequired)
+        trace("notification_updated foreground=$isPlaybackOngoing")
+    }
+
     private fun shouldRetryOriginal() = selection.state.value.phase in setOf(SourceSelectionPhase.SEARCHING,
         SourceSelectionPhase.CHOOSING, SourceSelectionPhase.FAILED) ||
         failure in setOf(PlaybackFailure.PERMISSION, PlaybackFailure.UNAVAILABLE) ||
@@ -535,6 +635,7 @@ class MusxiPlaybackService : MediaSessionService() {
         selectedTicket?.let { !sources.sourceAuthorized(it) } == true
 
     private fun retryFromCommand(retryOriginal: Boolean = shouldRetryOriginal()) {
+        if (failure == PlaybackFailure.BACKGROUND_RESTRICTED) { failure = null; publish() }
         if (player.playerError == null && !(retryOriginal && selectedTicket != null)) return
         trace("retry_from_command")
         recovery.reset(); consecutiveSkips = 0; failure = null
@@ -611,6 +712,7 @@ class MusxiPlaybackService : MediaSessionService() {
 
     private fun publish() {
         publishQueue()
+        refreshSessionState?.invoke()
         session?.setSessionExtras(Bundle().apply {
             putString(EXTRA_FAILURE, failure?.name); putString(EXTRA_SKIPPED, lastSkipped?.name)
             putInt(EXTRA_SKIP_COUNT, skippedCount); putInt(EXTRA_REFRESH_COUNT, refreshCount); putInt(EXTRA_AUTO_COUNT, automaticTransitions)
@@ -627,12 +729,35 @@ class MusxiPlaybackService : MediaSessionService() {
     override fun onDestroy() {
         checkpoint()
         destroyed = true; cancelSelection(); queueCommands.invalidate(); scope.cancel(); sources.clear(); main.removeCallbacksAndMessages(null)
+        refreshSessionState = null
         session?.run { player.release(); release() }; session = null
         queueSnapshot.value = PlaybackQueueState(queueSnapshot.value.revision + 1)
         super.onDestroy()
     }
 
+    /** Debug bridge injects service queue loss without erasing the persisted journal. */
+    internal fun validationForeground(hold: Boolean, fastTimeout: Boolean): Boolean {
+        if (destroyed || applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE == 0) return false
+        validationHoldForeground = hold
+        setForegroundServiceTimeoutMs(if (fastTimeout) 0L else 600_000L)
+        return true
+    }
+
+    internal fun validationForegroundState(): Pair<Boolean, Boolean> = isPlaybackOngoing to foregroundGate.pending
+
+    internal fun validationLoseQueue(): Boolean {
+        if (destroyed || applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE == 0) return false
+        checkpoint()
+        playbackWanted = false
+        cancelPendingSelection()
+        queueCommands.invalidate()
+        player.pause(); player.stop(); player.clearMediaItems()
+        publishQueue(); publish()
+        return true
+    }
+
     companion object {
+        internal var validationService: java.lang.ref.WeakReference<MusxiPlaybackService>? = null
         const val COMMAND_APPLY_QUEUE = "musxi.applyQueue"
         const val EXTRA_QUEUE_REVISION = "musxi.queueRevision"
         const val EXTRA_FAILURE = "musxi.failure"

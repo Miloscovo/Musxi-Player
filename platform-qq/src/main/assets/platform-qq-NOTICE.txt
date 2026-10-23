@@ -25,6 +25,11 @@ models/lyric.py from qqmusic-api-python 0.8.1 at the same pinned revision.
 The Android adapter requests crypt=0/qrc=0 and handles standard text/LRC;
 it does not include QRC decryption or the upstream Python dependencies.
 
+2026-10-22 translation retrieval additionally uses trans=1/trans_t=0 and
+the response trans field from those same pinned lyric modules. Original
+and translated standard LRC are decoded and bounded independently; no
+QRC decryption or additional production dependency is included.
+
 The direct-open URI follows the official public PTLogin mobile page and
 login_10.js observed on 2026-10-18. The callback restores Musxi via
 musxiplayer://login-return; it only resumes checking the original attempt,

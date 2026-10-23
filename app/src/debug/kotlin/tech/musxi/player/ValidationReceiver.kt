@@ -19,7 +19,9 @@ class ValidationReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         val app = context.applicationContext as MusxiApplication
         val step = intent.getStringExtra("step").orEmpty()
-        if (!P2ValidationRunner.run(app, step) && !P1DataValidationRunner.run(app, step) && !P1ValidationRunner.run(app, step) && !P0ValidationRunner.run(app, step)) ValidationRunner.run(app, step)
+        if (BackendSourceMatchValidationRunner.run(app, step) || BackendSystemValidationRunner.run(app, step)) return
+        if (BackendFavoritesValidationRunner.run(app, step) || BackendBackgroundValidationRunner.run(app, step) || BackendPlaybackValidationRunner.run(app, step) || BackendCacheValidationRunner.run(app, step) || BackendEveningValidationRunner.run(app, step) || BackendMetricsValidationRunner.run(app, step) || KugouPlaybackValidationRunner.run(app, step)) return
+        if (!LyricsTranslationValidationRunner.run(app, step) && !P2ValidationRunner.run(app, step) && !P1DataValidationRunner.run(app, step) && !P1ValidationRunner.run(app, step) && !P0ValidationRunner.run(app, step)) ValidationRunner.run(app, step)
     }
 }
 

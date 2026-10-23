@@ -46,6 +46,7 @@ class FavoritesBrowser(
     private val fetch: FavoritesFetch,
     private val write: FavoritesWrite,
     private val now: () -> Long = System::currentTimeMillis,
+    private val onVerifiedChange: (Platform, LibraryCacheIdentity) -> Unit = { _, _ -> },
 ) {
     private val mutable = MutableStateFlow(immutableMap(Platform.entries.associateWith { FavoritesState() }))
     val state = mutable.asStateFlow()
@@ -180,6 +181,13 @@ class FavoritesBrowser(
                 error = null,
                 syncedAtEpochMs = timestamp(),
             ))
+            try {
+                if (identity(platform) == currentIdentity) {
+                    onVerifiedChange(platform, currentIdentity)
+                }
+            } catch (_: Throwable) {
+                // A listener cannot turn a verified collection into an error state.
+            }
         }
         try {
             fetch.fetch(platform, currentCheck(platform, token, currentIdentity), callback)

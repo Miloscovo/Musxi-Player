@@ -1,10 +1,12 @@
 # P1 队列恢复、最近播放与歌词验收（2026-10-20）
 
+> 历史专项记录：以下只对应文中日期、包和测试范围；当前状态以 [0.1 验收](android-0.1-acceptance.md) 为准。本机证据路径仅用于本地复查，不随仓库分发。
+
 接口见 [P1 后端接线](frontend-backend-contract-p1.md)。队列持久化/显式暂停恢复、最近播放、三平台标准歌词已接入并完成后端真机检查。酷狗初轮空响应已在同日补验中修复，最新证据见文末；下方213项测试及旧APK属于初轮记录。正式前端的接线、视觉与交互验收另行完成。
 
 ## 构建与边界
 
-工作区 `C:\text\Musxi-Player安卓`，JDK17 / SDK36，执行 `./build.ps1 -Test -Lint` 成功。213 项 JUnit，0 failures/errors/skipped，较播放模式阶段新增40项。六模块 Lint 均0 errors；warnings：app37、accounts1、playback2、酷狗1、QQ1、网易云5。新增警告为 debug SharedPreferences 的 UseKtx 建议；没有新增生产依赖，cc 的 Compose/Gradle/截图文件保留。
+工作区 `<project-root>`，JDK17 / SDK36，执行 `./build.ps1 -Test -Lint` 成功。213 项 JUnit，0 failures/errors/skipped，较播放模式阶段新增40项。六模块 Lint 均0 errors；warnings：app37、accounts1、playback2、酷狗1、QQ1、网易云5。新增警告为 debug SharedPreferences 的 UseKtx 建议；没有新增生产依赖，cc 的 Compose/Gradle/截图文件保留。
 
 最终 debug APK SHA-256：`5828d33279dc0c2d46f03e9983e919eb4a325e228ebcd5281d21af994deffc32`。APK v2 签名通过，覆盖安装至 OPPO PJF110 / Android16。重新执行 `:app:processReleaseMainManifest` 成功，release 使用正式 MusxiApplication、无 ValidationReceiver/ValidationFocusActivity；P1DataValidationRunner 仅在 debug 源集。本轮未生成发布版、提交、推送或发布。
 
