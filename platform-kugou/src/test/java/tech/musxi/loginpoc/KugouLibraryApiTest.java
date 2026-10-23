@@ -180,6 +180,157 @@ public class KugouLibraryApiTest {
         assertEquals(1, requests[0]);
     }
     private static final String HASH="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    @Test public void originalLyricsStopAfterLrcAndRedactCandidateCredentials() throws Exception {
+        List<KugouApi.Request> requests=new ArrayList<>();
+        String original="[00:01.00]Fixture";
+        String encoded=Base64.getEncoder().encodeToString(original.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        KugouLibraryApi library=new KugouLibraryApi(new KugouApi(new KugouApi.Device("b".repeat(32)),r->{
+            requests.add(r);
+            return r.endpoint.endsWith("/search")
+                ?json("{status:200,candidates:[{id:'5',accesskey:'private-looking-access'}]}")
+                :json("{status:200,content:'"+encoded+"'}");
+        }));
+        KugouLibraryApi.LyricsOriginal lyrics=library.lyricsOriginal(
+            new KugouApi.Session("fixture-token","123","Fixture"),HASH+"_12_34");
+        assertEquals(original,lyrics.original);
+        assertEquals(2,requests.size());
+        assertTrue(requests.get(0).endpoint.endsWith("/search"));
+        assertEquals("lrc",requests.get(1).params.get("fmt"));
+        assertEquals("LyricsOriginal(redacted)",lyrics.toString());
+        assertFalse(lyrics.toString().contains(original));
+        assertFalse(lyrics.toString().contains("private-looking-access"));
+        assertFalse(lyrics.toString().contains("fixture-token"));
+    }
+    @Test public void translationReusesBoundCandidateAcrossLibraryFacadesWithoutSearching() throws Exception {
+        List<KugouApi.Request> requests=new ArrayList<>();
+        String original="[00:01.00]Fixture";
+        String encoded=Base64.getEncoder().encodeToString(original.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        KugouApi api=new KugouApi(new KugouApi.Device("b".repeat(32)),r->{
+            requests.add(r);
+            if(r.endpoint.endsWith("/search"))
+                return json("{status:200,candidates:[{id:'5',accesskey:'fixture'},{id:'6',accesskey:'unused'}]}");
+            return json("{status:200,content:'"+encoded+"'}");
+        });
+        KugouApi.Session session=new KugouApi.Session("fixture-token","123","Fixture");
+        KugouLibraryApi.LyricsOriginal lyrics=new KugouLibraryApi(api).lyricsOriginal(session,HASH+"_12_34");
+        KugouLibraryApi.LyricsDocument document=new KugouLibraryApi(api).lyricsTranslation(session,lyrics);
+        assertEquals(original,document.original);
+        assertEquals(3,requests.size());
+        assertEquals(1,requests.stream().filter(r->r.endpoint.endsWith("/search")).count());
+        assertEquals("5",requests.get(2).params.get("id"));
+        assertEquals("fixture",requests.get(2).params.get("accesskey"));
+        assertEquals("krc",requests.get(2).params.get("fmt"));
+    }
+    @Test public void translationFailureKeepsOriginalWithoutRetry() throws Exception {
+        List<KugouApi.Request> requests=new ArrayList<>();
+        String original="[00:01.00]Fixture";
+        String encoded=Base64.getEncoder().encodeToString(original.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        KugouLibraryApi library=new KugouLibraryApi(new KugouApi(new KugouApi.Device("b".repeat(32)),r->{
+            requests.add(r);
+            if(r.endpoint.endsWith("/search"))
+                return json("{status:200,candidates:[{id:'5',accesskey:'fixture'}]}");
+            if("krc".equals(r.params.get("fmt")))
+                throw new KugouApi.ApiException("network","Fixed failure");
+            return json("{status:200,content:'"+encoded+"'}");
+        }));
+        KugouApi.Session session=new KugouApi.Session("fixture-token","123","Fixture");
+        KugouLibraryApi.LyricsOriginal lyrics=library.lyricsOriginal(session,HASH+"_12_34");
+        KugouLibraryApi.LyricsDocument document=library.lyricsTranslation(session,lyrics);
+        assertEquals(original,document.original);
+        assertEquals(KugouLibraryApi.TranslationStatus.NETWORK,document.translationStatus);
+        assertEquals(3,requests.size());
+    }
+    @Test public void emptySearchProducesCandidateFreeOriginalWithoutTranslationDownload() throws Exception {
+        List<KugouApi.Request> requests=new ArrayList<>();
+        KugouLibraryApi library=new KugouLibraryApi(new KugouApi(new KugouApi.Device("b".repeat(32)),r->{
+            requests.add(r);return json("{status:200,candidates:[]}");
+        }));
+        KugouApi.Session session=new KugouApi.Session("fixture-token","123","Fixture");
+        KugouLibraryApi.LyricsOriginal lyrics=library.lyricsOriginal(session,HASH+"_12_34");
+        assertEquals("",lyrics.original);
+        assertEquals(1,requests.size());
+        KugouLibraryApi.LyricsDocument document=library.lyricsTranslation(session,lyrics);
+        assertEquals("",document.original);
+        assertEquals(KugouLibraryApi.TranslationStatus.ABSENT,document.translationStatus);
+        assertEquals(1,requests.size());
+    }
+    @Test public void originalHandleRejectsCrossSessionAndCrossApiUseBeforeTransport() throws Exception {
+        List<KugouApi.Request> requests=new ArrayList<>();
+        KugouApi api=new KugouApi(new KugouApi.Device("b".repeat(32)),r->{
+            requests.add(r);
+            if(r.endpoint.endsWith("/search"))
+                return json("{status:200,candidates:[{id:'5',accesskey:'fixture'}]}");
+            return json("{status:200,content:''}");
+        });
+        KugouLibraryApi library=new KugouLibraryApi(api);
+        KugouApi.Session session=new KugouApi.Session("fixture-token","123","Fixture");
+        KugouLibraryApi.LyricsOriginal lyrics=library.lyricsOriginal(session,HASH+"_12_34");
+        rejects("identity",()->library.lyricsTranslation(
+            new KugouApi.Session("fixture-token","123","Fixture"),lyrics));
+        assertEquals(2,requests.size());
+        int[] otherCalls={0};
+        KugouApi otherApi=new KugouApi(new KugouApi.Device("c".repeat(32)),r->{
+            otherCalls[0]++;return json("{status:200,content:'unexpected'}");
+        });
+        rejects("identity",()->new KugouLibraryApi(otherApi).lyricsTranslation(session,lyrics));
+        assertEquals(0,otherCalls[0]);
+    }
+    @Test public void translationReusesExactlyOneCandidateAndRetainsOriginalOnInvalidKrc() throws Exception {
+        List<KugouApi.Request> requests=new ArrayList<>();
+        String original="[00:01.00]Fixture";
+        String encoded=Base64.getEncoder().encodeToString(original.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        KugouLibraryApi library=new KugouLibraryApi(new KugouApi(new KugouApi.Device("b".repeat(32)),r->{
+            requests.add(r);
+            if(r.endpoint.endsWith("/search"))return json("{status:200,candidates:[{id:'5',accesskey:'fixture'},{id:'6',accesskey:'unused'}]}");
+            return json("{status:200,content:'"+("lrc".equals(r.params.get("fmt"))?encoded:"invalid")+"'}");
+        }));
+        KugouLibraryApi.LyricsDocument document=library.lyricsDocument(new KugouApi.Session("fixture","123","Fixture"),HASH+"_12_34");
+        assertEquals(original,document.original);assertEquals(KugouLibraryApi.TranslationStatus.INVALID,document.translationStatus);
+        assertEquals(3,requests.size());
+        for(int i=1;i<3;i++) {
+            assertEquals("5",requests.get(i).params.get("id"));assertEquals("fixture",requests.get(i).params.get("accesskey"));
+            Map<String,String> params=new LinkedHashMap<>(requests.get(i).params);String signature=params.remove("signature");
+            assertEquals(KugouApi.androidSignature(params,null),signature);
+            assertFalse(params.containsKey("token"));
+        }
+        assertEquals("lrc",requests.get(1).params.get("fmt"));assertEquals("krc",requests.get(2).params.get("fmt"));
+        assertFalse(document.toString().contains(original));
+    }
+    @Test public void optionalKrcTransportFailuresNeverRejectSuccessfulLrcOrRetry() throws Exception {
+        for(String category:Arrays.asList("network","timeout","protocol","unavailable")) {
+            int[] calls={0};String original="[00:01]Fixture";
+            String encoded=Base64.getEncoder().encodeToString(original.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            KugouLibraryApi library=new KugouLibraryApi(new KugouApi(new KugouApi.Device("b".repeat(32)),r->{
+                calls[0]++;
+                if(r.endpoint.endsWith("/search"))return json("{status:200,candidates:[{id:'1',accesskey:'fixture'}]}");
+                if("krc".equals(r.params.get("fmt")))throw new KugouApi.ApiException(category,"Fixed failure");
+                return json("{status:200,content:'"+encoded+"'}");
+            }));
+            KugouLibraryApi.LyricsDocument doc=library.lyricsDocument(new KugouApi.Session("fixture","123","Fixture"),HASH+"_12_34");
+            assertEquals(original,doc.original);assertEquals(3,calls[0]);
+            assertEquals(category.equals("protocol")?KugouLibraryApi.TranslationStatus.INVALID:
+                category.equals("unavailable")?KugouLibraryApi.TranslationStatus.PLATFORM_ERROR:
+                KugouLibraryApi.TranslationStatus.valueOf(category.toUpperCase(Locale.ROOT)),doc.translationStatus);
+        }
+    }
+    @Test public void absentLyricsDoNotAttemptOptionalDownloadAndFailedLrcStillFails() throws Exception {
+        for(String response:Arrays.asList("{status:200,candidates:[]}","{status:200,candidates:[{id:'1',accesskey:'fixture'}]}")) {
+            int[] calls={0};
+            KugouLibraryApi library=new KugouLibraryApi(new KugouApi(new KugouApi.Device("b".repeat(32)),r->{
+                calls[0]++;
+                return r.endpoint.endsWith("/search")?json(response):json("{status:200,content:''}");
+            }));
+            assertEquals("",library.lyricsDocument(new KugouApi.Session("fixture","123","Fixture"),HASH+"_12_34").original);
+            assertEquals(response.contains("candidates:[]")?1:2,calls[0]);
+        }
+        int[] calls={0};
+        KugouLibraryApi library=new KugouLibraryApi(new KugouApi(new KugouApi.Device("b".repeat(32)),r->{
+            calls[0]++;
+            return r.endpoint.endsWith("/search")?json("{status:200,candidates:[{id:'1',accesskey:'fixture'}]}"):json("{status:200,content:'!invalid!'}");
+        }));
+        rejects("protocol",()->library.lyricsDocument(new KugouApi.Session("fixture","123","Fixture"),HASH+"_12_34"));
+        assertEquals(2,calls[0]);
+    }
     private JSONObject json(String s) {try{return new JSONObject(s);}catch(org.json.JSONException e){throw new AssertionError(e);}}
     private void rejects(String code,Action action) throws Exception {
         try {action.run();fail("Expected fixed failure");}catch(KugouApi.ApiException e){assertEquals(code,e.code);assertNull(e.getCause());}

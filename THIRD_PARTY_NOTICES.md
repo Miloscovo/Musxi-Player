@@ -1,6 +1,8 @@
 # Musxi Android 许可与来源
 
-本独立目录于 2026-10-20 从 `C:\text\Musxi-Player\Musxi-Player\android\player` 复制，保留完整安卓开发内容，并在个人 fork 的 `android/development` 分支进行版本管理。原仓库为 https://github.com/qwt1011/Musxi-Player ，上游为 https://github.com/Miloscovo/Musxi-Player ，原检出基线 `80743c6aae9ab6b56c13200f53b0ebbb8e852de1`。该基线自身不代表已经收录后续安卓改动。
+2026-10-23 安卓0.1验收候选复用 Musxi PC 应用图标：来自本地PC v0.5.1工作树 `assets/icons/musxi.png`，PC CEF构建同目录 `musxi.ico` 用于exe。来源提交 `e72fba9feb6da22a1b8b207ba2fa07b29b96d36c`，沿用本项目的Musxi品牌素材及GPL来源记录；安卓只做不同密度缩放与自适应适配；alpha02 在 108dp 前景中增加 18dp inset，将完整图案收至可见 72dp 区域，避免主标识被裁切，未引入第三方图标包。AndroidX设备端Compose验收依赖仅进入androidTest测试APK，沿用AndroidX Apache-2.0声明，不进入产品运行依赖。
+
+本安卓工程源自 [Miloscovo/Musxi-Player](https://github.com/Miloscovo/Musxi-Player)，早期在个人 fork 的 android/development 分支开发，现于 [qwt1011/Musxi-Player-Android](https://github.com/qwt1011/Musxi-Player-Android) 独立保存。最初 PC 检出基线为 `80743c6aae9ab6b56c13200f53b0ebbb8e852de1`；上次安卓 PR #24 的提交为 `ac3ac80f4259244a50fb5269aa0fdf5bd1c59afd`，上游合并提交为 `c5821a70659a16ddbe08ad8fad6bf60cce5cf532`。独立仓库初始提交保留同一安卓源码树、许可与来源，不携入整个 PC 历史。
 
 基于 Musxi Player，Copyright (c) 2026 Miloscovo and contributors；派生工程采用 GPL-3.0-or-later，完整 GPLv3 文本见 [LICENSE](LICENSE)。本次归档安卓源码，未新增生产依赖或发布 APK。正式分发二进制时应提供匹配的源码及构建说明。
 
@@ -22,7 +24,7 @@
 
 历史模块 NOTICE 中的 `android/player/` 或 PoC 路径记录原始来源；当前对应源码分别位于本目录的 platform-kugou/、platform-qq/、platform-netease/，构建入口是本目录 build.ps1 / Gradle wrapper。
 
-2026-10-20 P0 增量继续改编上述固定版本的三平台歌曲搜索分页和图片元数据，不新增协议来源或生产依赖；原模块声明、版权和完整许可保留。cc 本地工作区曾加入 AndroidX Compose / Material3（Apache-2.0）及宿主截图测试工具 Roborazzi（Apache-2.0）、Robolectric（MIT）；本次独立后端 PR 不包含这些前端代码、测试、Gradle 插件或依赖，现有后端依赖及许可保持原基线。
+2026-10-20 P0 增量继续改编上述固定版本的三平台歌曲搜索分页和图片元数据，不新增协议来源或生产依赖；原模块声明、版权和完整许可保留。cc 工作区已加入的 AndroidX Compose / Material3 沿用 Apache-2.0，随包许可使用现有 AndroidX-Apache-2.0.txt；Roborazzi（Apache-2.0）和 Robolectric（MIT）仅宿主截图测试，不进入 APK。本轮后端不改前端依赖版本。
 
 同日 P1 标准歌词继续使用同一固定来源：酷狗 module/search_lyric.js、module/lyric.js；网易云 module/lyric.js；QQ qqmusic-api-python 0.8.1 的 modules/lyric.py、models/lyric.py（通过 PyPI 原版本 wheel 只读核对，未安装或打包 Python）。标准 LRC 解析、队列元数据持久化及最近播放使用现有 Kotlin/Java/Android API，无新增生产依赖；不含 QRC/KRC 逐字解密。模块 assets NOTICE 已同步。
 

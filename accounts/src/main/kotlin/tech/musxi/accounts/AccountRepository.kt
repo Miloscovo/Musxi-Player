@@ -11,6 +11,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.distinctUntilChanged
 import tech.musxi.core.account.*
 import tech.musxi.core.library.*
+import tech.musxi.core.diagnostics.*
 import tech.musxi.neteaseloginpoc.NeteaseApi
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
@@ -22,7 +23,13 @@ class AccountRepository(context: Context) {
     val states: StateFlow<Map<Platform, AccountState>> = coordinator.states
     private val gate = Any()
     private val queue = Executors.newSingleThreadScheduledExecutor()
+    private val requests = RequestLanes(queue, Executors.newSingleThreadExecutor())
     private val main = Handler(Looper.getMainLooper())
+    private val requestMetrics = RequestMetrics(SystemClock::elapsedRealtime)
+
+    /** Bounded in-memory aggregates, with fixed platform/operation labels only. */
+    fun requestTimingSnapshot(): List<RequestMetricSummary> = requestMetrics.snapshot()
+    fun clearRequestTimings() = requestMetrics.clear()
     private val libraryCaches: Map<Platform, LibraryPageStore> = mapOf(
         Platform.NETEASE to FileLibraryPageStore(java.io.File(app.noBackupFilesDir, "library-pages-v1")),
         Platform.KUGOU to FileLibraryPageStore(java.io.File(app.noBackupFilesDir, "kugou-library-pages-v1"), Platform.KUGOU),
@@ -39,7 +46,7 @@ class AccountRepository(context: Context) {
         mapOf(Platform.KUGOU to KugouDriver(app), Platform.QQ to QqDriver(app),
             Platform.NETEASE to NeteaseDriver(app))
     }
-    private val sessions = mutableMapOf<Platform, Any>() // worker queue only
+    private val sessions = mutableMapOf<Platform, Any>() // every access holds gate
     private class Pending(val token: Long, val request: LoginRequest, val deadline: Long)
     private val pending = mutableMapOf<Platform, Pending>() // worker queue only
     private val pollTasks = mutableMapOf<Platform, Pair<Long, java.util.concurrent.ScheduledFuture<*>>>()
@@ -263,19 +270,30 @@ class AccountRepository(context: Context) {
         }
     }
 
-    /** Library executes on the same queue as account changes, avoiding a cross-account response race. */
-    internal fun <T> withNeteaseSession(work: (NeteaseApi, NeteaseApi.Session) -> T, result: (Result<T>) -> Unit) {
+    /** Only audio bypasses bulk reads. Session snapshots and all result fences retain account ownership. */
+    internal fun <T> withNeteaseSession(work: (NeteaseApi, NeteaseApi.Session) -> T, result: (Result<T>) -> Unit, operation: RequestOperation = RequestOperation.OTHER) {
         val expected = states.value.getValue(Platform.NETEASE)
-        queue.execute {
+        val timing = requestMetrics.queued(Platform.NETEASE, operation)
+        requests.execute(operation) {
+            requestMetrics.started(timing)
+            var entered = false
             val response = runCatching {
                 val state = states.value.getValue(Platform.NETEASE)
                 if (state.phase != AccountPhase.CONNECTED || state.generation != expected.generation) throw LibraryUnavailable()
-                val session = sessions[Platform.NETEASE] as? NeteaseApi.Session ?: throw LibraryUnavailable()
+                val session = sessionSnapshot(Platform.NETEASE, expected.generation) as? NeteaseApi.Session ?: throw LibraryUnavailable()
+                entered = true
                 val value = work((drivers.getValue(Platform.NETEASE) as NeteaseDriver).api, session)
                 val latest = states.value.getValue(Platform.NETEASE)
                 if (latest.generation != expected.generation || latest.phase != AccountPhase.CONNECTED) throw LibraryUnavailable()
                 value
             }
+            requestMetrics.finished(timing, when {
+                !entered -> RequestOutcome.REJECTED
+                response.exceptionOrNull() is LibraryUnavailable -> RequestOutcome.STALE
+                (response.exceptionOrNull() as? LibraryPageFailure)?.category in setOf("account_changed", "cancelled") -> RequestOutcome.STALE
+                response.isSuccess -> RequestOutcome.SUCCESS
+                else -> RequestOutcome.FAILED
+            })
             val failure = response.exceptionOrNull()
             var expirationGeneration: Long? = null
             if (failure is NeteaseApi.ApiException && failure.code == "expired") {
@@ -285,6 +303,7 @@ class AccountRepository(context: Context) {
                 }
             }
             main.post {
+                requestMetrics.delivered(timing)
                 val latest = states.value.getValue(Platform.NETEASE)
                 if (expirationGeneration != null && latest.generation == expirationGeneration
                     && latest.phase == AccountPhase.REAUTH_REQUIRED) result(response)
@@ -300,18 +319,29 @@ class AccountRepository(context: Context) {
         return state.phase == AccountPhase.CONNECTED && state.generation == generation
     }
 
-    internal fun <T> withQqSession(work: (tech.musxi.qqloginpoc.QqMusicApi, tech.musxi.qqloginpoc.QqMusicApi.Session) -> T, result: (Result<T>) -> Unit) {
+    internal fun <T> withQqSession(work: (tech.musxi.qqloginpoc.QqMusicApi, tech.musxi.qqloginpoc.QqMusicApi.Session) -> T, result: (Result<T>) -> Unit, operation: RequestOperation = RequestOperation.OTHER) {
         val expected = states.value.getValue(Platform.QQ)
-        queue.execute {
+        val timing = requestMetrics.queued(Platform.QQ, operation)
+        requests.execute(operation) {
+            requestMetrics.started(timing)
+            var entered = false
             val response = runCatching {
                 val state = states.value.getValue(Platform.QQ)
                 if (state.phase != AccountPhase.CONNECTED || state.generation != expected.generation) throw LibraryUnavailable()
-                val session = sessions[Platform.QQ] as? tech.musxi.qqloginpoc.QqMusicApi.Session ?: throw LibraryUnavailable()
+                val session = sessionSnapshot(Platform.QQ, expected.generation) as? tech.musxi.qqloginpoc.QqMusicApi.Session ?: throw LibraryUnavailable()
+                entered = true
                 val value = work((drivers.getValue(Platform.QQ) as QqDriver).api, session)
                 val latest = states.value.getValue(Platform.QQ)
                 if (latest.generation != expected.generation || latest.phase != AccountPhase.CONNECTED) throw LibraryUnavailable()
                 value
             }
+            requestMetrics.finished(timing, when {
+                !entered -> RequestOutcome.REJECTED
+                response.exceptionOrNull() is LibraryUnavailable -> RequestOutcome.STALE
+                (response.exceptionOrNull() as? LibraryPageFailure)?.category in setOf("account_changed", "cancelled") -> RequestOutcome.STALE
+                response.isSuccess -> RequestOutcome.SUCCESS
+                else -> RequestOutcome.FAILED
+            })
             val failure = response.exceptionOrNull()
             var expirationGeneration: Long? = null
             if (failure is tech.musxi.qqloginpoc.QqMusicApi.ApiException && failure.code == "expired") {
@@ -321,6 +351,7 @@ class AccountRepository(context: Context) {
                 }
             }
             main.post {
+                requestMetrics.delivered(timing)
                 val latest = states.value.getValue(Platform.QQ)
                 if (expirationGeneration != null && latest.generation == expirationGeneration
                     && latest.phase == AccountPhase.REAUTH_REQUIRED) result(response)
@@ -337,23 +368,41 @@ class AccountRepository(context: Context) {
     }
 
     internal fun <T> withKugouSession(work: (tech.musxi.loginpoc.KugouApi, tech.musxi.loginpoc.KugouApi.Session) -> T,
-        result: (Result<T>) -> Unit) {
+        result: (Result<T>) -> Unit, operation: RequestOperation = RequestOperation.OTHER) {
         val expected = states.value.getValue(Platform.KUGOU).generation
-        queue.execute {
+        val timing = requestMetrics.queued(Platform.KUGOU, operation)
+        requests.execute(operation) {
+            requestMetrics.started(timing)
+            var entered = false
             val response = runCatching {
                 if (!isKugouGenerationConnected(expected)) throw LibraryUnavailable()
-                val session = sessions[Platform.KUGOU] as? tech.musxi.loginpoc.KugouApi.Session ?: throw LibraryUnavailable()
+                val session = sessionSnapshot(Platform.KUGOU, expected) as? tech.musxi.loginpoc.KugouApi.Session ?: throw LibraryUnavailable()
+                entered = true
                 val value = work((drivers.getValue(Platform.KUGOU) as KugouDriver).api, session)
                 if (!isKugouGenerationConnected(expected)) throw LibraryUnavailable()
                 value
             }
+            requestMetrics.finished(timing, when {
+                !entered -> RequestOutcome.REJECTED
+                response.exceptionOrNull() is LibraryUnavailable -> RequestOutcome.STALE
+                (response.exceptionOrNull() as? LibraryPageFailure)?.category in setOf("account_changed", "cancelled") -> RequestOutcome.STALE
+                response.isSuccess -> RequestOutcome.SUCCESS
+                else -> RequestOutcome.FAILED
+            })
             main.post {
+                requestMetrics.delivered(timing)
                 if (!isKugouGenerationConnected(expected)) result(Result.failure(LibraryUnavailable()))
                 else result(response)
             }
         }
     }
 
+    // Do not retain gate during HTTP. Logout/re-auth can invalidate an in-flight snapshot immediately.
+    private fun sessionSnapshot(platform: Platform, generation: Long): Any = synchronized(gate) {
+        val state = states.value.getValue(platform)
+        if (state.phase != AccountPhase.CONNECTED || state.generation != generation) throw LibraryUnavailable()
+        sessions[platform] ?: throw LibraryUnavailable()
+    }
     internal fun isKugouGenerationConnected(generation: Long): Boolean {
         val state = states.value.getValue(Platform.KUGOU)
         return state.phase == AccountPhase.CONNECTED && state.generation == generation

@@ -12,6 +12,8 @@ enum class PlaybackFailure {
     RATE_LIMIT,
     AUTH_REQUIRED,
     PROTOCOL,
+    /** Foreground service could not be established in the bounded start window. */
+    BACKGROUND_RESTRICTED,
     UNKNOWN,
 }
 
@@ -71,6 +73,7 @@ class QueueRecoveryPolicy {
             PlaybackFailure.RATE_LIMIT,
             PlaybackFailure.AUTH_REQUIRED,
             PlaybackFailure.PROTOCOL,
+            PlaybackFailure.BACKGROUND_RESTRICTED,
             PlaybackFailure.UNKNOWN -> RecoveryAction.STOP
         }
 }

@@ -142,8 +142,42 @@ public final class KugouLibraryApi {
             if(!Arrays.asList("1","200").contains(text(response.opt("status"))))throw error("protocol");
         } catch(org.json.JSONException malformed) { throw error("protocol"); }
     }
-    /** Standard LRC only. Hash and album-audio ID identify the actual selected source. */
+    public enum TranslationStatus { PRESENT, ABSENT, INVALID, UNSUPPORTED, NETWORK, TIMEOUT, PLATFORM_ERROR }
+    public static final class LyricsOriginal {
+        public final String original;
+        private final KugouApi ownerApi;
+        private final KugouApi.Session ownerSession;
+        private final String candidateId;
+        private final String candidateAccessKey;
+        private LyricsOriginal(String original,KugouApi ownerApi,KugouApi.Session ownerSession,
+                String candidateId,String candidateAccessKey) {
+            this.original=original;
+            this.ownerApi=ownerApi;
+            this.ownerSession=ownerSession;
+            this.candidateId=candidateId;
+            this.candidateAccessKey=candidateAccessKey;
+        }
+        @Override public String toString() { return "LyricsOriginal(redacted)"; }
+    }
+    public static final class LyricsDocument {
+        public final String original;
+        public final List<KrcLyricsDecoder.Row> rows;
+        public final TranslationStatus translationStatus;
+        public final String diagnostic;
+        LyricsDocument(String original,List<KrcLyricsDecoder.Row> rows,TranslationStatus status) {
+            this(original,rows,status,"NONE");
+        }
+        LyricsDocument(String original,List<KrcLyricsDecoder.Row> rows,TranslationStatus status,String diagnostic) {
+            this.original=original;this.rows=rows;this.translationStatus=status;this.diagnostic=diagnostic;
+        }
+        @Override public String toString() { return "LyricsDocument(redacted)"; }
+    }
+    /** Compatibility entry point: original LRC only, without an optional KRC request. */
     public String lyrics(KugouApi.Session session, String songKey) throws IOException {
+        return lyricsOriginal(session,songKey).original;
+    }
+    /** Resolves and downloads the original LRC once; translation can reuse this bound handle. */
+    public LyricsOriginal lyricsOriginal(KugouApi.Session session,String songKey) throws IOException {
         if (session == null || songKey == null) throw error("identity");
         String[] parts = songKey.split("_", -1);
         if (parts.length != 3 || !parts[0].matches("[a-f0-9]{32}")) throw error("identity");
@@ -153,16 +187,45 @@ public final class KugouLibraryApi {
         lyricStatus(search, "lyrics_search_status");
         JSONArray rows = search.optJSONArray("candidates");
         if (rows == null || rows.length() > 100) throw lyricError("lyrics_search_rows");
-        if (rows.length() == 0) return "";
+        if (rows.length() == 0) return new LyricsOriginal("",api,session,null,null);
         JSONObject candidate = rows.optJSONObject(0);
         if (candidate == null) throw lyricError("lyrics_search_candidate");
         String id = numeric(candidate.opt("id"), false);
         Object access = candidate.opt("accesskey");
-        if (!(access instanceof String) || !((String)access).matches("[A-Za-z0-9_-]{1,256}")) throw lyricError("lyrics_search_key");
+        if (!(access instanceof String) || !((String)access).matches("[A-Za-z0-9_-]{1,256}"))
+            throw lyricError("lyrics_search_key");
         JSONObject downloaded = api.lyricsCall("/download", map("ver", "1", "client", "android", "id", id,
             "accesskey", (String)access, "fmt", "lrc", "charset", "utf8"));
         lyricStatus(downloaded, "lyrics_download_status");
-        return parseLyrics(downloaded);
+        return new LyricsOriginal(parseLyrics(downloaded),api,session,id,(String)access);
+    }
+    public LyricsDocument lyricsDocument(KugouApi.Session session,String songKey) throws IOException {
+        return lyricsTranslation(session,lyricsOriginal(session,songKey));
+    }
+    /** Downloads only the KRC bound by the original stage; optional failure keeps the LRC. */
+    public LyricsDocument lyricsTranslation(KugouApi.Session session,LyricsOriginal original) throws IOException {
+        if (session == null || original == null || session != original.ownerSession || api != original.ownerApi)
+            throw error("identity");
+        if (original.original.trim().isEmpty() || original.candidateId == null || original.candidateAccessKey == null)
+            return new LyricsDocument(original.original,Collections.emptyList(),TranslationStatus.ABSENT);
+        try {
+            JSONObject krc=api.lyricsCall("/download",map("ver","1","client","android","id",original.candidateId,
+                "accesskey",original.candidateAccessKey,"fmt","krc","charset","utf8"));
+            lyricStatus(krc,"lyrics_download_status");
+            Object content=krc.opt("content");
+            KrcLyricsDecoder.Document decoded=KrcLyricsDecoder.decode(content instanceof String?(String)content:null);
+            return new LyricsDocument(original.original,decoded.rows,
+                TranslationStatus.valueOf(decoded.status.name()),decoded.diagnostic);
+        } catch(java.net.SocketTimeoutException timeout) {
+            return new LyricsDocument(original.original,Collections.emptyList(),TranslationStatus.TIMEOUT);
+        } catch(KugouApi.ApiException failure) {
+            TranslationStatus status="timeout".equals(failure.code)?TranslationStatus.TIMEOUT:
+                "network".equals(failure.code)?TranslationStatus.NETWORK:
+                "protocol".equals(failure.code) || "limit".equals(failure.code)?TranslationStatus.INVALID:TranslationStatus.PLATFORM_ERROR;
+            return new LyricsDocument(original.original,Collections.emptyList(),status);
+        } catch(IOException network) {
+            return new LyricsDocument(original.original,Collections.emptyList(),TranslationStatus.NETWORK);
+        }
     }
     private static void lyricStatus(JSONObject root, String diagnostic) throws IOException {
         if (root == null || !(root.opt("status") instanceof Number)) throw lyricError(diagnostic);

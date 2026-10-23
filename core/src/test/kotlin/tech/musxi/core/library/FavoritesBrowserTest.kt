@@ -27,8 +27,10 @@ class FavoritesBrowserTest {
         }.toMutableMap()
         val fetches = mutableListOf<FetchCall>()
         val writes = mutableListOf<WriteCall>()
+        val verifiedCallbacks = mutableListOf<Pair<Platform, LibraryCacheIdentity>>()
         var fetchThrows = false
         var writeThrows = false
+        var rejectVerifiedCallbacks = false
 
         val browser = FavoritesBrowser(
             identity = { identities[it] },
@@ -41,6 +43,10 @@ class FavoritesBrowserTest {
                 writes += WriteCall(song, liked, isCurrent, result)
             },
             now = { 1234L },
+            onVerifiedChange = { platform, identity ->
+                if (rejectVerifiedCallbacks) error("private listener detail")
+                verifiedCallbacks += platform to identity
+            },
         )
 
         fun refresh(platform: Platform): FetchCall {
@@ -350,5 +356,82 @@ class FavoritesBrowserTest {
         assertFalse(state.loading)
         assertFalse(state.synced)
         assertNull(state.pending)
+    }
+
+    @Test
+    fun successfulWriteNotifiesOnceOnlyAfterVerifiedSnapshot() {
+        val fixture = Fixture()
+        val platform = Platform.NETEASE
+        val identity = fixture.identities.getValue(platform)
+        fixture.seed(platform, fixture.keys(platform, "saved"))
+        val changed = fixture.keys(platform, "saved", "new")
+
+        fixture.browser.setLiked(fixture.song(platform, "new"), true)
+        assertTrue(fixture.verifiedCallbacks.isEmpty())
+        fixture.writes.single().result(Result.success(Unit))
+        fixture.writes.single().result(Result.success(Unit))
+        fixture.fetches.last().result(Result.success(FavoritesSnapshot(changed)))
+
+        assertEquals(listOf(platform to identity), fixture.verifiedCallbacks)
+        assertTrue(fixture.browser.state.value.getValue(platform).synced)
+        fixture.fetches.last().result(Result.success(FavoritesSnapshot(changed)))
+        assertEquals(1, fixture.verifiedCallbacks.size)
+    }
+
+    @Test
+    fun verifiedCallbackExceptionsCannotUndoPublishedFavorites() {
+        val fixture = Fixture()
+        val platform = Platform.NETEASE
+        val changed = fixture.keys(platform, "saved", "new")
+        fixture.seed(platform, fixture.keys(platform, "saved"))
+        fixture.rejectVerifiedCallbacks = true
+
+        fixture.browser.setLiked(fixture.song(platform, "new"), true)
+        fixture.writes.single().result(Result.success(Unit))
+        fixture.fetches.last().result(Result.success(FavoritesSnapshot(changed)))
+
+        val state = fixture.browser.state.value.getValue(platform)
+        assertEquals(changed, state.keys)
+        assertTrue(state.synced)
+        assertNull(state.error)
+    }
+
+    @Test
+    fun unverifiedFailedAndStaleWritesNeverNotify() {
+        val fixture = Fixture()
+        val platform = Platform.NETEASE
+        val old = fixture.keys(platform, "saved")
+        val song = fixture.song(platform, "new")
+
+        fixture.identities[platform] = fixture.identities.getValue(platform).copy(verified = false)
+        fixture.browser.setLiked(song, true)
+        assertTrue(fixture.writes.isEmpty())
+
+        fixture.identities[platform] = fixture.identities.getValue(platform).copy(verified = true)
+        fixture.seed(platform, old)
+
+        fixture.browser.setLiked(song, true)
+        fixture.fetches.last().result(Result.success(FavoritesSnapshot(old)))
+        assertTrue(fixture.verifiedCallbacks.isEmpty())
+
+        fixture.seed(platform, old)
+        fixture.browser.setLiked(song, true)
+        val staleWrite = fixture.writes.last()
+        fixture.identities[platform] = fixture.identities.getValue(platform).copy(generation = 2)
+        fixture.browser.accountChanged()
+        staleWrite.result(Result.success(Unit))
+        assertTrue(fixture.verifiedCallbacks.isEmpty())
+    }
+
+    @Test
+    fun idempotentFavoriteWriteDoesNotNotify() {
+        val fixture = Fixture()
+        val platform = Platform.NETEASE
+        fixture.seed(platform, fixture.keys(platform, "saved"))
+
+        fixture.browser.setLiked(fixture.song(platform, "saved"), true)
+
+        assertTrue(fixture.writes.isEmpty())
+        assertTrue(fixture.verifiedCallbacks.isEmpty())
     }
 }

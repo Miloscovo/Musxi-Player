@@ -3,6 +3,7 @@ package tech.musxi.accounts
 import android.os.SystemClock
 import tech.musxi.core.account.Platform
 import tech.musxi.core.library.*
+import tech.musxi.core.diagnostics.RequestOperation
 import tech.musxi.neteaseloginpoc.NeteaseLibraryApi
 import tech.musxi.neteaseloginpoc.NeteaseApi
 
@@ -26,7 +27,7 @@ class NeteaseLibraryRepository(private val accounts: AccountRepository) : Librar
             Page(page.items.map { PlaylistSummary(MediaKey(Platform.NETEASE, it.id), it.name,
                 ArtworkPolicy.sanitize(Platform.NETEASE, it.coverUrl), it.trackCount) },
                 page.nextOffset.takeIf { it >= 0 }, page.total.takeIf { it >= 0 })
-        }, safeCallback(result))
+        }, safeCallback(result), RequestOperation.PLAYLISTS)
     }
 
     override fun tracks(playlist: MediaKey, offset: Int, result: (Result<Page<SongSummary>>) -> Unit) {
@@ -35,13 +36,13 @@ class NeteaseLibraryRepository(private val accounts: AccountRepository) : Librar
             val page = NeteaseLibraryApi(api).tracks(session, playlist.id, offset, 50)
             Page(page.items.map(::summary),
                 page.nextOffset.takeIf { it >= 0 }, page.total.takeIf { it >= 0 })
-        }, safeCallback(result))
+        }, safeCallback(result), RequestOperation.TRACKS)
     }
 
     fun search(keywords: String, result: (Result<List<SongSummary>>) -> Unit) {
         accounts.withNeteaseSession({ api, session ->
             NeteaseLibraryApi(api).search(session, keywords).map(::summary)
-        }, safeCallback(result))
+        }, safeCallback(result), RequestOperation.SEARCH)
     }
 
     fun searchPage(keywords: String, offset: Int, result: (Result<Page<SongSummary>>) -> Unit,
@@ -52,7 +53,7 @@ class NeteaseLibraryRepository(private val accounts: AccountRepository) : Librar
             val page = NeteaseLibraryApi(api).search(session, keywords, offset, 30)
             if (!isCurrent()) throw LibraryFailure("cancelled")
             Page(page.items.map(::summary), page.nextOffset.takeIf { it >= 0 }, page.total.takeIf { it >= 0 })
-        }, safeCallback(result))
+        }, safeCallback(result), RequestOperation.SEARCH)
     }
 
     fun song(key: MediaKey, result: (Result<SongSummary>) -> Unit) {
@@ -60,7 +61,7 @@ class NeteaseLibraryRepository(private val accounts: AccountRepository) : Librar
         accounts.withNeteaseSession({ api, session ->
             val track = NeteaseLibraryApi(api).song(session, key.id)
             summary(track)
-        }, safeCallback(result))
+        }, safeCallback(result), RequestOperation.SONG)
     }
 
     fun queue(playlist: MediaKey, startSong: MediaKey, result: (Result<PlaybackQueue>) -> Unit) {
@@ -71,7 +72,7 @@ class NeteaseLibraryRepository(private val accounts: AccountRepository) : Librar
             val index = ids.indexOf(startSong.id)
             if (index < 0) throw LibraryFailure("incomplete")
             PlaybackQueue(ids.map { SongSummary(MediaKey(Platform.NETEASE, it), "待加载歌曲", emptyList(), "", 0) }, index, generation)
-        }, safeCallback(result))
+        }, safeCallback(result), RequestOperation.QUEUE)
     }
 
     /** Internal playback handoff: capability URL is transient and should not enter UI state/cache. */
@@ -85,7 +86,7 @@ class NeteaseLibraryRepository(private val accounts: AccountRepository) : Librar
             AudioCapability(song, summary(track), audio.url, audio.expiresAtElapsedMs) {
                 accounts.isNeteaseGenerationConnected(generation)
             }
-        }, safeCallback(result))
+        }, safeCallback(result), RequestOperation.AUDIO)
     }
 
     class AudioCapability internal constructor(val song: MediaKey, val metadata: SongSummary, private val url: String,

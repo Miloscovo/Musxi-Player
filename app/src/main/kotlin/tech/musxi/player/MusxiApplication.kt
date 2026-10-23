@@ -32,11 +32,24 @@ open class MusxiApplication : Application(), PlaybackHost {
     protected open fun onFavoriteDiagnostic(platform: tech.musxi.core.account.Platform, operation: String, category: String) = Unit
     val favorites by lazy { tech.musxi.core.library.FavoritesBrowser(accounts::playbackIdentity,
         tech.musxi.core.library.FavoritesFetch(favoritesRepository::fetch),
-        tech.musxi.core.library.FavoritesWrite(favoritesRepository::setLiked)) }
+        tech.musxi.core.library.FavoritesWrite(favoritesRepository::setLiked),
+        onVerifiedChange = { platform, identity ->
+            when (platform) {
+                Platform.NETEASE -> libraryBrowser
+                Platform.KUGOU -> kugouLibraryBrowser
+                Platform.QQ -> qqLibraryBrowser
+            }.invalidate(identity)
+        }) }
     val playbackJournal: tech.musxi.core.playback.PlaybackJournalBrowser by lazy { tech.musxi.core.playback.PlaybackJournalBrowser(
         accounts::playbackIdentity, accounts::playbackJournal, { saved, result -> queuePlayback.restore(saved, result) }) }
     private val lyricsRepository by lazy { tech.musxi.accounts.LyricsRepository(accounts) }
-    val lyrics by lazy { tech.musxi.core.lyrics.LyricsBrowser(accounts::playbackIdentity, lyricsRepository::fetch) }
+    val lyrics by lazy { tech.musxi.core.lyrics.LyricsBrowser(accounts::playbackIdentity,
+        lyricsRepository::fetchOriginal, ::fetchLyricsTranslation,
+        lyricsRepository::fetchOriginal, lyricsRepository::releaseOriginal) }
+    protected open fun fetchLyricsTranslation(key: tech.musxi.core.library.MediaKey,
+        original: tech.musxi.core.lyrics.ParsedLyrics, refresh: Boolean,
+        result: (Result<tech.musxi.core.lyrics.ParsedLyrics>) -> Unit) =
+        lyricsRepository.fetchTranslation(key, original, refresh, result)
     private val appScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Main.immediate)
     val searchBrowser by lazy { accounts.createSearchBrowser(tech.musxi.core.library.SearchPageFetch { query, current, result ->
         when (query.platform) {
@@ -88,6 +101,7 @@ open class MusxiApplication : Application(), PlaybackHost {
         // Dedicated app-owned WebView jar. No other platform uses this browser profile.
         if (Build.VERSION.SDK_INT >= 28) WebView.setDataDirectorySuffix("netease_login")
         accounts = AccountRepository(this)
+        appScope.launch { accounts.states.collect { lyricsRepository.accountChanged() } }
         appScope.launch { accounts.states.collect { playbackJournal.accountChanged() } }
         appScope.launch { accounts.states.collect { favorites.accountChanged() } }
         appScope.launch {

@@ -261,7 +261,7 @@ public class NeteaseLibraryApiTest {
         assertEquals("https://p9.music.126.net/list.jpg", NeteaseLibraryApi.parsePlaylists(playlist, 0, 30).items.get(0).coverUrl);
     }
 
-    @Test public void lyricsUseStrictEapiWhitelistAndReturnOnlyStandardLrc() throws Exception {
+    @Test public void lyricsDocumentUsesOneStrictEapiRequestAndLegacyLyricsCompatibility() throws Exception {
         final String standard = "[00:01.00]First\n[00:02.50]Second";
         final java.util.List<NeteaseApi.Request> requests = new java.util.ArrayList<>();
         NeteaseApi api = new NeteaseApi(request -> {
@@ -271,18 +271,17 @@ public class NeteaseLibraryApiTest {
         });
         NeteaseApi.Session session = NeteaseApi.Session.fromJson(
                 j("{userId:'7',nickname:'User',cookies:{MUSIC_U:'fixture',__csrf:'csrf'}}"));
-        assertEquals(standard, new NeteaseLibraryApi(api).lyrics(session, "12345"));
+        NeteaseLibraryApi library = new NeteaseLibraryApi(api);
+        NeteaseLibraryApi.LyricsDocument document = library.lyricsDocument(session, "12345");
+        assertEquals(standard, document.original);
+        assertNull(document.translation);
+        assertEquals(NeteaseLibraryApi.TranslationStatus.ABSENT, document.translationStatus);
         assertEquals(1, requests.size());
-        NeteaseApi.Request request = requests.get(0);
-        assertEquals(NeteaseApi.LYRIC, request.endpoint);
-        NeteaseApi.requireEndpoint(new URL(request.endpoint));
-        JSONObject payload = eapiPayload(request, "/api/song/lyric");
-        assertEquals("12345", payload.getString("id"));
-        assertEquals(-1, payload.getInt("tv"));
-        assertEquals(-1, payload.getInt("lv"));
-        assertEquals(-1, payload.getInt("rv"));
-        assertEquals(-1, payload.getInt("kv"));
-        assertEquals(1, payload.getInt("_nmclfl"));
+        requireLyricPayload(requests.get(0));
+        requests.clear();
+        assertEquals(standard, library.lyrics(session, "12345"));
+        assertEquals(1, requests.size());
+        requireLyricPayload(requests.get(0));
         fails("endpoint", () -> NeteaseApi.requireEndpoint(new URL(NeteaseApi.LYRIC + "?id=private")));
         fails("endpoint", () -> NeteaseApi.requireEndpoint(new URL(
                 "https://interfacepc.music.163.com/eapi/song/lyric/other")));
@@ -299,6 +298,95 @@ public class NeteaseLibraryApiTest {
         JSONObject tooLarge = new JSONObject().put("code", 200)
                 .put("lrc", new JSONObject().put("lyric", new String(oversized)));
         fails("limit", () -> NeteaseLibraryApi.parseLyrics(tooLarge));
+    }
+
+    @Test public void lyricsDocumentAcceptsValidTranslationWithoutAlignment() throws Exception {
+        String original = "[00:01.00]Original\n[00:02.00]Text";
+        String translation = "[00:01.00]译文\n[00:02.00]文字";
+        NeteaseLibraryApi.LyricsDocument document = NeteaseLibraryApi.parseLyricsDocument(
+                new JSONObject().put("code", 200)
+                        .put("lrc", new JSONObject().put("lyric", original))
+                        .put("tlyric", new JSONObject().put("lyric", translation)));
+        assertEquals(original, document.original);
+        assertEquals(translation, document.translation);
+        assertEquals(NeteaseLibraryApi.TranslationStatus.PRESENT, document.translationStatus);
+    }
+
+    @Test public void lyricsDocumentTreatsMissingNullEmptyAndBlankTranslationAsAbsent() throws Exception {
+        String original = "[00:01.00]Original";
+        JSONObject[] bodies = {
+                new JSONObject().put("code", 200).put("lrc", new JSONObject().put("lyric", original)),
+                new JSONObject().put("code", 200).put("lrc", new JSONObject().put("lyric", original))
+                        .put("tlyric", JSONObject.NULL),
+                new JSONObject().put("code", 200).put("lrc", new JSONObject().put("lyric", original))
+                        .put("tlyric", new JSONObject()),
+                new JSONObject().put("code", 200).put("lrc", new JSONObject().put("lyric", original))
+                        .put("tlyric", new JSONObject().put("lyric", JSONObject.NULL)),
+                new JSONObject().put("code", 200).put("lrc", new JSONObject().put("lyric", original))
+                        .put("tlyric", new JSONObject().put("lyric", " \n\t\u3000"))
+        };
+        for (JSONObject body : bodies) {
+            NeteaseLibraryApi.LyricsDocument document = NeteaseLibraryApi.parseLyricsDocument(body);
+            assertEquals(original, document.original);
+            assertNull(document.translation);
+            assertEquals(NeteaseLibraryApi.TranslationStatus.ABSENT, document.translationStatus);
+        }
+        NeteaseLibraryApi.LyricsDocument noLyrics = NeteaseLibraryApi.parseLyricsDocument(
+                new JSONObject().put("code", 200).put("nolyric", true)
+                        .put("tlyric", new JSONObject().put("lyric", "translation")));
+        assertEquals("", noLyrics.original);
+        assertNull(noLyrics.translation);
+        assertEquals(NeteaseLibraryApi.TranslationStatus.ABSENT, noLyrics.translationStatus);
+    }
+
+    @Test public void lyricsDocumentDegradesInvalidTranslationButKeepsValidOriginal() throws Exception {
+        String original = "[00:01.00]Original";
+        char[] oversized = new char[256 * 1024 + 1];
+        Arrays.fill(oversized, 'x');
+        Object[] translations = {
+                "not-an-object", new JSONArray().put("translation"),
+                new JSONObject().put("lyric", 3),
+                new JSONObject().put("lyric", "line" + (char) 0 + "text"),
+                new JSONObject().put("lyric", "line" + (char) 1 + "text"),
+                new JSONObject().put("lyric", String.valueOf((char) 0xd800)),
+                new JSONObject().put("lyric", String.valueOf((char) 0xdc00)),
+                new JSONObject().put("lyric", new String(oversized))
+        };
+        for (Object translation : translations) {
+            NeteaseLibraryApi.LyricsDocument document = NeteaseLibraryApi.parseLyricsDocument(
+                    new JSONObject().put("code", 200)
+                            .put("lrc", new JSONObject().put("lyric", original))
+                            .put("tlyric", translation));
+            assertEquals(original, document.original);
+            assertNull(document.translation);
+            assertEquals(NeteaseLibraryApi.TranslationStatus.INVALID, document.translationStatus);
+        }
+    }
+
+    @Test public void lyricsDocumentRejectsBrokenOrOversizedOriginalDespiteTranslation() throws Exception {
+        JSONObject validTranslation = new JSONObject().put("lyric", "translation");
+        fails("protocol", () -> NeteaseLibraryApi.parseLyricsDocument(j("{code:200,lrc:'secret'}")));
+        fails("protocol", () -> NeteaseLibraryApi.parseLyricsDocument(
+                new JSONObject().put("code", 200).put("lrc", new JSONObject().put("lyric", 3))
+                        .put("tlyric", validTranslation)));
+        char[] oversized = new char[512 * 1024 + 1];
+        Arrays.fill(oversized, 'x');
+        fails("limit", () -> NeteaseLibraryApi.parseLyricsDocument(
+                new JSONObject().put("code", 200)
+                        .put("lrc", new JSONObject().put("lyric", new String(oversized)))
+                        .put("tlyric", validTranslation)));
+    }
+
+    @Test public void lyricsDocumentToStringIsFixedAndRedacted() throws Exception {
+        String original = "private original";
+        String translation = "private translation";
+        NeteaseLibraryApi.LyricsDocument document = NeteaseLibraryApi.parseLyricsDocument(
+                new JSONObject().put("code", 200)
+                        .put("lrc", new JSONObject().put("lyric", original))
+                        .put("tlyric", new JSONObject().put("lyric", translation)));
+        assertEquals("LyricsDocument{redacted}", document.toString());
+        assertFalse(document.toString().contains(original));
+        assertFalse(document.toString().contains(translation));
     }
 
     @Test public void likedIdsUsesSessionUidAndStrictBoundedUniqueParsing() throws Exception {
@@ -368,5 +456,15 @@ public class NeteaseLibraryApiTest {
 
     private static JSONObject jUnchecked(String text) {
         try { return new JSONObject(text); } catch (org.json.JSONException e) { throw new AssertionError(e); }
+    }
+    private static void requireLyricPayload(NeteaseApi.Request request) throws Exception {
+        assertEquals(NeteaseApi.LYRIC, request.endpoint);
+        JSONObject payload = eapiPayload(request, "/api/song/lyric");
+        assertEquals("12345", payload.getString("id"));
+        assertEquals(-1, payload.getInt("tv"));
+        assertEquals(-1, payload.getInt("lv"));
+        assertEquals(-1, payload.getInt("rv"));
+        assertEquals(-1, payload.getInt("kv"));
+        assertEquals(1, payload.getInt("_nmclfl"));
     }
 }

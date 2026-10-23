@@ -8,6 +8,7 @@ internal class QueueCommandMailbox {
         class Replace(val queue: PlaybackQueue, val positionMs: Long = 0, val playWhenReady: Boolean = true,
             val repeatMode: String? = null, val shuffleEnabled: Boolean? = null) : Action
         data object Clear : Action
+        class Jump(val index: Int, val expectedRevision: Long) : Action
         class Edit(val expectedRevision: Long, val edit: tech.musxi.core.playback.QueueEdit) : Action
         class Insert(val expectedRevision: Long, val song: tech.musxi.core.library.SongSummary,
             val playNext: Boolean) : Action

@@ -44,6 +44,15 @@ public final class QqLibraryApi {
         Audio(String url,long expires){this.url=url;expiresAtElapsedMs=expires;}
         @Override public String toString(){return "Audio(redacted)";}
     }
+    public enum TranslationStatus { PRESENT, ABSENT, INVALID }
+    public static final class LyricsDocument {
+        public final String original,translation;
+        public final TranslationStatus translationStatus;
+        LyricsDocument(String original,String translation,TranslationStatus translationStatus){
+            this.original=original;this.translation=translation;this.translationStatus=translationStatus;
+        }
+        @Override public String toString(){return "LyricsDocument{redacted}";}
+    }
     interface AudioProbe { void check(String url) throws IOException; }
     private final QqMusicApi api; private final BooleanSupplier valid; private final AudioProbe probe;
     private final long deadline=System.nanoTime()+60_000_000_000L;
@@ -263,15 +272,62 @@ public final class QqLibraryApi {
         if(code==80092)throw error("permission");
     }
     public String lyrics(QqMusicApi.Session session,String songMid) throws IOException {
+        return lyricsDocument(session,songMid).original;
+    }
+    public LyricsDocument lyricsDocument(QqMusicApi.Session session,String songMid) throws IOException {
         if(session==null)throw error("identity");
         requireMid(songMid);
         JSONObject response=call(session,"music.musichallSong.PlayLyricInfo","GetPlayLyricInfo",
             obj("crypt",0,"lrc_t",0,"qrc",0,"qrc_t",0,"roma",0,"roma_t",0,
-                "trans",0,"trans_t",0,"needSingingAnnotations",false,"type",1,"songMid",songMid));
+                "trans",1,"trans_t",0,"needSingingAnnotations",false,"type",1,"songMid",songMid));
+        return parseLyricsDocument(response);
+    }
+    static LyricsDocument parseLyricsDocument(JSONObject response) throws IOException {
         Object value=response.opt("lyric");
-        if(value==null || value==JSONObject.NULL || "".equals(value))return "";
+        if(value==null || value==JSONObject.NULL || "".equals(value))
+            return new LyricsDocument("",null,TranslationStatus.ABSENT);
         if(!(value instanceof String))throw error("protocol");
-        return parseLyrics((String)value);
+        String original=parseLyrics((String)value);
+        Object translated=response.opt("trans");
+        if(translated==null || translated==JSONObject.NULL)
+            return new LyricsDocument(original,null,TranslationStatus.ABSENT);
+        if(!(translated instanceof String))return new LyricsDocument(original,null,TranslationStatus.INVALID);
+        String raw=(String)translated;
+        // Bound the encoded representation before decoding; a 256KiB LRC needs <350KiB Base64.
+        if(raw.length()>350*1024 || !validTranslationText(raw,350*1024))
+            return new LyricsDocument(original,null,TranslationStatus.INVALID);
+        try {
+            if(looksHexCipher(raw))throw error("protocol");
+            String text=raw;
+            if(base64Alphabet(raw)){
+                // Short, unpadded ASCII may be ordinary unsynced text (for example "test").
+                String decoded=decodeLyricBase64(raw,raw.endsWith("=") || raw.length()>256*1024);
+                if(decoded!=null)text=decoded;
+            }
+            if(!validTranslationText(text,256*1024))throw error("limit");
+            if(isBlank(text))return new LyricsDocument(original,null,TranslationStatus.ABSENT);
+            return new LyricsDocument(original,text,TranslationStatus.PRESENT);
+        }catch(IOException invalid){
+            return new LyricsDocument(original,null,TranslationStatus.INVALID);
+        }
+    }
+    private static boolean isBlank(String value){
+        return value.codePoints().allMatch(c->Character.isWhitespace(c)||Character.isSpaceChar(c));
+    }
+    private static boolean validTranslationText(String value,int maximumBytes){
+        int bytes=0;
+        for(int i=0;i<value.length();){
+            char c=value.charAt(i++);
+            if(Character.isHighSurrogate(c)){
+                if(i>=value.length() || !Character.isLowSurrogate(value.charAt(i++)))return false;
+                bytes+=4;
+            }else{
+                if(Character.isLowSurrogate(c) || Character.isISOControl(c) && c!='\n' && c!='\r' && c!='\t')return false;
+                bytes+=c<0x80?1:c<0x800?2:3;
+            }
+            if(bytes>maximumBytes)return false;
+        }
+        return true;
     }
     static String parseLyrics(String value) throws IOException {
         if(value==null)throw error("protocol");

@@ -2,6 +2,7 @@ package tech.musxi.accounts
 
 import tech.musxi.core.account.Platform
 import tech.musxi.core.library.*
+import tech.musxi.core.diagnostics.RequestOperation
 import tech.musxi.loginpoc.KugouApi
 import tech.musxi.loginpoc.KugouLibraryApi
 import tech.musxi.neteaseloginpoc.NeteaseApi
@@ -20,13 +21,13 @@ class FavoritesRepository(private val accounts: AccountRepository,
             Platform.NETEASE -> accounts.withNeteaseSession({ api, session ->
                 requireCurrent(current)
                 NeteaseLibraryApi(api).likedIds(session).also { requireCurrent(current) }
-            }, callback)
+            }, callback, RequestOperation.FAVORITES_READ)
             Platform.KUGOU -> accounts.withKugouSession({ api, session ->
                 requireCurrent(current); KugouLibraryApi(api).likedIds(session, current)
-            }, callback)
+            }, callback, RequestOperation.FAVORITES_READ)
             Platform.QQ -> accounts.withQqSession({ api, session ->
                 requireCurrent(current); QqLibraryApi(api, current).likedIds(session)
-            }, callback)
+            }, callback, RequestOperation.FAVORITES_READ)
         }
     }
 
@@ -35,14 +36,14 @@ class FavoritesRepository(private val accounts: AccountRepository,
         when (song.key.platform) {
             Platform.NETEASE -> accounts.withNeteaseSession({ api, session ->
                 requireCurrent(current); NeteaseLibraryApi(api).setLiked(session, song.key.id, liked)
-            }, callback)
+            }, callback, RequestOperation.FAVORITES_WRITE)
             Platform.KUGOU -> accounts.withKugouSession({ api, session ->
                 requireCurrent(current)
                 KugouLibraryApi(api).setLiked(session, song.key.id, song.title, song.durationMs, liked, current)
-            }, callback)
+            }, callback, RequestOperation.FAVORITES_WRITE)
             Platform.QQ -> accounts.withQqSession({ api, session ->
                 requireCurrent(current); QqLibraryApi(api, current).setLiked(session, song.key.id, liked)
-            }, callback)
+            }, callback, RequestOperation.FAVORITES_WRITE)
         }
     }
 

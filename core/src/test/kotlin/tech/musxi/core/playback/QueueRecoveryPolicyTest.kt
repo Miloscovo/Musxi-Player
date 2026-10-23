@@ -39,6 +39,7 @@ class QueueRecoveryPolicyTest {
             PlaybackFailure.RATE_LIMIT,
             PlaybackFailure.AUTH_REQUIRED,
             PlaybackFailure.PROTOCOL,
+            PlaybackFailure.BACKGROUND_RESTRICTED,
             PlaybackFailure.UNKNOWN
         )
         for (failure in failures) {

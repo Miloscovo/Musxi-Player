@@ -12,7 +12,7 @@ class SourceSelectionTest {
     private val first = SourceCandidate(song(Platform.NETEASE, "1"), 7)
     private val second = SourceCandidate(song(Platform.KUGOU, "a".repeat(32) + "_0_1"), 8)
 
-    @Test fun timeoutStartsWhenResultsAreReadyAndPicksFirstSameNameOnce() {
+    @Test fun timeoutStartsWhenResultsAreReadyAndPicksFirstEligibleOnce() {
         var now = 10L; val selection = SourceSelection { now }; val chosen = mutableListOf<SourceCandidate>()
         val token = selection.begin(original, chosen::add, {})
         now = 9000; selection.tick(token); assertTrue(chosen.isEmpty())
@@ -67,5 +67,42 @@ class SourceSelectionTest {
         assertTrue(SourceSelection.sameTitle(" Ａｉｚｏ ", "aizo"))
         assertFalse(SourceSelection.sameTitle("AIZO", "AIZO (Live)"))
         assertFalse(SourceSelection.sameTitle(" ", ""))
+    }
+    @Test fun sameTitleWrongSingerMissingDurationAndVersionAlbumNeverStartTimerButRemainManual() {
+        var now = 0L; val selection = SourceSelection { now }; val chosen = mutableListOf<SourceCandidate>()
+        val token = selection.begin(original, chosen::add, {})
+        val wrong = first.copy(song = first.song.copy(artists = listOf("Other")))
+        val unknown = second.copy(song = second.song.copy(durationMs = 0))
+        val version = first.copy(song = first.song.copy(key = MediaKey(Platform.NETEASE, "2"), album = "Live"))
+        selection.offer(token, AlternativeSources(original, listOf(wrong, unknown, version)))
+        assertEquals(SourceSelectionPhase.CHOOSING, selection.state.value.phase)
+        assertNull(selection.state.value.deadlineElapsedMs); assertNull(selection.state.value.automaticIndex)
+        now = 100_000; selection.tick(token); assertTrue(chosen.isEmpty())
+        assertTrue(selection.select(token, 2)); assertEquals(listOf(version), chosen)
+    }
+    @Test fun laterEligibleCandidateWinsWithoutReorderingManualOptions() {
+        val selection = SourceSelection { 0 }; val chosen = mutableListOf<SourceCandidate>()
+        val token = selection.begin(original, chosen::add, {})
+        val wrong = first.copy(song = first.song.copy(artists = listOf("Other")))
+        selection.offer(token, AlternativeSources(original, listOf(wrong, second)))
+        assertEquals(listOf(wrong, second), selection.state.value.candidates)
+        assertEquals(1, selection.state.value.automaticIndex)
+    }
+    @Test fun mismatchedOriginalResultCannotReplaceActiveSearchOrArmTimer() {
+        val selection = SourceSelection { 0 }; val token = selection.begin(original, {}, {})
+        selection.offer(token, AlternativeSources(original.copy(key = MediaKey(Platform.QQ, "A0000000000002")), listOf(first)))
+        assertEquals(SourceSelectionPhase.SEARCHING, selection.state.value.phase)
+        assertEquals(original, selection.state.value.original)
+        assertNull(selection.state.value.deadlineElapsedMs)
+        selection.offer(token, AlternativeSources(original, listOf(first)))
+        assertEquals(0, selection.state.value.automaticIndex)
+    }
+    @Test fun repositoryMayEnrichSameOriginalKeyBeforeAutomaticAssessment() {
+        val selection = SourceSelection { 0 }
+        val incomplete = original.copy(artists = emptyList(), durationMs = 0)
+        val token = selection.begin(incomplete, {}, {})
+        selection.offer(token, AlternativeSources(original, listOf(first)))
+        assertEquals(original, selection.state.value.original)
+        assertEquals(0, selection.state.value.automaticIndex)
     }
 }

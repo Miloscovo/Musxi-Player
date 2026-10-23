@@ -276,8 +276,14 @@ public class QqLibraryApiTest {
     }
     @Test public void lyricsUseFixedPlainCgiAndDecodeOnlyStandardBase64Lrc() throws Exception {
         Fixture f=new Fixture();String lrc="[00:01.00]Hello\n[00:02.00]世界";
-        f.data.add(new JSONObject().put("lyric",lrc));
+        String translation="[00:01.00]你好\n[00:02.00]世界";
+        JSONObject response=new JSONObject().put("lyric",lrc).put("trans",translation);
+        f.data.add(new JSONObject(response.toString()));f.data.add(response);
+        QqLibraryApi.LyricsDocument document=new QqLibraryApi(f.api).lyricsDocument(session(),MID);
+        assertEquals(lrc,document.original);assertEquals(translation,document.translation);
+        assertEquals(QqLibraryApi.TranslationStatus.PRESENT,document.translationStatus);
         assertEquals(lrc,new QqLibraryApi(f.api).lyrics(session(),MID));
+        assertEquals(2,f.requests.size());
         JSONObject request=new JSONObject(f.requests.get(0).body).getJSONObject("req_0");
         assertEquals("music.musichallSong.PlayLyricInfo",request.getString("module"));
         assertEquals("GetPlayLyricInfo",request.getString("method"));
@@ -285,12 +291,102 @@ public class QqLibraryApiTest {
         assertEquals(0,param.getInt("crypt"));assertEquals(0,param.getInt("lrc_t"));
         assertEquals(0,param.getInt("qrc"));assertEquals(0,param.getInt("qrc_t"));
         assertEquals(0,param.getInt("roma"));assertEquals(0,param.getInt("roma_t"));
-        assertEquals(0,param.getInt("trans"));assertEquals(0,param.getInt("trans_t"));
+        assertEquals(1,param.getInt("trans"));assertEquals(0,param.getInt("trans_t"));
         assertEquals(false,param.getBoolean("needSingingAnnotations"));
         assertEquals(1,param.getInt("type"));assertEquals(MID,param.getString("songMid"));
         String encoded=Base64.getEncoder().encodeToString(lrc.getBytes(StandardCharsets.UTF_8));
         assertEquals(lrc,QqLibraryApi.parseLyrics(encoded));
         assertEquals("plain words",QqLibraryApi.parseLyrics("plain words"));
+    }
+    @Test public void lyricsDocumentTreatsMissingNullAndBlankTranslationAsAbsent() throws Exception {
+        String lrc="[00:01.00]Original";
+        QqLibraryApi.LyricsDocument missing=QqLibraryApi.parseLyricsDocument(
+            new JSONObject().put("lyric",lrc));
+        assertEquals(lrc,missing.original);assertNull(missing.translation);
+        assertEquals(QqLibraryApi.TranslationStatus.ABSENT,missing.translationStatus);
+        for(Object blank:new Object[]{JSONObject.NULL,""," \t\n"}) {
+            QqLibraryApi.LyricsDocument document=QqLibraryApi.parseLyricsDocument(
+                new JSONObject().put("lyric",lrc).put("trans",blank));
+            assertEquals(lrc,document.original);assertNull(document.translation);
+            assertEquals(QqLibraryApi.TranslationStatus.ABSENT,document.translationStatus);
+        }
+    }
+    @Test public void lyricsDocumentAcceptsUnicodePlainAndStandardBase64Translation() throws Exception {
+        String lrc="[00:01.00]Original";
+        String plain="[00:01.00]译文\uD83C\uDFB5";
+        QqLibraryApi.LyricsDocument passive=QqLibraryApi.parseLyricsDocument(
+            new JSONObject().put("lyric",lrc).put("trans",plain));
+        assertEquals(plain,passive.translation);
+        assertEquals(QqLibraryApi.TranslationStatus.PRESENT,passive.translationStatus);
+        String encoded=Base64.getEncoder().encodeToString(plain.getBytes(StandardCharsets.UTF_8));
+        QqLibraryApi.LyricsDocument active=QqLibraryApi.parseLyricsDocument(
+            new JSONObject().put("lyric",lrc).put("trans",encoded));
+        assertEquals(plain,active.translation);
+        assertEquals(QqLibraryApi.TranslationStatus.PRESENT,active.translationStatus);
+        QqLibraryApi.LyricsDocument unsynced=QqLibraryApi.parseLyricsDocument(
+            new JSONObject().put("lyric",lrc).put("trans","test"));
+        assertEquals("test",unsynced.translation);
+        assertEquals(QqLibraryApi.TranslationStatus.PRESENT,unsynced.translationStatus);
+    }
+    @Test public void invalidTranslationDegradesIndependentlyOfValidOriginal() throws Exception {
+        String lrc="[00:01.00]Original";
+        String invalidUtf8=Base64.getEncoder().encodeToString(new byte[]{(byte)0xff});
+        String qrc=Base64.getEncoder().encodeToString(
+            "[QrcInfos][QrcLyric][00:01.00]translation".getBytes(StandardCharsets.UTF_8));
+        for(Object invalid:new Object[]{7,invalidUtf8,"AAAA==",
+                "0123456789abcdef0123456789abcdef","[00:01.00]bad"+(char)0+"text",
+                "[00:01.00]bad"+(char)0xD800+"text",qrc}) {
+            QqLibraryApi.LyricsDocument document=QqLibraryApi.parseLyricsDocument(
+                new JSONObject().put("lyric",lrc).put("trans",invalid));
+            assertEquals(lrc,document.original);assertNull(document.translation);
+            assertEquals(QqLibraryApi.TranslationStatus.INVALID,document.translationStatus);
+        }
+    }
+    @Test public void translationDecodedUtf8LimitIsExact() throws Exception {
+        String lrc="[00:01.00]Original";
+        String prefix="[00:01.00]";
+        String exact=prefix+String.join("",Collections.nCopies(256*1024-prefix.length(),"x"));
+        String exactEncoded=Base64.getEncoder().encodeToString(exact.getBytes(StandardCharsets.UTF_8));
+        QqLibraryApi.LyricsDocument accepted=QqLibraryApi.parseLyricsDocument(
+            new JSONObject().put("lyric",lrc).put("trans",exactEncoded));
+        assertEquals(exact,accepted.translation);
+        assertEquals(QqLibraryApi.TranslationStatus.PRESENT,accepted.translationStatus);
+        String oversized=prefix+String.join("",Collections.nCopies(256*1024-prefix.length()+1,"x"));
+        String oversizedEncoded=Base64.getEncoder().encodeToString(oversized.getBytes(StandardCharsets.UTF_8));
+        QqLibraryApi.LyricsDocument rejected=QqLibraryApi.parseLyricsDocument(
+            new JSONObject().put("lyric",lrc).put("trans",oversizedEncoded));
+        assertEquals(lrc,rejected.original);assertNull(rejected.translation);
+        assertEquals(QqLibraryApi.TranslationStatus.INVALID,rejected.translationStatus);
+    }
+    @Test public void blankTranslationStillHonorsDecodedLimitAndEncodedInputIsBounded() throws Exception {
+        String lrc="[00:01.00]Original";
+        String blank=String.join("",Collections.nCopies(256*1024," "));
+        QqLibraryApi.LyricsDocument exact=QqLibraryApi.parseLyricsDocument(
+            new JSONObject().put("lyric",lrc).put("trans",blank));
+        assertEquals(QqLibraryApi.TranslationStatus.ABSENT,exact.translationStatus);
+        for(String invalid:new String[]{blank+" ",String.join("",Collections.nCopies(350*1024+1,"A"))}){
+            QqLibraryApi.LyricsDocument document=QqLibraryApi.parseLyricsDocument(
+                new JSONObject().put("lyric",lrc).put("trans",invalid));
+            assertEquals(lrc,document.original);assertNull(document.translation);
+            assertEquals(QqLibraryApi.TranslationStatus.INVALID,document.translationStatus);
+        }
+    }
+    @Test public void lyricsDocumentDoesNotHideInvalidOriginal() throws Exception {
+        String validTranslation="[00:01.00]Translation";
+        rejects("protocol",()->QqLibraryApi.parseLyricsDocument(
+            new JSONObject().put("lyric",7).put("trans",validTranslation)));
+        rejects("limit",()->QqLibraryApi.parseLyricsDocument(
+            new JSONObject().put("lyric",String.join("",Collections.nCopies(512*1024+1,"x")))
+                .put("trans",validTranslation)));
+    }
+    @Test public void lyricsDocumentToStringRedactsBothLyrics() throws Exception {
+        String original="[00:01.00]secret original";
+        String translation="[00:01.00]secret translation";
+        QqLibraryApi.LyricsDocument document=QqLibraryApi.parseLyricsDocument(
+            new JSONObject().put("lyric",original).put("trans",translation));
+        String rendered=document.toString();
+        assertFalse(rendered.contains(original));assertFalse(rendered.contains(translation));
+        assertTrue(rendered.contains("redacted"));
     }
     @Test public void lyricsReturnEmptyAndRejectInvalidOrOversizedContent() throws Exception {
         for(Object empty:new Object[]{"",JSONObject.NULL}){

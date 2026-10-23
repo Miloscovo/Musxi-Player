@@ -1,5 +1,9 @@
 # 安卓后端增量 PR 记录（2026-10-21）
 
+> 历史专项记录：以下只对应文中日期、包和测试范围；当前状态以 [0.1 验收](android-0.1-acceptance.md) 为准。本机证据路径仅用于本地复查，不随仓库分发。
+
+已创建：[上游 PR #24](https://github.com/Miloscovo/Musxi-Player/pull/24)，已于 2026-10-21 合并（上游提交 c5821a7）；提交 `ac3ac80f4259244a50fb5269aa0fdf5bd1c59afd`，70 个文件，目标 `android/development`。本地开发目录继续保留未提交副本，PR 提交在隔离 worktree 中。
+
 ## 上游旧 PR 核对
 
 - [PR #23](https://github.com/Miloscovo/Musxi-Player/pull/23) 已由 Miloscovo 于 2026-10-21 12:48:21（北京时间）合并；原临时 base 为 `codex/pr23-archive-merge`，合并结果保存在上游 `android/development`，桌面 `main` 保持独立。
@@ -9,7 +13,7 @@
 
 ## 本次范围
 
-用户授权提交目前新增内容并创建新 PR，明确排除 cc 未完成的前端。本次从上游 `android/development` 创建 `android/backend-p0-p2`，在独立 worktree `C:\text\Musxi-Player-android-backend-pr` 整理，原工作区 `C:\text\Musxi-Player安卓` 的进行中成果保留。
+用户授权提交目前新增内容并创建新 PR，明确排除 cc 未完成的前端。本次从上游 `android/development` 创建 `android/backend-p0-p2`，在独立 worktree `<project-root>\.local\worktrees\Musxi-Player-android-backend-pr` 整理，原工作区 `<project-root>` 的进行中成果保留。
 
 包含：
 

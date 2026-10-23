@@ -19,7 +19,7 @@ try {
         $adb = Join-Path $sdk 'platform-tools/adb.exe'
         & $adb install -r $apk
         if ($LASTEXITCODE -ne 0) { throw 'adb install failed.' }
-        & $adb shell am start --display 0 -n 'tech.musxi.player.dev/tech.musxi.player.DeveloperActivity'
-        if ($LASTEXITCODE -ne 0) { throw 'Could not open the developer Activity.' }
+        & $adb shell am start --display 0 -n 'tech.musxi.player.dev/tech.musxi.player.MainActivity'
+        if ($LASTEXITCODE -ne 0) { throw 'Could not open MainActivity.' }
     }
 } finally { Pop-Location }

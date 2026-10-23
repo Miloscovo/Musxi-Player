@@ -3,6 +3,7 @@ package tech.musxi.accounts
 import android.os.SystemClock
 import tech.musxi.core.account.Platform
 import tech.musxi.core.library.*
+import tech.musxi.core.diagnostics.RequestOperation
 import tech.musxi.loginpoc.KugouApi
 import tech.musxi.loginpoc.KugouLibraryApi
 
@@ -45,7 +46,7 @@ class KugouLibraryRepository(private val accounts: AccountRepository) : LibraryP
             Page(page.items.map { PlaylistSummary(MediaKey(Platform.KUGOU, it.id), it.name,
                 ArtworkPolicy.sanitize(Platform.KUGOU, it.coverUrl), it.trackCount) },
                 page.nextOffset.takeIf { it >= 0 }, page.total.takeIf { it >= 0 })
-        }, safe(result))
+        }, safe(result), RequestOperation.PLAYLISTS)
     }
     override fun tracks(playlist: MediaKey, offset: Int, result: (Result<Page<SongSummary>>) -> Unit) {
         require(playlist.platform == Platform.KUGOU)
@@ -54,13 +55,13 @@ class KugouLibraryRepository(private val accounts: AccountRepository) : LibraryP
             val page = KugouLibraryApi(api).tracks(session, playlist.id, offset, 30)
             Page(remember(page.items.map(::summary), generation),
                 page.nextOffset.takeIf { it >= 0 }, page.total.takeIf { it >= 0 })
-        }, safe(result))
+        }, safe(result), RequestOperation.TRACKS)
     }
     fun search(keywords: String, result: (Result<List<SongSummary>>) -> Unit) {
         val generation = accounts.states.value.getValue(Platform.KUGOU).generation
         accounts.withKugouSession({ api, session ->
             remember(KugouLibraryApi(api).search(session, keywords).map(::summary), generation)
-        }, safe(result))
+        }, safe(result), RequestOperation.SEARCH)
     }
     fun searchPage(keywords: String, offset: Int, result: (Result<Page<SongSummary>>) -> Unit,
         isCurrent: () -> Boolean = { true }) {
@@ -72,7 +73,7 @@ class KugouLibraryRepository(private val accounts: AccountRepository) : LibraryP
             if (!isCurrent()) throw LibraryFailure("cancelled")
             Page(remember(page.items.map(::summary), generation),
                 page.nextOffset.takeIf { it >= 0 }, page.total.takeIf { it >= 0 })
-        }, safe(result))
+        }, safe(result), RequestOperation.SEARCH)
     }
     /** The pinned vendor has no general song-detail module. Reuse known metadata only. */
     fun song(key: MediaKey, result: (Result<SongSummary>) -> Unit) {
@@ -84,7 +85,7 @@ class KugouLibraryRepository(private val accounts: AccountRepository) : LibraryP
                 if (metadataGeneration != generation) throw LibraryFailure("unavailable")
                 metadata[key] ?: throw LibraryFailure("unavailable")
             }
-        }, safe(result))
+        }, safe(result), RequestOperation.SONG)
     }
     fun queue(playlist: MediaKey, startSong: MediaKey, result: (Result<PlaybackQueue>) -> Unit) {
         require(playlist.platform == Platform.KUGOU && startSong.platform == Platform.KUGOU)
@@ -118,7 +119,7 @@ class KugouLibraryRepository(private val accounts: AccountRepository) : LibraryP
             if (index < 0) throw LibraryFailure("incomplete")
             remember(songs, generation)
             PlaybackQueue(songs, index, generation)
-        }, safe(result))
+        }, safe(result), RequestOperation.QUEUE)
     }
     fun resolveAudio(song: MediaKey, result: (Result<AudioCapability>) -> Unit) {
         require(song.platform == Platform.KUGOU)
@@ -126,7 +127,7 @@ class KugouLibraryRepository(private val accounts: AccountRepository) : LibraryP
         accounts.withKugouSession({ api, session ->
             val audio = KugouLibraryApi(api).audio(session, song.id, SystemClock.elapsedRealtime())
             AudioCapability(audio.url, audio.expiresAtElapsedMs) { accounts.isKugouGenerationConnected(generation) }
-        }, safe(result))
+        }, safe(result), RequestOperation.AUDIO)
     }
     class AudioCapability internal constructor(private val url: String, private val expiresAt: Long, private val current: () -> Boolean) {
         fun deliverToPlayer(deliver: (String) -> Unit) {

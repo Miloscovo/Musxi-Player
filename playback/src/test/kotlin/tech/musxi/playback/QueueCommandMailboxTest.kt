@@ -57,4 +57,41 @@ class QueueCommandMailboxTest {
         assertNotNull(mailbox.take(token))
         assertNull(mailbox.take(token))
     }
+
+    @Test fun rapidRowClicksDispatchOnlyTheLatestSlotAndItsRenderedRevision() {
+        val mailbox = QueueCommandMailbox()
+        val first = mailbox.submit(QueueCommandMailbox.Action.Jump(0, 7))
+        val latest = QueueCommandMailbox.Action.Jump(1, 7)
+        val last = mailbox.submit(latest)
+        assertNull(mailbox.take(first))
+        assertSame(latest, mailbox.take(last))
+        assertNull(mailbox.take(last))
+    }
+
+    @Test fun delayedJumpCannotOvertakeAReplacementOrReorder() {
+        val mailbox = QueueCommandMailbox()
+        val jump = mailbox.submit(QueueCommandMailbox.Action.Jump(1, 7))
+        val replacement = replace()
+        val replaced = mailbox.submit(replacement)
+        assertNull(mailbox.take(jump))
+        assertSame(replacement, mailbox.take(replaced))
+
+        val secondJump = mailbox.submit(QueueCommandMailbox.Action.Jump(1, 8))
+        val move = QueueCommandMailbox.Action.Edit(8, tech.musxi.core.playback.QueueEdit.Move(1, 0))
+        val moved = mailbox.submit(move)
+        assertNull(mailbox.take(secondJump))
+        assertSame(move, mailbox.take(moved))
+    }
+
+    @Test fun clearAndSystemStopPreventAPendingJumpFromRestartingPlayback() {
+        val mailbox = QueueCommandMailbox()
+        val jump = mailbox.submit(QueueCommandMailbox.Action.Jump(1, 7))
+        val clear = mailbox.submit(QueueCommandMailbox.Action.Clear)
+        assertNull(mailbox.take(jump))
+        assertSame(QueueCommandMailbox.Action.Clear, mailbox.take(clear))
+        val retry = mailbox.submit(QueueCommandMailbox.Action.Jump(0, 9))
+        mailbox.invalidate()
+        assertFalse(mailbox.isPending(retry))
+        assertNull(mailbox.take(retry))
+    }
 }
