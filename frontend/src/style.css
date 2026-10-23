@@ -166,6 +166,21 @@ main.app-shell { --sidebar-width:clamp(210px,15.5vw,240px); overflow:hidden; bor
 .track-name { color:var(--ink); font-size:16px; font-weight:700 }
 .song.track-row.active .track-name { color:var(--accent) }
 .track-index,.track-artist,.track-album,.track-duration { color:var(--muted); font-size:15px }
+.track-index { position:relative; display:grid; place-items:center; min-height:32px }
+.song.track-row .track-index-play { position:absolute; inset:0; display:grid; place-items:center; width:100%; height:32px; padding:0; background:transparent; color:var(--ink); visibility:hidden }
+.track-index-play svg { width:20px; height:20px; fill:currentColor }
+.track-index[data-current=true] .track-number { visibility:hidden }
+.song.track-row:is(:hover,:focus-within) .track-index:not([data-playing=true]) .track-number,
+.song.track-row:is(:hover,:focus-within) .track-index:not([data-playing=true]) .track-wave { visibility:hidden }
+.song.track-row:is(:hover,:focus-within) .track-index:not([data-playing=true]) .track-index-play { visibility:visible }
+.track-wave { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; gap:2px; color:var(--accent); pointer-events:none }
+.track-wave i { width:3px; height:16px; border-radius:2px; background:currentColor; transform-origin:center; transform:scaleY(.5) }
+.track-wave i:nth-child(2) { height:20px; animation-delay:-.2s }
+.track-wave i:nth-child(3) { height:14px; animation-delay:-.4s }
+.track-wave i:nth-child(4) { height:18px; animation-delay:-.6s }
+.track-index[data-playing=true] .track-wave i { animation-name:song-wave; animation-duration:.8s; animation-iteration-count:infinite; animation-timing-function:ease-in-out }
+@keyframes song-wave { 0%,100% { transform:scaleY(.3) } 50% { transform:scaleY(1) } }
+@media (prefers-reduced-motion:reduce) { .track-index[data-playing=true] .track-wave i { animation:none } }
 .library-shell:is([data-theme=light],[data-theme=glass-light]) .song.track-row>:is(.track-artist,.track-album,.track-duration) { opacity:1 }
 .track-duration { font-variant-numeric:tabular-nums; white-space:nowrap }
 .song-actions { display:none }
@@ -380,6 +395,7 @@ html,body,#app,main.app-shell { background:transparent!important }
 .message-alert-description { overflow-wrap:anywhere }
 .queue-panel { -webkit-app-region:no-drag; z-index:70; display:flex; flex-direction:column; width:min(300px,calc(100vw - 24px)); height:380px; max-height:var(--radix-popover-content-available-height); padding:10px; border:1px solid var(--line); border-radius:12px; background:var(--surface-alpha); color:var(--ink); box-shadow:0 6px 24px #0003; outline:none; font-family:inherit }
 .queue-panel-header { display:flex; align-items:center; gap:8px; flex-shrink:0; padding:4px 6px 8px; border-bottom:1px solid var(--line) }
+.queue-fade[data-state=closed] { pointer-events:none }
 .queue-panel-header h2 { margin:0; font-size:18px; font-weight:700 }
 .queue-panel-list { flex:1; min-height:0; overflow:auto; padding:0; margin:0; list-style:none }
 .queue-panel-list::-webkit-scrollbar { width:10px; background:transparent }
@@ -450,12 +466,13 @@ html,body,#app,main.app-shell { background:transparent!important }
 .app-body { position:relative; display:flex; flex:1; min-height:0 }
 .library-layer { display:flex; flex:1; min-width:0; min-height:0 }
 /* Keep the covered library mounted, but exclude its controls from CEF drag regions. */
-.library-layer[inert] { isolation:isolate; visibility:hidden }
+.library-layer[inert] { isolation:isolate }
+.library-layer[data-covered=true] { visibility:hidden }
 .lyrics-toggle { position:relative; flex:none; padding:0; border-radius:11px; background:transparent; line-height:0 }
 .lyrics-toggle svg { position:absolute; inset:0; margin:auto; width:30px; height:30px; padding:4px; border-radius:50%; background:#0008; fill:none; stroke:#fff; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; opacity:0; transition:opacity .15s }
 .lyrics-toggle:is(:hover,:focus-visible) svg { opacity:1 }
-.lyrics-page { position:absolute; inset:0; z-index:4; display:grid; grid-template-columns:minmax(320px,38%) minmax(0,1fr); grid-template-rows:minmax(0,1fr); align-items:center; gap:clamp(24px,5vw,72px); padding:56px clamp(24px,6vw,96px); background:var(--surface); color:var(--ink); animation:lyrics-in .2s ease-out; -webkit-app-region:drag }
-@keyframes lyrics-in { from { opacity:0; transform:translateY(24px) } }
+.lyrics-page { position:absolute; inset:0; z-index:4; display:grid; grid-template-columns:minmax(320px,38%) minmax(0,1fr); grid-template-rows:minmax(0,1fr); align-items:center; gap:clamp(24px,5vw,72px); padding:56px clamp(24px,6vw,96px); background:var(--surface); color:var(--ink); -webkit-app-region:drag }
+.lyrics-page[inert] { pointer-events:none; -webkit-app-region:no-drag }
 .lyrics-close { position:absolute; left:20px; top:40px; display:grid; place-items:center; width:40px; height:40px; padding:0; border-radius:10px; background:transparent; color:var(--ink) }
 .lyrics-close:hover { background:var(--hover-surface) }
 .lyrics-close svg { width:26px; height:26px; fill:none; stroke:currentColor; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round }
@@ -486,7 +503,7 @@ html,body,#app,main.app-shell { background:transparent!important }
   .lyrics-track h2 { margin:0 }
   .lyrics-close { top:16px; left:10px }
 }
-@media (prefers-reduced-motion:reduce) { .lyrics-page { animation:none } .lyrics-toggle svg { transition:none } }
+@media (prefers-reduced-motion:reduce) { .lyrics-toggle svg { transition:none } }
 .lyrics-match-dialog { width:960px; max-width:calc(100vw - 32px); max-height:calc(100dvh - 40px); overflow:auto; color:var(--ink) }
 .lyrics-match-dialog [data-variant=ghost] { color:inherit }
 .lyrics-match-preview li button:disabled { opacity:1 }
@@ -584,7 +601,7 @@ body:has([data-slot="popover-content"],[data-slot="context-menu-content"]) .comp
 .desktop-lyrics-toggle { display:grid; place-items:center; width:42px; height:46px; padding:4px; background:transparent; color:var(--ink); opacity:.7 }
 .desktop-lyrics-toggle:hover { opacity:1 }
 /* A "词" badge: a glyph in a rounded frame, unlike the dock's line icons. */
-.desktop-lyrics-toggle svg { width:31px; height:31px; overflow:visible }
+.desktop-lyrics-toggle svg { width:34px; height:34px; overflow:visible }
 .desktop-lyrics-toggle rect { fill:none; stroke:currentColor; stroke-width:1.9 }
 .desktop-lyrics-toggle text { fill:currentColor; font:700 10.5px "Microsoft YaHei UI","Microsoft YaHei",sans-serif }
 .desktop-lyrics-toggle[aria-pressed=true] { color:var(--accent); opacity:1 }

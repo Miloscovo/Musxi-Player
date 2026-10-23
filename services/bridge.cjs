@@ -6,7 +6,7 @@ const fs = require('node:fs/promises');
 const readline = require('node:readline');
 const {inspectAudio}=require('./kugou-audio.cjs');
 const VENDOR = path.join(__dirname, 'vendor', 'KuGouMusicApi-a5a98013cce79fe0ae2ad65fc84b68176ebcfc1e');
-const ALLOWED = new Set(['login_qr_key', 'login_qr_create', 'login_qr_check', 'user_detail', 'user_playlist', 'playlist_track_all_new', 'song_url', 'privilege_lite', 'user_verify', 'song_auth', 'song_url_auth', 'search', 'playlist_tracks_add', 'playlist_tracks_del', 'user_vip_detail', 'youth_month_vip_record', 'youth_day_vip', 'search_lyric', 'lyric']);
+const ALLOWED = new Set(['login_qr_key', 'login_qr_create', 'login_qr_check', 'user_detail', 'user_playlist', 'playlist_track_all_new', 'playlist_track_all', 'song_url', 'privilege_lite', 'user_verify', 'song_auth', 'song_url_auth', 'search', 'playlist_tracks_add', 'playlist_tracks_del', 'user_vip_detail', 'youth_month_vip_record', 'youth_day_vip', 'search_lyric', 'lyric']);
 const QUALITIES = [{id:'128',name:'标准 · 128 kbps'}, {id:'320',name:'高品质 · 320 kbps'}, {id:'flac',name:'无损 · FLAC'}, {id:'kugou:high',name:'Hi-Res'}];
 function confirmedQuality(data, id) {
   const bitrate=Number(data.bitRate ?? data.bitrate ?? data.bit_rate ?? 0);
@@ -102,7 +102,7 @@ function responseShape(value, depth = 0) {
 function playlist(item) {
   const id = text(item.listid);
   if (!id) throw new Error('歌单缺少标识，无法完整同步');
-  return { id, editable: Number(item.is_edit)===1, favorite: Number(item.is_def)===2, automaticCover: item.is_custom_pic===0 || item.is_custom_pic==='0', cover: cover(item), name: text(item.name) || '未命名歌单', count: Number(item.count ?? item.songcount ?? item.song_count ?? 0), globalId: text(item.global_collection_id), owner: text(item.list_create_userid) };
+  return { id, editable: Number(item.is_edit)===1, favorite: Number(item.is_def)===2, automaticCover: item.is_custom_pic===0 || item.is_custom_pic==='0', cover: cover(item), name: text(item.name) || '未命名歌单', count: Number(item.count ?? item.songcount ?? item.song_count ?? 0), globalId: text(item.global_collection_id), sourceGlobalId: text(item.list_create_gid), owner: text(item.list_create_userid) };
 }
 function track(item) {
   // Responses vary between cloud-list generations; preserve IDs for playback.
@@ -260,7 +260,9 @@ class Adapter {
     this.knownPlaylists=new Map(list.map(p=>[p.id,p]));return list;
   }
   async playlistTracks(p) {
-    const list=await this.pages('playlist_track_all_new',{listid:p.id},['info','songs','lists'],row=>{
+    const sourceId=!p.editable && !p.favorite ? p.sourceGlobalId : '';
+    const list=await this.pages(sourceId?'playlist_track_all':'playlist_track_all_new',
+      sourceId?{id:sourceId}:{listid:p.id},['info','songs','lists'],row=>{
       const t=track(row);t.id=`${p.id}:${t.id}`;return t;
     });
     if(p.favorite) list.sort((a,b)=>b.collectedAt-a.collectedAt);

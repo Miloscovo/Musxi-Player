@@ -8,7 +8,7 @@ import { cn } from '@/lib/utils';
 const Popover = Primitive.Root;
 const PopoverTrigger = Primitive.Trigger;
 function PopoverContent({ className, ...props }: ComponentProps<typeof Primitive.Content>) {
-  return <Primitive.Portal><Primitive.Content data-slot="popover-content"
+  return <Primitive.Portal forceMount={props.forceMount}><Primitive.Content data-slot="popover-content"
     className={cn('queue-panel', className)} collisionPadding={12} {...props} /></Primitive.Portal>;
 }
 export { Popover, PopoverTrigger, PopoverContent };

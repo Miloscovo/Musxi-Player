@@ -1,7 +1,14 @@
-import { useRef, useState, useEffect } from 'react';
+import { useRef, useState, useEffect, type ComponentProps } from 'react';
+import { AnimatePresence, motion, useIsPresent } from 'motion/react';
 import type { useLibrary } from '../composables/useLibrary';
 import { Button } from './ui/button';
+import PlayerControl from './PlayerControl';
 import { Popover, PopoverTrigger, PopoverContent } from './ui/popover';
+
+function QueueSurface(props: ComponentProps<typeof motion.div>) {
+  const present = useIsPresent();
+  return <motion.div {...props} inert={!present}/>;
+}
 
 export default function QueuePanel({ library }: { library: ReturnType<typeof useLibrary> }) {
   const [open, setOpen] = useState(false);
@@ -12,10 +19,13 @@ export default function QueuePanel({ library }: { library: ReturnType<typeof use
     if (open) currentRow.current?.scrollIntoView({ block: 'nearest' });
   }, [open, currentId]);
   return <Popover open={open} onOpenChange={setOpen}>
-    <PopoverTrigger asChild><Button variant="unstyled" className="preview-control queue-control" aria-label="播放列表" title="播放列表">
+    <PopoverTrigger asChild><PlayerControl variant="unstyled" className="preview-control queue-control" aria-label="播放列表" title="播放列表">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h12M4 10h12M4 15h7M17 14v7l5-3.5z"/></svg>
-    </Button></PopoverTrigger>
-    <PopoverContent side="top" align="end" sideOffset={48} aria-label="播放列表" onOpenAutoFocus={event => event.preventDefault()}>
+    </PlayerControl></PopoverTrigger>
+    <AnimatePresence initial={false}>
+    {open && <PopoverContent forceMount asChild side="top" align="end" sideOffset={48} className="queue-fade" aria-label="播放列表" onOpenAutoFocus={event => event.preventDefault()}>
+      <QueueSurface initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+        transition={{ duration: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 0.15 }}>
       <div className="queue-panel-header"><h2>播放列表 ({tracks.length})</h2>
         <Button variant="unstyled" className="queue-action" aria-label="清空播放列表" disabled={!tracks.length || library.pending} onClick={() => void library.queueClear()}>
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 4h6M6 7v13h12V7"/></svg>
@@ -38,6 +48,8 @@ export default function QueuePanel({ library }: { library: ReturnType<typeof use
         </li>;
       })}</ul>
       {!tracks.length && <p className="queue-empty">播放列表为空</p>}
-    </PopoverContent>
+      </QueueSurface>
+    </PopoverContent>}
+    </AnimatePresence>
   </Popover>;
 }

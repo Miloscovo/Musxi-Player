@@ -3,6 +3,7 @@ import type { useLibrary } from '../composables/useLibrary';
 import type { PlaybackOrder } from '../native/library';
 import { platformNames, type MusicPlatform } from '../native/library';
 import { Button } from './ui/button';
+import PlayerControl from './PlayerControl';
 import { Popover, PopoverTrigger, PopoverContent } from './ui/popover';
 
 const orders: { id: PlaybackOrder; name: string; path: string }[] = [
@@ -39,11 +40,11 @@ export default function PlayerActions({ library, currentId, onNotice, children }
   function localNotice() { onNotice('本地歌曲无法收藏和添加到歌单'); }
   return <div className="play-controls">
     <Popover open={favoriteOpen} onOpenChange={setFavoriteOpen}>
-    <PopoverTrigger asChild><Button variant="unstyled" aria-label={liked ? '取消收藏当前歌曲' : '收藏当前歌曲'}
+    <PopoverTrigger asChild><PlayerControl variant="unstyled" aria-label={liked ? '取消收藏当前歌曲' : '收藏当前歌曲'}
       aria-pressed={liked} disabled={unavailable} className="player-favorite"
       onClick={event => { if(local) {event.preventDefault();localNotice();} else void library.menu(currentId); }}>
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20S3 14.5 3 8.5a4.5 4.5 0 0 1 9-1 4.5 4.5 0 0 1 9 1C21 14.5 12 20 12 20Z"/></svg>
-    </Button></PopoverTrigger>
+    </PlayerControl></PopoverTrigger>
     <PopoverContent side="top" sideOffset={16} className="player-action-menu" aria-label="收藏平台">
       {ready ? (['netease','kugou','qq'] as MusicPlatform[]).filter(platform=>(state.accounts?.find(account=>account.platform===platform)?.connected ?? (platform==='kugou' && state.connected)) && (platform===currentPlatform || state.now.platforms?.includes(platform) || providers?.some(provider=>provider.platform===platform))).map(platform=>{
         const provider=providers?.find(provider=>provider.platform===platform);
@@ -57,10 +58,10 @@ export default function PlayerActions({ library, currentId, onNotice, children }
     </PopoverContent>
     </Popover>
     <Popover open={addOpen} onOpenChange={setAddOpen}>
-      <PopoverTrigger asChild><Button variant="unstyled" aria-label="添加当前歌曲到歌单" disabled={unavailable}
+      <PopoverTrigger asChild><PlayerControl variant="unstyled" aria-label="添加当前歌曲到歌单" disabled={unavailable}
         onClick={event => { if (local) { event.preventDefault(); localNotice(); } else void library.menu(currentId); }}>
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5h12M3 10h12M3 15h7M17 12v9m-4-4.5h8"/></svg>
-      </Button></PopoverTrigger>
+      </PlayerControl></PopoverTrigger>
       <PopoverContent side="top" sideOffset={16} className="player-action-menu" aria-label="添加到歌单">
         <strong>添加到歌单</strong>
         {ready && state.menu.playlists.map(list => <Button key={list.id} variant="unstyled" disabled={library.pending}
@@ -70,9 +71,9 @@ export default function PlayerActions({ library, currentId, onNotice, children }
     </Popover>
     {children}
     <Popover open={orderOpen} onOpenChange={setOrderOpen}>
-      <PopoverTrigger asChild><Button variant="unstyled" aria-label={`播放顺序：${order.name}`} title={order.name}>
+      <PopoverTrigger asChild><PlayerControl variant="unstyled" aria-label={`播放顺序：${order.name}`} title={order.name}>
         <svg viewBox="-4 -4 32 32" aria-hidden="true"><path d={order.path}/></svg>
-      </Button></PopoverTrigger>
+      </PlayerControl></PopoverTrigger>
       <PopoverContent side="top" sideOffset={16} className="player-action-menu" aria-label="播放顺序">
         {orders.map(item => <Button key={item.id} variant="unstyled" aria-pressed={order.id === item.id} disabled={library.pending}
           onClick={() => { void library.setPlaybackOrder(item.id); setOrderOpen(false); }}>
@@ -81,10 +82,10 @@ export default function PlayerActions({ library, currentId, onNotice, children }
       </PopoverContent>
     </Popover>
     <Popover open={qualityOpen} onOpenChange={setQualityOpen}>
-      <PopoverTrigger asChild><Button variant="unstyled" aria-label="音质选择" title="音质选择" disabled={unavailable}
+      <PopoverTrigger asChild><PlayerControl variant="unstyled" aria-label="音质选择" title="音质选择" disabled={unavailable}
         onClick={() => { if(!local)void library.qualities(currentId); }}>
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 14v-3a7 7 0 0 1 14 0v3M5 12H4v7h3v-7H5Zm14 0h1v7h-3v-7h2Z"/></svg>
-      </Button></PopoverTrigger>
+      </PlayerControl></PopoverTrigger>
       <PopoverContent side="top" sideOffset={16} className="player-action-menu" aria-label="音质选择">
         <strong>音质选择</strong>
         {local ? <Button variant="unstyled" aria-pressed="true" onClick={() => setQualityOpen(false)}>原始音质</Button> :

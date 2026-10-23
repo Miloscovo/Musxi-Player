@@ -337,3 +337,38 @@ test('automatic covers follow first visible song while manual covers and failed 
   const result=await a.run({op:'sync'});
   assert.deepEqual(result.playlists.map(p=>p.cover),['https://imge.kugou.com/first.jpg','https://imge.kugou.com/manual.jpg','https://imge.kugou.com/newest.jpg','https://imge.kugou.com/fallback.jpg']);
 });
+
+test('saved public playlists read the original collection across pages and retain the saved identity',async()=>{
+  const requests=[];
+  const a=authenticated(async(name,p)=>{
+    requests.push([name,p]);
+    if(name==='user_playlist')return response({total:1,info:[{listid:18,name:'Saved playlist',count:133,is_edit:0,
+      global_collection_id:'collection_saved',list_create_gid:'collection_original'}]});
+    assert.equal(name,'playlist_track_all');assert.equal(p.id,'collection_original');
+    return response({count:133,songs:Array.from({length:p.page===1?100:33},(_,i)=>{
+      const n=(p.page-1)*100+i;return {hash:n.toString(16).padStart(32,'0'),songname:`Song ${n}`};
+    })});
+  });
+  await a.run({op:'sync'});const result=await a.run({op:'tracks',id:'18'});
+  assert.equal(result.playlist.id,'18');assert.equal(result.playlist.name,'Saved playlist');
+  assert.equal(result.tracks.length,133);assert.equal(new Set(result.tracks.map(t=>t.id)).size,133);
+  assert.ok(result.tracks.every(t=>t.id.startsWith('18:') && a.knownTracks.has(t.id)));
+  assert.deepEqual(requests.filter(([name])=>name==='playlist_track_all').map(([,p])=>p.page),[1,2]);
+});
+
+test('own, favorite and legacy playlists retain personal-list reads despite collection metadata',async()=>{
+  const a=authenticated(async(name,p)=>{
+    assert.equal(name,'playlist_track_all_new');assert.equal(p.listid,'saved');
+    return response({count:1,info:[{fileid:1,hash:'a'.repeat(32)}]});
+  });
+  for(const flags of [{editable:true,sourceGlobalId:'collection_original'},
+    {favorite:true,sourceGlobalId:'collection_original'},{}]) {
+    const tracks=await a.playlistTracks({id:'saved',...flags});assert.equal(tracks.length,1);
+  }
+});
+
+test('incomplete original public playlist pages fail instead of replacing the song list',async()=>{
+  const a=authenticated(async(name,p)=>response({count:133,songs:p.page===1?[{hash:'a'.repeat(32)}]:[]}));
+  await assert.rejects(a.playlistTracks({id:'saved',sourceGlobalId:'collection_original'}),/未完整/);
+  assert.equal(a.knownTracks.size,0);
+});

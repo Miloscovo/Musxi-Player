@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import { AnimatePresence, motion } from 'motion/react';
 import { useWindow } from './composables/useWindow';
 import CoverImage from './components/CoverImage';
 import { usePlayerState } from './composables/usePlayerState';
@@ -9,6 +10,7 @@ import { Dialog, DialogTrigger, DialogContent, DialogTitle, DialogDescription } 
 import MessageAlerts from './components/MessageAlerts';
 import QueuePanel from './components/QueuePanel';
 import PlayerActions from './components/PlayerActions';
+import PlayerControl from './components/PlayerControl';
 import PlaybackPlatform from './components/PlaybackPlatform';
 import LyricsView from './views/LyricsView';
 import { playbackTimes, formatPlaybackTime } from './composables/playbackTime';
@@ -31,6 +33,7 @@ export default function App() {
   const [volumeDraft, setVolumeDraft] = useState<number | null>(null);
   const [closeOpen, setCloseOpen] = useState(false);
   const [lyricsOpen, setLyricsOpen] = useState(false);
+  const [lyricsCovered, setLyricsCovered] = useState(false);
   const compact = !!shell.state.compact;
   useEffect(() => { if ((lyricsOpen || compact) && shortcuts.recording) void shortcuts.cancel(); }, [lyricsOpen, compact, shortcuts.recording]);
   const playerElement = useRef<HTMLElement>(null);
@@ -42,6 +45,7 @@ export default function App() {
     finally { setCompactBusy(false); }
   }
   const closeLyrics = useCallback(() => setLyricsOpen(false), []);
+  const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   const [actionNotice, setActionNotice] = useState({ text: '', token: '0' });
   const showActionNotice = (text: string) => setActionNotice(previous => ({ text, token: String(Number(previous.token) + 1) }));
   const trayButton = useRef<HTMLButtonElement>(null);
@@ -124,10 +128,14 @@ export default function App() {
       </Dialog>
     </div></div>}
     <div className="app-body" hidden={compact}>
-      <div className="library-layer" inert={lyricsOpen}><LibraryView library={library} theme={shell.theme} appearance={shell.appearance} onAppearance={shell.setAppearance} transparency={shell.transparency} onTransparency={shell.setTransparency} updates={updates} showUpdates={showUpdates} shortcuts={shortcuts}
-        wallpaper={wallpaper} wallpaperEnabled={shell.wallpaperEnabled} onWallpaperEnabled={shell.setWallpaperEnabled} playerTransparent={shell.playerTransparent} onPlayerTransparent={shell.setPlayerTransparent}/></div>
-      {lyricsOpen && <LyricsView trackId={state?.opened ? state.trackId : ''} now={currentTrack} positionMs={state?.positionMs ?? 0}
-        canSeek={connected && !!state?.opened && !!state.durationMs} onSeek={positionMs => void seek(positionMs)} onClose={closeLyrics} />}
+      <motion.div className="library-layer" inert={lyricsOpen || lyricsCovered} data-covered={lyricsCovered || undefined} initial={false}
+        animate={{ opacity: lyricsOpen || lyricsCovered ? 0 : 1 }} transition={{ duration: reducedMotion ? 0 : 0.08 }}
+        onAnimationComplete={() => { if (lyricsOpen) setLyricsCovered(true); }}><LibraryView library={library} playback={state} onResume={() => void resume()} theme={shell.theme} appearance={shell.appearance} onAppearance={shell.setAppearance} transparency={shell.transparency} onTransparency={shell.setTransparency} updates={updates} showUpdates={showUpdates} shortcuts={shortcuts}
+        wallpaper={wallpaper} wallpaperEnabled={shell.wallpaperEnabled} onWallpaperEnabled={shell.setWallpaperEnabled} playerTransparent={shell.playerTransparent} onPlayerTransparent={shell.setPlayerTransparent}/></motion.div>
+      <AnimatePresence onExitComplete={() => { if (!lyricsOpen) setLyricsCovered(false); }}>
+        {lyricsOpen && lyricsCovered && <LyricsView key="lyrics" trackId={state?.opened ? state.trackId : ''} now={currentTrack} positionMs={state?.positionMs ?? 0}
+          canSeek={connected && !!state?.opened && !!state.durationMs} onSeek={positionMs => void seek(positionMs)} onClose={closeLyrics} />}
+      </AnimatePresence>
     </div>
     <section ref={playerElement} className="player" aria-label="播放器" aria-busy={loading} onClickCapture={event => {
       // Menus and lyrics need the full viewport rather than a clipped player strip.
@@ -169,22 +177,22 @@ export default function App() {
           <p>{currentTrack?.artist || status}</p></div>
       </div>
       {state && <PlayerActions library={library} currentId={state.opened ? state.trackId : ''} onNotice={showActionNotice}>
-        <Button variant="unstyled" aria-label="上一首" onClick={() => library.skip(-1)}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 5.5v13"/><path d="M18.5 5.5v13L8 12z"/></svg></Button>
-        <Button variant="unstyled" className="play-button" aria-label={wantsPlay ? '暂停' : '播放'} disabled={!connected || !state.opened} onClick={() => wantsPlay ? pause() : resume()}>
+        <PlayerControl variant="unstyled" aria-label="上一首" onClick={() => library.skip(-1)}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 5.5v13"/><path d="M18.5 5.5v13L8 12z"/></svg></PlayerControl>
+        <PlayerControl variant="unstyled" className="play-button" aria-label={wantsPlay ? '暂停' : '播放'} disabled={!connected || !state.opened} onClick={() => wantsPlay ? pause() : resume()}>
           {wantsPlay ? <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="5" width="3.5" height="14" rx="1.2"/><rect x="13.5" y="5" width="3.5" height="14" rx="1.2"/></svg> :
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8.5 5.5v13L19 12z"/></svg>}
-        </Button>
-        <Button variant="unstyled" aria-label="下一首" onClick={() => library.skip(1)}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M17.5 5.5v13"/><path d="M5.5 5.5v13L16 12z"/></svg></Button>
+        </PlayerControl>
+        <PlayerControl variant="unstyled" aria-label="下一首" onClick={() => library.skip(1)}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M17.5 5.5v13"/><path d="M5.5 5.5v13L16 12z"/></svg></PlayerControl>
       </PlayerActions>}
-      <div className="player-side">{desktop.state.enabled && <Button variant="unstyled" className="desktop-lyrics-toggle" aria-label="桌面歌词"
+      <div className="player-side">{desktop.state.enabled && <PlayerControl variant="unstyled" className="desktop-lyrics-toggle" aria-label="桌面歌词"
         aria-pressed={desktop.state.visible} title={desktop.state.visible ? '关闭桌面歌词' : '打开桌面歌词'} onClick={() => void desktop.setVisible(!desktop.state.visible)}>
         <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2.8" y="4.5" width="18.4" height="15" rx="4"/><text x="12" y="16.1" textAnchor="middle">词</text></svg>
-      </Button>}{state && <div className="volume-control">
-        <Button variant="unstyled" className="icon volume-button" aria-label={state.volumePercent===0 ? '取消静音' : '静音'} aria-pressed={state.volumePercent===0} disabled={busy || !connected}
+      </PlayerControl>}{state && <div className="volume-control">
+        <PlayerControl variant="unstyled" className="icon volume-button" aria-label={state.volumePercent===0 ? '取消静音' : '静音'} aria-pressed={state.volumePercent===0} disabled={busy || !connected}
           onClick={()=>void shortcuts.execute('mute')}>
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 9h4l5-4v14l-5-4H3z" fill="currentColor"/>
           <path d={state.volumePercent===0 ? 'm16 9 6 6m0-6-6 6' : 'M16 8a6 6 0 0 1 0 8m3-11a10 10 0 0 1 0 14'} fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
-        </Button>
+        </PlayerControl>
         <input ref={volumeInput} type="range" min="0" max="100" value={volumeDraft ?? state.volumePercent}
           style={{ '--volume': `${volumeDraft ?? state.volumePercent}%` } as CSSProperties}
           disabled={!connected} onInput={event => setVolumeDraft(Number(event.currentTarget.value))} aria-label="音量" />

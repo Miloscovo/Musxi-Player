@@ -2,12 +2,16 @@ import { AccountDialog, PlatformIcon } from '../components/AccountDialog';
 import { platformNames, type MusicPlatform } from '../native/library';
 import { isDemoMode } from '../demo/context.ts';
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { animate } from 'motion/mini';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import type { useLibrary } from '../composables/useLibrary';
+import { isCurrentSong } from '../composables/songPlayback';
+import type { PlayerState } from '../native/types';
 import type { Theme } from '../native/window';
 import { safeImage, type Track } from '../native/library';
 import CoverImage from '../components/CoverImage';
 import { Button } from '../components/ui/button';
+import PlayerControl from '../components/PlayerControl';
 import { Dialog, DialogTrigger, DialogContent, DialogTitle, DialogDescription } from '../components/ui/dialog';
 import { SidebarProvider, Sidebar, SidebarRail } from '../components/ui/sidebar';
 import { Tooltip, TooltipTrigger, TooltipProvider, TooltipContent } from '../components/ui/tooltip';
@@ -37,11 +41,12 @@ function appendUnique(previous: Track[], incoming?: Track[]) {
   return rows;
 }
 export default function LibraryView({ library: lib, theme, appearance, onAppearance, transparency = 50, onTransparency, updates, showUpdates = 0, shortcuts,
-  wallpaper,wallpaperEnabled,onWallpaperEnabled,playerTransparent,onPlayerTransparent }: {
+  wallpaper,wallpaperEnabled,onWallpaperEnabled,playerTransparent,onPlayerTransparent,playback,onResume }: {
   library: ReturnType<typeof useLibrary>; theme: Theme; appearance?: Appearance; onAppearance?: (next: Appearance) => void;
   transparency?: number; onTransparency?: (value: number) => void;
   updates?: AppUpdates; showUpdates?: number;
   shortcuts: ShortcutsController;
+  playback?: PlayerState | null; onResume?: () => void;
   wallpaper?:WallpaperController;wallpaperEnabled?:boolean;onWallpaperEnabled?:(value:boolean)=>void;
   playerTransparent?:boolean;onPlayerTransparent?:(value:boolean)=>void;
 }) {
@@ -55,7 +60,7 @@ export default function LibraryView({ library: lib, theme, appearance, onAppeara
   const [removeFoldersOpen, setRemoveFoldersOpen] = useState(false);
   useEffect(() => {
     // The dock notice asks for the update details page.
-    if (showUpdates) { setView('settings'); setSettingsSection('updates'); setShowTracks(false); }
+    if (showUpdates) navigate(() => { setView('settings'); setSettingsSection('updates'); setShowTracks(false); });
   }, [showUpdates]);
   const [playlistQuery, setPlaylistQuery] = useState('');
   const content = useRef<HTMLDivElement>(null);
@@ -80,6 +85,36 @@ export default function LibraryView({ library: lib, theme, appearance, onAppeara
   const tracksVisible = view === 'recent' || view === 'search' || (view === 'library' && showTracks);
   const fixedPageHeader = view === 'settings' || (view === 'library' && !showTracks);
   const PageBody = fixedPageHeader ? 'div' : Fragment;
+  const navigationKey = JSON.stringify([view, view === 'settings' ? settingsSection :
+    view === 'library' ? [librarySection, showTracks, showTracks ? state?.playlistId : ''] : '']);
+  const [navigationRevision, setNavigationRevision] = useState(0);
+  const previousNavigation = useRef(navigationKey);
+  const transition = useRef<ReturnType<typeof animate> | null>(null);
+  const navigationRequest = useRef(0);
+  function pageTargets() {
+    return content.current ? Array.from(content.current.children).filter(element => !element.matches('header,nav')) : [];
+  }
+  function navigate(update: () => void) {
+    const request = ++navigationRequest.current;
+    transition.current?.cancel();
+    const commit = () => {
+      if (request !== navigationRequest.current) return;
+      update();
+      setNavigationRevision(value => value + 1);
+    };
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) { commit(); return; }
+    transition.current = animate(pageTargets(), { opacity: [1, 0] }, { duration: 0.09, ease: 'easeOut' });
+    void transition.current.then(commit);
+  }
+  useEffect(() => () => { ++navigationRequest.current; transition.current?.cancel(); }, []);
+  useLayoutEffect(() => {
+    if (previousNavigation.current === navigationKey && !navigationRevision) return;
+    previousNavigation.current = navigationKey;
+    transition.current?.cancel();
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    transition.current = animate(pageTargets(), { opacity: [0, 1] }, { duration: 0.09, ease: 'easeOut' });
+    return () => transition.current?.cancel();
+  }, [navigationKey, navigationRevision]);
   const playSource = view === 'recent' ? 'recent' : view === 'search' ? 'search' : isLocal ? 'local' : 'library';
   const virtualSongs = useVirtualizer({
     count: tracksVisible ? rows.length : 0,
@@ -156,11 +191,16 @@ export default function LibraryView({ library: lib, theme, appearance, onAppeara
     if (element && element.scrollHeight - element.scrollTop - element.clientHeight <= 140) void loadMore();
   }
   useEffect(checkLoadMore, [rows.length, playlistRows.length, busy, playlistFilter, view, showTracks, isLocal]);
-  async function open(id: string) { resetScroll(); setPlaylistQuery(''); await lib.open(id); setShowTracks(true); }
+  async function open(id: string) {
+    const request = ++navigationRequest.current;
+    transition.current?.cancel();
+    resetScroll(); setPlaylistQuery(''); await lib.open(id);
+    if (request === navigationRequest.current) navigate(() => setShowTracks(true));
+  }
   async function searchSongs() {
     resetScroll();
     if (view === 'recent' || (view === 'library' && showTracks)) return;
-    setSearchRows([]); setView('search'); setShowTracks(true); await lib.search(query);
+    navigate(() => { setSearchRows([]); setView('search'); setShowTracks(true); }); await lib.search(query);
   }
   async function menu(id: string) { setMenuId(id); await lib.menu(id); }
   const time = (ms: number) => `${Math.floor(ms / 60000)}:${String(Math.floor(ms / 1000) % 60).padStart(2, '0')}`;
@@ -177,13 +217,13 @@ export default function LibraryView({ library: lib, theme, appearance, onAppeara
           }}>{avatar ? <img src={avatar} alt={`${label}用户头像`}/> : <span aria-hidden="true"/>}</Button>
         </div>;
       })}</div>
-      <Button variant="unstyled" className={view === 'search' ? 'selected' : ''} onClick={() => { resetScroll(); setView('search'); setShowTracks(false); }}>
+      <Button variant="unstyled" className={view === 'search' ? 'selected' : ''} onClick={() => navigate(() => { resetScroll(); setView('search'); setShowTracks(false); })}>
         <svg className="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10" cy="10" r="6.5" fill="none" stroke="currentColor" strokeWidth="1.8"/><path d="m15 15 6 6" stroke="currentColor" strokeWidth="1.8"/></svg> 发现</Button>
-      <Button variant="unstyled" className={view === 'library' ? 'selected' : ''} onClick={() => { resetScroll(); setView('library'); setShowTracks(false); }}>
+      <Button variant="unstyled" className={view === 'library' ? 'selected' : ''} onClick={() => navigate(() => { resetScroll(); setView('library'); setShowTracks(false); })}>
         <svg className="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M10 18V5l10-2v13" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round"/><circle cx="7" cy="18" r="3" fill="currentColor"/><circle cx="17" cy="16" r="3" fill="currentColor"/></svg> 音乐库</Button>
-      <Button variant="unstyled" className={view === 'recent' ? 'selected' : ''} aria-pressed={view === 'recent'} onClick={() => { resetScroll(); setPlaylistQuery(''); setView('recent'); setShowTracks(false); }}>
+      <Button variant="unstyled" className={view === 'recent' ? 'selected' : ''} aria-pressed={view === 'recent'} onClick={() => navigate(() => { resetScroll(); setPlaylistQuery(''); setView('recent'); setShowTracks(false); })}>
         <svg className="icon" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l4 2"/></svg> 最近播放</Button>
-      <Button variant="unstyled" className={`settings-nav${view === 'settings' ? ' selected' : ''}`} aria-label="设置" onClick={() => { resetScroll(); setView('settings'); setShowTracks(false); }}>
+      <Button variant="unstyled" className={`settings-nav${view === 'settings' ? ' selected' : ''}`} aria-label="设置" onClick={() => navigate(() => { resetScroll(); setView('settings'); setShowTracks(false); })}>
         <svg className="icon" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.65" strokeLinecap="round" strokeLinejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.09a2 2 0 0 1 1 1.73v.5a2 2 0 0 1-1 1.73l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.38a2 2 0 0 0-.73-2.73l-.15-.09a2 2 0 0 1-1-1.73v-.5a2 2 0 0 1 1-1.73l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg> 设置</Button>
     </aside>;
   return <SidebarProvider asChild><section className="library-shell" data-theme={theme}>
@@ -191,7 +231,7 @@ export default function LibraryView({ library: lib, theme, appearance, onAppeara
     <SidebarRail/>
     <div ref={content} className={`library-content${fixedPageHeader ? ' fixed-page-header' : ''}${scrollbarVisible ? ' scrollbar-visible' : ''}`} onScroll={checkLoadMore}>
       {<header className={view === 'library' ? (showTracks ? 'playlist-header' : 'library-home-header') : ''}><div className="page-heading">
-        {view === 'library' && showTracks && <Button variant="unstyled" className="back-button" aria-label="返回歌单" onClick={() => { resetScroll(); setShowTracks(false); }}><svg className="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5-7 7 7 7" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg></Button>}
+        {view === 'library' && showTracks && <Button variant="unstyled" className="back-button" aria-label="返回歌单" onClick={() => navigate(() => { resetScroll(); setShowTracks(false); })}><svg className="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5-7 7 7 7" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg></Button>}
         <h1 className={view === 'recent' ? 'recent-title' : view === 'search' ? 'discovery-title' : view === 'settings' ? 'settings-title' : ''}>{view === 'recent' ? '最近播放' : view === 'settings' ? '设置' : view === 'search' ? '发现' : showTracks ? (isLocal && state?.playlistId === 'musxi:local' ? '本地歌曲整合' : state?.playlistName) : '音乐库'}</h1>
       </div><div className="header-actions">
         {view === 'recent' && <Button variant="ghost" className="playlist-play-button" disabled={pending || !state?.recent?.length} onClick={()=>void lib.recentClear()}>清空记录</Button>}
@@ -215,15 +255,15 @@ export default function LibraryView({ library: lib, theme, appearance, onAppeara
           { id: 'lyrics', label: '歌词', icon: 'M6 3h12a3 3 0 0 1 3 3v12a3 3 0 0 1-3 3H6a3 3 0 0 1-3-3V6a3 3 0 0 1 3-3ZM7 12h2m4 0h4M7 16h6m3 0h1' },
           ...(updates && !updates.unsupported ? [{ id: 'updates', label: '关于与更新', icon: 'M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20ZM12 11v6m0-10h.01' }] as const : [])] as const).map(section =>
           <Button key={section.id} variant="secondary" className="library-section" aria-pressed={settingsSection === section.id}
-            onClick={() => { resetScroll();setSettingsSection(section.id); }}><svg className="icon" viewBox="0 0 24 24" aria-hidden="true"><path d={section.icon}/></svg>{section.label}</Button>)}
+            onClick={() => navigate(() => { resetScroll();setSettingsSection(section.id); })}><svg className="icon" viewBox="0 0 24 24" aria-hidden="true"><path d={section.icon}/></svg>{section.label}</Button>)}
       </nav>}
       {view === 'library' && !showTracks && <nav className="library-sections" aria-label="音乐库分类">
         {librarySections.map(section => <Button key={section.id} variant="secondary" className="library-section"
-          aria-pressed={librarySection === section.id} onClick={() => {
+          aria-pressed={librarySection === section.id} onClick={() => navigate(() => {
             resetScroll(); setLibrarySection(section.id);
             setShowTracks(false);
             if(section.id === 'local') void lib.open('musxi:local');
-          }}>
+          })}>
           <svg className="icon" viewBox="0 0 24 24" aria-hidden="true"><path d={section.icon}/></svg>{section.label}
         </Button>)}
       </nav>}
@@ -271,23 +311,44 @@ export default function LibraryView({ library: lib, theme, appearance, onAppeara
           {!state?.connected ? <div className="library-section-empty"><p>登录后查看你的音乐库。</p><Button onClick={() => {setAccountPlatform(null);setAccount(true);}}>扫码登录</Button></div>
             : librarySection === 'saved' && !visiblePlaylists.length && <p className="library-section-empty">{busy ? '正在加载…' : '暂无收藏歌单。'}</p>}
         </>}
-      </> : view === 'search' && !state?.keywords && !busy ? <div className="discover-empty"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10" cy="10" r="6.5"/><path d="m15 15 6 6"/></svg><h2>发现好音乐</h2><p>在右上角搜索歌曲、歌手或专辑</p></div> : <>
+      </> : view === 'search' && !state?.keywords && !showTracks ? <div className="discover-empty"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10" cy="10" r="6.5"/><path d="m15 15 6 6"/></svg><h2>发现好音乐</h2><p>在右上角搜索歌曲、歌手或专辑</p></div> : <>
         <div className="track-table" role="table" aria-label={view === 'recent' ? '最近播放' : view === 'library' ? state?.playlistName : '搜索结果'}>
           <div className="track-table-head track-row" role="row"><span role="columnheader" aria-label="序号"/><span aria-hidden="true"/><span role="columnheader">歌曲</span><span role="columnheader">歌手</span><span role="columnheader">专辑</span><span role="columnheader">时长</span><span aria-hidden="true"/></div>
           <div ref={songScroll} className={`song-scroll${scrollbarVisible ? ' scrollbar-visible' : ''}`} onScroll={checkLoadMore}>
           <div ref={songList} className="song-list" role="rowgroup" style={{ position: 'relative', height: virtualSongs.getTotalSize() }}>{virtualSongs.getVirtualItems().map(item => {
             const index = item.index; const song = rows[index];
             const songIsLocal=isLocal || (view==='recent' && song.id.startsWith('local:'));
+            const current = isCurrentSong(song, playback, state?.now);
+            const playing = current && !!playback?.playing;
+            const cannotPlay = pending || (!songIsLocal && !state?.connected);
+            const playSong = () => {
+              if (cannotPlay) return;
+              if (current) { if (!playback?.playing && !playback?.pending) onResume?.(); }
+              else void lib.play(playSource, song.id);
+            };
             return <ContextMenu key={song.id} modal={false} onOpenChange={opened => {
               if (opened && !songIsLocal) void menu(song.id);
               else setMenuId(current => current === song.id ? '' : current);
-            }}><ContextMenuTrigger asChild><div ref={virtualSongs.measureElement} data-index={index} aria-rowindex={index + 2} className={`song track-row${state?.now?.name === song.name && state?.now?.artist === song.artist ? ' active' : ''}`} role="row"
+            }}><ContextMenuTrigger asChild><div ref={virtualSongs.measureElement} data-index={index} aria-rowindex={index + 2} className={`song track-row${current ? ' active' : ''}`} role="row"
             style={{ position: 'absolute', top: 0, left: 0, width: '100%', transform: `translateY(${item.start - listOffset}px)` }}
-            onDoubleClick={() => lib.play(playSource, song.id)}
+            tabIndex={0} onKeyDown={event => {
+              if (event.target === event.currentTarget && event.key === 'Enter') { event.preventDefault(); playSong(); }
+            }}
+            onClick={event => {
+              if (event.defaultPrevented || event.button !== 0 || event.detail > 1
+                || (event.target as Element).closest('button,a,input,select,[role=menuitem]')) return;
+              playSong();
+            }}
             >
-            <span className="track-index" role="cell">{index + 1}</span><CoverImage url={song.cover}/><strong className="track-name" role="cell"><span className="track-title">{song.name}</span>{view==='recent' && (songIsLocal || !song.platforms?.length) && <span className="song-platforms"><small className={`song-platform-tag ${song.platform || 'local'}`}>{songIsLocal?'本地':song.platform==='netease'?'网易云':song.platform==='qq'?'QQ':'酷狗'}</small></span>}{(view==='search' || view==='recent' || (view==='library' && state?.playlistId==='musxi:cloud-favorites')) && song.platforms ? <span className="song-platforms">{song.platforms.map(platform=><small key={platform} className={`song-platform-tag ${platform}`} title={`${platformNames[platform]}${view==='search'?'搜索结果':view==='recent'?'歌曲来源':'收藏歌曲'}`}>{platform==='netease'?'网易云':platform==='kugou'?'酷狗':'QQ'}</small>)}</span> : view==='search' && song.platform && <small className="song-platform">{platformNames[song.platform]}</small>}</strong>
+            <span className="track-index" role="cell" data-current={current || undefined} data-playing={playing || undefined}>
+              <span className="track-number">{index + 1}</span>
+              <PlayerControl variant="unstyled" className="track-index-play" disabled={cannotPlay} aria-label={`播放 ${song.name}`} onClick={event => { if (event.detail <= 1) playSong(); }}>
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 5 11 7-11 7z"/></svg>
+              </PlayerControl>
+              {current && <span className="track-wave" role="img" aria-label={playing ? '正在播放' : '已暂停'}><i/><i/><i/><i/></span>}
+            </span><CoverImage url={song.cover}/><strong className="track-name" role="cell"><span className="track-title">{song.name}</span>{view==='recent' && (songIsLocal || !song.platforms?.length) && <span className="song-platforms"><small className={`song-platform-tag ${song.platform || 'local'}`}>{songIsLocal?'本地':song.platform==='netease'?'网易云':song.platform==='qq'?'QQ':'酷狗'}</small></span>}{(view==='search' || view==='recent' || (view==='library' && state?.playlistId==='musxi:cloud-favorites')) && song.platforms ? <span className="song-platforms">{song.platforms.map(platform=><small key={platform} className={`song-platform-tag ${platform}`} title={`${platformNames[platform]}${view==='search'?'搜索结果':view==='recent'?'歌曲来源':'收藏歌曲'}`}>{platform==='netease'?'网易云':platform==='kugou'?'酷狗':'QQ'}</small>)}</span> : view==='search' && song.platform && <small className="song-platform">{platformNames[song.platform]}</small>}</strong>
             <span className="track-artist" role="cell">{song.artist}</span><span className="track-album" role="cell">{song.album || '—'}</span><span className="track-duration" role="cell">{time(song.duration)}</span>
-            <div className="song-actions"><Button variant="unstyled" className="song-play" disabled={pending || (!songIsLocal && !state?.connected)} aria-label={`播放 ${song.name}`} onClick={() => lib.play(playSource, song.id)}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4v16l13-8z"/></svg></Button><Button variant="unstyled" className="song-menu" disabled={busy} aria-label="歌曲操作" onClick={() => {if(!songIsLocal)void menu(song.id);}}>•••</Button></div>
+            <div className="song-actions"><PlayerControl variant="unstyled" className="song-play" disabled={pending || (!songIsLocal && !state?.connected)} aria-label={`播放 ${song.name}`} onClick={playSong}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4v16l13-8z"/></svg></PlayerControl><Button variant="unstyled" className="song-menu" disabled={busy} aria-label="歌曲操作" onClick={() => {if(!songIsLocal)void menu(song.id);}}>•••</Button></div>
           </div></ContextMenuTrigger><ContextMenuContent aria-label="歌曲操作">
             <ContextMenuItem disabled={pending || (!songIsLocal && !state?.connected)} onSelect={() => void lib.queueNext(playSource, song.id)}>下一首播放</ContextMenuItem>
             {songIsLocal ? isLocal ? <ContextMenuItem disabled={busy} onSelect={() => void lib.removeLocalTrack(song.id,state!.playlistId)}>移除</ContextMenuItem>

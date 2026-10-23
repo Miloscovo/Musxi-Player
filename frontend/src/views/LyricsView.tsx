@@ -1,4 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
+import { animate } from 'motion';
+import { motion, useIsPresent } from 'motion/react';
 import { useLyricsDisplay } from '../composables/useLyricsDisplay';
 import LyricsMatchDialog from '../components/LyricsMatchDialog';
 import CoverImage from '../components/CoverImage';
@@ -16,6 +18,8 @@ export default function LyricsView({ trackId, now, positionMs, canSeek, onSeek, 
   trackId: string; now?: LibraryState['now']; positionMs: number; canSeek: boolean;
   onSeek: (positionMs: number) => void; onClose: () => void;
 }) {
+  const present = useIsPresent();
+  const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   const { lyrics, loading, failed, retry, retryTranslation, translation, settleManual } = useLyrics(trackId, true);
   const hint = translationHint(lyrics, translation);
   // The reply to a manual check fades out after a few seconds (see .transient).
@@ -27,6 +31,8 @@ export default function LyricsView({ trackId, now, positionMs, canSeek, onSeek, 
   useEffect(()=>{setMatching(false);},[trackId]);
   const list = useRef<HTMLOListElement>(null); const closeButton = useRef<HTMLButtonElement>(null);
   const userScroll = useRef(0);
+  const scrollAnimation = useRef<ReturnType<typeof animate> | null>(null);
+  const centeredLine = useRef<number | null>(null);
   const synced = lyrics?.kind === 'synced';
   const lines = lyrics?.lines || [];
   const active = synced ? activeLyricLine(lines, positionMs) : -1;
@@ -34,6 +40,7 @@ export default function LyricsView({ trackId, now, positionMs, canSeek, onSeek, 
   const dual = translated && showTranslation;
   useEffect(() => { closeButton.current?.focus({ focusVisible: false } as FocusOptions); }, []);
   useEffect(() => {
+    if (!present) return;
     function keyboard(event: KeyboardEvent) {
       // Popovers and dialogs handle their own Escape first.
       if (event.key !== 'Escape' || event.defaultPrevented || document.querySelector('[role=dialog]')) return;
@@ -41,22 +48,39 @@ export default function LyricsView({ trackId, now, positionMs, canSeek, onSeek, 
     }
     window.addEventListener('keydown', keyboard);
     return () => window.removeEventListener('keydown', keyboard);
-  }, [onClose]);
-  useEffect(() => { userScroll.current = 0; list.current?.scrollTo({ top: 0 }); }, [trackId]);
+  }, [onClose, present]);
+  useLayoutEffect(() => {
+    userScroll.current = 0; centeredLine.current = null;
+    scrollAnimation.current?.stop();
+    if (list.current) list.current.scrollTop = 0;
+  }, [trackId]);
   useLayoutEffect(() => {
     const container = list.current; const row = container?.children[Math.max(0, active)] as HTMLElement | undefined;
     // Leave the view alone for a few seconds after the user scrolls it.
     if (!container || !row || Date.now() - userScroll.current < 3000) return;
-    container.scrollTo({ top: row.offsetTop - container.clientHeight / 2 + row.clientHeight / 2, behavior: 'smooth' });
+    const target = Math.max(0, Math.min(container.scrollHeight - container.clientHeight,
+      row.offsetTop - container.clientHeight / 2 + row.clientHeight / 2));
+    const immediate = centeredLine.current === null || Math.abs(active - centeredLine.current) > 1
+      || Math.abs(target - container.scrollTop) > container.clientHeight
+      || window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    centeredLine.current = active;
+    if (immediate) container.scrollTop = target;
+    else scrollAnimation.current = animate(container.scrollTop, target, {
+      duration: 0.4, ease: [0.22, 1, 0.36, 1], onUpdate: value => { container.scrollTop = value; },
+    });
+    return () => scrollAnimation.current?.stop();
     // Showing or hiding translations changes row heights; re-centre the current line.
   }, [active, lines, dual, display.alignment, display.fontSize]);
-  const markScrolled = () => { userScroll.current = Date.now(); };
+  const markScrolled = () => { scrollAnimation.current?.stop(); userScroll.current = Date.now(); };
   const message = !trackId ? '尚未播放歌曲' : loading ? '正在加载歌词…' : failed ? '歌词加载失败，请检查网络后重试' :
     !lines.length ? (lyrics?.platform && lyrics.platform !== 'local' ? '这首歌在平台上暂无歌词' : '暂无歌词') : '';
   useLayoutEffect(() => {
     if (list.current) return observeLyricDragRegions(list.current);
   }, [lines, message]);
-  return <section className="lyrics-page" aria-label="歌词" data-alignment={display.alignment} style={{ '--lyrics-font-size': `${display.fontSize}px` } as CSSProperties}>
+  return <motion.section className="lyrics-page" aria-label="歌词" inert={!present} aria-hidden={!present || undefined}
+    initial={reduced ? false : { opacity: 0, y: 24 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: reduced ? 0 : 24 }}
+    transition={{ duration: reduced ? 0 : 0.22, ease: [0.22, 1, 0.36, 1] }}
+    data-alignment={display.alignment} style={{ '--lyrics-font-size': `${display.fontSize}px` } as CSSProperties}>
     <Button variant="unstyled" ref={closeButton} className="lyrics-close" aria-label="收起歌词页" title="收起" onClick={onClose}>
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
     </Button>
@@ -88,5 +112,5 @@ export default function LyricsView({ trackId, now, positionMs, canSeek, onSeek, 
         </li>)}
       </ol>}
     {matching && <LyricsMatchDialog key={trackId} id={trackId} positionMs={positionMs} canSeek={canSeek} onSeek={onSeek} onClose={()=>setMatching(false)} onSaved={retry}/>}
-  </section>;
+  </motion.section>;
 }
