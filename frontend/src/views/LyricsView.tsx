@@ -14,12 +14,14 @@ import type { LibraryState } from '../native/library';
 
 const origins: Record<string, string> = { 'lrc-file': '本地歌词文件', embedded: '内嵌歌词', online: '在线歌词', cache: '在线歌词', matched: '指定歌词' };
 
-export default function LyricsView({ trackId, now, positionMs, canSeek, onSeek, onClose }: {
+export default function LyricsView({ trackId, now, positionMs, canSeek, onSeek, onClose, onEntered }: {
   trackId: string; now?: LibraryState['now']; positionMs: number; canSeek: boolean;
   onSeek: (positionMs: number) => void; onClose: () => void;
+  onEntered: () => void;
 }) {
   const present = useIsPresent();
   const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  useLayoutEffect(() => { if (present && reduced) onEntered(); }, [present, reduced, onEntered]);
   const { lyrics, loading, failed, retry, retryTranslation, translation, settleManual } = useLyrics(trackId, true);
   const hint = translationHint(lyrics, translation);
   // The reply to a manual check fades out after a few seconds (see .transient).
@@ -80,6 +82,7 @@ export default function LyricsView({ trackId, now, positionMs, canSeek, onSeek, 
   return <motion.section className="lyrics-page" aria-label="歌词" inert={!present} aria-hidden={!present || undefined}
     initial={reduced ? false : { opacity: 0, y: 24 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: reduced ? 0 : 24 }}
     transition={{ duration: reduced ? 0 : 0.22, ease: [0.22, 1, 0.36, 1] }}
+    onAnimationComplete={() => { if (present) onEntered(); }}
     data-alignment={display.alignment} style={{ '--lyrics-font-size': `${display.fontSize}px` } as CSSProperties}>
     <Button variant="unstyled" ref={closeButton} className="lyrics-close" aria-label="收起歌词页" title="收起" onClick={onClose}>
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>

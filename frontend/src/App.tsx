@@ -34,6 +34,8 @@ export default function App() {
   const [closeOpen, setCloseOpen] = useState(false);
   const [lyricsOpen, setLyricsOpen] = useState(false);
   const [lyricsCovered, setLyricsCovered] = useState(false);
+  const transparentLyrics = shell.appearance.transparent;
+  const lyricsEntered = useCallback(() => setLyricsCovered(true), []);
   const compact = !!shell.state.compact;
   useEffect(() => { if ((lyricsOpen || compact) && shortcuts.recording) void shortcuts.cancel(); }, [lyricsOpen, compact, shortcuts.recording]);
   const playerElement = useRef<HTMLElement>(null);
@@ -128,13 +130,13 @@ export default function App() {
       </Dialog>
     </div></div>}
     <div className="app-body" hidden={compact}>
-      <motion.div className="library-layer" inert={lyricsOpen || lyricsCovered} data-covered={lyricsCovered || undefined} initial={false}
-        animate={{ opacity: lyricsOpen || lyricsCovered ? 0 : 1 }} transition={{ duration: reducedMotion ? 0 : 0.08 }}
-        onAnimationComplete={() => { if (lyricsOpen) setLyricsCovered(true); }}><LibraryView library={library} playback={state} onResume={() => void resume()} theme={shell.theme} appearance={shell.appearance} onAppearance={shell.setAppearance} transparency={shell.transparency} onTransparency={shell.setTransparency} updates={updates} showUpdates={showUpdates} shortcuts={shortcuts}
+      <motion.div className="library-layer" inert={lyricsOpen || lyricsCovered} data-covered={lyricsCovered && (transparentLyrics || lyricsOpen) || undefined} initial={false}
+        animate={{ opacity: transparentLyrics && (lyricsOpen || lyricsCovered) ? 0 : 1 }} transition={{ duration: reducedMotion ? 0 : 0.08 }}
+        onAnimationComplete={() => { if (transparentLyrics && lyricsOpen) setLyricsCovered(true); }}><LibraryView library={library} playback={state} onResume={() => void resume()} theme={shell.theme} appearance={shell.appearance} onAppearance={shell.setAppearance} transparency={shell.transparency} onTransparency={shell.setTransparency} updates={updates} showUpdates={showUpdates} shortcuts={shortcuts}
         wallpaper={wallpaper} wallpaperEnabled={shell.wallpaperEnabled} onWallpaperEnabled={shell.setWallpaperEnabled} playerTransparent={shell.playerTransparent} onPlayerTransparent={shell.setPlayerTransparent}/></motion.div>
       <AnimatePresence onExitComplete={() => { if (!lyricsOpen) setLyricsCovered(false); }}>
-        {lyricsOpen && lyricsCovered && <LyricsView key="lyrics" trackId={state?.opened ? state.trackId : ''} now={currentTrack} positionMs={state?.positionMs ?? 0}
-          canSeek={connected && !!state?.opened && !!state.durationMs} onSeek={positionMs => void seek(positionMs)} onClose={closeLyrics} />}
+        {lyricsOpen && (!transparentLyrics || lyricsCovered) && <LyricsView key="lyrics" trackId={state?.opened ? state.trackId : ''} now={currentTrack} positionMs={state?.positionMs ?? 0}
+          canSeek={connected && !!state?.opened && !!state.durationMs} onSeek={positionMs => void seek(positionMs)} onClose={closeLyrics} onEntered={lyricsEntered} />}
       </AnimatePresence>
     </div>
     <section ref={playerElement} className="player" aria-label="播放器" aria-busy={loading} onClickCapture={event => {
@@ -168,7 +170,7 @@ export default function App() {
           {showRemaining ? `-${times.remaining}` : times.total}</Button>
       </div>
       <div className="player-track" inert={lyricsOpen && !compact}><Button variant="unstyled" className="lyrics-toggle" aria-expanded={lyricsOpen}
-          aria-label={lyricsOpen ? '收起歌词页' : '展开歌词页'} title={lyricsOpen ? '收起歌词' : '查看歌词'} onClick={() => setLyricsOpen(open => !open)}>
+          aria-label={lyricsOpen ? '收起歌词页' : '展开歌词页'} title={lyricsOpen ? '收起歌词' : '查看歌词'} onClick={() => { if (!transparentLyrics) setLyricsCovered(false); setLyricsOpen(open => !open); }}>
           <CoverImage url={currentTrack?.cover || ''} />
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d={lyricsOpen ? 'm6 9 6 6 6-6' : 'm6 15 6-6 6 6'}/></svg>
         </Button>

@@ -23,9 +23,10 @@ function SidebarProvider({ defaultOpen = true, asChild = false, ...props }:
 }
 function Sidebar({ asChild = false, ...props }: ComponentProps<'aside'> & { asChild?: boolean }) {
   const { open } = useSidebar();
-  if(!open)return null;
   const Comp = asChild ? Slot : 'aside';
-  return <Comp data-slot="sidebar" data-state="expanded" data-collapsible="offcanvas" {...props}/>;
+  return <div className="sidebar-frame" data-state={open ? 'expanded' : 'collapsed'}>
+    <Comp data-slot="sidebar" data-state={open ? 'expanded' : 'collapsed'} data-collapsible="offcanvas" {...props} inert={!open} aria-hidden={!open || undefined}/>
+  </div>;
 }
 function SidebarRail({ onClick, ...props }: ComponentProps<typeof Button>) {
   const { open, toggleSidebar } = useSidebar();

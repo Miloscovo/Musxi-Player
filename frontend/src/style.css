@@ -416,10 +416,15 @@ html,body,#app,main.app-shell { background:transparent!important }
 .queue-empty { text-align:center; margin:24px 0; font-size:14px; color:var(--muted) }
 .music-tooltip small { display:block; margin-top:6px; color:var(--muted) }
 .library-shell { position:relative }
-.sidebar-rail { position:absolute; left:calc(var(--sidebar-width) - 6px); top:0; bottom:0; z-index:7; width:12px; padding:0; border-radius:0; background:transparent; cursor:w-resize; -webkit-app-region:no-drag }
+.sidebar-frame { display:flex; flex-shrink:0; min-width:0; min-height:0; width:var(--sidebar-width); overflow:hidden; transition:width .22s cubic-bezier(.22,1,.36,1) }
+.sidebar-frame[data-state=collapsed] { width:0 }
+.sidebar-frame>.sidebar { width:var(--sidebar-width); transition:transform .22s cubic-bezier(.22,1,.36,1),visibility 0s }
+.sidebar-frame>.sidebar[data-state=collapsed] { transform:translateX(-100%); visibility:hidden; transition-delay:0s,.22s; -webkit-app-region:no-drag }
+.sidebar-rail { position:absolute; left:calc(var(--sidebar-width) - 6px); top:0; bottom:0; z-index:7; width:12px; padding:0; border-radius:0; background:transparent; cursor:w-resize; -webkit-app-region:no-drag; transition:left .22s cubic-bezier(.22,1,.36,1) }
 .sidebar-rail[data-state=collapsed] { left:0; width:24px; cursor:e-resize }
 .sidebar-rail::after { position:absolute; top:0; bottom:0; left:5px; width:2px; background:transparent; content:"" }
 .sidebar-rail:hover::after,.sidebar-rail:focus-visible::after { background:var(--line) }
+@media(prefers-reduced-motion:reduce) { .sidebar-frame,.sidebar-frame>.sidebar,.sidebar-rail { transition:none } }
 @media(max-width:700px) { .collection-search { width:min(380px,calc(100vw - 36px)) } }
 
 .demo-notice { margin: 8px 0; color: var(--muted); font-size: 12px; }
