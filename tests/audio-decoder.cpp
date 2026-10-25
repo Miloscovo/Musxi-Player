@@ -45,6 +45,30 @@ int main(int argc,char** argv) {
         require(argc==2,"fixture directory required");const fs::path folder=argv[1];
         FfmpegDecoder decoder;
         fails([&]{decoder.read();},"read without open succeeded");
+        const auto taggedFlac=folder/"trailing-tag.flac";
+        fs::copy_file(folder/"source.flac",taggedFlac,fs::copy_options::overwrite_existing);
+        {std::ofstream out(taggedFlac,std::ios::binary|std::ios::app);out<<std::string(50,'X');}
+        decoder.open(taggedFlac.wstring());
+        const auto flacPcm=reference(folder/"flac.f32");
+        compare(decode(decoder),flacPcm,"FLAC trailing non-audio data");
+        for(int loop=0;loop<3;++loop){decoder.seek(0);compare(decode(decoder),flacPcm,"FLAC replay with trailing data");}
+        decoder.open((folder/"source.flac").wstring(),{44100,2,0});
+        const auto cleanResampled=decode(decoder);
+        decoder.open(taggedFlac.wstring(),{44100,2,0});
+        require(decode(decoder)==cleanResampled,"FLAC footer handling changed SRC samples or tail");
+        decoder.close();
+        // A footer must not hide a stream that has not produced all declared samples.
+        {std::fstream file(taggedFlac,std::ios::binary|std::ios::in|std::ios::out);
+            require(bool(file),"open FLAC sample-count fixture");
+            file.seekg(25);char low=0;file.get(low);file.seekp(25);file.put(static_cast<char>(static_cast<unsigned char>(low)+1));}
+        decoder.open(taggedFlac.wstring());
+        fails([&]{decode(decoder);},"incomplete FLAC accepted as a harmless footer");
+        decoder.close();
+        {std::fstream file(taggedFlac,std::ios::binary|std::ios::in|std::ios::out);
+            require(bool(file),"open unknown FLAC sample-count fixture");
+            file.seekg(21);char packed=0;file.get(packed);file.seekp(21);file.put(packed&0xf0);file.write("\0\0\0\0",4);}
+        decoder.open(taggedFlac.wstring());
+        fails([&]{decode(decoder);},"unknown FLAC sample count incorrectly suppressed an error");
         for(const auto ext:{"wav","mp3","flac","m4a","aac","ogg","opus","wma"}) {
             decoder.open((folder/(std::string("source.")+ext)).wstring());
             require(decoder.info().sourceChannels==2 && decoder.info().sourceSampleRate>0,"source info");

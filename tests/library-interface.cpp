@@ -282,6 +282,15 @@ int main() try {
         qualityFailure.set_value({{"ok",false},{"error","Quality unavailable"}});
         for(int i=0;i<5;++i)pump();
         require(audioTrackId=="good" && switched->state.playing,"failed quality download swallowed natural next playback");
+        seedQueue({"played","good"},{});
+        cloudOperation="song_menu";requestGeneration=cloudGeneration;
+        std::promise<Json> menuResult;cloudFuture=menuResult.get_future();finish();
+        require(cloudAutoNext && requested.empty(),"busy menu request lost or duplicated automatic next");
+        menuResult.set_value({{"ok",true},{"data",Json::object()}});
+        for(int i=0;i<5;++i)pump();
+        require(audioTrackId=="good" && requested==std::vector<std::string>{"good"},"deferred next did not play exactly once");
+        seedQueue({"played","good"},{});playbackOrder="repeat-one";finish();
+        require(requested.empty() && audioTrackId=="played" && switched->state.playing,"natural EOF broke single repeat");
         seedQueue({"played","bad"},{});
         cloudRequestOverride=[&](const Json& request){requested.push_back(request.value("id",""));return Json{{"ok",false},{"error","Unavailable"}};};
         invoke("library.skip",{{"delta",1}});pump();pump();

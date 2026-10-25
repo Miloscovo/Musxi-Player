@@ -12,7 +12,7 @@ template<class F> musxi::PlayerState waitState(F predicate) {
 }
 int main(int argc,char** argv) {
     try {
-        require(argc==2,"fixture directory required");const fs::path folder=argv[1];
+        require(argc==2 || argc==3,"fixture directory and optional cached audio file required");const fs::path folder=argv[1];
         hostHooks.connectCloud=false;
         audioBackend().setVolume(10);
         int events=0;musxi::setApplicationPlayerEvents([&](const char*,const musxi::PlayerState&){++events;});
@@ -145,6 +145,37 @@ int main(int argc,char** argv) {
         require(s.trackId=="auto-good" && s.playing && !s.pending && autoRequests==std::vector<std::string>({"auto-start","auto-broken","auto-good"}),
             "real EOF/decode failure did not advance immediately to playable audio");
         require(libraryPlayTrackId=="auto-good" && libraryPlayGeneration==cloudGeneration && libraryOperationStatus=="completed","real auto-next request state was not synchronized");
+        cloudRequestOverride=nullptr;closeAudio();
+        const auto loopFlac=folder/"repeat-footer.flac";
+        fs::copy_file(folder/"source.flac",loopFlac,fs::copy_options::overwrite_existing);
+        {std::ofstream out(loopFlac,std::ios::binary|std::ios::app);out<<std::string(50,'X');}
+        std::vector<fs::path> repeatFiles={folder/"source.wav",loopFlac,folder/"source.mp3"};
+        if(argc==3)repeatFiles.push_back(fs::u8path(argv[2]));
+        int repeatRequests=0;
+        cloudRequestOverride=[&](const Json&){++repeatRequests;return Json{{"ok",false},{"error","Unexpected repeat download"}};};
+        for(const auto& file:repeatFiles) {
+            closeAudio();playbackOrder="repeat-one";cloudCurrent=0;
+            currentPlaybackTrack={{"id","repeat-test"},{"name","Repeat fixture"}};
+            cloudQueue=Json::array({currentPlaybackTrack});libraryPlayTrackId="repeat-test";
+            libraryPlayGeneration=++cloudGeneration;libraryOperationStatus="completed";
+            require(bool(loadAndPlayAudio(file.wstring(),"repeat-test")),"repeat fixture load rejected");
+            s=waitState([](auto state){return state.playing && !state.pending;});
+            const auto tail=s.durationMs-350;
+            for(int cycle=0;cycle<3;++cycle) {
+                musxi::applicationPlayerCommand(musxi::PlayerCommand::Seek,tail);
+                waitState([&](auto state){return state.playing && !state.pending && state.positionMs>=tail;});
+                s=waitState([](auto state){return state.playing && !state.pending && state.positionMs<500;});
+                require(s.trackId=="repeat-test" && s.volumePercent==10,"repeat changed song identity or volume");
+            }
+            musxi::applicationPlayerCommand(musxi::PlayerCommand::Pause);
+            waitState([](auto state){return !state.playing && !state.pending;});
+            musxi::applicationPlayerCommand(musxi::PlayerCommand::Seek,0);
+            waitState([](auto state){return !state.playing && !state.pending && state.positionMs==0;});
+            musxi::applicationPlayerCommand(musxi::PlayerCommand::Resume);
+            waitState([](auto state){return state.playing && !state.pending;});
+            std::cout<<"PASS three real repeat cycles and pause/replay "<<file.extension().string()<<'\n';
+        }
+        require(repeatRequests==0,"single repeat unexpectedly requested another download");
         cloudRequestOverride=nullptr;closeAudio();
         const auto profile=folder/("history-check-"+std::to_string(GetCurrentProcessId()));
         fs::create_directories(profile/"cloud-cache");

@@ -5,6 +5,7 @@ extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavutil/channel_layout.h>
 #include <libavutil/opt.h>
+#include <libavutil/intreadwrite.h>
 #include <libswresample/swresample.h>
 }
 #include <algorithm>
@@ -45,6 +46,7 @@ struct FfmpegDecoder::Impl {
     int stream=-1,inputRate=0,inputFormat=-1;
     bool drainSent=false,decodedEof=false,finished=false,timeline=false,afterSeek=false;
     std::int64_t cursor=0,target=0,pendingStart=0;
+    std::int64_t flacSamples=0;
     std::vector<float> pending;
     std::size_t offset=0;
     ~Impl() {
@@ -117,6 +119,9 @@ struct FfmpegDecoder::Impl {
         codec->pkt_timebase=st->time_base;codec->thread_count=1;
         check(avcodec_open2(codec,decoder,nullptr),"Open decoder");
         info.sourceSampleRate=codec->sample_rate;info.sourceChannels=codec->ch_layout.nb_channels;
+        if(codec->codec_id==AV_CODEC_ID_FLAC && std::strcmp(format->iformat->name,"flac")==0 &&
+           codec->extradata_size==34 && st->time_base.num==1 && st->time_base.den==codec->sample_rate)
+            flacSamples=static_cast<std::int64_t>(AV_RB64(codec->extradata+10)&((1ULL<<36)-1));
         if(st->duration!=AV_NOPTS_VALUE)info.durationMs=av_rescale_q(st->duration,st->time_base,{1,1000});
         else if(format->duration!=AV_NOPTS_VALUE)info.durationMs=av_rescale_q(format->duration,AV_TIME_BASE_Q,{1,1000});
         packet=av_packet_alloc();frame=av_frame_alloc();
@@ -178,7 +183,12 @@ struct FfmpegDecoder::Impl {
         for(;;) {
             checkCancelled();
             const auto received=avcodec_receive_frame(codec,frame);
-            if(received==0){convert(frame);av_frame_unref(frame);return;}
+            if(received==0){
+                // STREAMINFO's exact sample count excludes non-audio footers; still flush the resampler below.
+                if(flacSamples && frame->best_effort_timestamp>=0 && frame->best_effort_timestamp<=flacSamples &&
+                   frame->nb_samples>0 && frame->nb_samples==flacSamples-frame->best_effort_timestamp)decodedEof=true;
+                convert(frame);av_frame_unref(frame);return;
+            }
             if(received==AVERROR_EOF){decodedEof=true;convert(nullptr);return;}
             if(received!=AVERROR(EAGAIN))fail("Decode frame",received);
             if(drainSent)fail("Decoder stalled while draining",AVERROR_INVALIDDATA);

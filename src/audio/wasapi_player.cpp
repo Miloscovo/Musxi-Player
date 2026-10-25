@@ -1,5 +1,6 @@
 #include "wasapi_player.hpp"
 #include "pcm_output.hpp"
+#include "output_drain.hpp"
 #include "../cxx17_guard.hpp"
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
@@ -85,6 +86,8 @@ struct WasapiPlayer::Impl {
     WORD bits=0,validBits=0;
     bool floatDevice=false;
     std::chrono::steady_clock::time_point deviceCheck{},starvedSince{};
+    OutputDrain drain;
+    std::chrono::steady_clock::duration drainGrace{};
 
     Impl() {
         std::promise<void> initialized;auto result=initialized.get_future();
@@ -121,6 +124,7 @@ struct WasapiPlayer::Impl {
         if(decode.joinable())decode.join();
     }
     void release() {
+        drain.reset();
         if(client && running)client->Stop();
         running=false;cancelDecode();
         head=count=0;state.bufferedFrames=0;
@@ -194,6 +198,10 @@ struct WasapiPlayer::Impl {
         check(initialized,"Initialize shared WASAPI");
         check(client->SetEventHandle(audioReady.value),"Set audio event");
         check(client->GetBufferSize(&endpointFrames),"Get endpoint buffer size");
+        REFERENCE_TIME latency=2500000;
+        REFERENCE_TIME reportedLatency=0;
+        if(SUCCEEDED(client->GetStreamLatency(&reportedLatency)) && reportedLatency>=0)latency=reportedLatency;
+        drainGrace=std::chrono::milliseconds(latency/10000+(endpointFrames*1000ULL+f->nSamplesPerSec-1)/f->nSamplesPerSec+50);
         check(client->GetService(IID_PPV_ARGS(&render)),"Get render client");
         check(client->GetService(IID_PPV_ARGS(&clock)),"Get audio clock");
         check(client->GetService(IID_PPV_ARGS(&volume)),"Get stream volume");
@@ -208,6 +216,7 @@ struct WasapiPlayer::Impl {
             check(volume->SetAllVolumes(static_cast<UINT32>(levels.size()),levels.data()),"Set stream volume");}
     }
     void startDecode(std::int64_t ms) {
+        drain.reset();
         cancelDecode();
         state.metadataReady=false;
         {std::lock_guard<std::mutex> lock(pcmMutex);head=count=0;exactIntegerBits=0;pcmWriter={};ready=eof=false;decodeError.clear();decodeErrorCode=0;decodedDuration=state.durationMs;}
@@ -279,11 +288,13 @@ struct WasapiPlayer::Impl {
         if(padding>endpointFrames)throw OutputError("Invalid endpoint padding",E_FAIL);
         if(eof && !count && !padding) {
             UINT64 ticks=0;check(clock->GetPosition(&ticks,nullptr),"Read final output clock");
-            if(submitted && static_cast<long double>(ticks)*state.format.sampleRate/frequency<submitted)return;
+            // A drained endpoint may stop its clock short of the final frame; allow its tail latency, then finish.
+            if(!drain.complete(true,static_cast<long double>(ticks)*state.format.sampleRate/frequency,submitted,now,drainGrace))return;
             if(running)check(client->Stop(),"Stop completed stream");running=false;wanted=false;
             state.positionMs=static_cast<std::int64_t>((baseFrame+submitted)*1000/state.format.sampleRate);
             state.phase=OutputPhase::Ended;events.push_back({true,state.generation,{},0});return;
         }
+        drain.reset();
         if(running && !count && !padding && !eof) {
             check(client->Stop(),"Stop starved output");running=false;
             check(client->Reset(),"Reset starved output");baseFrame+=submitted;submitted=0;
@@ -320,7 +331,7 @@ void WasapiPlayer::play(){impl_->guarded([&]{auto& s=*impl_;
 });}
 void WasapiPlayer::pause(){impl_->guarded([&]{auto& s=*impl_;if(!s.client)return;
     if(s.state.phase==OutputPhase::Ended)return;
-    if(s.running)check(s.client->Stop(),"Pause output");s.running=false;s.wanted=false;s.position();s.state.phase=OutputPhase::Paused;
+    if(s.running)check(s.client->Stop(),"Pause output");s.drain.reset();s.running=false;s.wanted=false;s.position();s.state.phase=OutputPhase::Paused;
 });}
 void WasapiPlayer::stop(){impl_->guarded([&]{auto& s=*impl_;if(!s.client)return;s.wanted=false;s.resetTo(0);s.state.phase=OutputPhase::Ready;});}
 void WasapiPlayer::seek(std::int64_t ms){if(ms<0 || ms>INT64_MAX/192000)throw std::invalid_argument("Seek outside supported range");impl_->guarded([&]{auto& s=*impl_;
