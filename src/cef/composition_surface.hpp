@@ -16,7 +16,9 @@ class CompositionSurface {
     template<class T> using Ptr=Microsoft::WRL::ComPtr<T>;
 public:
     void setResizing(bool resizing) {resizing_=resizing;}
+    void setBottomAligned(bool aligned) {bottomAligned_=aligned;}
     int alphaAt(int x,int y) const {
+        y+=viewOffsetY_;
         if((surfaceWidth_!=width_ || surfaceHeight_!=height_) && !combined_.empty()) {
             if(x<0 || y<0 || x>=surfaceWidth_ || y>=surfaceHeight_)return -1;
             return combined_[(static_cast<size_t>(y)*surfaceWidth_+x)*4+3];
@@ -29,10 +31,12 @@ public:
         if(composition_)composition_->Commit();
         bitmap_.Reset();visual_.Reset();target_.Reset();composition_.Reset();context_.Reset();device_.Reset();
         view_.clear();popup_.clear();combined_.clear();width_=height_=surfaceWidth_=surfaceHeight_=0;
+        bottomAligned_=false;viewOffsetY_=0;contentDirty_=true;
     }
-    void popup(bool visible,RECT rect) {popupVisible_=visible;popupRect_=rect;if(!visible)popup_.clear();}
+    void popup(bool visible,RECT rect) {popupVisible_=visible;popupRect_=rect;if(!visible)popup_.clear();contentDirty_=true;}
     bool paint(HWND window,bool popup,const void* pixels,int width,int height) {
         if(width<=0 || height<=0 || width>16384 || height>16384)return false;
+        contentDirty_=true;
         const auto size=static_cast<size_t>(width)*height*4;
         if(popup) {popup_.resize(size);std::memcpy(popup_.data(),pixels,size);popupWidth_=width;popupHeight_=height;}
         else {
@@ -49,7 +53,10 @@ public:
         const int slack=MulDiv(2,GetDpiForWindow(window),96);
         if(!resizing_ && (std::abs(rect.right-width_)>slack || std::abs(rect.bottom-height_)>slack))return true;
         if(!composition_ && !initialize(window))return false;
-        const int canvasWidth=std::max(1L,rect.right),canvasHeight=std::max(1L,rect.bottom);
+        const int canvasWidth=bottomAligned_?width_:std::max(1L,rect.right),canvasHeight=bottomAligned_?height_:std::max(1L,rect.bottom);
+        viewOffsetY_=bottomAligned_?std::max(0L,height_-rect.bottom):0;
+        if(FAILED(visual_->SetOffsetY(static_cast<float>(-viewOffsetY_))))return false;
+        if(bottomAligned_ && !contentDirty_ && bitmap_)return SUCCEEDED(composition_->Commit());
         if(canvasWidth!=surfaceWidth_ || canvasHeight!=surfaceHeight_)bitmap_.Reset();
         if(!bitmap_) {
             if(FAILED(composition_->CreateSurface(canvasWidth,canvasHeight,DXGI_FORMAT_B8G8R8A8_UNORM,DXGI_ALPHA_MODE_PREMULTIPLIED,&bitmap_)) ||
@@ -114,7 +121,8 @@ public:
         }
         const auto ended=bitmap_->EndDraw();
         if(FAILED(result) || FAILED(ended) || FAILED(device_->GetDeviceRemovedReason()))return false;
-        return SUCCEEDED(composition_->Commit());
+        if(FAILED(composition_->Commit()))return false;
+        contentDirty_=false;return true;
     }
 private:
     bool initialize(HWND window) {
@@ -137,5 +145,7 @@ private:
     int width_=0,height_=0,popupWidth_=0,popupHeight_=0;bool popupVisible_=false;RECT popupRect_{};
     int surfaceWidth_=0,surfaceHeight_=0;
     bool resizing_=false;
+    bool bottomAligned_=false,contentDirty_=true;
+    int viewOffsetY_=0;
     std::vector<std::uint8_t> view_,popup_,combined_;
 };

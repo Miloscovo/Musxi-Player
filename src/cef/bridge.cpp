@@ -284,15 +284,21 @@ public:
                             !params.contains("height") || !params["height"].is_number_integer() || params["height"]<88 || params["height"]>200) {
                         callback->Failure(400,"Invalid compact window parameters");return true;
                     }
-                    if(!testWindow_ || !setMainWindowCompact(params["compact"].get<bool>(),params["height"].get<int>())) {
+                    const auto window=testWindow_;
+                    if(!window || !setMainWindowCompact(params["compact"].get<bool>(),params["height"].get<int>(),[callback,window](bool success) {
+                        if(!success){callback->Failure(500,"无法调整窗口大小，请重试。");return;}
+                        callback->Success(Json{{"version",1},{"result",{{"enabled",true},{"maximized",IsZoomed(window)!=FALSE},{"compact",mainWindowCompact()}}}}.dump());
+                    })) {
                         callback->Failure(500,"无法调整窗口大小，请重试。");return true;
                     }
+                    return true;
                 } else {
                     if(!params.empty()){callback->Failure(400,"Unexpected window parameters");return true;}
                     if(command!="window.getState" && command!="window.minimize" && command!="window.maximize" && command!="window.close" && command!="window.minimizeToTray") {
                         callback->Failure(404,"Unknown window command");return true;
                     }
                     if(testWindow_) {
+                        if(command!="window.getState")finishMainWindowTransition();
                         if(command=="window.minimizeToTray" && !minimizeToTray()) {callback->Failure(500,"无法创建系统托盘图标，请重试。");return true;}
                         if(command=="window.minimize")ShowWindow(testWindow_,SW_MINIMIZE);
                         if(command=="window.maximize")ShowWindow(testWindow_,IsZoomed(testWindow_)?SW_RESTORE:SW_MAXIMIZE);

@@ -15,6 +15,7 @@ import { verifyDesktopWindow } from './desktopSmoke';
 import { observeLyricDragRegions } from '../composables/lyrics';
 import { verifyUpdatesUI } from './updatesSmoke';
 import { verifyWallpaperUI } from './wallpaperSmoke';
+import { rememberTrackLoadingCount } from '../composables/playlistLoadingCounts';
 
 function SmokeLibraryView(props: Omit<ComponentProps<typeof LibraryView>, 'shortcuts'>) {
   const shortcuts = useShortcuts();
@@ -33,6 +34,297 @@ function checkMenuDragRegions(open: boolean) {
   for (const region of Array.from(document.querySelectorAll('.window-bar,.library-content>header,.sidebar'))) {
     if (getComputedStyle(region).getPropertyValue('-webkit-app-region').trim() !== (open ? 'no-drag' : 'drag'))
       throw new Error(`Menu ${open ? 'blocks outside clicks' : 'did not restore window dragging'}`);
+  }
+}
+
+export async function verifyOtherSongLoading(library: ReturnType<typeof useLibrary>) {
+  const fixture=document.createElement('div');
+  fixture.style.cssText='position:fixed;inset:40px;display:flex;z-index:60';document.body.append(fixture);
+  const root=createRoot(fixture), original=library.state!;
+  let state:typeof library.state=null;
+  let searchState:typeof library.state=null;
+  let searchId=0;
+  const render=()=>root.render(createElement(SmokeLibraryView,{library:{...library,state,pending:false,search:async()=>{
+    searchState={...original,busy:false,playlistId:'musxi:local',search:[],keywords:'',operation:{...original.operation,id:`search-${++searchId}`,kind:'search',status:'pending'}};
+    state={...state!,busy:false};render();
+  }},theme:'light'}));
+  const navigate=(label:string)=>Array.from(fixture.querySelectorAll<HTMLButtonElement>('.sidebar>button')).find(button=>button.textContent?.trim()===label)!.click();
+  try {
+    render();await waitFor(()=>!!fixture.querySelector('.sidebar'));
+    navigate('最近播放');
+    await waitFor(()=>!!fixture.querySelector('.recent-title'));
+    if(fixture.querySelector('.track-skeleton'))throw new Error('Recent songs unexpectedly showed loading skeletons');
+    state={...original,busy:true,recent:[]};render();
+    await waitFor(()=>!fixture.querySelector('.track-skeleton') && !!fixture.querySelector('.empty-tracks'));
+    if(fixture.querySelector('.empty-tracks')!.textContent?.includes('正在加载'))throw new Error('Cleared recent songs were reported as loading');
+    state={...original,busy:false,keywords:'',search:[]};render();
+    navigate('发现');
+    await waitFor(()=>!!fixture.querySelector('.discover-empty'));
+    const input=fixture.querySelector<HTMLInputElement>('.collection-search input')!;
+    input.focus();
+    if(getComputedStyle(input.closest('form')!).boxShadow==='none')throw new Error('Focused search field has no focus outline');
+    if(getComputedStyle(input.closest('form')!).boxShadow.includes('4px'))throw new Error('Search field still has an outer halo');
+    input.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true}));
+    if(document.activeElement!==input)throw new Error('Clicking inside the search field removed focus');
+    fixture.querySelector('.discover-empty')!.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true}));
+    if(document.activeElement===input)throw new Error('Clicking outside the search field did not remove focus');
+    if(getComputedStyle(input.closest('form')!).boxShadow!=='none')throw new Error('Search focus outline remained after blur');
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value')!.set!.call(input,'fixture search');
+    input.dispatchEvent(new Event('input',{bubbles:true}));
+    await waitFor(()=>!fixture.querySelector<HTMLButtonElement>('[aria-label="搜索"]')!.disabled);
+    fixture.querySelector<HTMLFormElement>('.collection-search')!.requestSubmit();
+    await waitFor(()=>!!fixture.querySelector('.track-skeleton'));
+    if(fixture.querySelector('.discover-empty'))throw new Error('Search loading showed the discovery empty state');
+    state=searchState;render();
+    await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+    if(!fixture.querySelector('.track-skeleton') || fixture.querySelector('.empty-tracks'))
+      throw new Error('Search pending without global busy lost its skeleton');
+    const searchCapacity=()=>Math.max(1,Math.floor(fixture.querySelector('.song-scroll')!.clientHeight/(innerWidth<=1100?70:61)));
+    await waitFor(()=>fixture.querySelectorAll('.track-skeleton').length===searchCapacity(),'Search skeleton did not fill its viewport');
+    if(fixture.querySelector('.song-scroll')!.scrollHeight>fixture.querySelector('.song-scroll')!.clientHeight+1)
+      throw new Error('Search skeleton exceeded one page');
+    state={...state!,busy:false,keywords:'fixture search',search:[],searchMore:false,operation:{...state!.operation,status:'completed'}};render();
+    await waitFor(()=>!fixture.querySelector('.track-skeleton') && !!fixture.querySelector('.empty-tracks'));
+    for(const status of ['failed','cancelled'] as const) {
+      fixture.querySelector<HTMLFormElement>('.collection-search')!.requestSubmit();
+      await waitFor(()=>!!fixture.querySelector('.track-skeleton'));
+      state={...searchState!,operation:{...searchState!.operation,status}};render();
+      await waitFor(()=>!fixture.querySelector('.track-skeleton') && !!fixture.querySelector('.empty-tracks'));
+    }
+    root.render(createElement(QueuePanel,{library:{...library,state:null}}));
+    await waitFor(()=>!!fixture.querySelector('[aria-label="播放列表"]'));
+    fixture.querySelector<HTMLButtonElement>('[aria-label="播放列表"]')!.click();
+    await waitFor(()=>!!document.querySelector('.queue-empty'));
+    if(document.querySelector('.queue-skeleton'))throw new Error('Queue unexpectedly showed loading skeletons');
+    root.render(createElement(QueuePanel,{library:{...library,state:{...original,queue:[]},pending:true}}));
+    await waitFor(()=>!document.querySelector('.queue-skeleton') && !!document.querySelector('.queue-empty'));
+  } finally { root.unmount();fixture.remove(); }
+}
+
+export async function verifyTrackLoading(library: ReturnType<typeof useLibrary>) {
+  const fixture=document.createElement('div');
+  fixture.style.cssText='position:fixed;inset:40px;display:flex;z-index:60';
+  document.body.append(fixture);
+  const root=createRoot(fixture), original=library.state!;
+  const short={...original.playlists[0],id:'track-count-short',editable:true};
+  const long={...short,id:'track-count-long'};
+  const state={...original,user:'track-count-ui',accounts:[],connected:true,busy:false,playlistId:short.id,
+    tracks:[original.tracks[0]],trackCount:3,playlists:[short,long],operation:{...original.operation,kind:'tracks',status:'completed' as const}};
+  const keys=[short,long].map(list=>`musxi-track-loading-count:${JSON.stringify([state.user,list.id])}`);
+  const previous=keys.map(key=>localStorage.getItem(key));
+  let current=state;
+  const render=()=>root.render(createElement(SmokeLibraryView,{library:{...library,state:current,open:async id=>{
+    current={...current,busy:true,tracks:id===current.playlistId?[]:current.tracks};render();
+  }},theme:'light'}));
+  const capacity=()=>Math.max(1,Math.floor(fixture.querySelector('.song-scroll')!.clientHeight/(innerWidth<=1100?70:61)));
+  try {
+    rememberTrackLoadingCount(localStorage,state,false,'');
+    rememberTrackLoadingCount(localStorage,{...state,playlistId:long.id,trackCount:10000},false,'');
+    render();
+    await waitFor(()=>fixture.querySelectorAll('button.playlist').length===3);
+    fixture.querySelectorAll<HTMLButtonElement>('button.playlist')[1].click();
+    await waitFor(()=>!!fixture.querySelector('.song-scroll') && fixture.querySelectorAll('.track-skeleton').length===Math.min(3,capacity()),'Short playlist skeleton count mismatch');
+    if(fixture.querySelector('.song[role=row]'))throw new Error('Loading a playlist showed stale songs');
+    current={...state};render();
+    await waitFor(()=>!fixture.querySelector('.track-skeleton') && !!fixture.querySelector('.song[role=row]'),'Loaded song row missing');
+    fixture.querySelector<HTMLButtonElement>('[aria-label="返回歌单"]')!.click();
+    await waitFor(()=>fixture.querySelectorAll('button.playlist').length===3,'Return to playlist list failed');
+    fixture.querySelectorAll<HTMLButtonElement>('button.playlist')[2].click();
+    await waitFor(()=>!!fixture.querySelector('.song-scroll') && fixture.querySelectorAll('.track-skeleton').length===capacity(),'Long playlist skeleton did not fill one page');
+    const scroll=fixture.querySelector('.song-scroll')!;
+    if(scroll.scrollHeight>scroll.clientHeight+1 || fixture.querySelector('.song[role=row]'))
+      throw new Error('Song skeleton exceeded one page or used the previous playlist');
+    fixture.style.bottom='180px';
+    await waitFor(()=>fixture.querySelectorAll('.track-skeleton').length===capacity(),'Resized skeleton count mismatch');
+    current={...state,playlistId:long.id,trackCount:0,tracks:[]};render();
+    await waitFor(()=>!fixture.querySelector('.track-skeleton') && !!fixture.querySelector('.empty-tracks'));
+  } finally {
+    root.unmount();fixture.remove();
+    keys.forEach((key,index)=>previous[index]===null?localStorage.removeItem(key):localStorage.setItem(key,previous[index]!));
+  }
+}
+
+export async function verifyPlaylistLoading(library: ReturnType<typeof useLibrary>) {
+  const cacheKey='musxi-playlist-loading-counts', cached=localStorage.getItem(cacheKey);
+  localStorage.removeItem(cacheKey);
+  const fixture=document.createElement('div');
+  fixture.style.cssText='position:fixed;inset:40px;display:flex;z-index:60';
+  document.body.append(fixture);
+  const root=createRoot(fixture), original=library.state!;
+  const render=(state:typeof library.state,pending=false,error='')=>root.render(createElement(SmokeLibraryView,{library:{...library,state,pending,error},theme:'light'}));
+  try {
+    for(const state of [null,{...original,connected:true,busy:true,playlists:[]}]) {
+      render(state);
+      await waitFor(()=>fixture.querySelectorAll('.playlist-skeleton').length===6);
+      const cover=fixture.querySelector<HTMLElement>('.playlist-skeleton .cover')!;
+      const style=getComputedStyle(cover);
+      if(fixture.querySelector('.library-section-empty') || fixture.querySelector('.playlist-skeleton button')
+        || !fixture.querySelector('[role=status][aria-label="正在加载歌单列表"]')
+        || !style.backgroundImage.includes('linear-gradient') || cover.getBoundingClientRect().width!==96
+        || (style.animationName==='none')!==matchMedia('(prefers-reduced-motion: reduce)').matches)
+        throw new Error('Playlist skeleton layout, loading state or shimmer is incorrect');
+    }
+    render({...original,connected:true,busy:false,playlists:[]},true);
+    await waitFor(()=>fixture.querySelectorAll('.playlist-skeleton').length===6);
+    render({...original,connected:true,busy:true});
+    const createdCount=original.playlists.filter(list=>list.editable).length+1;
+    await waitFor(()=>fixture.querySelectorAll('.playlist-skeleton').length===createdCount);
+    if(fixture.querySelector('button.playlist'))throw new Error('Busy library exposed disabled playlist entries');
+    render({...original,connected:true,busy:false},true);
+    await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+    if(fixture.querySelectorAll('.playlist-skeleton').length!==createdCount)throw new Error('Pending library ended its skeleton early');
+    render({...original,connected:true,busy:false});
+    await waitFor(()=>!fixture.querySelector('.playlist-skeleton') && !!fixture.querySelector('.playlist strong'));
+    if(fixture.querySelector('button.playlist:disabled') || fixture.querySelector('.playlist .cover-loading'))
+      throw new Error('Loaded playlists are disabled or still animate their covers');
+    const saved=fixture.querySelectorAll<HTMLButtonElement>('.library-sections button')[1];
+    saved.click();
+    await waitFor(()=>saved.getAttribute('aria-pressed')==='true');
+    render({...original,connected:true,busy:true,playlists:[]});
+    await waitFor(()=>fixture.querySelectorAll('.playlist-skeleton').length===6);
+    render({...original,connected:true,busy:false,playlists:[]});
+    await waitFor(()=>fixture.querySelector('.library-section-empty')?.textContent==='暂无收藏歌单。');
+    if(fixture.querySelector('.playlist-skeleton'))throw new Error('Empty saved playlists kept loading');
+    const offlineAccounts=(['kugou','netease','qq'] as const).map(platform=>({platform,name:platform,connected:false,user:'',error:''}));
+    for(const accounts of [undefined,[],offlineAccounts.slice(0,2),offlineAccounts.map((account,index)=>index===0?{...account,error:'验证失败'}:account),
+      offlineAccounts.map((account,index)=>index===0?{...account,connected:true}:account)]) {
+      render({...original,connected:false,busy:false,playlists:[],accounts});
+      await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+      if(fixture.querySelector('.library-section-empty')?.textContent?.includes('登录后'))throw new Error('Unconfirmed accounts showed the sign-in prompt');
+    }
+    for(const [busy,pending,error] of [[true,false,''],[false,true,''],[false,false,'读取失败']] as const) {
+      render({...original,connected:false,busy,playlists:[],accounts:offlineAccounts},pending,error);
+      await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+      if(fixture.querySelector('.library-section-empty')?.textContent?.includes('登录后'))throw new Error('Pending or failed account check showed the sign-in prompt');
+    }
+    render({...original,connected:false,busy:false,playlists:[],accounts:offlineAccounts});
+    await waitFor(()=>!!fixture.querySelector('.library-section-empty')?.textContent?.includes('登录后'));
+    if(fixture.querySelector('.playlist-skeleton'))throw new Error('Signed-out library kept loading');
+    render(null);
+    await waitFor(()=>!!fixture.querySelector('.playlist-skeleton'));
+    render(null,false,'加载失败');
+    await waitFor(()=>!fixture.querySelector('.playlist-skeleton'));
+    if(fixture.querySelector('.playlist-skeleton'))throw new Error('Failed library kept loading');
+    const created=fixture.querySelectorAll<HTMLButtonElement>('.library-sections button')[0];
+    created.click();
+    await waitFor(()=>created.getAttribute('aria-pressed')==='true');
+    const counted={...original,connected:true,busy:false,user:'skeleton-count-fixture',accounts:[],
+      operation:{...original.operation,kind:'sync',status:'completed' as const},
+      playlists:[{...original.playlists[0],editable:true},{...original.playlists[0],id:'second',editable:true}]};
+    render(counted);
+    await waitFor(()=>JSON.parse(localStorage.getItem(cacheKey) || 'null')?.created===3);
+    render({...counted,busy:true,playlists:[]});
+    await waitFor(()=>fixture.querySelectorAll('.playlist-skeleton').length===3);
+    render(null);
+    await waitFor(()=>fixture.querySelectorAll('.playlist-skeleton').length===3);
+    render({...counted,user:'different-account',busy:true,playlists:[]});
+    await waitFor(()=>fixture.querySelectorAll('.playlist-skeleton').length===6);
+  } finally {
+    root.unmount();fixture.remove();
+    if(cached===null)localStorage.removeItem(cacheKey);else localStorage.setItem(cacheKey,cached);
+  }
+}
+
+export async function verifyLyricsPlayerCollapse() {
+  const page = document.querySelector<HTMLElement>('.lyrics-page')!;
+  const player = document.querySelector<HTMLElement>('.player')!;
+  await Promise.allSettled(player.getAnimations().map(animation=>animation.finished));
+  const height = window.innerHeight, pageHeight = page.getBoundingClientRect().height;
+  const context=document.createElement('canvas').getContext('2d')!;
+  const rgba=(color:string)=>{context.clearRect(0,0,1,1);context.fillStyle=color;context.fillRect(0,0,1,1);return context.getImageData(0,0,1,1).data;};
+  // Canvas conversion can round translucent color channels by one byte.
+  const sameColor=(actual:Uint8ClampedArray,expected:Uint8ClampedArray)=>actual.every((value,index)=>Math.abs(value-expected[index])<=1);
+  const originalBackground=rgba(getComputedStyle(player).backgroundColor);
+  const originalBorder=rgba(getComputedStyle(player).borderTopColor);
+  const coveredHeight=pageHeight+player.getBoundingClientRect().height;
+  const reduced=matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const coveredPixels=()=>parseFloat(getComputedStyle(player).clipPath.replace(/^inset\(/,'')) || 0;
+  const checkCover=()=>{
+    const covered=page.getBoundingClientRect().height-pageHeight;
+    if(Math.abs(coveredPixels()-covered)>1)throw new Error('Player clipping did not follow the lyrics cover edge');
+  };
+  const collapse = async () => {
+    const samples:number[]=[];
+    document.querySelector<HTMLButtonElement>('[aria-label="收起播放栏"]')!.click();
+    await waitFor(() => {
+      samples.push(page.getBoundingClientRect().height);
+      checkCover();
+      return Math.abs(page.getBoundingClientRect().height-coveredHeight)<1 &&
+        getComputedStyle(player.querySelector('.play-controls')!).visibility==='hidden' &&
+        getComputedStyle(player).backgroundColor==='rgba(0, 0, 0, 0)' &&
+        getComputedStyle(player).borderTopColor==='rgba(0, 0, 0, 0)' && getComputedStyle(player).boxShadow==='none';
+    }, 'Lyrics did not animate over the player');
+    if(!reduced && !samples.some(value=>value>pageHeight+1 && value<coveredHeight-1))
+      throw new Error('Lyrics player collapse skipped intermediate frames');
+  };
+  await collapse();
+  const rail = document.querySelector<HTMLButtonElement>('[aria-label="展开播放栏"]')!;
+  const bounds = rail.getBoundingClientRect();
+  if (window.innerHeight !== height || (await native.window.getState()).compact
+    || !page.isConnected || page.getBoundingClientRect().height <= pageHeight
+    || !player.querySelector('.player-content')?.hasAttribute('inert')
+    || getComputedStyle(player.querySelector('.player-progress')!).visibility !== 'hidden'
+    || Math.abs(page.getBoundingClientRect().bottom-height)>1
+    || Math.abs(bounds.left+bounds.width/2-window.innerWidth/2)>1 || bounds.width<24 || bounds.width>48
+    || !rail.querySelector('svg') || rail.textContent?.trim() || document.activeElement!==rail
+    || getComputedStyle(rail).getPropertyValue('-webkit-app-region').trim()!=='no-drag'
+    || player.querySelector('.player-rail')!.getClientRects().length
+    || rail.closest('[inert]')
+    || !rail.contains(document.elementFromPoint(bounds.left + bounds.width / 2, bounds.top + bounds.height / 2)))
+    throw new Error('Collapsing the player resized the window, hid lyrics or blocked expansion');
+  const blank=document.elementFromPoint(12,height-8)!;
+  if(blank.closest('button'))throw new Error('Bottom blank space still hits an expand control');
+  blank.dispatchEvent(new MouseEvent('click',{bubbles:true}));
+  await new Promise(resolve=>requestAnimationFrame(resolve));
+  if(!player.hasAttribute('data-lyrics-collapsed'))throw new Error('Bottom blank space expanded the player');
+  await request(window as unknown as CefTransport,'test.pressSpace',{});
+  const samples:number[]=[];
+  await waitFor(() => {
+    samples.push(page.getBoundingClientRect().height);
+    checkCover();
+    return !player.hasAttribute('data-lyrics-collapsed') && Math.abs(page.getBoundingClientRect().height-pageHeight)<1 &&
+      sameColor(rgba(getComputedStyle(player).backgroundColor),originalBackground) && sameColor(rgba(getComputedStyle(player).borderTopColor),originalBorder);
+  }, 'Lyrics player did not animate open').catch(error=>{throw new Error(`${error}: height=${page.getBoundingClientRect().height}/${pageHeight}, background=${rgba(getComputedStyle(player).backgroundColor)}/${originalBackground}, border=${rgba(getComputedStyle(player).borderTopColor)}/${originalBorder}`);});
+  if(!reduced && !samples.some(value=>value>pageHeight+1 && value<coveredHeight-1))
+    throw new Error('Lyrics player expansion skipped intermediate frames');
+  if (Math.abs(page.getBoundingClientRect().height - pageHeight) > 1
+    || getComputedStyle(player.querySelector('.play-controls')!).visibility !== 'visible'
+    || document.activeElement!==player.querySelector('.player-rail'))
+    throw new Error('Expanding the lyrics player did not restore its layout');
+  await collapse();
+  const expand=document.querySelector<HTMLButtonElement>('.lyrics-player-expand')!;
+  const target=expand.getBoundingClientRect();
+  document.elementFromPoint(target.left+target.width/2,target.top+target.height/2)!
+    .dispatchEvent(new MouseEvent('click',{bubbles:true,button:0}));
+  await waitFor(()=>!player.hasAttribute('data-lyrics-collapsed') && Math.abs(page.getBoundingClientRect().height-pageHeight)<1, 'Expand icon did not respond to a click');
+  await Promise.allSettled(player.getAnimations().map(animation=>animation.finished));
+  await collapse();
+}
+
+export async function verifyCompactWindowAnimation() {
+  const height=window.innerHeight;
+  const compactHeight=Math.ceil(document.querySelector('.player')!.getBoundingClientRect().height)+16;
+  for(const compact of [true,false]) {
+    const samples:number[]=[];
+    const layouts:number[]=[];
+    const resized=()=>layouts.push(window.innerHeight);
+    window.addEventListener('resize',resized);
+    try {
+      let finished=false;
+      const command=native.window.setCompact(compact,compactHeight).finally(()=>{finished=true;});
+      while(!finished) {
+        samples.push((await request(window as CefTransport,'test.windowSize',{}) as {height:number}).height);
+        await new Promise(resolve=>setTimeout(resolve,16));
+      }
+      const state=await command;
+      await waitFor(()=>compact ? window.innerHeight===compactHeight : window.innerHeight===height, 'Animated window did not reach its final height');
+      if(state.compact!==compact)throw new Error('Animated compact reply has the wrong state');
+      if(!matchMedia('(prefers-reduced-motion: reduce)').matches &&
+        new Set(samples.filter(value=>value>compactHeight && value<height)).size<2)
+        throw new Error('Window transition did not render intermediate heights');
+      if(layouts.some(value=>value>compactHeight && value<height))
+        throw new Error('Window animation repeatedly relaid out the CEF viewport');
+    } finally { window.removeEventListener('resize',resized); }
   }
 }
 
@@ -150,6 +442,9 @@ export async function verifyWebPage() {
     play: async (source, id) => { actions.push(`play:${id}`, `play:${source}:${id}`); },
   };
   try {
+    await verifyPlaylistLoading(fixtureLibrary);
+    await verifyTrackLoading(fixtureLibrary);
+    await verifyOtherSongLoading(fixtureLibrary);
     root.render(createElement(SmokeLibraryView, { library: fixtureLibrary, theme: 'light' }));
     await waitFor(() => !!fixture.querySelector('.playlist'));
     const favoritesCard=fixture.querySelector<HTMLButtonElement>('.playlist')!;
@@ -164,7 +459,7 @@ export async function verifyWebPage() {
     await waitFor(() => fixture.querySelectorAll('.playlist').length === 41);
     await checkFixedPageHeader(fixture);
     fixtureLibrary.state = shortLibrary;
-    fixtureLibrary.state={...fixtureLibrary.state!,connected:false};
+    fixtureLibrary.state={...fixtureLibrary.state!,connected:false,accounts:(['kugou','netease','qq'] as const).map(platform=>({platform,name:platform,connected:false,user:'',error:''}))};
     root.render(createElement(SmokeLibraryView,{library:fixtureLibrary,theme:'light'}));
     await waitFor(()=>!Array.from(fixture.querySelectorAll('.playlist strong')).some(e=>e.textContent==='云端收藏整合'));
     if(!fixture.querySelector('.library-section-empty')?.textContent?.includes('登录后'))throw new Error('Signed-out library prompt missing');
@@ -673,6 +968,7 @@ export async function verifyWebPage() {
       || getComputedStyle(rail).cursor!=='n-resize' || railBounds.width!==window.innerWidth
       || document.elementFromPoint(railBounds.width/4,railBounds.top+8)!==rail)
       throw new Error('Player collapse rail is visible, blocked or not across the dock edge');
+    await verifyCompactWindowAnimation();
     const collapseWindow=async () => {
       document.querySelector<HTMLButtonElement>('[aria-label="收起主界面"]')!.click();
       await waitFor(() => !!document.querySelector('.compact-player') && window.innerHeight<200, `Window did not collapse (${window.innerHeight}px)`);
@@ -688,14 +984,14 @@ export async function verifyWebPage() {
     };
     await collapseWindow();
     document.querySelector<HTMLButtonElement>('[aria-label="播放列表"]')!.click();
-    await waitFor(() => !document.querySelector('.compact-player') && window.innerHeight===expandedHeight
+    await waitFor(() => !document.querySelector('.compact-player') && !document.querySelector('.player-rail:disabled') && window.innerHeight===expandedHeight
       && !!document.querySelector('[data-slot=popover-content]'), 'Queue did not expand the compact window');
     document.dispatchEvent(new KeyboardEvent('keydown', { key:'Escape', bubbles:true }));
     await waitFor(() => !document.querySelector('[data-slot=popover-content]'));
     if(window.innerWidth!==expandedWidth)throw new Error('Expanded window width changed');
     await collapseWindow();
     document.querySelector<HTMLButtonElement>('[aria-label="展开主界面"]')!.click();
-    await waitFor(() => !document.querySelector('.compact-player') && window.innerHeight===expandedHeight, 'Window did not restore its original height');
+    await waitFor(() => !document.querySelector('.compact-player') && !document.querySelector('.player-rail:disabled') && window.innerHeight===expandedHeight, 'Window did not restore its original height');
     try { await native.window.setCompact(true,0);throw new Error('Invalid compact height accepted'); }
     catch(error) { if(!(error instanceof Error) || !error.message.includes('Invalid compact window parameters'))throw error; }
     document.querySelector<HTMLButtonElement>('.window-close')!.click();
@@ -759,7 +1055,7 @@ export async function verifyWebPage() {
     const maximizedHeight=(await settledWindowSize()).height;
     await collapseWindow();
     document.querySelector<HTMLButtonElement>('[aria-label="展开主界面"]')!.click();
-    await waitFor(() => !document.querySelector('.compact-player') && window.innerHeight===maximizedHeight, 'Window did not restore maximized height')
+    await waitFor(() => !document.querySelector('.compact-player') && !document.querySelector('.player-rail:disabled') && window.innerHeight===maximizedHeight, 'Window did not restore maximized height')
       .catch(async error => { throw new Error(`${error.message}: ${window.innerHeight}/${maximizedHeight}, ${JSON.stringify(await native.window.getState())}`); });
     if(!(await native.window.getState()).maximized)throw new Error('Compact mode did not restore maximized state');
     const restored = await native.window.maximize();
@@ -912,6 +1208,7 @@ export async function verifyWebPage() {
   if (getComputedStyle(lyricsPage).getPropertyValue('-webkit-app-region').trim() !== 'no-drag')
     throw new Error('Lyrics dragging blocks a modal dialog');
   dialogOverlay.remove();
+  if ((await native.window.getState()).enabled) await verifyLyricsPlayerCollapse();
   const handledEscape=new KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true});
   handledEscape.preventDefault();lyricsClose.dispatchEvent(handledEscape);
   if(!document.querySelector('.lyrics-page'))throw new Error('Handled Escape closed the lyrics page');
@@ -921,6 +1218,8 @@ export async function verifyWebPage() {
     throw new Error('Closing lyrics did not restore library visibility');
   if(playerTrack.hasAttribute('inert') || getComputedStyle(playerTrack).visibility!=='visible')
     throw new Error('Closing lyrics did not restore player track metadata');
+  if(document.querySelector('.player[data-lyrics-collapsed]') || getComputedStyle(controls).display === 'none')
+    throw new Error('Closing lyrics did not restore the player bar');
   const host = window as unknown as CefTransport;
   // test.complete intentionally has a test-only, non-v1 reply in the existing fixture.
   await new Promise<void>((resolve, reject) => host.cefQuery?.({

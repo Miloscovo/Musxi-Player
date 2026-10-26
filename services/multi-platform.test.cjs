@@ -3,6 +3,15 @@ const assert=require('node:assert/strict');
 const {MultiPlatform}=require('./multi-platform.cjs');
 function fixture(){const calls=[];const adapters=Object.fromEntries(['kugou','netease','qq'].map(platform=>[platform,{async run(r){calls.push([platform,r]);if(r.op==='init')return {connected:!!r.session,profile:{name:platform},session:r.session};if(r.op==='sync')return {playlists:[{id:platform==='kugou'?'1':platform+':1'}]};if(r.op==='search')return {tracks:[{id:platform+':song',name:platform,artist:'Artist',album:'Album'}],total:1,hasMore:false};if(r.op==='vip_auto')return {session:{cookie:{token:'private'}},outcome:'skipped'};return {status:'connected',profile:{name:platform},session:{platform}};}}]));return {calls,adapters,manager:new MultiPlatform(adapters)};}
 
+test('account initialization preserves verification failures instead of reporting confirmed logout',async()=>{
+  const {manager,adapters}=fixture();
+  adapters.kugou.run=async()=>({connected:false,verificationFailed:true});
+  const result=await manager.run({op:'init'});
+  assert.equal(result.connected,false);
+  assert.match(result.accounts.find(account=>account.platform==='kugou').error,/验证失败/);
+  assert.equal(result.accounts.find(account=>account.platform==='qq').error,'');
+});
+
 test('confirmed favorite edits refresh counts and automatic covers on every platform',async()=>{
   for(const platform of ['kugou','netease','qq']){
     const {manager,adapters}=fixture();

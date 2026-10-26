@@ -6,6 +6,7 @@ import { animate } from 'motion/mini';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import type { useLibrary } from '../composables/useLibrary';
 import { isCurrentSong } from '../composables/songPlayback';
+import { readPlaylistLoadingCount, rememberPlaylistLoadingCounts, readTrackLoadingCount, rememberTrackLoadingCount } from '../composables/playlistLoadingCounts';
 import type { PlayerState } from '../native/types';
 import type { Theme } from '../native/window';
 import { safeImage, type Track } from '../native/library';
@@ -55,6 +56,10 @@ export default function LibraryView({ library: lib, theme, appearance, onAppeara
   const [searchRows, setSearchRows] = useState<Track[]>([]);
   const [view, setView] = useState<'library' | 'search' | 'settings' | 'recent'>('library');
   const [query, setQuery] = useState(''); const [showTracks, setShowTracks] = useState(false);
+  const [requestedPlaylist, setRequestedPlaylist] = useState('');
+  const [requestedSearch, setRequestedSearch] = useState('');
+  const searchOperationBefore = useRef('');
+  const [skeletonPageRows, setSkeletonPageRows] = useState(8);
   const [librarySection, setLibrarySection] = useState<LibrarySection>('created');
   const [settingsSection, setSettingsSection] = useState<'appearance' | 'playback' | 'shortcuts' | 'lyrics' | 'updates'>('appearance');
   const [removeFoldersOpen, setRemoveFoldersOpen] = useState(false);
@@ -64,6 +69,16 @@ export default function LibraryView({ library: lib, theme, appearance, onAppeara
   }, [showUpdates]);
   const [playlistQuery, setPlaylistQuery] = useState('');
   const content = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const blurSearch = (event: PointerEvent) => {
+      const search = content.current?.querySelector('.collection-search');
+      const focused = document.activeElement;
+      if (search && focused instanceof HTMLElement && search.contains(focused)
+        && event.target instanceof Node && !search.contains(event.target)) focused.blur();
+    };
+    document.addEventListener('pointerdown', blurSearch, true);
+    return () => document.removeEventListener('pointerdown', blurSearch, true);
+  }, []);
   const pageScroll = useRef<HTMLDivElement>(null);
   const songScroll = useRef<HTMLDivElement>(null);
   const songList = useRef<HTMLDivElement>(null);
@@ -73,6 +88,11 @@ export default function LibraryView({ library: lib, theme, appearance, onAppeara
   const [account, setAccount] = useState(false); const [menuId, setMenuId] = useState('');
   const [accountPlatform, setAccountPlatform] = useState<MusicPlatform | null>(null);
   const isLocal = view === 'library' && librarySection === 'local';
+  const busy = pending || !!state?.busy;
+  const signedOut = !!state && !state.connected && !busy && !error && (['kugou','netease','qq'] as const).every(platform => {
+    const account = state.accounts?.find(account => account.platform === platform);
+    return account?.connected === false && !account.error;
+  });
   const visiblePlaylists = state?.playlists.filter(list => librarySection === 'created' ? list.editable
     : librarySection === 'saved' ? !list.editable : false).sort((a,b)=>librarySection==='created' ? Number(!!b.favorite)-Number(!!a.favorite) : 0) ?? [];
   const playlistFilter = playlistQuery.trim().toLocaleLowerCase();
@@ -80,8 +100,22 @@ export default function LibraryView({ library: lib, theme, appearance, onAppeara
     ? playlistRows.filter(song => [song.name, song.artist, song.album || '']
       .some(value => value.toLocaleLowerCase().includes(playlistFilter)))
     : playlistRows, [playlistRows, playlistFilter]);
-  const rows = view === 'recent' ? (state?.recent || []).filter(song=>!playlistFilter || [song.name,song.artist,song.album || ''].some(value=>value.toLocaleLowerCase().includes(playlistFilter))) : view === 'search' ? searchRows : isLocal && state?.playlistId !== 'musxi:local' && !state?.playlistId.startsWith('local-folder:') ? [] : filteredPlaylistRows;
-  const busy = pending || !!state?.busy;
+  const searchSettled = state?.operation.kind === 'search' && state.operation.id !== searchOperationBefore.current
+    && ['completed','failed','cancelled'].includes(state.operation.status);
+  const searchPending = (!!requestedSearch && !searchSettled) || (state?.operation.kind === 'search' && state.operation.status === 'pending');
+  const rows = view === 'recent' ? (state?.recent || []).filter(song=>!playlistFilter || [song.name,song.artist,song.album || ''].some(value=>value.toLocaleLowerCase().includes(playlistFilter))) : view === 'search' ? (requestedSearch && searchPending && state?.keywords !== requestedSearch ? [] : searchRows) :
+    requestedPlaylist && busy && !error && state?.playlistId !== requestedPlaylist ? [] : isLocal && state?.playlistId !== 'musxi:local' && !state?.playlistId.startsWith('local-folder:') ? [] : filteredPlaylistRows;
+  const songsLoading = view !== 'recent' && !error && (!state || (view === 'library' && busy) || (view === 'search' && searchPending));
+  const trackSkeletonCount = view === 'library' ? Math.min(skeletonPageRows, readTrackLoadingCount(localStorage, state, requestedPlaylist || state?.playlistId || '')) : skeletonPageRows;
+  useEffect(() => {
+    if (state) rememberTrackLoadingCount(localStorage, state, pending, error);
+    if (!busy) setRequestedPlaylist('');
+  }, [state, pending, error, busy]);
+  useEffect(() => { if (searchSettled || error) setRequestedSearch(''); }, [searchSettled, error]);
+  const playlistsLoading = !error && (!state || (!!state.connected && busy));
+  const skeletonCount = playlistsLoading ? (visiblePlaylists.length ? visiblePlaylists.length + Number(librarySection === 'created')
+    : readPlaylistLoadingCount(localStorage, state, librarySection)) : 6;
+  useEffect(() => { if (state) rememberPlaylistLoadingCounts(localStorage, state, pending, error); }, [state, pending, error]);
   const tracksVisible = view === 'recent' || view === 'search' || (view === 'library' && showTracks);
   const fixedPageHeader = view === 'settings' || (view === 'library' && !showTracks);
   const PageBody = fixedPageHeader ? 'div' : Fragment;
@@ -128,9 +162,12 @@ export default function LibraryView({ library: lib, theme, appearance, onAppeara
   // Headers stay outside the song viewport; only the list padding offsets rows.
   function measureListOffset() {
     const element = songScroll.current; const list = songList.current;
-    if (element && list) setListOffset(list.getBoundingClientRect().top
-      - element.getBoundingClientRect().top + element.scrollTop
-      + parseFloat(getComputedStyle(list).paddingTop));
+    if (element && list) {
+      const offset = list.getBoundingClientRect().top - element.getBoundingClientRect().top + element.scrollTop
+        + parseFloat(getComputedStyle(list).paddingTop);
+      setListOffset(offset);
+      setSkeletonPageRows(Math.max(1, Math.floor((element.clientHeight - offset) / (window.innerWidth <= 1100 ? 70 : 61))));
+    }
   }
   useLayoutEffect(measureListOffset);
   useLayoutEffect(() => {
@@ -194,12 +231,14 @@ export default function LibraryView({ library: lib, theme, appearance, onAppeara
   async function open(id: string) {
     const request = ++navigationRequest.current;
     transition.current?.cancel();
-    resetScroll(); setPlaylistQuery(''); await lib.open(id);
+    resetScroll(); setPlaylistQuery(''); setRequestedPlaylist(id); await lib.open(id);
     if (request === navigationRequest.current) navigate(() => setShowTracks(true));
   }
   async function searchSongs() {
     resetScroll();
     if (view === 'recent' || (view === 'library' && showTracks)) return;
+    searchOperationBefore.current = state?.operation.id || '';
+    setRequestedSearch(query.trim());
     navigate(() => { setSearchRows([]); setView('search'); setShowTracks(true); }); await lib.search(query);
   }
   async function menu(id: string) { setMenuId(id); await lib.menu(id); }
@@ -307,9 +346,14 @@ export default function LibraryView({ library: lib, theme, appearance, onAppeara
       {view === 'settings' ? settingsSection === 'updates' && updates ? <UpdateSettings updates={updates}/> : settingsSection === 'shortcuts' ? <ShortcutSettings shortcuts={shortcuts}/> : settingsSection === 'lyrics' ? <LyricsSettings/> : settingsSection === 'playback' ? <PlaybackSettings/> : <AppearanceSettings appearance={appearance ?? { mode: theme === 'dark' || theme === 'glass' ? 'dark' : 'light', transparent: theme === 'glass' || theme === 'glass-light', tone: 'green' }} onAppearance={onAppearance ?? (() => {})} transparency={transparency} onTransparency={onTransparency ?? (() => {})}
         wallpaper={wallpaper} wallpaperEnabled={wallpaperEnabled} onWallpaperEnabled={onWallpaperEnabled} playerTransparent={playerTransparent} onPlayerTransparent={onPlayerTransparent}/> : view === 'library' && !showTracks ? <>
         {!isLocal && <>
-          <div className="playlist-grid">{librarySection === 'created' && state?.connected && <Button variant="ghost" className="playlist" disabled={busy || !state?.connected} onClick={() => open('musxi:cloud-favorites')}><div className="cover placeholder" aria-hidden="true"><svg className="playlist-heart size-11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1.1-1.1a5.5 5.5 0 0 0-7.8 7.8L12 21l8.8-8.6a5.5 5.5 0 0 0 0-7.8Z"/></svg></div><div className="playlist-info"><strong>云端收藏整合</strong><span>{state?.favoritesCount ?? (state?.playlistId === 'musxi:cloud-favorites' ? state.trackCount : 0)} 首</span></div></Button>}{visiblePlaylists.map(list => <Button variant="ghost" key={list.id} className="playlist" disabled={busy} onClick={() => open(list.id)}><CoverImage url={list.cover}/><div className="playlist-info"><strong>{list.name}</strong><span>{list.count} 首{list.platform && ` · ${platformNames[list.platform]}`}</span></div></Button>)}</div>
-          {!state?.connected ? <div className="library-section-empty"><p>登录后查看你的音乐库。</p><Button onClick={() => {setAccountPlatform(null);setAccount(true);}}>扫码登录</Button></div>
-            : librarySection === 'saved' && !visiblePlaylists.length && <p className="library-section-empty">{busy ? '正在加载…' : '暂无收藏歌单。'}</p>}
+          {playlistsLoading ? <div className="playlist-grid" role="status" aria-label="正在加载歌单列表">
+            {Array.from({ length: skeletonCount }, (_, index) => <div key={index} className="playlist playlist-skeleton" aria-hidden="true">
+              <i className="cover"/><div className="playlist-info"><i/><i/></div>
+            </div>)}
+          </div> : <><div className="playlist-grid">{librarySection === 'created' && state?.connected && <Button variant="ghost" className="playlist" disabled={busy || !state?.connected} onClick={() => open('musxi:cloud-favorites')}><div className="cover placeholder" aria-hidden="true"><svg className="playlist-heart size-11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1.1-1.1a5.5 5.5 0 0 0-7.8 7.8L12 21l8.8-8.6a5.5 5.5 0 0 0 0-7.8Z"/></svg></div><div className="playlist-info"><strong>云端收藏整合</strong><span>{state?.favoritesCount ?? (state?.playlistId === 'musxi:cloud-favorites' ? state.trackCount : 0)} 首</span></div></Button>}{visiblePlaylists.map(list => <Button variant="ghost" key={list.id} className="playlist" disabled={busy} onClick={() => open(list.id)}><CoverImage url={list.cover}/><div className="playlist-info"><strong>{list.name}</strong><span>{list.count} 首{list.platform && ` · ${platformNames[list.platform]}`}</span></div></Button>)}</div>
+          {signedOut ? <div className="library-section-empty"><p>登录后查看你的音乐库。</p><Button onClick={() => {setAccountPlatform(null);setAccount(true);}}>扫码登录</Button></div>
+            : state?.connected && librarySection === 'saved' && !visiblePlaylists.length && <p className="library-section-empty">暂无收藏歌单。</p>}
+          </>}
         </>}
       </> : view === 'search' && !state?.keywords && !showTracks ? <div className="discover-empty"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10" cy="10" r="6.5"/><path d="m15 15 6 6"/></svg><h2>发现好音乐</h2><p>在右上角搜索歌曲、歌手或专辑</p></div> : <>
         <div className="track-table" role="table" aria-label={view === 'recent' ? '最近播放' : view === 'library' ? state?.playlistName : '搜索结果'}>
@@ -346,7 +390,7 @@ export default function LibraryView({ library: lib, theme, appearance, onAppeara
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 5 11 7-11 7z"/></svg>
               </PlayerControl>
               {current && <span className="track-wave" role="img" aria-label={playing ? '正在播放' : '已暂停'}><i/><i/><i/><i/></span>}
-            </span><CoverImage url={song.cover}/><strong className="track-name" role="cell"><span className="track-title">{song.name}</span>{view==='recent' && (songIsLocal || !song.platforms?.length) && <span className="song-platforms"><small className={`song-platform-tag ${song.platform || 'local'}`}>{songIsLocal?'本地':song.platform==='netease'?'网易云':song.platform==='qq'?'QQ':'酷狗'}</small></span>}{(view==='search' || view==='recent' || (view==='library' && state?.playlistId==='musxi:cloud-favorites')) && song.platforms ? <span className="song-platforms">{song.platforms.map(platform=><small key={platform} className={`song-platform-tag ${platform}`} title={`${platformNames[platform]}${view==='search'?'搜索结果':view==='recent'?'歌曲来源':'收藏歌曲'}`}>{platform==='netease'?'网易云':platform==='kugou'?'酷狗':'QQ'}</small>)}</span> : view==='search' && song.platform && <small className="song-platform">{platformNames[song.platform]}</small>}</strong>
+            </span><CoverImage url={song.cover} animateLoading/><strong className="track-name" role="cell"><span className="track-title">{song.name}</span>{view==='recent' && (songIsLocal || !song.platforms?.length) && <span className="song-platforms"><small className={`song-platform-tag ${song.platform || 'local'}`}>{songIsLocal?'本地':song.platform==='netease'?'网易云':song.platform==='qq'?'QQ':'酷狗'}</small></span>}{(view==='search' || view==='recent' || (view==='library' && state?.playlistId==='musxi:cloud-favorites')) && song.platforms ? <span className="song-platforms">{song.platforms.map(platform=><small key={platform} className={`song-platform-tag ${platform}`} title={`${platformNames[platform]}${view==='search'?'搜索结果':view==='recent'?'歌曲来源':'收藏歌曲'}`}>{platform==='netease'?'网易云':platform==='kugou'?'酷狗':'QQ'}</small>)}</span> : view==='search' && song.platform && <small className="song-platform">{platformNames[song.platform]}</small>}</strong>
             <span className="track-artist" role="cell">{song.artist}</span><span className="track-album" role="cell">{song.album || '—'}</span><span className="track-duration" role="cell">{time(song.duration)}</span>
             <div className="song-actions"><PlayerControl variant="unstyled" className="song-play" disabled={pending || (!songIsLocal && !state?.connected)} aria-label={`播放 ${song.name}`} onClick={playSong}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4v16l13-8z"/></svg></PlayerControl><Button variant="unstyled" className="song-menu" disabled={busy} aria-label="歌曲操作" onClick={() => {if(!songIsLocal)void menu(song.id);}}>•••</Button></div>
           </div></ContextMenuTrigger><ContextMenuContent aria-label="歌曲操作">
@@ -384,7 +428,12 @@ export default function LibraryView({ library: lib, theme, appearance, onAppeara
             {view==='recent' && <ContextMenuItem onSelect={()=>void lib.recentRemove(song.id)}>移除记录</ContextMenuItem>}
           </ContextMenuContent></ContextMenu>;
           })}</div>
-          {!rows.length && <p className="empty-tracks">{busy ? '正在加载…' : (view === 'library' || view === 'recent') && playlistFilter ? (view === 'library' && state && page * 50 < state.trackCount && !error ? '正在搜索歌单…' : '未找到匹配的歌曲') : '暂无歌曲'}</p>}
+          {!rows.length && (songsLoading ? <div className="track-loading" role="status" aria-label="正在加载歌曲列表">
+            {Array.from({ length: trackSkeletonCount }, (_, index) => <div key={index} className="song track-row track-skeleton" aria-hidden="true">
+              <i className="track-index"/><i className="cover"/><i className="track-name"/><i className="track-artist"/>
+              <i className="track-album"/><i className="track-duration"/><span className="song-actions"/>
+            </div>)}
+          </div> : <p className="empty-tracks">{(view === 'library' || view === 'recent') && playlistFilter ? (view === 'library' && state && page * 50 < state.trackCount && !error ? '正在搜索歌单…' : '未找到匹配的歌曲') : '暂无歌曲'}</p>)}
           </div>
         </div>
       </>}

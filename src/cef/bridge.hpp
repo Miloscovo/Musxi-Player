@@ -2,6 +2,7 @@
 #include "include/cef_app.h"
 #include "include/cef_client.h"
 #include "include/cef_browser.h"
+#include <functional>
 namespace musxi { struct LibraryReply; }
 namespace musxi::cef_adapter {
 CefRefPtr<CefApp> makeApp();
@@ -28,7 +29,8 @@ void resetShortcutInput();
 void rememberShortcutVolume(int volume);
 void dismissTrayMenu();
 bool mainWindowCompact();
-bool setMainWindowCompact(bool compact,int height);
+bool setMainWindowCompact(bool compact,int height,std::function<void(bool)> complete={});
+void finishMainWindowTransition();
 bool closeBrowsers();
 bool smokePassed();
 bool browserReadyToClose();

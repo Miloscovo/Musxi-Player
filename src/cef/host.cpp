@@ -11,6 +11,7 @@
 #include <shlobj.h>
 #include <shellapi.h>
 #include <algorithm>
+#include <cmath>
 #include <windowsx.h>
 #include <string>
 #include <imm.h>
@@ -22,6 +23,7 @@
 #include <vector>
 #include "shortcuts.hpp"
 #include "wallpaper_store.hpp"
+#include "window_animation.hpp"
 
 namespace {
 std::wstring pagePath;
@@ -77,6 +79,7 @@ void showFromTray(HWND hwnd) {
 bool hideToTray(HWND hwnd) {
     // Never hide the only reachable window if the notification icon cannot be added.
     if(!addTray(hwnd))return false;
+    musxi::cef_adapter::finishMainWindowTransition();
     KillTimer(hwnd,102);
     if(auto browser=musxi::cef_adapter::browserHost())browser->WasHidden(true);
     ShowWindow(hwnd,SW_HIDE);
@@ -161,6 +164,52 @@ bool mainCompact=false;
 int compactHeight=130;
 WINDOWPLACEMENT expandedPlacement{sizeof(WINDOWPLACEMENT)};
 POINT expandedWorkOffset{};
+RECT expandedScreenBounds{},compactTransitionFrom{},compactTransitionTo{};
+bool compactTransitionRunning=false;
+bool compactTransitionWaiting=false;
+ULONGLONG compactTransitionStart=0;
+ULONGLONG compactFrameRequestTick=0;
+std::function<void(bool)> compactTransitionComplete;
+void finishCompactTransition(bool success=true) {
+    if(!compactTransitionRunning)return;
+    compactTransitionRunning=false;compactTransitionWaiting=false;KillTimer(testWindow,103);
+    RemovePropW(testWindow,musxi::cef_adapter::ResizeViewProperty);
+    if(success) {
+        const auto& r=compactTransitionTo;
+        success=SetWindowPos(testWindow,nullptr,r.left,r.top,r.right-r.left,r.bottom-r.top,SWP_NOZORDER|SWP_NOACTIVATE)!=FALSE;
+        if(success && !mainCompact)success=SetWindowPlacement(testWindow,&expandedPlacement)!=FALSE;
+    }
+    if(!success) {
+        mainCompact=!mainCompact;
+        if(!mainCompact)SetWindowPlacement(testWindow,&expandedPlacement);
+        else {const auto& r=compactTransitionFrom;SetWindowPos(testWindow,nullptr,r.left,r.top,r.right-r.left,r.bottom-r.top,SWP_NOZORDER|SWP_NOACTIVATE);}
+    }
+    if(!surface.present(testWindow))PostMessageW(testWindow,musxi::cef_adapter::RecoveryFailed,0,0);
+    surface.setResizing(false);scheduleBrowserResize(testWindow);
+    auto complete=std::move(compactTransitionComplete);
+    if(complete)complete(success);
+}
+void advanceCompactTransition() {
+    if(!compactTransitionRunning)return;
+    if(compactTransitionWaiting) {
+        const auto now=GetTickCount64();
+        if(now-compactTransitionStart>=1000){finishCompactTransition(false);return;}
+        // An in-flight resize can still deliver the compact frame before the full viewport.
+        if(now-compactFrameRequestTick>=50) {
+            compactFrameRequestTick=now;
+            if(auto browser=musxi::cef_adapter::browserHost()){browser->WasHidden(false);browser->WasResized();browser->Invalidate(PET_VIEW);}
+        }
+        return;
+    }
+    const double progress=static_cast<double>(GetTickCount64()-compactTransitionStart)/musxi::cef_adapter::windowTransitionMilliseconds;
+    if(progress>=1){finishCompactTransition();return;}
+    const auto amount=musxi::cef_adapter::windowTransitionProgress(progress);
+    const auto interpolate=[amount](LONG from,LONG to){return from+static_cast<LONG>(std::lround((to-from)*amount));};
+    const auto& a=compactTransitionFrom;const auto& b=compactTransitionTo;
+    const int left=interpolate(a.left,b.left),top=interpolate(a.top,b.top);
+    if(!SetWindowPos(testWindow,nullptr,left,top,interpolate(a.right,b.right)-left,interpolate(a.bottom,b.bottom)-top,SWP_NOZORDER|SWP_NOACTIVATE))
+        finishCompactTransition(false);
+}
 void loadMainWindow(const std::filesystem::path& profile) {
     mainSettingsPath=profile/L"window.json";
     if(smoke)return;
@@ -214,6 +263,8 @@ RECT initialMainBounds() {
 }
 LRESULT CALLBACK testProc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp) {
     const auto browser=musxi::cef_adapter::browserHost();
+    // Pointer coordinates belong to the frozen viewport until the transition ends.
+    if(compactTransitionRunning && msg>=WM_MOUSEFIRST && msg<=WM_MOUSELAST)return 0;
     if(msg==TaskbarCreated && trayAdded) {
         trayAdded=false;
         if(!addTray(hwnd)){lockDesktopLyrics(false);saveDesktopSettings();publishDesktop();showFromTray(hwnd);}
@@ -295,6 +346,8 @@ LRESULT CALLBACK testProc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp) {
         }return 0;
     case WM_MOVE: if(browser)browser->NotifyMoveOrResizeStarted();break;
     case WM_ENTERSIZEMOVE: {
+        finishCompactTransition();
+        surface.setBottomAligned(false);
         KillTimer(hwnd,102);
         GetClientRect(hwnd,&resizeView);const int dpi=GetDpiForWindow(hwnd);
         resizeView.right=std::max(1,MulDiv(resizeView.right,96,dpi));
@@ -307,6 +360,7 @@ LRESULT CALLBACK testProc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp) {
         surface.setResizing(false);KillTimer(hwnd,101);
         scheduleBrowserResize(hwnd);return 0;
     case WM_TIMER:
+        if(wp==103){advanceCompactTransition();return 0;}
         if(wp==101){CefDoMessageLoopWork();return 0;}
         if(wp==102){if(browser)browser->Invalidate(PET_VIEW);else KillTimer(hwnd,102);return 0;}
         break;
@@ -314,9 +368,10 @@ LRESULT CALLBACK testProc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp) {
     case WM_APP+43: frameColor=wp?RGB(16,18,20):RGB(255,255,255);InvalidateRect(hwnd,nullptr,TRUE);return 0;
     case WM_NCCALCSIZE: return 0;
     case WM_NCPAINT: return 0;
-    case WM_NCHITTEST: return hostHitTest(hwnd,lp);
+    case WM_NCHITTEST: return compactTransitionRunning?HTCLIENT:hostHitTest(hwnd,lp);
     case WM_NCLBUTTONDBLCLK: if(mainCompact && wp==HTCAPTION)return 0;break;
     case WM_SYSCOMMAND:
+        finishCompactTransition();
         if(mainCompact && (wp&0xfff0)==SC_MAXIMIZE)return 0;
         if((wp&0xfff0)==SC_SIZE || (wp&0xfff0)==SC_MOVE) {
             // Let Chromium complete resize frames inside Windows' sizing loop.
@@ -326,16 +381,16 @@ LRESULT CALLBACK testProc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp) {
         break;
     case WM_GETMINMAXINFO: {
         auto m=reinterpret_cast<MINMAXINFO*>(lp);
-        const auto height=MulDiv(mainCompact?compactHeight:560,GetDpiForWindow(hwnd),96);
+        const auto height=MulDiv(mainCompact || compactTransitionRunning?compactHeight:560,GetDpiForWindow(hwnd),96);
         m->ptMinTrackSize={MulDiv(800,GetDpiForWindow(hwnd),96),height};
-        m->ptMaxTrackSize.y=mainCompact?height:GetSystemMetricsForDpi(SM_CYMAXTRACK,GetDpiForWindow(hwnd));
+        m->ptMaxTrackSize.y=mainCompact && !compactTransitionRunning?height:GetSystemMetricsForDpi(SM_CYMAXTRACK,GetDpiForWindow(hwnd));
         MONITORINFO info{sizeof(info)};
         if(GetMonitorInfoW(MonitorFromWindow(hwnd,MONITOR_DEFAULTTONEAREST),&info)) {
             m->ptMaxPosition={info.rcWork.left-info.rcMonitor.left,info.rcWork.top-info.rcMonitor.top};
             m->ptMaxSize={info.rcWork.right-info.rcWork.left,info.rcWork.bottom-info.rcWork.top};
         }return 0;
     }
-    case WM_DPICHANGED: {auto r=reinterpret_cast<RECT*>(lp);SetWindowPos(hwnd,nullptr,r->left,r->top,r->right-r->left,mainCompact?MulDiv(compactHeight,HIWORD(wp),96):r->bottom-r->top,SWP_NOZORDER);if(browser){browser->NotifyScreenInfoChanged();browser->WasResized();}return 0;}
+    case WM_DPICHANGED: {finishCompactTransition();auto r=reinterpret_cast<RECT*>(lp);SetWindowPos(hwnd,nullptr,r->left,r->top,r->right-r->left,mainCompact?MulDiv(compactHeight,HIWORD(wp),96):r->bottom-r->top,SWP_NOZORDER);if(browser){browser->NotifyScreenInfoChanged();browser->WasResized();}return 0;}
     case WM_SIZE: {
         if(wp==SIZE_MINIMIZED)KillTimer(hwnd,102);
         if(browser) {
@@ -442,6 +497,7 @@ void tick() {
     if(smoke && GetTickCount64()-startTick>(updatesUiSmoke.empty()?30000:90000))PostMessageW(nativeWindow,WM_CLOSE,0,0);
 }
 bool canClose() {
+    finishCompactTransition();
     if(!hostClosing){shortcutRegistry.clear();saveDesktopSettings();saveMainWindow();hostClosing=true;}
     if(!musxi::cef_adapter::closeBrowsers())return false;
     // The windowless browser is gone. Remove its frozen surface before blocking
@@ -574,27 +630,39 @@ musxi::LibraryReply shortcutsCommand(const std::string& command,const std::strin
     }catch(const std::exception&){return {400,"无效快捷键参数",{}};}
 }
 bool mainWindowCompact() {return mainCompact;}
-bool setMainWindowCompact(bool compact,int height) {
+void finishMainWindowTransition() {finishCompactTransition();}
+bool setMainWindowCompact(bool compact,int height,std::function<void(bool)> complete) {
     if(!testWindow)return false;
-    if(compact==mainCompact)return true;
+    finishCompactTransition();
+    if(compact==mainCompact){if(complete)complete(true);return true;}
+    RECT bounds{};if(!GetWindowRect(testWindow,&bounds))return false;
     if(compact) {
         if(!GetWindowPlacement(testWindow,&expandedPlacement))return false;
-        RECT bounds{};if(!GetWindowRect(testWindow,&bounds))return false;
         MONITORINFO monitor{sizeof(monitor)};
         if(!GetMonitorInfoW(MonitorFromWindow(testWindow,MONITOR_DEFAULTTONEAREST),&monitor))return false;
         expandedWorkOffset={monitor.rcWork.left-monitor.rcMonitor.left,monitor.rcWork.top-monitor.rcMonitor.top};
-        compactHeight=height;mainCompact=true;
-        ShowWindow(testWindow,SW_RESTORE);
+        compactHeight=height;expandedScreenBounds=bounds;
         const int pixels=MulDiv(compactHeight,GetDpiForWindow(testWindow),96);
-        if(!SetWindowPos(testWindow,nullptr,bounds.left,bounds.bottom-pixels,bounds.right-bounds.left,
-                pixels,SWP_NOZORDER|SWP_NOACTIVATE)) {
-            mainCompact=false;SetWindowPlacement(testWindow,&expandedPlacement);return false;
+        compactTransitionTo={bounds.left,bounds.bottom-pixels,bounds.right,bounds.bottom};
+    } else compactTransitionTo=expandedScreenBounds;
+    compactTransitionFrom=bounds;compactTransitionStart=GetTickCount64();
+    compactTransitionComplete=std::move(complete);compactTransitionRunning=true;mainCompact=compact;
+    BOOL animate=TRUE;
+    SystemParametersInfoW(SPI_GETCLIENTAREAANIMATION,0,&animate,0);
+    compactTransitionWaiting=!compact && animate;compactFrameRequestTick=compactTransitionStart;
+    surface.setResizing(true);surface.setBottomAligned(true);
+    const int dpi=GetDpiForWindow(testWindow);
+    resizeView={0,0,MulDiv(expandedScreenBounds.right-expandedScreenBounds.left,96,dpi),MulDiv(expandedScreenBounds.bottom-expandedScreenBounds.top,96,dpi)};
+    SetPropW(testWindow,musxi::cef_adapter::ResizeViewProperty,&resizeView);
+    KillTimer(testWindow,102);
+    if(compact && IsZoomed(testWindow)) {
+        ShowWindow(testWindow,SW_RESTORE);
+        if(!SetWindowPos(testWindow,nullptr,bounds.left,bounds.top,bounds.right-bounds.left,bounds.bottom-bounds.top,SWP_NOZORDER|SWP_NOACTIVATE)) {
+            finishCompactTransition(false);return true;
         }
-    } else {
-        mainCompact=false;
-        if(!SetWindowPlacement(testWindow,&expandedPlacement)){mainCompact=true;return false;}
     }
-    scheduleBrowserResize(testWindow);
+    if(!animate || !SetTimer(testWindow,103,USER_TIMER_MINIMUM,nullptr))finishCompactTransition();
+    else if(auto browser=musxi::cef_adapter::browserHost()){browser->WasHidden(false);browser->WasResized();browser->Invalidate(PET_VIEW);}
     return true;
 }
 void presentDesktopLyrics(const void* pixels,int width,int height) {paintDesktopLyrics(pixels,width,height);}
@@ -666,8 +734,15 @@ void trayMenuClosed() {if(trayWindow){DestroyWindow(trayWindow);trayWindow=nullp
 void presentBrowser(bool popup,const void* pixels,int width,int height) {
     if(!testWindow || renderFailed)return;
     if(!popup) {
+        if(compactTransitionRunning) {
+            const int dpi=GetDpiForWindow(testWindow);
+            if(std::abs(width-MulDiv(resizeView.right,dpi,96))>2 || std::abs(height-MulDiv(resizeView.bottom,dpi,96))>2)return;
+            if(compactTransitionWaiting){compactTransitionWaiting=false;compactTransitionStart=GetTickCount64();}
+        }
         RECT bounds{};GetClientRect(testWindow,&bounds);
-        if(std::abs(bounds.right-width)<=1 && std::abs(bounds.bottom-height)<=1)KillTimer(testWindow,102);
+        if(!compactTransitionRunning && std::abs(bounds.right-width)<=1 && std::abs(bounds.bottom-height)<=1) {
+            KillTimer(testWindow,102);surface.setBottomAligned(false);
+        }
     }
     if(surface.paint(testWindow,popup,pixels,width,height))return;
     surface.clear();

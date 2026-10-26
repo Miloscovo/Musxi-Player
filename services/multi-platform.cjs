@@ -26,7 +26,7 @@ class MultiPlatform {
   async call(platform,request) {
     const result=await this.adapters[platform].run(request);
     if(result.session) this.sessions[platform]=result.session;
-    if(request.op==='init')this.accounts[platform]={connected:result.connected,profile:result.profile};
+    if(request.op==='init')this.accounts[platform]={connected:result.connected,profile:result.profile,error:result.verificationFailed?`${NAMES[platform]}登录状态验证失败，请稍后重试`:''};
     if(request.op==='poll' && result.status==='connected')this.accounts[platform]={connected:true,profile:result.profile};
     if(request.op==='logout') {this.accounts[platform]={connected:false};delete this.sessions[platform];delete this.favoriteKeys[platform];this.playlists[platform]=[];}
     if(result.playlists)this.playlists[platform]=result.playlists;

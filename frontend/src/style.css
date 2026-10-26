@@ -103,6 +103,7 @@ main.app-shell { --sidebar-width:clamp(210px,15.5vw,240px); overflow:hidden; bor
 .page-heading { gap:18px }
 .page-heading h1 { min-width:0; overflow:hidden; margin:0; color:var(--ink); font-size:32px; font-weight:750; text-overflow:ellipsis; white-space:nowrap }
 .back-button { display:grid; place-items:center; flex:none; width:40px; height:42px; padding:0; background:transparent; color:var(--ink) }
+.back-button:hover { background:var(--hover-surface); border-radius:8px }
 .back-button .icon { width:30px; height:30px }
 .header-actions { flex:none; margin-left:auto; gap:12px }
 .header-actions .playlist-play-button { display:inline-flex; align-items:center; justify-content:center; flex:none; gap:4px; width:85px; height:38px; padding:0 12px; border-radius:5px; background:var(--side); color:var(--ink); font-size:14px; transform:translateY(-8px) }
@@ -114,6 +115,7 @@ main.app-shell { --sidebar-width:clamp(210px,15.5vw,240px); overflow:hidden; bor
 .playlist-play-button:disabled { cursor:default }
 .collection-search { display:flex; align-items:center; gap:10px; width:min(430px,37vw); height:48px; padding:0 16px; border-radius:16px; background:var(--search); color:var(--ink); -webkit-app-region:no-drag }
 .collection-search { transform:translateY(-8px) }
+.collection-search:focus-within { box-shadow:0 0 0 1px var(--accent) }
 .collection-search button { display:grid; place-items:center; flex:none; width:26px; height:32px; padding:0; background:transparent; color:var(--ink) }
 .collection-search button:disabled { opacity:1; cursor:default }
 .collection-search button .icon { width:22px; height:22px }
@@ -134,8 +136,8 @@ main.app-shell { --sidebar-width:clamp(210px,15.5vw,240px); overflow:hidden; bor
 :root[data-theme=light][data-tone=blue] .playlist { --hover-surface:#e3edfa }
 :root[data-theme=light][data-tone=blue] :is(.playlist,.song.track-row):has(>.cover.placeholder) { --hover-surface:var(--app-soft) }
 :root[data-theme=glass-light] { --hover-surface:#ffffff14 }
-:root:is([data-theme=light],[data-theme=glass-light])[data-tone=blue] .cover.placeholder { background:#e3edfa }
-:root:is([data-theme=light],[data-theme=glass-light]):is([data-tone=green],[data-tone=pink],[data-tone=red]) .song.track-row>.cover.placeholder { background:color-mix(in srgb,var(--app-soft) 90%,var(--accent)) }
+:root:is([data-theme=light],[data-theme=glass-light])[data-tone=blue] .cover.placeholder { background-color:#e3edfa }
+:root:is([data-theme=light],[data-theme=glass-light]):is([data-tone=green],[data-tone=pink],[data-tone=red]) .song.track-row>.cover.placeholder { background-color:color-mix(in srgb,var(--app-soft) 90%,var(--accent)) }
 .playlist .cover { width:96px; height:96px; border-radius:12px; font-size:32px }
 .playlist .playlist-heart { width:44px; height:44px }
 .playlist-info { display:flex; flex:1; min-width:0; flex-direction:column; justify-content:center; gap:8px; text-align:left }
@@ -187,6 +189,18 @@ main.app-shell { --sidebar-width:clamp(210px,15.5vw,240px); overflow:hidden; bor
 .song-actions button { width:25px; height:32px; padding:3px; background:transparent; color:var(--ink) }
 .song-play svg { width:18px; height:18px; fill:currentColor }
 .empty-tracks { padding:28px 12px; color:var(--muted) }
+.track-skeleton { pointer-events:none }
+.track-skeleton>i { display:block; width:70%; height:14px; border-radius:4px }
+.track-skeleton>i,.playlist-skeleton i,.cover.cover-loading { background:linear-gradient(100deg,var(--line) 30%,color-mix(in srgb,var(--muted) 18%,transparent) 50%,var(--line) 70%); background-size:240% 100%; animation:track-loading 1.6s ease-in-out infinite }
+.playlist-skeleton { pointer-events:none }
+.playlist-skeleton i { display:block }
+.playlist-skeleton .playlist-info i { width:80%; height:18px; border-radius:4px }
+.playlist-skeleton .playlist-info i+i { width:40%; height:12px }
+.track-skeleton>.track-index { width:16px; min-height:0; justify-self:center }
+.track-skeleton>.track-name { width:80%; height:16px }
+.track-skeleton>.track-duration { width:36px }
+@keyframes track-loading { from { background-position:100% 0 } to { background-position:-100% 0 } }
+@media (prefers-reduced-motion:reduce) { .track-skeleton>i,.playlist-skeleton i,.cover.cover-loading { animation:none } }
 .library-content:has(>.discover-empty) { display:flex; flex-direction:column; padding-bottom:0 }
 .library-content:has(>.discover-empty)>header { flex-shrink:0; margin-bottom:0 }
 .discover-empty { display:flex; flex:1; flex-direction:column; align-items:center; justify-content:center; min-height:0; color:var(--muted); text-align:center }
@@ -374,7 +388,7 @@ html,body,#app,main.app-shell { background:transparent!important }
 .local-import-grid { flex-shrink:0; margin:16px 0 }
 .local-import { height:auto; width:100%; justify-content:flex-start }
 .local-import .placeholder { color:var(--accent) }
-.cover.placeholder { background:var(--app-soft); color:var(--accent) }
+.cover.placeholder { background-color:var(--app-soft); color:var(--accent) }
 .local-import .placeholder .icon { width:32px; height:32px }
 .local-folder-options { display:flex; flex-direction:column; gap:6px; max-height:min(360px,calc(100vh - 240px)); overflow:auto; margin:18px 0 }
 .local-folder-options button { display:flex; align-items:center; gap:12px; min-height:44px; flex-shrink:0; padding:10px 12px; text-align:left }
@@ -481,6 +495,9 @@ html,body,#app,main.app-shell { background:transparent!important }
 .lyrics-close { position:absolute; left:20px; top:40px; display:grid; place-items:center; width:40px; height:40px; padding:0; border-radius:10px; background:transparent; color:var(--ink) }
 .lyrics-close:hover { background:var(--hover-surface) }
 .lyrics-close svg { width:26px; height:26px; fill:none; stroke:currentColor; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round }
+.lyrics-player-expand { position:absolute; left:50%; bottom:12px; display:grid; place-items:center; width:36px; height:32px; padding:0; border-radius:8px; background:transparent; color:var(--ink); transform:translateX(-50%); -webkit-app-region:no-drag }
+.lyrics-player-expand:hover { background:var(--hover-surface) }
+.lyrics-player-expand svg { width:20px; height:20px; fill:none; stroke:currentColor; stroke-width:2; stroke-linecap:round; stroke-linejoin:round }
 .lyrics-track { display:flex; flex-direction:column; align-items:center; min-width:0; text-align:center; -webkit-app-region:drag }
 .lyrics-close,.lyrics-track button,.lyrics-lines li.lyric-interactive,.lyrics-message button { -webkit-app-region:no-drag }
 .lyrics-track .cover { width:320px; height:auto; aspect-ratio:1; border-radius:18px; box-shadow:0 18px 40px #0002; font-size:72px }
@@ -585,10 +602,16 @@ html,body,#app,main.app-shell { background:transparent!important }
 .player { z-index:5; -webkit-app-region:no-drag } /* Exclude the dock from overlapping CEF drag rectangles after resizing. */
 .app-body[hidden] { display:none }
 .player-rail { position:absolute; top:-6px; left:0; z-index:3; width:100%; height:12px; padding:0; border-radius:0; background:transparent; cursor:n-resize; -webkit-app-region:no-drag }
+.player-rail[hidden] { display:none }
 .player-rail[data-state=collapsed] { top:-16px; height:16px; cursor:s-resize }
 .player-rail::after { position:absolute; left:0; right:0; top:5px; height:2px; background:transparent; content:"" }
 .player-rail[data-state=collapsed]::after { top:auto; bottom:0 }
 .player-rail:hover::after,.player-rail:focus-visible::after { background:var(--line) }
+.player-content { display:contents; visibility:visible }
+.player[data-lyrics-mode] { z-index:3; transition:background-color .22s cubic-bezier(.22,1,.36,1),border-color .22s cubic-bezier(.22,1,.36,1),box-shadow .22s cubic-bezier(.22,1,.36,1) }
+.app-shell .player[data-lyrics-collapsed] { background-color:transparent; border-color:transparent; box-shadow:none }
+.player[data-lyrics-collapsed]>.player-content { visibility:hidden; transition:visibility 0s .22s }
+@media(prefers-reduced-motion:reduce) { .player[data-lyrics-mode],.player[data-lyrics-collapsed]>.player-content { transition:none } }
 .compact-player .player { margin-top:16px; -webkit-app-region:drag }
 .compact-player .app-wallpaper-layer { top:16px }
 .compact-player .player :is(button,input,.track) { -webkit-app-region:no-drag }

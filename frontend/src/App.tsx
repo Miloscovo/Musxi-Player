@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { useWindow } from './composables/useWindow';
 import CoverImage from './components/CoverImage';
@@ -33,18 +33,40 @@ export default function App() {
   const [volumeDraft, setVolumeDraft] = useState<number | null>(null);
   const [closeOpen, setCloseOpen] = useState(false);
   const [lyricsOpen, setLyricsOpen] = useState(false);
+  const [lyricsPlayerCollapsed, setLyricsPlayerCollapsed] = useState(false);
+  useEffect(() => { if (!lyricsOpen) setLyricsPlayerCollapsed(false); }, [lyricsOpen]);
   const [lyricsCovered, setLyricsCovered] = useState(false);
   const transparentLyrics = shell.appearance.transparent;
   const lyricsEntered = useCallback(() => setLyricsCovered(true), []);
-  const compact = !!shell.state.compact;
+  const [compactTransition, setCompactTransition] = useState<boolean | null>(null);
+  const compactBusy = compactTransition !== null;
+  const compact = !!shell.state.compact && compactTransition !== false;
+  const playerCollapsed = lyricsOpen && !compact && lyricsPlayerCollapsed;
+  const railLabel = lyricsOpen && !compact ? '收起播放栏' : (compact ? '展开主界面' : '收起主界面');
   useEffect(() => { if ((lyricsOpen || compact) && shortcuts.recording) void shortcuts.cancel(); }, [lyricsOpen, compact, shortcuts.recording]);
   const playerElement = useRef<HTMLElement>(null);
-  const [compactBusy, setCompactBusy] = useState(false);
+  const clipLyricsPlayer = useCallback((covered: number) => {
+    const player = playerElement.current;
+    if (player) player.style.clipPath = covered > 0 && player.hasAttribute('data-lyrics-mode') ? `inset(${covered}px 0 0)` : '';
+  }, []);
+  useLayoutEffect(() => { if (!lyricsOpen) clipLyricsPlayer(0); }, [lyricsOpen, clipLyricsPlayer]);
+  const playerRail = useRef<HTMLButtonElement>(null);
+  const expandLyricsPlayer = useCallback(() => {
+    setLyricsPlayerCollapsed(false);
+    requestAnimationFrame(() => playerRail.current?.focus({ preventScroll:true }));
+  }, []);
+  const [playerHeight, setPlayerHeight] = useState(110);
+  useLayoutEffect(() => {
+    const player = playerElement.current; if (!player) return;
+    const measure = () => setPlayerHeight(player.getBoundingClientRect().height);
+    measure(); const observer = new ResizeObserver(measure); observer.observe(player);
+    return () => observer.disconnect();
+  }, []);
   async function setCompact(value: boolean) {
     if(compactBusy || wallpaper.busy)return;
-    setCompactBusy(true);
+    setCompactTransition(value);
     try { if(value)wallpaper.cancel();await shell.setCompact(value, Math.ceil(playerElement.current?.getBoundingClientRect().height ?? 110) + 16); }
-    finally { setCompactBusy(false); }
+    finally { setCompactTransition(null); }
   }
   const closeLyrics = useCallback(() => setLyricsOpen(false), []);
   const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -136,16 +158,18 @@ export default function App() {
         wallpaper={wallpaper} wallpaperEnabled={shell.wallpaperEnabled} onWallpaperEnabled={shell.setWallpaperEnabled} playerTransparent={shell.playerTransparent} onPlayerTransparent={shell.setPlayerTransparent}/></motion.div>
       <AnimatePresence onExitComplete={() => { if (!lyricsOpen) setLyricsCovered(false); }}>
         {lyricsOpen && (!transparentLyrics || lyricsCovered) && <LyricsView key="lyrics" trackId={state?.opened ? state.trackId : ''} now={currentTrack} positionMs={state?.positionMs ?? 0}
-          canSeek={connected && !!state?.opened && !!state.durationMs} onSeek={positionMs => void seek(positionMs)} onClose={closeLyrics} onEntered={lyricsEntered} />}
+          canSeek={connected && !!state?.opened && !!state.durationMs} onSeek={positionMs => void seek(positionMs)} onClose={closeLyrics} onEntered={lyricsEntered}
+          bottomOffset={playerCollapsed ? playerHeight : 0} onExpandPlayer={expandLyricsPlayer} onPlayerCover={clipLyricsPlayer} />}
       </AnimatePresence>
     </div>
-    <section ref={playerElement} className="player" aria-label="播放器" aria-busy={loading} onClickCapture={event => {
+    <section ref={playerElement} className="player" data-lyrics-mode={lyricsOpen && !compact || undefined} data-lyrics-collapsed={playerCollapsed || undefined} aria-label="播放器" aria-busy={loading} onClickCapture={event => {
       // Menus and lyrics need the full viewport rather than a clipped player strip.
       if(compact && (event.target as Element).closest('[aria-haspopup],.lyrics-toggle'))void setCompact(false);
     }}>
-      {shell.state.enabled && <Button variant="unstyled" className="player-rail" data-state={compact ? 'collapsed' : 'expanded'} disabled={compactBusy}
-        aria-label={compact ? '展开主界面' : '收起主界面'} aria-expanded={!compact}
-        title={compact ? '展开主界面' : '收起主界面'} onClick={() => void setCompact(!compact)} />}
+      {shell.state.enabled && <Button variant="unstyled" ref={playerRail} className="player-rail" hidden={playerCollapsed} data-state={compact ? 'collapsed' : 'expanded'} disabled={compactBusy || playerCollapsed}
+        aria-label={railLabel} aria-expanded={!compact && !playerCollapsed}
+        title={railLabel} onClick={() => { if (lyricsOpen && !compact) setLyricsPlayerCollapsed(value => !value); else void setCompact(!compact); }} />}
+      <div className="player-content" inert={playerCollapsed}>
       <div className="player-progress">
         <span className="player-time elapsed" aria-label="已播放">{times.elapsed}</span>
         <div className="seek-track">
@@ -171,7 +195,7 @@ export default function App() {
       </div>
       <div className="player-track" inert={lyricsOpen && !compact}><Button variant="unstyled" className="lyrics-toggle" aria-expanded={lyricsOpen}
           aria-label={lyricsOpen ? '收起歌词页' : '展开歌词页'} title={lyricsOpen ? '收起歌词' : '查看歌词'} onClick={() => { if (!transparentLyrics) setLyricsCovered(false); setLyricsOpen(open => !open); }}>
-          <CoverImage url={currentTrack?.cover || ''} />
+          <CoverImage url={currentTrack?.cover || ''} animateLoading />
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d={lyricsOpen ? 'm6 9 6 6 6-6' : 'm6 15 6-6 6 6'}/></svg>
         </Button>
         <div className="track"><div className="playback-title"><h2 id="playback" title={currentTrack?.name}>{currentTrack?.name || '尚未选择歌曲'}</h2>
@@ -208,6 +232,7 @@ export default function App() {
         <Button variant="secondary" disabled={wallpaper.busy} onClick={wallpaper.cancel}>取消预览</Button>
         <Button disabled={wallpaper.busy} onClick={()=>void wallpaper.apply()}>应用壁纸</Button>
       </div>}
+      </div>
     </section>
   </main>;
 }
