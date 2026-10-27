@@ -512,6 +512,7 @@ html,body,#app,main.app-shell { background:transparent!important }
 /* Let the first and last lines scroll to the vertical center. */
 .lyrics-lines::before,.lyrics-lines::after { display:block; height:45%; content:"" }
 .lyrics-lines :is(button,span) { display:block; width:100%; padding:10px 14px; border-radius:10px; background:transparent; color:var(--muted); font:inherit; font-size:20px; line-height:1.5; text-align:left; overflow-wrap:anywhere }
+.lyrics-lines.synced button,.lyrics-lines.synced small { transition:color .3s ease }
 .lyrics-lines.synced button:enabled:hover { background:var(--hover-surface); color:var(--ink); cursor:pointer }
 .lyrics-lines.synced button:disabled { cursor:default; opacity:1 }
 .lyrics-lines li[aria-current=true] button { color:var(--accent); font-weight:700 }
@@ -525,7 +526,7 @@ html,body,#app,main.app-shell { background:transparent!important }
   .lyrics-track h2 { margin:0 }
   .lyrics-close { top:16px; left:10px }
 }
-@media (prefers-reduced-motion:reduce) { .lyrics-toggle svg { transition:none } }
+@media (prefers-reduced-motion:reduce) { .lyrics-toggle svg,.lyrics-lines.synced button,.lyrics-lines.synced small { transition:none } }
 .lyrics-match-dialog { width:960px; max-width:calc(100vw - 32px); max-height:calc(100dvh - 40px); overflow:auto; color:var(--ink) }
 .lyrics-match-dialog [data-variant=ghost] { color:inherit }
 .lyrics-match-preview li button:disabled { opacity:1 }

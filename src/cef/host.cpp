@@ -24,6 +24,7 @@
 #include "shortcuts.hpp"
 #include "wallpaper_store.hpp"
 #include "window_animation.hpp"
+#include "window_frame_rate.hpp"
 
 namespace {
 std::wstring pagePath;
@@ -40,6 +41,22 @@ bool mouseTracked=false,imeActive=false,releasingCapture=false,renderFailed=fals
 constexpr UINT TrayMessage=WM_APP+44;
 constexpr UINT ResizeBrowserMessage=WM_APP+45;
 bool resizeBrowserPending=false;
+HMONITOR frameMonitor=nullptr;
+int monitorFrameRate(HMONITOR monitor) {
+    MONITORINFOEXW info{};info.cbSize=sizeof(info);
+    DEVMODEW mode{};mode.dmSize=sizeof(mode);
+    if(!monitor || !GetMonitorInfoW(monitor,reinterpret_cast<MONITORINFO*>(&info)) ||
+       !EnumDisplaySettingsW(info.szDevice,ENUM_CURRENT_SETTINGS,&mode))return musxi::cef_adapter::windowFrameRate(0);
+    return musxi::cef_adapter::windowFrameRate(mode.dmDisplayFrequency);
+}
+void updateWindowFrameRate(HWND hwnd,bool force=false) {
+    const auto browser=musxi::cef_adapter::browserHost();if(!browser)return;
+    const auto monitor=MonitorFromWindow(hwnd,MONITOR_DEFAULTTONEAREST);
+    if(!force && monitor==frameMonitor)return;
+    frameMonitor=monitor;
+    const auto rate=monitorFrameRate(monitor);
+    if(browser->GetWindowlessFrameRate()!=rate)browser->SetWindowlessFrameRate(rate);
+}
 void scheduleBrowserResize(HWND hwnd) {
     if(!resizeBrowserPending)resizeBrowserPending=PostMessageW(hwnd,ResizeBrowserMessage,0,0)!=FALSE;
 }
@@ -344,7 +361,8 @@ LRESULT CALLBACK testProc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp) {
                 ImmReleaseContext(hwnd,context);
             }
         }return 0;
-    case WM_MOVE: if(browser)browser->NotifyMoveOrResizeStarted();break;
+    case WM_MOVE: if(browser){updateWindowFrameRate(hwnd);browser->NotifyMoveOrResizeStarted();}break;
+    case WM_DISPLAYCHANGE: updateWindowFrameRate(hwnd,true);break;
     case WM_ENTERSIZEMOVE: {
         finishCompactTransition();
         surface.setBottomAligned(false);
@@ -390,7 +408,7 @@ LRESULT CALLBACK testProc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp) {
             m->ptMaxSize={info.rcWork.right-info.rcWork.left,info.rcWork.bottom-info.rcWork.top};
         }return 0;
     }
-    case WM_DPICHANGED: {finishCompactTransition();auto r=reinterpret_cast<RECT*>(lp);SetWindowPos(hwnd,nullptr,r->left,r->top,r->right-r->left,mainCompact?MulDiv(compactHeight,HIWORD(wp),96):r->bottom-r->top,SWP_NOZORDER);if(browser){browser->NotifyScreenInfoChanged();browser->WasResized();}return 0;}
+    case WM_DPICHANGED: {finishCompactTransition();auto r=reinterpret_cast<RECT*>(lp);SetWindowPos(hwnd,nullptr,r->left,r->top,r->right-r->left,mainCompact?MulDiv(compactHeight,HIWORD(wp),96):r->bottom-r->top,SWP_NOZORDER);if(browser){updateWindowFrameRate(hwnd,true);browser->NotifyScreenInfoChanged();browser->WasResized();}return 0;}
     case WM_SIZE: {
         if(wp==SIZE_MINIMIZED)KillTimer(hwnd,102);
         if(browser) {
@@ -475,7 +493,7 @@ void ready(void* window) {
     info.runtime_style=CEF_RUNTIME_STYLE_ALLOY;
     if(preview)info.bounds=CefRect(160,120,960,680);
     CefBrowserSettings settings;
-    if(!preview){settings.background_color=0;settings.windowless_frame_rate=60;}
+    if(!preview){settings.background_color=0;settings.windowless_frame_rate=monitorFrameRate(MonitorFromWindow(testWindow,MONITOR_DEFAULTTONEAREST));}
     auto browser=CefBrowserHost::CreateBrowserSync(info,
         musxi::cef_adapter::makeClient(url,window,smoke,testWindow),url,settings,nullptr,nullptr);
     if(!browser) {createFailed=true;PostMessageW(nativeWindow,WM_CLOSE,0,0);}

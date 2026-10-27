@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
-import { motion, useIsPresent } from 'motion/react';
+import { animate, motion, useIsPresent } from 'motion/react';
 import { useLyricsDisplay } from '../composables/useLyricsDisplay';
 import LyricsMatchDialog from '../components/LyricsMatchDialog';
 import CoverImage from '../components/CoverImage';
@@ -37,6 +37,7 @@ export default function LyricsView({ trackId, now, positionMs, canSeek, onSeek, 
   const expandButton = useRef<HTMLButtonElement>(null);
   useLayoutEffect(() => { if(bottomOffset>0)expandButton.current?.focus({ preventScroll:true }); }, [bottomOffset]);
   const userScroll = useRef(0);
+  const scrollAnimation = useRef<ReturnType<typeof animate> | null>(null);
   const synced = lyrics?.kind === 'synced';
   const lines = lyrics?.lines || [];
   const active = synced ? activeLyricLine(lines, positionMs) : -1;
@@ -61,13 +62,15 @@ export default function LyricsView({ trackId, now, positionMs, canSeek, onSeek, 
     const container = list.current; const row = container?.children[Math.max(0, active)] as HTMLElement | undefined;
     // Leave the view alone for a few seconds after the user scrolls it.
     if (!container || !row || Date.now() - userScroll.current < 3000) return;
-    container.scrollTo({
-      top: row.offsetTop - container.clientHeight / 2 + row.clientHeight / 2,
-      behavior: reduced ? 'instant' : 'smooth',
+    const top = row.offsetTop - container.clientHeight / 2 + row.clientHeight / 2;
+    if (reduced) container.scrollTop = top;
+    else scrollAnimation.current = animate(container.scrollTop, top, {
+      duration: 0.48, ease: [0.22, 1, 0.36, 1], onUpdate: value => { container.scrollTop = value; },
     });
+    return () => { scrollAnimation.current?.stop(); scrollAnimation.current = null; };
     // Showing or hiding translations changes row heights; re-centre the current line.
   }, [active, lines, dual, display.alignment, display.fontSize, reduced]);
-  const markScrolled = () => { userScroll.current = Date.now(); };
+  const markScrolled = () => { userScroll.current = Date.now(); scrollAnimation.current?.stop(); scrollAnimation.current = null; };
   const message = !trackId ? '尚未播放歌曲' : loading ? '正在加载歌词…' : failed ? '歌词加载失败，请检查网络后重试' :
     !lines.length ? (lyrics?.platform && lyrics.platform !== 'local' ? '这首歌在平台上暂无歌词' : '暂无歌词') : '';
   useLayoutEffect(() => {
