@@ -9,7 +9,7 @@ import { Popover, PopoverTrigger, PopoverContent } from './ui/popover';
 const orders: { id: PlaybackOrder; name: string; path: string }[] = [
   { id: 'sequential', name: '顺序播放', path: 'M4 6h13m-3-3 3 3-3 3M20 18H7m3-3-3 3 3 3' },
   { id: 'random', name: '随机播放', path: 'M3 5h3l12 14h3m-3-3 3 3-3 3M3 19h3l4-5m4-4 4-5h3m-3-3 3 3-3 3' },
-  { id: 'repeat-one', name: '单曲循环', path: 'M4 10V6h15m-3-3 3 3-3 3M20 14v4H5m3-3-3 3 3 3M11 10l2-1v6' },
+  { id: 'repeat-one', name: '单曲循环', path: 'M17 3l3 3-3 3M20 6H7a3 3 0 0 0-3 3v2M7 21l-3-3 3-3M4 18h13a3 3 0 0 0 3-3v-2M11 10l1.5-1v6' },
 ];
 
 export default function PlayerActions({ library, currentId, onNotice, children }: {

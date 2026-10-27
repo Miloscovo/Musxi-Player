@@ -3,6 +3,8 @@ import type { Appearance, AppearanceMode, AppearanceTone } from '../composables/
 import { Button } from './ui/button';
 import WallpaperSettings from './WallpaperSettings';
 import type { WallpaperController } from '../composables/useWallpaper';
+import { useLyricsBackground } from '../composables/useLyricsBackground';
+import { usePlayerStyle } from '../composables/usePlayerStyle';
 
 const modes: { id: AppearanceMode; label: string; path: string }[] = [
   { id: 'light', label: '浅色', path: 'M12 3V1m0 22v-2M3 12H1m22 0h-2M4.2 4.2 2.8 2.8m18.4 18.4-1.4-1.4M4.2 19.8l-1.4 1.4M21.2 2.8l-1.4 1.4M17 12a5 5 0 1 1-10 0 5 5 0 0 1 10 0Z' },
@@ -22,6 +24,8 @@ export default function AppearanceSettings({ appearance, onAppearance, transpare
   wallpaper?:WallpaperController;wallpaperEnabled?:boolean;onWallpaperEnabled?:(value:boolean)=>void;
   playerTransparent?:boolean;onPlayerTransparent?:(value:boolean)=>void;
 }) {
+  const [lyricsBackground, setLyricsBackground] = useLyricsBackground();
+  const [playerStyle, setPlayerStyle] = usePlayerStyle();
   return <section className="settings-content" aria-label="外观设置">
     <div className="appearance-mode">
       <h3 id="appearance-mode-label">外观模式</h3>
@@ -38,6 +42,24 @@ export default function AppearanceSettings({ appearance, onAppearance, transpare
         {tones.map(tone => <Button key={tone.id} variant="unstyled" className="appearance-segment"
           disabled={wallpaper?.busy} aria-pressed={appearance.tone === tone.id} onClick={() => onAppearance({ ...appearance, tone: tone.id })}>
           <span className="appearance-tone-dot" style={{ background: tone.color }} aria-hidden="true"/>{tone.label}
+        </Button>)}
+      </div>
+    </div>
+    <div className="appearance-tone appearance-mode">
+      <h3 id="player-style-label">播放器样式</h3>
+      <div className="appearance-segments" role="group" aria-labelledby="player-style-label">
+        {(['vinyl', 'square', 'none'] as const).map(value => <Button key={value} variant="unstyled" className="appearance-segment"
+          aria-pressed={playerStyle === value} onClick={() => setPlayerStyle(value)}>
+          {value === 'vinyl' ? '液体彩胶' : value === 'square' ? '方形封面' : '不显示'}
+        </Button>)}
+      </div>
+    </div>
+    <div className="appearance-tone appearance-mode">
+      <h3 id="lyrics-background-label">歌词界面背景</h3>
+      <div className="appearance-segments" role="group" aria-labelledby="lyrics-background-label">
+        {(['main', 'cover'] as const).map(value => <Button key={value} variant="unstyled" className="appearance-segment"
+          aria-pressed={lyricsBackground === value} onClick={() => setLyricsBackground(value)}>
+          {value === 'main' ? '跟随主界面' : '模糊歌曲封面'}
         </Button>)}
       </div>
     </div>

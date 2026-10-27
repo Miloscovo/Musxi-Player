@@ -153,7 +153,16 @@ export async function verifyPlaylistLoading(library: ReturnType<typeof useLibrar
   const root=createRoot(fixture), original=library.state!;
   const render=(state:typeof library.state,pending=false,error='')=>root.render(createElement(SmokeLibraryView,{library:{...library,state,pending,error},theme:'light'}));
   try {
-    for(const state of [null,{...original,connected:true,busy:true,playlists:[]}]) {
+    const syncOperation={...original.operation,kind:'sync',status:'pending' as const};
+    render(null);
+    await waitFor(()=>fixture.querySelectorAll('.playlist-skeleton').length===6);
+    render({...original,connected:false,busy:false,status:'登录后，把收藏带到这里。',accounts:[],playlists:[],operation:{...original.operation,kind:'',status:'idle'}});
+    await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+    if(fixture.querySelectorAll('.playlist-skeleton').length!==6)throw new Error('Startup stopped loading before connection began');
+    render({...original,connected:false,busy:true,status:'正在连接本机接口…',playlists:[],operation:{...original.operation,kind:'',status:'idle'}});
+    await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+    if(fixture.querySelectorAll('.playlist-skeleton').length!==6)throw new Error('Startup stopped loading before account verification finished');
+    for(const state of [null,{...original,connected:true,busy:true,playlists:[],operation:syncOperation}]) {
       render(state);
       await waitFor(()=>fixture.querySelectorAll('.playlist-skeleton').length===6);
       const cover=fixture.querySelector<HTMLElement>('.playlist-skeleton .cover')!;
@@ -164,23 +173,51 @@ export async function verifyPlaylistLoading(library: ReturnType<typeof useLibrar
         || (style.animationName==='none')!==matchMedia('(prefers-reduced-motion: reduce)').matches)
         throw new Error('Playlist skeleton layout, loading state or shimmer is incorrect');
     }
-    render({...original,connected:true,busy:false,playlists:[]},true);
+    render({...original,connected:true,busy:false,playlists:[],operation:syncOperation},true);
     await waitFor(()=>fixture.querySelectorAll('.playlist-skeleton').length===6);
-    render({...original,connected:true,busy:true});
+    render({...original,connected:true,busy:true,operation:syncOperation});
     const createdCount=original.playlists.filter(list=>list.editable).length+1;
     await waitFor(()=>fixture.querySelectorAll('.playlist-skeleton').length===createdCount);
     if(fixture.querySelector('button.playlist'))throw new Error('Busy library exposed disabled playlist entries');
-    render({...original,connected:true,busy:false},true);
+    render({...original,connected:true,busy:false,operation:syncOperation},true);
     await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
     if(fixture.querySelectorAll('.playlist-skeleton').length!==createdCount)throw new Error('Pending library ended its skeleton early');
     render({...original,connected:true,busy:false});
+    await new Promise(resolve=>setTimeout(resolve,100));
+    if(fixture.querySelectorAll('.playlist-skeleton').length!==createdCount)throw new Error('Startup loading ended during a brief idle gap');
+    render({...original,connected:true,busy:true,operation:{...original.operation,kind:'song_menu',status:'pending'}});
+    await new Promise(resolve=>setTimeout(resolve,850));
+    if(fixture.querySelectorAll('.playlist-skeleton').length!==createdCount)throw new Error('Startup loading ended while player menu kept playlists disabled');
+    render({...original,connected:true,busy:false});
     await waitFor(()=>!fixture.querySelector('.playlist-skeleton') && !!fixture.querySelector('.playlist strong'));
-    if(fixture.querySelector('button.playlist:disabled') || fixture.querySelector('.playlist .cover-loading'))
-      throw new Error('Loaded playlists are disabled or still animate their covers');
+    if(fixture.querySelector('button.playlist:disabled')) throw new Error('Loaded playlists are disabled');
+    render({...original,connected:true,busy:false,playlists:original.playlists.map((list,index)=>index===0?{...list,cover:'https://example.com/pending-cover.jpg'}:list)});
+    await waitFor(()=>!!fixture.querySelector('button.playlist .cover-loading'));
+    if(fixture.querySelector('.playlist-skeleton') || fixture.querySelector('button.playlist:disabled'))
+      throw new Error('A loading cover blocked an available playlist');
+    render({...original,connected:true,busy:false});
+    await waitFor(()=>!fixture.querySelector('button.playlist .cover-loading'));
+    for (const status of ['正在检查概念版 VIP 权益…','登录成功，正在检查概念版 VIP 权益…','正在同步收藏歌单…']) {
+      render({...original,connected:true,busy:true,status,operation:{...original.operation,kind:'audio',status:'completed'}});
+      await waitFor(()=>fixture.querySelectorAll('.playlist-skeleton').length===createdCount);
+      render({...original,connected:true,busy:true,status:'已同步 1 个歌单 · 点击歌单查看歌曲',operation:{...original.operation,kind:'audio',status:'completed'}});
+      await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+      if(fixture.querySelectorAll('.playlist-skeleton').length!==createdCount)throw new Error('Automatic sync ended loading before playlist entries became available');
+      render({...original,connected:true,busy:false,status:'已同步 1 个歌单 · 点击歌单查看歌曲'});
+      await waitFor(()=>!fixture.querySelector('.playlist-skeleton'));
+    }
+    for(const kind of ['song_menu','qualities','audio','song_update']) {
+      for(const [busy,pending] of [[true,false],[false,true]] as const) {
+        render({...original,connected:true,busy,operation:{...original.operation,kind,status:'pending'}},pending);
+        await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+        if(fixture.querySelector('.playlist-skeleton') || !fixture.querySelector('.playlist strong'))
+          throw new Error(`Playback ${kind} replaced loaded playlists with skeletons`);
+      }
+    }
     const saved=fixture.querySelectorAll<HTMLButtonElement>('.library-sections button')[1];
     saved.click();
     await waitFor(()=>saved.getAttribute('aria-pressed')==='true');
-    render({...original,connected:true,busy:true,playlists:[]});
+    render({...original,connected:true,busy:true,playlists:[],operation:syncOperation});
     await waitFor(()=>fixture.querySelectorAll('.playlist-skeleton').length===6);
     render({...original,connected:true,busy:false,playlists:[]});
     await waitFor(()=>fixture.querySelector('.library-section-empty')?.textContent==='暂无收藏歌单。');
@@ -213,11 +250,17 @@ export async function verifyPlaylistLoading(library: ReturnType<typeof useLibrar
       playlists:[{...original.playlists[0],editable:true},{...original.playlists[0],id:'second',editable:true}]};
     render(counted);
     await waitFor(()=>JSON.parse(localStorage.getItem(cacheKey) || 'null')?.created===3);
-    render({...counted,busy:true,playlists:[]});
+    render({...counted,busy:true,playlists:[],operation:syncOperation});
     await waitFor(()=>fixture.querySelectorAll('.playlist-skeleton').length===3);
     render(null);
     await waitFor(()=>fixture.querySelectorAll('.playlist-skeleton').length===3);
-    render({...counted,user:'different-account',busy:true,playlists:[]});
+    render({...counted,connected:false,busy:false,user:'',accounts:[],status:'登录后，把收藏带到这里。',playlists:[]});
+    await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+    if(fixture.querySelectorAll('.playlist-skeleton').length!==3)throw new Error('Startup did not use the previous playlist count before account verification');
+    render({...counted,connected:false,busy:true,user:'',accounts:[],status:'正在连接本机接口…',playlists:[]});
+    await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+    if(fixture.querySelectorAll('.playlist-skeleton').length!==3)throw new Error('Connection discarded the previous playlist count');
+    render({...counted,user:'different-account',busy:true,playlists:[],operation:syncOperation});
     await waitFor(()=>fixture.querySelectorAll('.playlist-skeleton').length===6);
   } finally {
     root.unmount();fixture.remove();
@@ -1166,7 +1209,12 @@ export async function verifyWebPage() {
     Math.abs((trackBounds.top + trackBounds.bottom) / 2 - pageCenter) > 1
       || Math.abs((lyricBounds.top + lyricBounds.bottom) / 2 - pageCenter) > 1)
     throw new Error('Lyrics layout did not center wide columns or stack narrow content');
-  if (coverBounds.width < (narrowLyrics ? 48 : 1) || coverBounds.width > (narrowLyrics ? 80 : 480) || Math.abs(coverBounds.height - coverBounds.width) > 1
+  const titleBounds = lyricsPage.querySelector('.lyrics-title')!.getBoundingClientRect();
+  const matchButton = lyricsPage.querySelector<HTMLElement>('.lyrics-title>button[data-variant=secondary]');
+  const matchStyle = matchButton && getComputedStyle(matchButton);
+  const titleHeight = titleBounds.height - (matchButton ? matchButton.getBoundingClientRect().height + parseFloat(matchStyle!.marginTop) + parseFloat(matchStyle!.marginBottom) : 0);
+  if ((narrowLyrics ? Math.abs(coverBounds.height-Math.min(titleHeight,480))>1 || Math.abs(coverBounds.top-titleBounds.top)>1
+    : coverBounds.width < 1 || coverBounds.width > 480) || Math.abs(coverBounds.height - coverBounds.width) > 1
     || getComputedStyle(lyricsPage.querySelector('h2')!).fontSize !== '22px')
     throw new Error('Lyrics responsive cover size or fixed title size changed');
   if (window.innerWidth >= 1200 && coverBounds.left - pageBounds.left < 100)

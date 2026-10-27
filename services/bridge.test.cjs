@@ -17,6 +17,18 @@ test('cover batches deduplicate URLs and isolate unavailable images', async () =
     assert.equal(calls,2);assert.equal(r.images.length,2);assert.ok(r.images[0].image.startsWith('data:image/jpeg;base64,'));assert.equal(r.images[1].image,'');
   } finally {global.fetch=original;}
 });
+test('cover downloads prefer larger supported images and fall back to the original', async () => {
+  const original=global.fetch;const calls=[];
+  global.fetch=async url=>{calls.push(url);if(url.includes('/400/'))return {ok:true,headers:{get:()=> 'text/html'},body:(async function*(){yield Buffer.from('error');})()};return {ok:true,body:(async function*(){yield Buffer.from('fixture');})()};};
+  try {
+    const a=new Adapter(async()=>{throw Error('No account request expected');});
+    const kugou='https://imge.kugou.com/200/album.jpg';const qq='https://y.gtimg.cn/music/photo_new/T002R300x300M000abc.jpg';
+    const images=(await a.run({op:'covers',urls:[kugou,qq]})).images;
+    assert.deepEqual(calls,['https://imge.kugou.com/400/album.jpg','https://y.gtimg.cn/music/photo_new/T002R800x800M000abc.jpg',kugou]);
+    assert.deepEqual(images.map(image=>image.url),[kugou,qq]);
+    assert.ok(images.every(image=>image.image.startsWith('data:image/jpeg;base64,')));
+  } finally {global.fetch=original;}
+});
 const response = data => ({ body: { status: 1, data }, cookie: [] });
 
 test('audio rights refusals survive authorization fallback without mislabeling network failures',async()=>{
@@ -45,6 +57,17 @@ test('NetEase and QQ HTTP covers download over HTTPS but retain the requested ca
     assert.deepEqual(result.images.map(image=>image.url),urls);
     assert.deepEqual(downloaded,urls.map(url=>url.replace('http:','https:')));
     assert.ok(result.images.every(image=>image.image.startsWith('data:image/jpeg;base64,')));
+  } finally {global.fetch=original;}
+});
+test('NetEase image/jpg responses load for covers and avatars',async()=>{
+  const original=global.fetch;
+  global.fetch=async()=>({ok:true,headers:{get:()=> 'image/jpg'},body:(async function*(){yield Buffer.from('fixture');})()});
+  try {
+    const a=new Adapter(async()=>{throw Error('No account request expected');});
+    const urls=['https://p1.music.126.net/cover.jpg','https://p2.music.126.net/avatar.jpg'];
+    const result=await a.run({op:'covers',urls});
+    assert.deepEqual(result.images.map(image=>image.url),urls);
+    assert.ok(result.images.every(image=>image.image==='data:image/jpeg;base64,Zml4dHVyZQ=='));
   } finally {global.fetch=original;}
 });
 test('restart metadata restores song identities without bypassing authentication or accepting URLs',async()=>{

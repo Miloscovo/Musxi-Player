@@ -112,9 +112,25 @@ export default function LibraryView({ library: lib, theme, appearance, onAppeara
     if (!busy) setRequestedPlaylist('');
   }, [state, pending, error, busy]);
   useEffect(() => { if (searchSettled || error) setRequestedSearch(''); }, [searchSettled, error]);
-  const playlistsLoading = !error && (!state || (!!state.connected && busy));
+  const playlistSyncing = useRef(true);
+  const [, setPlaylistReady] = useState(0);
+  const starting = !!state && !state.connected && !state.accounts?.length &&
+    (state.status === '登录后，把收藏带到这里。' || state.status === '正在连接本机接口…');
+  if (error || (state && !state.connected && !busy && !starting)) playlistSyncing.current = false;
+  else if (starting && !error) playlistSyncing.current = true;
+  // shortcut: automatic sync is identified by status text, use a structured operation when the bridge exposes it.
+  else if (state?.connected && busy && ((state.operation.kind === 'sync' && state.operation.status === 'pending') ||
+    state.status.includes('正在同步收藏歌单') || state.status.includes('正在检查概念版 VIP 权益') ||
+    (state.operation.status === 'idle' && !state.playlists.length))) playlistSyncing.current = true;
+  useEffect(() => {
+    if (!state?.connected || busy || error || !playlistSyncing.current) return;
+    // shortcut: allow startup actions to settle over one polling interval; use an explicit readiness signal if the bridge adds one.
+    const timer = setTimeout(() => { playlistSyncing.current = false; setPlaylistReady(value => value + 1); }, 800);
+    return () => clearTimeout(timer);
+  }, [state?.connected, busy, error]);
+  const playlistsLoading = !error && (!state || playlistSyncing.current);
   const skeletonCount = playlistsLoading ? (visiblePlaylists.length ? visiblePlaylists.length + Number(librarySection === 'created')
-    : readPlaylistLoadingCount(localStorage, state, librarySection)) : 6;
+    : readPlaylistLoadingCount(localStorage, starting ? null : state, librarySection)) : 6;
   useEffect(() => { if (state) rememberPlaylistLoadingCounts(localStorage, state, pending, error); }, [state, pending, error]);
   const tracksVisible = view === 'recent' || view === 'search' || (view === 'library' && showTracks);
   const fixedPageHeader = view === 'settings' || (view === 'library' && !showTracks);
@@ -350,7 +366,7 @@ export default function LibraryView({ library: lib, theme, appearance, onAppeara
             {Array.from({ length: skeletonCount }, (_, index) => <div key={index} className="playlist playlist-skeleton" aria-hidden="true">
               <i className="cover"/><div className="playlist-info"><i/><i/></div>
             </div>)}
-          </div> : <><div className="playlist-grid">{librarySection === 'created' && state?.connected && <Button variant="ghost" className="playlist" disabled={busy || !state?.connected} onClick={() => open('musxi:cloud-favorites')}><div className="cover placeholder" aria-hidden="true"><svg className="playlist-heart size-11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1.1-1.1a5.5 5.5 0 0 0-7.8 7.8L12 21l8.8-8.6a5.5 5.5 0 0 0 0-7.8Z"/></svg></div><div className="playlist-info"><strong>云端收藏整合</strong><span>{state?.favoritesCount ?? (state?.playlistId === 'musxi:cloud-favorites' ? state.trackCount : 0)} 首</span></div></Button>}{visiblePlaylists.map(list => <Button variant="ghost" key={list.id} className="playlist" disabled={busy} onClick={() => open(list.id)}><CoverImage url={list.cover}/><div className="playlist-info"><strong>{list.name}</strong><span>{list.count} 首{list.platform && ` · ${platformNames[list.platform]}`}</span></div></Button>)}</div>
+          </div> : <><div className="playlist-grid">{librarySection === 'created' && state?.connected && <Button variant="ghost" className="playlist" disabled={busy || !state?.connected} onClick={() => open('musxi:cloud-favorites')}><div className="cover placeholder" aria-hidden="true"><svg className="playlist-heart size-11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1.1-1.1a5.5 5.5 0 0 0-7.8 7.8L12 21l8.8-8.6a5.5 5.5 0 0 0 0-7.8Z"/></svg></div><div className="playlist-info"><strong>云端收藏整合</strong><span>{state?.favoritesCount ?? (state?.playlistId === 'musxi:cloud-favorites' ? state.trackCount : 0)} 首</span></div></Button>}{visiblePlaylists.map(list => <Button variant="ghost" key={list.id} className="playlist" disabled={busy} onClick={() => open(list.id)}><CoverImage url={list.cover} animateLoading/><div className="playlist-info"><strong>{list.name}</strong><span>{list.count} 首{list.platform && ` · ${platformNames[list.platform]}`}</span></div></Button>)}</div>
           {signedOut ? <div className="library-section-empty"><p>登录后查看你的音乐库。</p><Button onClick={() => {setAccountPlatform(null);setAccount(true);}}>扫码登录</Button></div>
             : state?.connected && librarySection === 'saved' && !visiblePlaylists.length && <p className="library-section-empty">暂无收藏歌单。</p>}
           </>}

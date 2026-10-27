@@ -403,15 +403,26 @@ class Adapter {
       case 'covers': {
         const urls = [...new Set((Array.isArray(request.urls) ? request.urls : []).filter(url => typeof url === 'string' && coverUrl(url)))].slice(0, 8);
         const images = await Promise.all(urls.map(async url => {
-          try {
-            const r = await fetch(coverUrl(url), { signal: AbortSignal.timeout(8000), redirect: 'error' });
-            if (!r.ok) throw Error('image');
-            const chunks = [];let size = 0;
-            for await (const chunk of r.body) {
-              size += chunk.length;if (size > 1024 * 1024) throw Error('size');chunks.push(Buffer.from(chunk));
-            }
-            return { url, image: 'data:image/jpeg;base64,' + Buffer.concat(chunks).toString('base64') };
-          } catch { return { url, image: '' }; }
+          const original = coverUrl(url); const candidate = new URL(original);
+          if (/^(?:[^.]+\.)*(?:kugou\.com|kgimg\.com)$/.test(candidate.hostname))
+            candidate.pathname = candidate.pathname.replace(/^\/200\//, '/400/');
+          if (candidate.hostname === 'y.gtimg.cn')
+            candidate.pathname = candidate.pathname.replace(/^(\/music\/photo_new\/T002)R300x300(M000[^/]+\.jpg)$/i, '$1R800x800$2');
+          for (const source of new Set([candidate.href, original])) {
+            try {
+              const r = await fetch(source, { signal: AbortSignal.timeout(8000), redirect: 'error' });
+              if (!r.ok) throw Error('image');
+              const contentType = r.headers?.get('content-type') || '';
+              if (contentType && !/^(image\/(jpe?g|png|webp)|application\/octet-stream)(;|$)/i.test(contentType)) throw Error('image type');
+              const chunks = [];let size = 0;
+              for await (const chunk of r.body) {
+                size += chunk.length;if (size > 1024 * 1024) throw Error('size');chunks.push(Buffer.from(chunk));
+              }
+              if (!size) throw Error('empty image');
+              return { url, image: 'data:image/jpeg;base64,' + Buffer.concat(chunks).toString('base64') };
+            } catch { /* Try the original image when the larger one is unavailable. */ }
+          }
+          return { url, image: '' };
         }));
         return { images };
       }

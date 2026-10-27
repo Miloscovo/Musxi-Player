@@ -1,8 +1,12 @@
-import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type SyntheticEvent } from 'react';
 import { animate, motion, useIsPresent } from 'motion/react';
 import { useLyricsDisplay } from '../composables/useLyricsDisplay';
+import { useLyricsBackground } from '../composables/useLyricsBackground';
+import { usePlayerStyle } from '../composables/usePlayerStyle';
+import { sampleCoverColor } from '../composables/vinylColor';
 import LyricsMatchDialog from '../components/LyricsMatchDialog';
 import VinylCover from '../components/VinylCover';
+import CoverImage from '../components/CoverImage';
 import { Button } from '../components/ui/button';
 import { useLyrics } from '../composables/useLyrics';
 import { activeLyricLine, observeLyricDragRegions } from '../composables/lyrics';
@@ -32,7 +36,29 @@ export default function LyricsView({ trackId, now, positionMs, playing, canSeek,
   const [matching,setMatching]=useState(false);
   const [showTranslation,setShowTranslation]=useLyricsTranslation();
   const [display] = useLyricsDisplay();
-  const [coverColor, setCoverColor] = useState({ url: '', color: '' });
+  const [background] = useLyricsBackground();
+  const [playerStyle] = usePlayerStyle();
+  const title = useRef<HTMLDivElement>(null);
+  const [titleHeight, setTitleHeight] = useState(0);
+  useLayoutEffect(() => {
+    const element = title.current;
+    if (!element) return;
+    const measure = () => {
+      const button = element.querySelector<HTMLElement>(':scope>button[data-variant=secondary]');
+      const style = button && getComputedStyle(button);
+      setTitleHeight(element.getBoundingClientRect().height - (button ? button.getBoundingClientRect().height + parseFloat(style!.marginTop) + parseFloat(style!.marginBottom) : 0));
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+  const [coverColor, setCoverColor] = useState({ url: '', color: '', image: '' });
+  function sampleCover(event: SyntheticEvent<HTMLDivElement>) {
+    if (event.target instanceof HTMLImageElement)
+      setCoverColor({ url: now?.cover || '', color: sampleCoverColor(event.target), image: event.target.currentSrc });
+  }
+  const backgroundImage = background === 'cover' && now?.cover && coverColor.url === now.cover ? coverColor.image : '';
   useEffect(()=>{setMatching(false);},[trackId]);
   const list = useRef<HTMLOListElement>(null); const closeButton = useRef<HTMLButtonElement>(null);
   const expandButton = useRef<HTMLButtonElement>(null);
@@ -82,15 +108,17 @@ export default function LyricsView({ trackId, now, positionMs, playing, canSeek,
     transition={{ duration: reduced ? 0 : 0.22, ease: [0.22, 1, 0.36, 1] }}
     onUpdate={latest => onPlayerCover(Math.max(0, -Number(latest.bottom || 0)))}
     onAnimationComplete={() => { if (present) onEntered(); }}
-    data-alignment={display.alignment} style={{ '--lyrics-font-size': `${display.fontSize}px`,
+    data-alignment={display.alignment} data-player-style={playerStyle} data-cover-background={backgroundImage ? 'true' : undefined} style={{ '--lyrics-font-size': `${display.fontSize}px`,
       ...(display.colorMode === 'cover' && now?.cover && coverColor.url === now.cover && coverColor.color
         ? { '--vinyl-color': coverColor.color, '--lyrics-color': 'var(--lyric-vinyl)' } : {}) } as CSSProperties}>
+    {backgroundImage && <div className="lyrics-cover-background" aria-hidden="true"><img src={backgroundImage} alt=""/></div>}
     <Button variant="unstyled" ref={closeButton} className="lyrics-close" aria-label="收起歌词页" title="收起" onClick={onClose}>
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
     </Button>
-    <div className="lyrics-track">
-      <VinylCover url={now?.cover || ''} playing={playing} onColor={(url,color)=>setCoverColor({url,color})} />
-      <div className="lyrics-title"><h2 title={now?.name}>{now?.name || '尚未选择歌曲'}</h2>
+    <div className="lyrics-track" style={{ '--compact-art-size': `${titleHeight}px` } as CSSProperties}>
+      {playerStyle === 'vinyl' ? <VinylCover url={now?.cover || ''} playing={playing} onColor={(url,color,image)=>setCoverColor({url,color,image})} /> :
+        <div className="lyrics-square-cover" hidden={playerStyle === 'none'} onLoadCapture={sampleCover}><CoverImage url={now?.cover || ''} animateLoading /></div>}
+      <div ref={title} className="lyrics-title"><h2 title={now?.name}>{now?.name || '尚未选择歌曲'}</h2>
         <p>{now?.artist}</p>
         {lyrics && origins[lyrics.origin] && <span className="lyrics-origin">{origins[lyrics.origin]}</span>}
         {trackId.startsWith('local:') && <Button variant="secondary" size="sm" onClick={()=>setMatching(true)}>{lyrics?.kind==='none'?'搜索歌词':'选择 / 替换歌词'}</Button>}
