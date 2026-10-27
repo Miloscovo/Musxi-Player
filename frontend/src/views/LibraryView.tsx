@@ -343,7 +343,7 @@ export default function LibraryView({ library: lib, theme, appearance, onAppeara
           </DialogContent>
         </Dialog>
       </div>}
-      {view === 'settings' ? settingsSection === 'updates' && updates ? <UpdateSettings updates={updates}/> : settingsSection === 'shortcuts' ? <ShortcutSettings shortcuts={shortcuts}/> : settingsSection === 'lyrics' ? <LyricsSettings/> : settingsSection === 'playback' ? <PlaybackSettings/> : <AppearanceSettings appearance={appearance ?? { mode: theme === 'dark' || theme === 'glass' ? 'dark' : 'light', transparent: theme === 'glass' || theme === 'glass-light', tone: 'green' }} onAppearance={onAppearance ?? (() => {})} transparency={transparency} onTransparency={onTransparency ?? (() => {})}
+      {view === 'settings' ? settingsSection === 'updates' && updates ? <UpdateSettings updates={updates}/> : settingsSection === 'shortcuts' ? <ShortcutSettings shortcuts={shortcuts}/> : settingsSection === 'lyrics' ? <LyricsSettings coverUrl={state?.now?.cover}/> : settingsSection === 'playback' ? <PlaybackSettings/> : <AppearanceSettings appearance={appearance ?? { mode: theme === 'dark' || theme === 'glass' ? 'dark' : 'light', transparent: theme === 'glass' || theme === 'glass-light', tone: 'green' }} onAppearance={onAppearance ?? (() => {})} transparency={transparency} onTransparency={onTransparency ?? (() => {})}
         wallpaper={wallpaper} wallpaperEnabled={wallpaperEnabled} onWallpaperEnabled={onWallpaperEnabled} playerTransparent={playerTransparent} onPlayerTransparent={onPlayerTransparent}/> : view === 'library' && !showTracks ? <>
         {!isLocal && <>
           {playlistsLoading ? <div className="playlist-grid" role="status" aria-label="正在加载歌单列表">

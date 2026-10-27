@@ -842,6 +842,12 @@ export async function verifyWebPage() {
   await waitFor(() => !!document.querySelector('.lyrics-preview'), 'Lyrics settings did not load');
   const savedLyrics = localStorage.getItem('musxi-lyrics-display');
   try {
+    const colors=document.querySelectorAll<HTMLButtonElement>('[aria-labelledby=lyrics-color-label] button');
+    if(colors.length!==2)throw new Error('Lyrics color options are missing');
+    colors[1].click();
+    await waitFor(()=>colors[1].getAttribute('aria-pressed')==='true' && JSON.parse(localStorage.getItem('musxi-lyrics-display') || '{}').colorMode==='cover', 'Cover lyric color was not saved');
+    colors[0].click();
+    await waitFor(()=>colors[0].getAttribute('aria-pressed')==='true' && JSON.parse(localStorage.getItem('musxi-lyrics-display') || '{}').colorMode==='theme', 'Theme lyric color was not saved');
     const left = document.querySelector<HTMLButtonElement>('[aria-labelledby=lyrics-alignment-label] button')!;
     left.click();
     await waitFor(() => getComputedStyle(document.querySelector('.lyrics-preview')!).textAlign === 'left', 'Lyrics alignment did not update');
@@ -1153,14 +1159,14 @@ export async function verifyWebPage() {
   const trackBounds = lyricsPage.querySelector('.lyrics-track')!.getBoundingClientRect();
   const lyricArea = lyricsPage.querySelector('.lyrics-lines,.lyrics-message')!;
   const lyricBounds = lyricArea.getBoundingClientRect();
-  const coverBounds = lyricsPage.querySelector('.cover')!.getBoundingClientRect();
+  const coverBounds = lyricsPage.querySelector('.vinyl-cover')!.getBoundingClientRect();
   const pageCenter = (pageBounds.top + pageBounds.bottom) / 2;
   const narrowLyrics = window.innerWidth <= 800;
   if (narrowLyrics ? trackBounds.bottom > lyricBounds.top :
     Math.abs((trackBounds.top + trackBounds.bottom) / 2 - pageCenter) > 1
       || Math.abs((lyricBounds.top + lyricBounds.bottom) / 2 - pageCenter) > 1)
     throw new Error('Lyrics layout did not center wide columns or stack narrow content');
-  if (coverBounds.width !== (narrowLyrics ? 64 : 320) || coverBounds.height !== coverBounds.width
+  if (coverBounds.width < (narrowLyrics ? 48 : 1) || coverBounds.width > (narrowLyrics ? 80 : 480) || Math.abs(coverBounds.height - coverBounds.width) > 1
     || getComputedStyle(lyricsPage.querySelector('h2')!).fontSize !== '22px')
     throw new Error('Lyrics responsive cover size or fixed title size changed');
   if (window.innerWidth >= 1200 && coverBounds.left - pageBounds.left < 100)

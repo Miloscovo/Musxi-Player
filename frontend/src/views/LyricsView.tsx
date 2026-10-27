@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from
 import { animate, motion, useIsPresent } from 'motion/react';
 import { useLyricsDisplay } from '../composables/useLyricsDisplay';
 import LyricsMatchDialog from '../components/LyricsMatchDialog';
-import CoverImage from '../components/CoverImage';
+import VinylCover from '../components/VinylCover';
 import { Button } from '../components/ui/button';
 import { useLyrics } from '../composables/useLyrics';
 import { activeLyricLine, observeLyricDragRegions } from '../composables/lyrics';
@@ -13,8 +13,8 @@ import type { LibraryState } from '../native/library';
 
 const origins: Record<string, string> = { 'lrc-file': '本地歌词文件', embedded: '内嵌歌词', online: '在线歌词', cache: '在线歌词', matched: '指定歌词' };
 
-export default function LyricsView({ trackId, now, positionMs, canSeek, onSeek, onClose, onEntered, bottomOffset, onExpandPlayer, onPlayerCover }: {
-  trackId: string; now?: LibraryState['now']; positionMs: number; canSeek: boolean;
+export default function LyricsView({ trackId, now, positionMs, playing, canSeek, onSeek, onClose, onEntered, bottomOffset, onExpandPlayer, onPlayerCover }: {
+  trackId: string; now?: LibraryState['now']; positionMs: number; playing: boolean; canSeek: boolean;
   onSeek: (positionMs: number) => void; onClose: () => void;
   onEntered: () => void;
   bottomOffset: number;
@@ -32,6 +32,7 @@ export default function LyricsView({ trackId, now, positionMs, canSeek, onSeek, 
   const [matching,setMatching]=useState(false);
   const [showTranslation,setShowTranslation]=useLyricsTranslation();
   const [display] = useLyricsDisplay();
+  const [coverColor, setCoverColor] = useState({ url: '', color: '' });
   useEffect(()=>{setMatching(false);},[trackId]);
   const list = useRef<HTMLOListElement>(null); const closeButton = useRef<HTMLButtonElement>(null);
   const expandButton = useRef<HTMLButtonElement>(null);
@@ -81,12 +82,14 @@ export default function LyricsView({ trackId, now, positionMs, canSeek, onSeek, 
     transition={{ duration: reduced ? 0 : 0.22, ease: [0.22, 1, 0.36, 1] }}
     onUpdate={latest => onPlayerCover(Math.max(0, -Number(latest.bottom || 0)))}
     onAnimationComplete={() => { if (present) onEntered(); }}
-    data-alignment={display.alignment} style={{ '--lyrics-font-size': `${display.fontSize}px` } as CSSProperties}>
+    data-alignment={display.alignment} style={{ '--lyrics-font-size': `${display.fontSize}px`,
+      ...(display.colorMode === 'cover' && now?.cover && coverColor.url === now.cover && coverColor.color
+        ? { '--vinyl-color': coverColor.color, '--lyrics-color': 'var(--lyric-vinyl)' } : {}) } as CSSProperties}>
     <Button variant="unstyled" ref={closeButton} className="lyrics-close" aria-label="收起歌词页" title="收起" onClick={onClose}>
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
     </Button>
     <div className="lyrics-track">
-      <CoverImage url={now?.cover || ''} animateLoading />
+      <VinylCover url={now?.cover || ''} playing={playing} onColor={(url,color)=>setCoverColor({url,color})} />
       <div className="lyrics-title"><h2 title={now?.name}>{now?.name || '尚未选择歌曲'}</h2>
         <p>{now?.artist}</p>
         {lyrics && origins[lyrics.origin] && <span className="lyrics-origin">{origins[lyrics.origin]}</span>}

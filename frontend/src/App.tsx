@@ -158,7 +158,7 @@ export default function App() {
         wallpaper={wallpaper} wallpaperEnabled={shell.wallpaperEnabled} onWallpaperEnabled={shell.setWallpaperEnabled} playerTransparent={shell.playerTransparent} onPlayerTransparent={shell.setPlayerTransparent}/></motion.div>
       <AnimatePresence onExitComplete={() => { if (!lyricsOpen) setLyricsCovered(false); }}>
         {lyricsOpen && (!transparentLyrics || lyricsCovered) && <LyricsView key="lyrics" trackId={state?.opened ? state.trackId : ''} now={currentTrack} positionMs={state?.positionMs ?? 0}
-          canSeek={connected && !!state?.opened && !!state.durationMs} onSeek={positionMs => void seek(positionMs)} onClose={closeLyrics} onEntered={lyricsEntered}
+          playing={!!state?.playing} canSeek={connected && !!state?.opened && !!state.durationMs} onSeek={positionMs => void seek(positionMs)} onClose={closeLyrics} onEntered={lyricsEntered}
           bottomOffset={playerCollapsed ? playerHeight : 0} onExpandPlayer={expandLyricsPlayer} onPlayerCover={clipLyricsPlayer} />}
       </AnimatePresence>
     </div>
