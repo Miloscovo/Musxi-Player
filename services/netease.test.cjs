@@ -44,3 +44,28 @@ test('advanced tiers require exact returned level, plain FLAC and full playback'
  data={url:'https://example.test/song',type:'nac',level:'hires'};
  await assert.rejects(adapter.audioInfo(track,'netease:hires'),/格式/);
 });
+
+test('large playlists read at most three detail batches concurrently and keep playlist order',async()=>{
+  let running=0,peak=0;const ids=Array.from({length:450},(_,id)=>({id:id+1}));
+  const adapter=new NeteaseAdapter(async(name,params)=>{
+    if(name==='playlist_detail')return {body:{code:200,playlist:{trackIds:ids}}};
+    assert.equal(name,'song_detail');const batch=params.ids.split(',').map(Number);
+    running++;peak=Math.max(peak,running);
+    await new Promise(resolve=>setTimeout(resolve,batch[0]===1?15:2));running--;
+    return {body:{code:200,songs:batch.map(id=>({id,name:String(id)}))}};
+  });
+  adapter.lists.set('netease:list',{id:'netease:list',serviceId:'list'});
+  const result=await adapter.playlist('netease:list');
+  assert.equal(peak,3);assert.equal(running,0);
+  assert.deepEqual(result.tracks.map(track=>track.id),ids.map(row=>'netease:'+row.id));
+});
+
+test('a failed detail batch does not return a partial playlist',async()=>{
+  const adapter=new NeteaseAdapter(async(name,params)=>{
+    if(name==='playlist_detail')return {body:{playlist:{trackIds:Array.from({length:250},(_,id)=>({id}))}}};
+    if(params.ids.startsWith('100,'))throw Error('offline');
+    return {body:{songs:params.ids.split(',').map(id=>({id}))}};
+  });
+  adapter.lists.set('netease:list',{id:'netease:list',serviceId:'list'});
+  await assert.rejects(adapter.playlist('netease:list'),/无法连接/);
+});

@@ -105,6 +105,8 @@ test('library client sends typed business actions and preserves operation IDs', 
   ]);
   await native.library.importLocal();
   assert.deepEqual(seen.at(-1), { version: 1, command: 'library.importLocal', params: {} });
+  await native.library.rescanLocal('local-folder:1');
+  assert.deepEqual(seen.at(-1), { version: 1, command: 'library.rescanLocal', params: { id: 'local-folder:1' } });
   await native.library.removeLocalFolder('local-folder:1');
   assert.deepEqual(seen.at(-1), { version: 1, command: 'library.removeLocalFolder', params: { id: 'local-folder:1' } });
   await native.library.removeLocalTrack('local:1','musxi:local');

@@ -100,6 +100,7 @@ async function verifyThemesAndWidth() {
   // Change appearance through the existing controls, so React and native theme stay in sync.
   for (const [index, mode] of [[0, 'light'], [1, 'dark']] as const) {
     await click(button('.settings-sections', '外观'), 'Open appearance');
+    await waitFor(() => document.querySelector('[aria-labelledby=appearance-mode-label] button'), 'Appearance settings did not load');
     const transparency = queryButton('.appearance-transparency [role=switch]');
     if (transparency?.getAttribute('aria-checked') === 'true') await click(transparency, 'Disable transparency');
     await click(document.querySelectorAll<HTMLButtonElement>('[aria-labelledby=appearance-mode-label] button')[index], `Set ${mode} theme`);
@@ -196,6 +197,7 @@ async function verifyDownloadUI(scenario: string) {
     await ready();
     await click(button('.update-download-actions', '稍后'), 'Defer before navigation');
     await click(button('.settings-sections', '播放'), 'Leave updates');
+    await waitFor(() => !document.querySelector('.update-settings'), 'Updates settings did not close');
     await click(button('.settings-sections', '关于与更新'), 'Return to retained package');
     await ready();
     await click(queryButton('.update-notice-primary'), 'Reminder must open details before installing');

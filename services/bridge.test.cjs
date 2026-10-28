@@ -395,3 +395,21 @@ test('incomplete original public playlist pages fail instead of replacing the so
   await assert.rejects(a.playlistTracks({id:'saved',sourceGlobalId:'collection_original'}),/未完整/);
   assert.equal(a.knownTracks.size,0);
 });
+
+test('automatic playlist cover reads run with bounded concurrency and isolate missing artwork',async()=>{
+  let running=0,peak=0;
+  const adapter=new Adapter(async(name,params)=>{
+    if(name==='user_playlist')return response({total:5,info:Array.from({length:5},(_,i)=>({listid:i+1,is_edit:1,count:1}))});
+    assert.equal(name,'playlist_track_all_new');running++;peak=Math.max(peak,running);
+    try {
+      await new Promise(resolve=>setTimeout(resolve,5));
+      if(params.listid==='3')throw Error('unavailable');
+      return response({info:[{cover:`https://imge.kugou.com/${params.listid}.jpg`}]});
+    } finally {running--;}
+  });
+  adapter.cookie={userid:'fixture',token:'fixture'};
+  const result=await adapter.run({op:'sync'});
+  assert.equal(peak,3);assert.equal(running,0);
+  assert.deepEqual(result.playlists.map(p=>p.id),['1','2','3','4','5']);
+  assert.deepEqual(result.playlists.map(p=>p.cover),['https://imge.kugou.com/1.jpg','https://imge.kugou.com/2.jpg','','https://imge.kugou.com/4.jpg','https://imge.kugou.com/5.jpg']);
+});

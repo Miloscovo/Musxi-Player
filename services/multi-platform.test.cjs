@@ -51,7 +51,10 @@ test('cloud favorites refresh signed-in own favorites, merge exact metadata and 
   assert.equal(result.favoritesCount,2);
   assert.deepEqual(result.tracks[0].platforms,['netease','kugou']);assert.equal(result.tracks[0].sources.length,2);
   assert.deepEqual(result.tracks[1].platforms,['netease']);
-  assert.deepEqual(calls.filter(c=>c[1]==='tracks').map(c=>c[2]),['kugou:liked','netease:liked']);
+  assert.equal(calls.length,0,'Opening freshly synchronized favorites must reuse the full result');
+  const readCalls=calls.length;
+  assert.equal((await manager.run({op:'tracks',id:'musxi:cloud-favorites'})).tracks.length,2);
+  assert.equal(calls.length,readCalls);
   assert.ok(!result.playlists.some(p=>p.id==='musxi:cloud-favorites'));
   result=await manager.run({op:'song_update',id:'netease:one',action:'unlike',aggregate:true});
   assert.equal(result.message,'已取消收藏');assert.equal(result.playlist.id,'musxi:cloud-favorites');
@@ -203,4 +206,106 @@ test('highest available prioritizes verified original advanced tiers and falls b
   assert.equal((await manager.audioWithDefault(platform,{op:'audio',defaultQuality:'best'})).quality,'320');
   assert.deepEqual(seen,expected);
  }
+});
+
+test('online reads reuse successful results for 30 seconds and isolate cached snapshots',async()=>{
+  const {manager,adapters}=fixture();let reads=0;
+  adapters.netease.run=async r=>{
+    if(r.op==='tracks'){reads++;return {playlist:{id:r.id},tracks:[{id:'netease:one',name:'Original',artist:'Artist'}]};}
+    return {playlists:[]};
+  };
+  const originalNow=Date.now;let now=originalNow();Date.now=()=>now;
+  try {
+    const request={op:'tracks',id:'netease:one'};
+    const first=await manager.run(request);first.tracks[0].name='Changed by caller';
+    assert.equal((await manager.run(request)).tracks[0].name,'Original');assert.equal(reads,1);
+    now+=30001;await manager.run(request);assert.equal(reads,2);
+    for(const op of ['sync','song_update','logout','init','poll']){
+      await manager.call('netease',{op});await manager.run(request);assert.equal(reads,3+['sync','song_update','logout','init','poll'].indexOf(op));
+    }
+  } finally {Date.now=originalNow;}
+});
+
+test('search cache separates keywords and pages, retries failures, and keeps playback source checks fresh',async()=>{
+  const {manager,adapters,calls}=fixture();
+  await manager.run({op:'search',keywords:'one',page:1});const initial=calls.length;
+  await manager.run({op:'search',keywords:'one',page:1});assert.equal(calls.length,initial);
+  await manager.run({op:'search',keywords:'one',page:2});assert.equal(calls.length,initial+3);
+  await manager.run({op:'search',keywords:'two',page:1});assert.equal(calls.length,initial+6);
+  let attempts=0;
+  adapters.netease.run=async()=>{if(++attempts===1)throw Error('offline');return {tracks:[],total:0,hasMore:false};};
+  await assert.rejects(manager.call('netease',{op:'search',keywords:'failed',page:1}));
+  await manager.call('netease',{op:'search',keywords:'failed',page:1});assert.equal(attempts,2);
+  await manager.sourceFor({id:'qq:one',name:'Song',artist:'Artist'},'netease');
+  await manager.sourceFor({id:'qq:one',name:'Song',artist:'Artist'},'netease');assert.equal(attempts,4);
+  for(let page=1;page<30;page++)await manager.call('netease',{op:'search',keywords:'bounded',page});
+  assert.ok(manager.readCache.size<=24);
+});
+
+test('a ready platform starts its favorite reads before another platform finishes synchronizing',async()=>{
+  const {manager,adapters}=fixture();
+  await manager.run({op:'init',session:{platform:'multi',accounts:{kugou:{},netease:{}}}});
+  let releaseSlow,signalFast;
+  const slow=new Promise(resolve=>{releaseSlow=resolve});
+  const fastStarted=new Promise(resolve=>{signalFast=resolve});
+  for(const platform of ['kugou','netease'])adapters[platform].run=async request=>{
+    if(request.op==='sync'){
+      if(platform==='netease')await slow;
+      return {playlists:[{id:platform+':liked',editable:true,favorite:true}]};
+    }
+    assert.equal(request.op,'tracks');
+    if(platform==='kugou')signalFast();
+    return {tracks:[{id:platform+':song',name:platform,artist:'Artist'}]};
+  };
+  const synchronization=manager.run({op:'sync'});let timeout;
+  try {
+    await Promise.race([fastStarted,new Promise((_,reject)=>{timeout=setTimeout(()=>reject(Error('Ready platform waited for the slow sync')),1000)})]);
+  } finally {clearTimeout(timeout);releaseSlow();}
+  const result=await synchronization;
+  assert.equal(result.favoritesCount,2);assert.equal(result.playlists.length,2);assert.deepEqual(result.warnings,[]);
+});
+
+test('completed sync warms merged favorites without repeated requests and honors expiry',async()=>{
+  const {manager,adapters,calls}=fixture();await manager.run({op:'init',session:{platform:'multi',accounts:{netease:{}}}});
+  let reads=0;
+  adapters.netease.run=async r=>{
+    calls.push(['netease',r]);
+    if(r.op==='sync')return {playlists:[{id:'netease:liked',favorite:true,editable:true}]};
+    if(r.op==='tracks'){reads++;return {tracks:[{id:'netease:song',name:'Song',artist:'Artist'}]};}
+    return {};
+  };
+  await manager.run({op:'sync'});const after=calls.length;
+  const first=await manager.run({op:'tracks',id:'musxi:cloud-favorites'});
+  assert.equal(reads,1);assert.equal(calls.length,after);assert.equal(first.tracks.length,1);
+  first.tracks[0].name='changed';assert.equal((await manager.run({op:'tracks',id:'musxi:cloud-favorites'})).tracks[0].name,'Song');
+  manager.readCache.get('musxi:cloud-favorites').expires=Date.now()-1;
+  await manager.run({op:'tracks',id:'musxi:cloud-favorites'});assert.equal(reads,2);
+});
+
+test('partially failed synchronization does not warm complete merged favorites',async()=>{
+  const {manager,adapters}=fixture();await manager.run({op:'init',session:{platform:'multi',accounts:{kugou:{},netease:{}}}});
+  adapters.kugou.run=async()=>{throw Error('unavailable')};adapters.netease.run=async r=>r.op==='sync'?{playlists:[]}:{tracks:[]};
+  const result=await manager.run({op:'sync'});assert.ok(result.warnings.length);assert.equal(manager.readCache.has('musxi:cloud-favorites'),false);
+});
+
+test('avatar downloads start independently of slow memberships while QQ commands remain serialized',async()=>{
+  const {manager,adapters}=fixture();await manager.run({op:'init',session:{platform:'multi',accounts:{netease:{},qq:{}}}});
+  let releaseMembership,signalPictures;const gate=new Promise(resolve=>{releaseMembership=resolve});
+  const started=new Promise(resolve=>{signalPictures=resolve});const pictures=[];let qqBusy=false;
+  for(const platform of ['netease','qq'])adapters[platform].run=async request=>{
+    if(platform==='qq'){assert.equal(qqBusy,false,'QQ child received concurrent commands');qqBusy=true;}
+    try {
+      if(request.op==='membership'){await gate;return {name:'VIP'};}
+      assert.equal(request.op,'avatar');return {url:`https://music.126.net/${platform}.jpg`};
+    } finally {if(platform==='qq')qqBusy=false;}
+  };
+  adapters.kugou.run=async request=>{
+    assert.equal(request.op,'covers');pictures.push(request.urls[0]);if(pictures.length===2)signalPictures();
+    return {images:[{image:'data:image/png;base64,AAAA'}]};
+  };
+  const task=manager.run({op:'avatar'});let timer;
+  try {
+    await Promise.race([started,new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('Avatar waited for membership')),1000)})]);
+  } finally {clearTimeout(timer);releaseMembership();}
+  const result=await task;assert.equal(pictures.length,2);assert.ok(result.accounts.filter(a=>a.connected).every(a=>a.avatar&&a.membership.name==='VIP'));
 });

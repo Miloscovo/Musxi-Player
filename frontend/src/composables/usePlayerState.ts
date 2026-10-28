@@ -59,7 +59,7 @@ export function usePlayerState() {
   useEffect(() => {
     if (connected && state && !smokeStarted.current && new URLSearchParams(location.search).has('smoke')) {
       smokeStarted.current = true; void verifyWebPage().catch(e => {
-        setError(String(e)); console.error('CEF smoke failed:', String(e));
+        setError(String(e)); console.error('CEF smoke failed:', e instanceof Error ? e.stack : String(e));
         void native.window.close(); // Test failures must exit instead of looking like a startup hang.
       });
     }

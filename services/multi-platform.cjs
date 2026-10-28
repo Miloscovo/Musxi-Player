@@ -15,16 +15,23 @@ function mergeTracks(tracks,groups=new Map()) {
   return [...groups.values()].map(group=>({...group,platforms:['netease','kugou','qq'].filter(p=>group.sources.some(source=>source.platform===p))}));
 }
 class MultiPlatform {
-  constructor(adapters) { this.adapters=adapters; this.active='kugou'; this.sessions={}; this.accounts={}; this.playlists={}; this.favoriteKeys={}; this.searchKeywords=''; this.searchGroups=new Map(); }
-  close() { for(const adapter of Object.values(this.adapters))adapter.stop?.('接口已关闭'); }
+  constructor(adapters) { this.adapters=adapters; this.active='kugou'; this.sessions={}; this.accounts={}; this.playlists={}; this.favoriteKeys={}; this.searchKeywords=''; this.searchGroups=new Map(); this.readCache=new Map(); }
+  close() { this.readCache.clear(); for(const adapter of Object.values(this.adapters))adapter.stop?.('接口已关闭'); }
   accountState() { return PLATFORMS.map(platform=>({platform,name:NAMES[platform],connected:!!this.accounts[platform]?.connected,user:this.accounts[platform]?.profile?.name || '',error:this.accounts[platform]?.error || '',avatar:this.accounts[platform]?.connected ? this.accounts[platform]?.avatar || '' : '',...(this.accounts[platform]?.connected && this.accounts[platform]?.membership ? {membership:this.accounts[platform].membership}: {})})); }
   allPlaylists() { return PLATFORMS.flatMap(platform=>(this.playlists[platform] || []).map(row=>({...row,platform}))); }
   decorate(result) {
     const favoritesCount=new Set(PLATFORMS.filter(p=>this.accounts[p]?.connected).flatMap(p=>[...(this.favoriteKeys[p] || [])])).size;
     return {favoritesCount,...result,accounts:this.accountState(),session:{platform:'multi',accounts:this.sessions},connected:this.accountState().some(a=>a.connected),profile:{name:this.accountState().filter(a=>a.connected).map(a=>a.user || a.name).join(' / ')}};
   }
-  async call(platform,request) {
-    const result=await this.adapters[platform].run(request);
+  async call(platform,request,useCache=true) {
+    if(['init','poll','logout','sync','song_update'].includes(request.op))this.readCache.clear();
+    const key=useCache?(request.op==='tracks'?JSON.stringify([platform,'tracks',request.id]):request.op==='search'?JSON.stringify([platform,'search',request.keywords,request.page]):null):null;
+    const cached=key && this.readCache.get(key);
+    const result=cached && cached.expires>Date.now()?structuredClone(cached.result):await this.adapters[platform].run(request);
+    if(key && (!cached || cached.expires<=Date.now())) {
+      this.readCache.delete(key);this.readCache.set(key,{expires:Date.now()+30000,result:structuredClone(result)});
+      if(this.readCache.size>24)this.readCache.delete(this.readCache.keys().next().value);
+    }
     if(result.session) this.sessions[platform]=result.session;
     if(request.op==='init')this.accounts[platform]={connected:result.connected,profile:result.profile,error:result.verificationFailed?`${NAMES[platform]}登录状态验证失败，请稍后重试`:''};
     if(request.op==='poll' && result.status==='connected')this.accounts[platform]={connected:true,profile:result.profile};
@@ -42,7 +49,7 @@ class MultiPlatform {
   async sourceFor(track,platform) {
     const source=[track,...(track.sources || [])].find(row=>platformOf(row.id)===platform && trackKey(row)===trackKey(track));
     if(source)return source;
-    const result=await this.call(platform,{op:'search',keywords:`${track.name} ${track.artist}`,page:1});
+    const result=await this.call(platform,{op:'search',keywords:`${track.name} ${track.artist}`,page:1},false);
     return result.tracks?.find(row=>platformOf(row.id)===platform && trackKey(row)===trackKey(track));
   }
   async audioWithDefault(platform,request) {
@@ -69,15 +76,25 @@ class MultiPlatform {
   async favorites() {
     const targets=PLATFORMS.filter(p=>this.accounts[p]?.connected);
     if(!targets.length)throw Error('请先登录音乐平台');
+    const cached=this.readCache.get(FAVORITES);
+    if(cached && cached.expires>Date.now())return structuredClone(cached.result);
     const results=await Promise.allSettled(targets.map(async platform=>{
       await this.call(platform,{op:'sync'});
       return this.readFavorites(platform);
     }));
     const fulfilled=results.filter(r=>r.status==='fulfilled');
     if(!fulfilled.length)throw Error('云端收藏读取失败，请稍后重试');
-    const tracks=mergeTracks(fulfilled.flatMap(r=>r.value));
-    return {favoritesCount:tracks.length,playlist:{id:FAVORITES,name:'云端收藏整合',editable:false,count:tracks.length},tracks,
-      playlists:this.allPlaylists(),warnings:targets.filter((p,i)=>results[i].status==='rejected').map(p=>`${NAMES[p]}收藏读取失败，当前列表仅包含其他平台的收藏`)};
+    return this.favoriteSnapshot(fulfilled.flatMap(r=>r.value),targets.filter((p,i)=>results[i].status==='rejected').map(p=>`${NAMES[p]}收藏读取失败，当前列表仅包含其他平台的收藏`));
+  }
+  favoriteSnapshot(rows,warnings) {
+    const tracks=mergeTracks(rows);
+    const result={favoritesCount:tracks.length,playlist:{id:FAVORITES,name:'云端收藏整合',editable:false,count:tracks.length},tracks,
+      playlists:this.allPlaylists(),warnings};
+    if(!result.warnings.length){
+      this.readCache.set(FAVORITES,{expires:Date.now()+30000,result:structuredClone(result)});
+      if(this.readCache.size>24)this.readCache.delete(this.readCache.keys().next().value);
+    }
+    return result;
   }
   async run(request) {
     const op=request.op;
@@ -99,14 +116,19 @@ class MultiPlatform {
     }
     if(op==='sync' || op==='search') {
       const targets=op==='sync'?PLATFORMS.filter(p=>this.accounts[p]?.connected):PLATFORMS;
-      const results=await Promise.allSettled(targets.map(platform=>this.call(platform,request)));
+      const favoriteWarnings=[];
+      const favoriteTracks=new Map();
+      const results=await Promise.allSettled(targets.map(async platform=>{
+        const result=await this.call(platform,request);
+        if(op==='sync')try {favoriteTracks.set(platform,await this.readFavorites(platform));} catch {favoriteWarnings.push(`${NAMES[platform]}收藏数量读取失败，已保留原有数量`);}
+        return result;
+      }));
       const fulfilled=results.filter(r=>r.status==='fulfilled').map(r=>r.value);
       if(!fulfilled.length)throw Error('各平台请求均失败，请检查网络和登录状态');
       const warnings=targets.filter((p,i)=>results[i].status==='rejected').map(p=>`${NAMES[p]}请求失败，已保留原有数据`);
       if(op==='sync') {
-        await Promise.all(targets.filter((p,i)=>results[i].status==='fulfilled').map(async platform=>{
-          try {await this.readFavorites(platform);} catch {warnings.push(`${NAMES[platform]}收藏数量读取失败，已保留原有数量`);}
-        }));
+        warnings.push(...favoriteWarnings);
+        if(!warnings.length)this.favoriteSnapshot(targets.flatMap(platform=>favoriteTracks.get(platform)),[]);
         return this.decorate({playlists:this.allPlaylists(),syncedAt:new Date().toISOString(),warnings});
       }
       if(request.page===1 || this.searchKeywords!==request.keywords){this.searchGroups.clear();this.searchKeywords=request.keywords;}
@@ -116,15 +138,21 @@ class MultiPlatform {
     if(op==='covers')return this.adapters.kugou.run(request);
     if(op==='avatar') {
       await Promise.all(PLATFORMS.filter(p=>this.accounts[p]?.connected).map(async platform=>{
-        try {
-          const membership=await this.adapters[platform].run({op:'membership'});
-          this.accounts[platform].membership=typeof membership.name==='string'?membership:{name:'会员状态暂不可用'};
-        } catch {this.accounts[platform].membership={name:'会员状态暂不可用'};}
-        try {
-          const result=await this.adapters[platform].run(request);
-          const image=result.url ? (await this.adapters.kugou.run({op:'covers',urls:[result.url]})).images?.[0]?.image : result.image;
-          this.accounts[platform].avatar=typeof image==='string' && /^data:image\/(jpeg|png|webp);base64,/.test(image)?image:'';
-        } catch { /* Avatar failures must not invalidate a signed-in account. */ }
+        const avatar=this.adapters[platform].run(request);
+        await Promise.all([(async()=>{
+          // QQ's child accepts one command at a time; read its stored avatar URL before membership.
+          if(platform==='qq')try {await avatar;} catch { /* Still check membership. */ }
+          try {
+            const membership=await this.adapters[platform].run({op:'membership'});
+            this.accounts[platform].membership=typeof membership.name==='string'?membership:{name:'会员状态暂不可用'};
+          } catch {this.accounts[platform].membership={name:'会员状态暂不可用'};}
+        })(),(async()=>{
+          try {
+            const result=await avatar;
+            const image=result.url ? (await this.adapters.kugou.run({op:'covers',urls:[result.url]})).images?.[0]?.image : result.image;
+            this.accounts[platform].avatar=typeof image==='string' && /^data:image\/(jpeg|png|webp);base64,/.test(image)?image:'';
+          } catch { /* Avatar failures must not invalidate a signed-in account. */ }
+        })()]);
       }));
       return this.decorate({image:this.accounts.kugou?.avatar || ''});
     }

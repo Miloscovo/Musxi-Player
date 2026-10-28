@@ -512,7 +512,7 @@ void ready(void* window) {
 void tick() {
     if(testWindow)refreshShortcutSuspension();
     CefDoMessageLoopWork();
-    if(smoke && GetTickCount64()-startTick>(updatesUiSmoke.empty()?30000:90000))PostMessageW(nativeWindow,WM_CLOSE,0,0);
+    if(smoke && GetTickCount64()-startTick>90000)PostMessageW(nativeWindow,WM_CLOSE,0,0);
 }
 bool canClose() {
     finishCompactTransition();

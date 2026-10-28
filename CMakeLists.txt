@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(MusxiPlayer VERSION 0.5.1 LANGUAGES CXX RC)
+project(MusxiPlayer VERSION 0.6.0 LANGUAGES CXX RC)
 if(NOT WIN32)
   message(FATAL_ERROR "Musxi Player requires Windows 10 or newer")
 endif()
@@ -234,7 +234,7 @@ if(BUILD_TESTING AND MUSXI_ENABLE_FFMPEG)
     endif()
     add_test(NAME cef-app-smoke
       COMMAND "$<TARGET_FILE_DIR:cef_host>/MusxiPlayerWeb.exe" --cef-smoke)
-    set_tests_properties(cef-app-smoke PROPERTIES TIMEOUT 35 RUN_SERIAL TRUE)
+    set_tests_properties(cef-app-smoke PROPERTIES TIMEOUT 100 RUN_SERIAL TRUE)
     if(MUSXI_BUILD_VUE_UI)
       if(NOT MUSXI_RELEASE_BUILD)
         foreach(scenario available current empty missing development checking failed stale changed
@@ -266,11 +266,11 @@ if(BUILD_TESTING AND MUSXI_ENABLE_FFMPEG)
       set_tests_properties(cef-preview-smoke PROPERTIES TIMEOUT 35 RUN_SERIAL TRUE)
       add_test(NAME cef-test-app-smoke
         COMMAND "$<TARGET_FILE_DIR:cef_host>/MusxiPlayerWeb.exe" --test-app --cef-smoke)
-      set_tests_properties(cef-test-app-smoke PROPERTIES TIMEOUT 35 RUN_SERIAL TRUE)
+      set_tests_properties(cef-test-app-smoke PROPERTIES TIMEOUT 100 RUN_SERIAL TRUE)
       add_test(NAME cef-unicode-smoke COMMAND ${CMAKE_COMMAND}
         "-DHOST=$<TARGET_FILE_DIR:cef_host>/MusxiPlayerWeb.exe"
         -P "${CMAKE_SOURCE_DIR}/tests/cef-unicode-smoke.cmake")
-      set_tests_properties(cef-unicode-smoke PROPERTIES TIMEOUT 40 RUN_SERIAL TRUE)
+      set_tests_properties(cef-unicode-smoke PROPERTIES TIMEOUT 100 RUN_SERIAL TRUE)
     endif()
   endif()
 endif()

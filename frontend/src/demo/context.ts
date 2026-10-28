@@ -193,6 +193,9 @@ export function createDemoTransport(): CefTransport {
           library.localPlaylists!.push({ id: 'local-folder:demo', name: '演示音乐文件夹', artist: '', cover: '', duration: 0, count: rows.length, editable: false });
         }
         library.notice = '已添加虚拟演示文件夹，不读取真实文件。'; break;
+      case 'library.rescanLocal':
+        if(p.id!=='musxi:local' && !library.localPlaylists?.some(list=>list.id===p.id))fail('本地文件夹不存在',404);
+        library.notice='演示模式不会读取真实文件，列表保持不变。';break;
       case 'library.removeLocalFolder': {
         if(!library.localPlaylists?.some(list=>list.id===p.id))fail('本地文件夹不存在',404);
         const removed=new Set((lists.get(p.id) || []).map(song=>song.id));

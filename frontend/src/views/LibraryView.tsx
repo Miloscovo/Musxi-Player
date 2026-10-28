@@ -89,6 +89,8 @@ export default function LibraryView({ library: lib, theme, appearance, onAppeara
   const [accountPlatform, setAccountPlatform] = useState<MusicPlatform | null>(null);
   const isLocal = view === 'library' && librarySection === 'local';
   const busy = pending || !!state?.busy;
+  const [rescanning, setRescanning] = useState(false);
+  useEffect(() => { if (!busy) setRescanning(false); }, [busy]);
   const signedOut = !!state && !state.connected && !busy && !error && (['kugou','netease','qq'] as const).every(platform => {
     const account = state.accounts?.find(account => account.platform === platform);
     return account?.connected === false && !account.error;
@@ -294,6 +296,7 @@ export default function LibraryView({ library: lib, theme, appearance, onAppeara
           disabled={busy || !state?.trackCount || (!isLocal && !state?.connected)} onClick={() => state && void lib.playPlaylist(state.playlistId)}>
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8.5 5.5v13L19 12z"/></svg><span>播放</span>
         </Button>}
+        {isLocal && showTracks && <Button variant="ghost" className="playlist-play-button" disabled={busy} aria-live="polite" onClick={() => { if(state) { setRescanning(true); void lib.rescanLocal(state.playlistId); } }}>{rescanning && busy ? '扫描中…' : '重新扫描'}</Button>}
         {(view === 'recent' || view === 'search' || showTracks) && <form className="collection-search" onSubmit={event => { event.preventDefault(); void searchSongs(); }}>
           <Button variant="unstyled" type="submit" disabled={busy || !(view !== 'search' ? playlistQuery : query).trim()} aria-label="搜索"><svg className="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.6" fill="none" stroke="currentColor" strokeWidth="2"/><path d="m16 16 5 5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/></svg></Button>
           <input value={view !== 'search' ? playlistQuery : query} onChange={event => {

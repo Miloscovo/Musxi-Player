@@ -245,7 +245,8 @@ class Adapter {
   }
   async refreshPlaylists() {
     this.auth();const list=await this.pages('user_playlist', {}, ['info','lists'], playlist);
-    for(const p of list.filter(p=>p.editable && (!p.cover || p.automaticCover) && p.count>0)) {
+    const pending=list.filter(p=>p.editable && (!p.cover || p.automaticCover) && p.count>0);
+    for(let i=0;i<pending.length;i+=3)await Promise.all(pending.slice(i,i+3).map(async p=>{
       try {
         if(p.favorite) {
           const first=(await this.playlistTracks(p))[0];
@@ -256,7 +257,7 @@ class Adapter {
           if(first && cover(first)){p.cover=cover(first);p.automaticCover=true;}
         }
       } catch { /* Missing artwork must not prevent playlist synchronization. */ }
-    }
+    }));
     this.knownPlaylists=new Map(list.map(p=>[p.id,p]));return list;
   }
   async playlistTracks(p) {

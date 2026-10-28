@@ -412,7 +412,7 @@ export async function verifyWebPage() {
     throw new Error('Title bar blocks the top of the sidebar rail');
   const originalContentLeft=document.querySelector('.library-content')!.getBoundingClientRect().left;
   desktopToggle.click();
-  await waitFor(() => !document.querySelector('.sidebar') && !!document.querySelector('[aria-label="展开侧栏"]'), 'Desktop sidebar did not fully collapse');
+  await waitFor(() => getComputedStyle(document.querySelector('.sidebar')!).visibility === 'hidden' && document.querySelector('.sidebar-frame')!.getBoundingClientRect().width < 1 && !!document.querySelector('[aria-label="展开侧栏"]'), 'Desktop sidebar did not fully collapse');
   if(document.querySelector('.library-content')!.getBoundingClientRect().left >= originalContentLeft)
     throw new Error('Collapsed sidebar still occupies page space');
   if(Math.abs(desktopToggle.getBoundingClientRect().left-document.querySelector('.library-shell')!.getBoundingClientRect().left)>1)
@@ -421,7 +421,7 @@ export async function verifyWebPage() {
   if(collapsedRailBounds.width<24 || document.elementFromPoint(collapsedRailBounds.left+20,collapsedRailBounds.top+80)!==desktopToggle)
     throw new Error('Collapsed sidebar expansion hit area is too narrow or blocked');
   document.querySelector<HTMLButtonElement>('[aria-label="展开侧栏"]')!.click();
-  await waitFor(() => !!document.querySelector('.sidebar'), 'Desktop sidebar did not expand');
+  await waitFor(() => document.querySelector('.sidebar')?.getAttribute('data-state') === 'expanded' && document.querySelector('.sidebar-frame')!.getBoundingClientRect().width >= sidebarBounds.width - 1, 'Desktop sidebar did not expand');
   for (const target of Array.from(document.querySelectorAll('.sidebar button,.library-sections button svg,.play-controls button'))) {
     const event = new MouseEvent('contextmenu', { bubbles: true, cancelable: true, button: 2 });
     target.dispatchEvent(event);
@@ -468,6 +468,7 @@ export async function verifyWebPage() {
     favorite: async (id: string, enabled: boolean) => { actions.push(`favorite:${id}:${enabled}`); },
     add: async (id: string, list: string) => { actions.push(`add:${id}:${list}`); },
     importLocal: async () => { actions.push('importLocal'); },
+    rescanLocal: async id => { actions.push(`rescanLocal:${id}`); },
     removeLocalFolder: async id => { actions.push(`removeLocalFolder:${id}`); },
     removeLocalTrack: async (id,playlistId) => { actions.push(`removeLocalTrack:${id}:${playlistId}`); },
     playPlaylist: async id => { actions.push(`playlistPlay:${id}`); },
@@ -489,7 +490,7 @@ export async function verifyWebPage() {
     await verifyTrackLoading(fixtureLibrary);
     await verifyOtherSongLoading(fixtureLibrary);
     root.render(createElement(SmokeLibraryView, { library: fixtureLibrary, theme: 'light' }));
-    await waitFor(() => !!fixture.querySelector('.playlist'));
+    await waitFor(() => !!fixture.querySelector('.playlist:not(.playlist-skeleton)'));
     const favoritesCard=fixture.querySelector<HTMLButtonElement>('.playlist')!;
     if(favoritesCard.querySelector('strong')?.textContent!=='云端收藏整合' || !favoritesCard.querySelector('svg path'))throw new Error('Cloud favorites entry is missing or not first');
     checkPlaylistText(favoritesCard);
@@ -541,7 +542,7 @@ export async function verifyWebPage() {
     root.render(null);
     await waitFor(() => !fixture.querySelector('.library-shell'));
     root.render(createElement(SmokeLibraryView, { library: fixtureLibrary, theme: 'light' }));
-    await waitFor(() => !!fixture.querySelector('.playlist'));
+    await waitFor(() => !!fixture.querySelector('.playlist:not(.playlist-skeleton)'));
     Array.from(fixture.querySelectorAll<HTMLButtonElement>('.playlist')).find(card => card.querySelector('strong')?.textContent === playlist.name)!.click();
     await waitFor(() => fixture.querySelectorAll('.song.track-row').length === 1, 'Single-song fixture did not restore');
     const playlistPlay = fixture.querySelector<HTMLButtonElement>('[aria-label="播放歌单"]')!;
@@ -563,8 +564,8 @@ export async function verifyWebPage() {
     fixture.querySelector<HTMLButtonElement>('[aria-label="播放歌单"]')!.click();
     await waitFor(() => actions.includes(`playlistPlay:${playlist.id}`));
     const row = fixture.querySelector<HTMLElement>('.song.track-row')!;
-    row.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
-    if (!actions.includes(`play:${song.id}`)) throw new Error('Song double-click stopped playing');
+    row.dispatchEvent(new MouseEvent('click', { bubbles: true, button: 0, detail: 1 }));
+    if (!actions.includes(`play:${song.id}`)) throw new Error('Song click stopped playing');
     const rightClick = () => row.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, button: 2, clientX: 300, clientY: 250 }));
     rightClick();
     await waitFor(() => !!document.querySelector('[data-slot=context-menu-content]'));
@@ -636,7 +637,10 @@ export async function verifyWebPage() {
     localCards[0].click();
     await waitFor(() => !!fixture.querySelector('.song.track-row'), 'All-local playlist did not show songs');
     if(fixture.querySelector('h1')?.textContent !== '本地歌曲整合')throw new Error('All-local playlist title is incorrect');
-    fixture.querySelector<HTMLElement>('.song.track-row')!.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+    const allRescan=Array.from(fixture.querySelectorAll<HTMLButtonElement>('.header-actions button')).find(button=>button.textContent==='重新扫描');
+    if(!allRescan || allRescan.disabled)throw new Error('All-local rescan button missing');
+    allRescan.click();await waitFor(()=>actions.includes('rescanLocal:musxi:local'));
+    fixture.querySelector<HTMLElement>('.song.track-row')!.dispatchEvent(new MouseEvent('click', { bubbles: true, button: 0, detail: 1 }));
     if(!actions.includes(`play:local:${song.id}`))throw new Error('All-local song playback failed');
     fixture.querySelector<HTMLButtonElement>('.back-button')!.click();
     await waitFor(() => !!fixture.querySelector('.local-all'));
@@ -644,8 +648,11 @@ export async function verifyWebPage() {
     fixtureLibrary.state={...fixtureLibrary.state!,playlistId:localPlaylist.id,playlistName:localPlaylist.name};
     root.render(createElement(SmokeLibraryView, { library: fixtureLibrary, theme: 'light' }));
     await waitFor(() => !!fixture.querySelector('.song.track-row'), 'Local song did not render');
-    fixture.querySelector<HTMLElement>('.song.track-row')!.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
-    if (!actions.includes(`play:local:${song.id}`)) throw new Error('Local double-click did not play offline');
+    const folderRescan=Array.from(fixture.querySelectorAll<HTMLButtonElement>('.header-actions button')).find(button=>button.textContent==='重新扫描');
+    if(!folderRescan || folderRescan.disabled)throw new Error('Folder rescan button missing');
+    folderRescan.click();await waitFor(()=>actions.includes(`rescanLocal:${localPlaylist.id}`));
+    fixture.querySelector<HTMLElement>('.song.track-row')!.dispatchEvent(new MouseEvent('click', { bubbles: true, button: 0, detail: 1 }));
+    if (!actions.includes(`play:local:${song.id}`)) throw new Error('Local click did not play offline');
     fixture.querySelector<HTMLElement>('.song.track-row')!.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,button:2,clientX:500,clientY:300}));
     await waitFor(()=>!!document.querySelector('[data-slot=context-menu-content]'));
     const localMenuItems=Array.from(document.querySelectorAll<HTMLElement>('[data-slot=context-menu-content] [role=menuitem]'));
@@ -661,10 +668,10 @@ export async function verifyWebPage() {
     await waitFor(()=>!!fixture.querySelector('.song.track-row'));
     const sidebarToggle=fixture.querySelector<HTMLButtonElement>('[data-slot=sidebar-rail]')!;
     sidebarToggle.click();
-    await waitFor(() => !fixture.querySelector('[data-slot=sidebar]'), 'Sidebar did not completely collapse');
+    await waitFor(() => getComputedStyle(fixture.querySelector('[data-slot=sidebar]')!).visibility === 'hidden' && fixture.querySelector('.sidebar-frame')!.getBoundingClientRect().width < 1, 'Sidebar did not completely collapse');
     if(document.querySelector('[data-slot=sheet-content],[data-slot=sheet-overlay]'))throw new Error('Sidebar still uses Sheet');
     sidebarToggle.click();
-    await waitFor(() => !!fixture.querySelector('[data-slot=sidebar]'), 'Sidebar did not expand');
+    await waitFor(() => fixture.querySelector('[data-slot=sidebar]')?.getAttribute('data-state') === 'expanded' && getComputedStyle(fixture.querySelector('[data-slot=sidebar]')!).visibility === 'visible', 'Sidebar did not expand');
     fixture.querySelector<HTMLButtonElement>('.settings-nav')!.click();
     await waitFor(() => !!fixture.querySelector('.settings-content'), 'Sidebar settings navigation failed');
     fixtureLibrary.state={...fixtureLibrary.state!,connected:true,queue:[song],queueCurrentId:song.id};

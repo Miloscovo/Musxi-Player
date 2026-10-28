@@ -138,6 +138,15 @@ LibraryReply applicationLibrary(const std::string& name,const std::string& param
             notice(trackRemoval?L"已从歌单移除歌曲，磁盘文件未删除":L"已移除音乐文件夹，磁盘文件未删除");
             return reply({{"id",std::to_string(++libraryOperationId)}});
         }
+        if(name=="library.rescanLocal") {
+            if(p.size()!=1)return {400,"无效扫描参数",{}};
+            const auto id=requiredText(p,"id");
+            if(localImportPending || localScan.valid() || !libraryNextPlay.is_null())return {409,"正在处理音乐，请稍后重试",{}};
+            loadLocalCatalog(cloud::dataDir()/L"local-music.json");
+            if(id!="musxi:local" && std::none_of(localFolders.begin(),localFolders.end(),[&](const Json& row){return row.at("id")==id;}))return {404,"本地文件夹不存在",{}};
+            startLocalRescan(id);
+            return reply({{"id",std::to_string(++libraryOperationId)}});
+        }
         if(name=="library.importLocal") {
             if(!p.empty())return {400,"无效导入参数",{}};
             if(localImportPending || localScan.valid())return {409,"正在导入音乐，请稍后再试",{}};

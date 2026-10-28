@@ -71,6 +71,7 @@ export function useLibrary() {
       recentRemove: (id:string) => run(signal=>native.library.recentRemove(id,signal)),
       recentClear: () => run(signal=>native.library.recentClear(signal)),
       importLocal: () => run(signal => native.library.importLocal(signal)),
+      rescanLocal: (id: string) => { changePage(1); r.tracks = new PlaylistPages(); return run(signal => native.library.rescanLocal(id, signal)); },
       removeLocalFolder: (id: string) => run(signal => native.library.removeLocalFolder(id, signal)),
       removeLocalTrack: (id: string, playlistId: string) => run(signal => native.library.removeLocalTrack(id, playlistId, signal)),
       skip: (delta: -1 | 1) => playback(signal => native.library.skip(delta, signal)),
@@ -83,7 +84,11 @@ export function useLibrary() {
   useEffect(() => {
     const r = runtime.current; r.active = true; r.pending = false; r.task = null;
     r.controller = new AbortController(); setPending(false);
-    void actions.refresh(); const timer = setInterval(() => void actions.refresh(), 800);
+    void actions.refresh(); let lastRead = Date.now();
+    const timer = setInterval(() => {
+      if (r.state && !r.pending && !r.state.busy && Date.now() - lastRead < 800) return;
+      lastRead = Date.now(); void actions.refresh();
+    }, 120);
     function stop() { r.active = false; clearInterval(timer); r.controller.abort(); }
     window.addEventListener('pagehide', stop);
     return () => { stop(); window.removeEventListener('pagehide', stop); };

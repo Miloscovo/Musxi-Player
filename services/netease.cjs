@@ -32,7 +32,21 @@ class NeteaseAdapter {
   song(row){const song={id:`netease:${row.id}`,serviceId:String(row.id),platform:'netease',name:row.name || '未命名歌曲',artist:(row.ar || row.artists || []).map(a=>a.name).join('、'),album:(row.al || row.album)?.name || '',cover:(row.al || row.album)?.picUrl || '',duration:Number(row.dt || row.duration || 0),count:0,editable:false};this.tracks.set(song.id,song);return song;}
   async sync(){this.auth();const rows=[];for(let offset=0;offset<10000;offset+=100){const b=await this.api('user_playlist',{uid:this.profile.id,limit:100,offset});rows.push(...(b.playlist || []));if(!b.more)break;if(offset===9900)throw Error('网易云歌单过多，请缩小范围');}
     const lists=rows.map(p=>({id:`netease:${p.id}`,serviceId:String(p.id),platform:'netease',name:p.name,artist:'',cover:p.coverImgUrl || '',duration:0,count:p.trackCount || 0,editable:String(p.creator?.userId)===this.profile.id,favorite:!!p.specialType}));this.lists=new Map(lists.map(p=>[p.id,p]));return lists;}
-  async playlist(id){const p=this.lists.get(id);if(!p)throw Error('请先同步网易云歌单');const detail=await this.api('playlist_detail',{id:p.serviceId});const ids=detail.playlist?.trackIds;if(!Array.isArray(ids))throw Error('网易云歌单数据无效');if(ids.length>10000)throw Error('歌单超过当前歌曲上限');const rows=[];for(let i=0;i<ids.length;i+=100){const b=await this.api('song_detail',{ids:ids.slice(i,i+100).map(row=>row.id).join(',')});if(!Array.isArray(b.songs))throw Error('歌曲数据无效');rows.push(...b.songs.map(row=>this.song(row)));}return {playlist:p,tracks:rows};}
+  async playlist(id){
+    const p=this.lists.get(id);if(!p)throw Error('请先同步网易云歌单');
+    const detail=await this.api('playlist_detail',{id:p.serviceId});const ids=detail.playlist?.trackIds;
+    if(!Array.isArray(ids))throw Error('网易云歌单数据无效');if(ids.length>10000)throw Error('歌单超过当前歌曲上限');
+    const rows=[];
+    for(let i=0;i<ids.length;i+=300){
+      const batches=[];
+      for(let start=i;start<Math.min(i+300,ids.length);start+=100)
+        batches.push(this.api('song_detail',{ids:ids.slice(start,start+100).map(row=>row.id).join(',')}));
+      for(const b of await Promise.all(batches)){
+        if(!Array.isArray(b.songs))throw Error('歌曲数据无效');rows.push(...b.songs.map(row=>this.song(row)));
+      }
+    }
+    return {playlist:p,tracks:rows};
+  }
   async audioInfo(track,quality){
     const level=QUALITIES.find(q=>q.id===quality);if(!level)throw Error('无效音质');
     const b=await this.api('song_url_v1',{id:track.serviceId,level:level.level});const d=b.data?.[0];

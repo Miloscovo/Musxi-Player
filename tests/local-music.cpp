@@ -36,6 +36,20 @@ int main(int argc,char** argv) {
         requireLocal(repeat["folders"].size()==1,"duplicate folder created a second playlist");
         auto overlap=scanLocalFolder(nested,repeat["tracks"],repeat["folders"]);
         requireLocal(overlap["folders"].size()==2 && overlap["tracks"].size()==2,"overlapping import duplicated songs or lost folder");
+        const auto sharedRow=std::find_if(overlap["tracks"].begin(),overlap["tracks"].end(),[&](const Json& row){return fs::u8path(row.at("path").get<std::string>())==nested/L"另一首歌.flac";});
+        requireLocal(sharedRow!=overlap["tracks"].end(),"shared fixture missing");
+        const auto sharedId=sharedRow->at("id").get<std::string>();
+        fs::remove(nested/L"另一首歌.flac");
+        fs::copy_file(fs::path(argv[1])/L"source.wav",folder/L"new.wav");
+        auto rescanned=scanLocalFolder(folder,overlap["tracks"],overlap["folders"],0,true);
+        requireLocal(rescanned["added"]==1 && rescanned["removed"]==1 && rescanned["tracks"].size()==3,"rescan did not add and remove folder memberships");
+        auto shared=std::find_if(rescanned["tracks"].begin(),rescanned["tracks"].end(),[&](const Json& row){return row.at("id")==sharedId;});
+        requireLocal(shared!=rescanned["tracks"].end() && shared->at("folders").size()==1 && shared->at("folders")[0]==overlap["folders"][1]["id"],"rescan lost shared song");
+        auto nestedScan=scanLocalFolder(nested,rescanned["tracks"],rescanned["folders"],rescanned["idHighWater"].get<size_t>(),true);
+        requireLocal(nestedScan["tracks"].size()==2,"rescan retained song missing from all folders");
+        bool missingFailed=false;try {scanLocalFolder(folder/L"missing",overlap["tracks"],overlap["folders"],0,true);}catch(...) {missingFailed=true;}
+        requireLocal(missingFailed,"missing folder rescan did not fail safely");
+        fs::remove(folder/L"new.wav");fs::copy_file(fs::path(argv[1])/L"source.flac",nested/L"另一首歌.flac");
         const auto catalog=folder/L"local-music.json";
         requireLocal(saveLocalCatalog(overlap["tracks"],catalog,overlap["folders"]),"catalog save failed");
         localLoaded=false;localTracks=Json::array();loadLocalCatalog(catalog);
@@ -52,6 +66,17 @@ int main(int argc,char** argv) {
         requireLocal(dto["playlistId"]=="musxi:local" && dto["trackCount"]==2 && !dto["tracks"][0].contains("path"),"public catalog/path boundary failed");
         requireLocal(dto["localPlaylists"].size()==2 && !dto["localPlaylists"][0].contains("path"),"public folder/path boundary failed");
         const auto nestedId=localFolders[1]["id"].get<std::string>();
+        requireLocal(musxi::applicationLibrary("library.rescanLocal","{}").code==400,"rescan accepted missing id");
+        requireLocal(musxi::applicationLibrary("library.rescanLocal","{\"id\":\"local-folder:missing\"}").code==404,"rescan accepted unknown folder");
+        fs::copy_file(fs::path(argv[1])/L"source.wav",nested/L"rescan.wav");
+        requireLocal(musxi::applicationLibrary("library.rescanLocal",Json{{"id",nestedId}}.dump()).code==0,"folder rescan rejected");
+        requireLocal(localScan.valid(),"folder rescan did not start asynchronously");
+        while(localScan.valid()){localTick();Sleep(1);}
+        requireLocal(localTracks.size()==3 && localPlaylistRows()[1]["count"]==2,"rescan did not publish added track");
+        fs::remove(nested/L"rescan.wav");
+        requireLocal(musxi::applicationLibrary("library.rescanLocal","{\"id\":\"musxi:local\"}").code==0,"all-folder rescan rejected");
+        while(localScan.valid()){localTick();Sleep(1);}
+        requireLocal(localTracks.size()==2 && localPlaylistRows()[1]["count"]==1,"all-folder rescan did not remove missing track");
         requireLocal(musxi::applicationLibrary("library.open",Json{{"id",nestedId}}.dump()).code==0,"local folder open failed");
         dto=Json::parse(musxi::applicationLibrary("library.getState","{}").json);
         requireLocal(dto["trackCount"]==1 && dto["playlistName"]==nested.filename().u8string(),"folder tracks were not filtered");

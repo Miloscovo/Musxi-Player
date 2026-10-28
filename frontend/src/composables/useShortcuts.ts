@@ -36,6 +36,10 @@ export function useShortcuts() {
   }, []);
   useEffect(() => {
     function keyboard(event: KeyboardEvent) {
+      if (event.key === 'Tab' && !event.ctrlKey && !event.altKey && !event.metaKey)
+        document.documentElement.dataset.keyboardNavigation = 'true';
+      else if (event.ctrlKey || event.altKey || event.metaKey)
+        document.documentElement.dataset.keyboardNavigation = 'false';
       if (!loaded || recording || busy || event.defaultPrevented || event.repeat || event.isComposing) return;
       const target = event.target as Element;
       if (target.closest('input, textarea, select, [contenteditable], [role=dialog]')) return;
@@ -43,6 +47,7 @@ export function useShortcuts() {
       if (!binding || (target.closest('button, [role=menuitem]') && [13,32].includes(binding.key))) return;
       const match = shortcutActions.find(([id]) => sameBinding(binding, state.bindings[id]));
       if (!match) return;
+      document.documentElement.dataset.keyboardNavigation = 'false';
       // Registered global combinations are consumed by Windows; never execute a second time in CEF.
       if (state.global && !state.suspended && !state.failed.includes(match[0])) return;
       event.preventDefault(); void execute(match[0]);
@@ -50,6 +55,12 @@ export function useShortcuts() {
     window.addEventListener('keydown', keyboard);
     return () => window.removeEventListener('keydown', keyboard);
   }, [state, loaded, recording, busy, execute]);
+  useEffect(() => {
+    const pointer = () => { document.documentElement.dataset.keyboardNavigation = 'false'; };
+    pointer();
+    window.addEventListener('pointerdown', pointer, true);
+    return () => window.removeEventListener('pointerdown', pointer, true);
+  }, []);
   async function save(settings: ShortcutSettings) {
     if (locked.current) return false;
     locked.current = true; setBusy(true); setError('');
