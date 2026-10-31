@@ -11,13 +11,16 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
-/** Phone-local read-only API, adapted from the pinned MIT vendor modules. Call off the UI thread.
+/** Phone-local library API, adapted from the pinned MIT vendor modules. Call off the UI thread.
  * song_url_v1 explicitly selects the vendor's supported EAPI override, not default XEAPI.
  * No alternate source, decryption of protected media, or permission bypass is implemented.
  */
 public final class NeteaseLibraryApi {
     private final NeteaseApi api;
-    public NeteaseLibraryApi(NeteaseApi api) { this.api = api; }
+    private final java.util.function.BooleanSupplier current;
+    public NeteaseLibraryApi(NeteaseApi api) { this(api,()->true); }
+    public NeteaseLibraryApi(NeteaseApi api,java.util.function.BooleanSupplier current) { this.api=api;this.current=current; }
+    private void requireCurrent() throws IOException { if(!current.getAsBoolean() || Thread.currentThread().isInterrupted())throw error("account_changed"); }
 
     public static final class Page<T> {
         public final List<T> items;
@@ -31,8 +34,13 @@ public final class NeteaseLibraryApi {
     public static final class Playlist {
         public final String id, name, coverUrl;
         public final int trackCount;
+        public final boolean liked, writable;
         Playlist(String id, String name, String coverUrl, int trackCount) {
+            this(id, name, coverUrl, trackCount, false, false);
+        }
+        Playlist(String id, String name, String coverUrl, int trackCount, boolean liked, boolean writable) {
             this.id = id; this.name = name; this.coverUrl = coverUrl; this.trackCount = trackCount;
+            this.liked = liked; this.writable = writable;
         }
     }
     public static final class Track {
@@ -52,12 +60,16 @@ public final class NeteaseLibraryApi {
     }
     /** An expiring capability; intentionally has no revealing toString or serialization method. */
     public static final class Audio {
-        public final String id, url;
+        public final String id, url, qualityId;
         public final int bitrate;
         public final long expiresAtElapsedMs;
-        Audio(String id, String url, int bitrate, long expiresAtElapsedMs) {
-            this.id = id; this.url = url; this.bitrate = bitrate; this.expiresAtElapsedMs = expiresAtElapsedMs;
+        Audio(String id, String url, int bitrate, long expiresAtElapsedMs, String qualityId) {
+            this.id = id; this.url = url; this.bitrate = bitrate; this.expiresAtElapsedMs = expiresAtElapsedMs; this.qualityId=qualityId;
         }
+    }
+    public static final class AudioQuality {
+        public final String id, name;
+        AudioQuality(String id,String name){this.id=id;this.name=name;}
     }
     public enum TranslationStatus { PRESENT, ABSENT, INVALID }
     public static final class LyricsDocument {
@@ -77,6 +89,54 @@ public final class NeteaseLibraryApi {
         JSONObject body = api.authenticatedCall(NeteaseApi.USER_PLAYLIST,
                 json("uid", session.userId, "limit", limit, "offset", offset, "includeVideo", true), session);
         return parsePlaylists(body, offset, limit);
+    }
+
+    /** Current-account playlists whose server creator.userId matches this session.
+     * The list includes the account's specialType=5 liked-songs playlist. */
+    public List<Playlist> writablePlaylists(NeteaseApi.Session session) throws IOException {
+        if (session == null) throw error("credentials");
+        LinkedHashMap<String, Playlist> out = new LinkedHashMap<>();
+        int offset = 0;
+        boolean foundLiked = false;
+        while (true) {
+            requireCurrent();
+            JSONObject body = api.authenticatedCall(NeteaseApi.USER_PLAYLIST,
+                    json("uid", session.userId, "limit", 100, "offset", offset, "includeVideo", true), session);
+            List<Playlist> page = parseWritablePlaylistPage(body, session.userId);
+            JSONArray rows = body.optJSONArray("playlist");
+            for (Playlist value : page) {
+                if (out.putIfAbsent(value.id, value) != null) throw error("protocol");
+                foundLiked |= value.liked;
+                if (out.size() > 20_000) throw error("limit");
+            }
+            boolean more = body.optBoolean("more");
+            if (more && rows.length() == 0) throw error("protocol");
+            if (!more) break;
+            offset += rows.length();
+            if (offset > 100_000) throw error("limit");
+        }
+        if (!foundLiked) throw error("incomplete");
+        requireCurrent();
+        return Collections.unmodifiableList(new ArrayList<>(out.values()));
+    }
+
+    /** Add one Netease song to an owned playlist. Liked songs use the pinned like endpoint;
+     * custom lists use the pinned playlist_tracks EAPI payload and are rechecked via detail. */
+    public void addToPlaylist(NeteaseApi.Session session, String playlistId, String songId) throws IOException {
+        if (session == null) throw error("credentials");
+        id(playlistId); id(songId);
+        requireCurrent();
+        JSONObject detail = api.authenticatedCall(NeteaseApi.PLAYLIST_DETAIL,
+                json("id", playlistId, "n", 0, "s", 0), session);
+        JSONObject playlist = requireOwnedPlaylist(detail, playlistId, session.userId);
+        requireCurrent();
+        if (nonNegative(playlist.opt("specialType"), 1_000_000) == 5) {
+            setLiked(session, songId, true);
+            return;
+        }
+        JSONArray tracks = new JSONArray().put(songId);
+        api.authenticatedCall(NeteaseApi.PLAYLIST_TRACKS,
+                json("op", "add", "pid", playlistId, "trackIds", tracks.toString(), "imme", "true"), session);
     }
 
     public Page<Track> tracks(NeteaseApi.Session session, String playlistId, int offset, int limit) throws IOException {
@@ -130,10 +190,55 @@ public final class NeteaseLibraryApi {
     }
 
     public Audio audio(NeteaseApi.Session session, String trackId, long nowElapsedMs) throws IOException {
+        return audio(session,trackId,nowElapsedMs,"netease:standard");
+    }
+
+    public Audio audio(NeteaseApi.Session session, String trackId, long nowElapsedMs, String qualityId) throws IOException {
         id(trackId);
+        String level=levelForQuality(qualityId);
         JSONObject body = api.authenticatedCall(NeteaseApi.SONG_URL,
-                json("ids", "[" + trackId + "]", "level", "standard", "encodeType", "flac"), session);
-        return parseAudio(body, trackId, nowElapsedMs);
+                json("ids", "[" + trackId + "]", "level", level, "encodeType", "flac"), session);
+        return parseAudio(body, trackId, nowElapsedMs, qualityId);
+    }
+
+    public List<AudioQuality> qualities(NeteaseApi.Session session,String trackId,long nowElapsedMs) throws IOException {
+        java.util.LinkedHashMap<String,AudioQuality> options=new java.util.LinkedHashMap<>();
+        for(String id:new String[]{"netease:standard","netease:higher","netease:exhigh","netease:lossless"}) {
+            try {
+                Audio audio=audio(session,trackId,nowElapsedMs,id);
+                options.putIfAbsent(audio.qualityId,new AudioQuality(audio.qualityId,qualityName(audio.qualityId)));
+            } catch(NeteaseApi.ApiException unavailable) {
+                if(!java.util.Arrays.asList("permission","unavailable","network").contains(unavailable.code))throw unavailable;
+            }
+        }
+        return Collections.unmodifiableList(new ArrayList<>(options.values()));
+    }
+
+    private static String levelForQuality(String id) throws IOException {
+        switch(id) {
+            case "netease:standard": return "standard";
+            case "netease:higher": return "higher";
+            case "netease:exhigh": return "exhigh";
+            case "netease:lossless": return "lossless";
+            default: throw error("request");
+        }
+    }
+
+    private static String qualityIdForBitrate(int bitrate) {
+        if(bitrate<=128_000)return "netease:standard";
+        if(bitrate<=192_000)return "netease:higher";
+        if(bitrate<=320_000)return "netease:exhigh";
+        return "netease:lossless";
+    }
+
+    private static String qualityName(String id) {
+        switch(id) {
+            case "netease:standard": return "标准音质";
+            case "netease:higher": return "较高音质";
+            case "netease:exhigh": return "极高音质";
+            case "netease:lossless": return "无损音质";
+            default: return "";
+        }
     }
 
     /** Standard LRC only, using the pinned module/lyric.js EAPI request. */
@@ -180,6 +285,39 @@ public final class NeteaseLibraryApi {
         boolean more = body.optBoolean("more");
         if (more && rows.length() == 0) throw error("protocol");
         return new Page<>(out, more ? offset + rows.length() : -1, -1);
+    }
+
+    static List<Playlist> parseWritablePlaylistPage(JSONObject body, String ownerId) throws IOException {
+        JSONArray rows = body.optJSONArray("playlist");
+        if (rows == null || rows.length() > 100 || !(body.opt("more") instanceof Boolean))
+            throw error("protocol");
+        id(ownerId);
+        List<Playlist> out = new ArrayList<>();
+        java.util.HashSet<String> seen = new java.util.HashSet<>();
+        for (int i = 0; i < rows.length(); i++) {
+            JSONObject p = rows.optJSONObject(i);
+            if (p == null) throw error("protocol");
+            String key = id(p.opt("id"));
+            if (!seen.add(key)) throw error("protocol");
+            JSONObject creator = p.optJSONObject("creator");
+            if (creator == null || !ownerId.equals(id(creator.opt("userId")))) continue;
+            int specialType = (int) nonNegative(p.opt("specialType"), 1_000_000);
+            boolean liked = specialType == 5;
+            out.add(new Playlist(key, name(p.opt("name"), "未命名歌单"),
+                    image(p.opt("coverImgUrl")),
+                    (int) nonNegative(p.opt("trackCount"), 1_000_000), liked, true));
+        }
+        return Collections.unmodifiableList(out);
+    }
+
+    static JSONObject requireOwnedPlaylist(JSONObject body, String playlistId, String ownerId) throws IOException {
+        id(playlistId); id(ownerId);
+        JSONObject playlist = body.optJSONObject("playlist");
+        if (playlist == null || !playlistId.equals(id(playlist.opt("id")))) throw error("identity");
+        JSONObject creator = playlist.optJSONObject("creator");
+        if (creator == null || !ownerId.equals(id(creator.opt("userId")))) throw error("permission");
+        nonNegative(playlist.opt("specialType"), 1_000_000);
+        return playlist;
     }
 
     static List<String> parseTrackIds(JSONObject body, String playlistId) throws IOException {
@@ -277,7 +415,12 @@ public final class NeteaseLibraryApi {
     }
 
     static Audio parseAudio(JSONObject body, String trackId, long nowElapsedMs) throws IOException {
+        return parseAudio(body,trackId,nowElapsedMs,"netease:standard");
+    }
+
+    static Audio parseAudio(JSONObject body, String trackId, long nowElapsedMs, String requestedQualityId) throws IOException {
         id(trackId);
+        levelForQuality(requestedQualityId);
         JSONArray rows = body.optJSONArray("data");
         if (rows == null || rows.length() != 1) throw error("protocol");
         JSONObject row = rows.optJSONObject(0);
@@ -287,9 +430,14 @@ public final class NeteaseLibraryApi {
         String url = mediaUrl(row.opt("url"));
         int bitrate = (int) nonNegative(row.opt("br"), 10_000_000);
         if (bitrate == 0) throw error("unavailable");
+        String actualQualityId=qualityIdForBitrate(bitrate);
+        List<String> levels=java.util.Arrays.asList("netease:standard","netease:higher","netease:exhigh","netease:lossless");
+        if(levels.indexOf(actualQualityId)>levels.indexOf(requestedQualityId))throw error("unavailable");
+        if(actualQualityId.equals("netease:lossless") && !"flac".equalsIgnoreCase(row.optString("type","")))
+            throw error("unavailable");
         long expires = nonNegative(row.opt("expi"), 86_400);
         if (expires == 0 || nowElapsedMs < 0 || nowElapsedMs > Long.MAX_VALUE - expires * 1000L) throw error("protocol");
-        return new Audio(trackId, url, bitrate, nowElapsedMs + expires * 1000L);
+        return new Audio(trackId, url, bitrate, nowElapsedMs + expires * 1000L, actualQualityId);
     }
 
     static String parseLyrics(JSONObject body) throws IOException {

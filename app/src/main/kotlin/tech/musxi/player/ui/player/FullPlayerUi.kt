@@ -39,6 +39,7 @@ data class PlayerUi(
     val album: String = "",
     /** Drives both the placeholder cover and the backdrop tint. */
     val coverSeed: String = "",
+    val coverUrl: String? = null,
     /** Platform that owns the queue item. */
     val queuePlatform: Platform? = null,
     /** Platform actually streaming; differs only after a cross-platform swap. */
@@ -56,6 +57,7 @@ data class PlayerUi(
     val swapSearching: Boolean = false,
     val hasPrevious: Boolean = false,
     val hasNext: Boolean = false,
+    val qualityName: String? = null,
 ) {
     /** 0..1, clamped; the thumb and the filled part both read this. */
     val progress: Float get() = if (durationMs > 0) {
@@ -81,6 +83,7 @@ fun playerUiOf(state: PlaybackState, swapSearching: Boolean = false): PlayerUi {
         artist = state.artist,
         album = state.album,
         coverSeed = state.title,
+        coverUrl = state.coverUrl,
         queuePlatform = state.queuePlatform,
         sourcePlatform = state.sourcePlatform,
         positionMs = state.positionMs,
@@ -95,6 +98,7 @@ fun playerUiOf(state: PlaybackState, swapSearching: Boolean = false): PlayerUi {
         swapSearching = swapSearching,
         hasPrevious = state.hasPrevious,
         hasNext = state.hasNext,
+        qualityName = state.qualityName,
     )
 }
 
@@ -112,7 +116,7 @@ fun thirdLineOf(ui: PlayerUi): String = when (ui.status) {
     PlayerStatus.FAILED -> if (ui.swapSearching) "当前音源不可用 · 正在换源" else "暂无可用音源"
     PlayerStatus.INTERRUPTED -> "已被其他应用暂停"
     PlayerStatus.ENDED -> if (ui.repeat == PlaybackRepeatMode.OFF && !ui.hasNext) "队列已播完" else "已播完"
-    PlayerStatus.NORMAL -> platformLine(ui)
+    PlayerStatus.NORMAL -> listOfNotNull(platformLine(ui).takeIf(String::isNotBlank), ui.qualityName).joinToString(" · ")
 }
 
 /**

@@ -126,6 +126,11 @@ public final class QqMusicApi {
     public QqMusicApi() { this(QqMusicApi::executeHttps); }
     QqMusicApi(Transport transport) { if (transport == null) throw new IllegalArgumentException("缺少网络配置"); this.transport = transport; }
 
+    /** Shared within this module; browser experiments exist only in the debug source set. */
+    Session exchangeMusicCode(String code) throws IOException {
+        return new Session(cgi("QQConnectLogin.LoginServer", "QQLogin", object("code", code), null), "QQ 音乐用户");
+    }
+
     public Attempt createLogin() throws IOException {
         // Official mobile ptlogin uses type=1 JSONP to open this same request in QQ.
         Map<String, String> params = map("s", "8", "e", "0", "appid", "716027609", "type", "1",
@@ -186,8 +191,7 @@ public final class QqMusicApi {
         String code = result.get("code");
         if (!safeSecret(code) || !"state".equals(result.get("state")))
             throw error("authorize", "QQ 未返回有效音乐授权码");
-        JSONObject data = cgi("QQConnectLogin.LoginServer", "QQLogin", object("code", code), null);
-        return new Session(data, "QQ 音乐用户");
+        return exchangeMusicCode(code);
     }
 
     /** Verify with the music login-info endpoint, not the public nickname endpoint. */
@@ -230,7 +234,7 @@ public final class QqMusicApi {
         }
     }
 
-    // Package-private bounded music surface. The sole write exception is one-song favorites.
+    // Package-private bounded music surface. Writes are one-song AddSonglist plus favorite add/delete.
     JSONObject library(Session session, String module, String method, JSONObject param) throws IOException {
         String endpoint = module + ":" + method;
         boolean favoriteWrite = favoriteWrite(module, method, param);
@@ -252,8 +256,11 @@ public final class QqMusicApi {
             param == null || param.length() != 4) return false;
         Object dirId = param.opt("dirId"), tid = param.opt("tid"), utf8 = param.opt("bFmtUtf8");
         JSONArray songs = param.optJSONArray("v_songInfo");
-        if (!integer(dirId, 201, 201) || !integer(tid, 0, 0) ||
-            !Boolean.TRUE.equals(utf8) || songs == null || songs.length() != 1) return false;
+        if (!Boolean.TRUE.equals(utf8) || songs == null || songs.length() != 1) return false;
+        boolean favorite = integer(dirId, 201, 201) && integer(tid, 0, 0);
+        boolean ownedAdd = "AddSonglist".equals(method) &&
+            integer(dirId, 0, 0) && integer(tid, 1, 9_007_199_254_740_991L);
+        if (!favorite && !ownedAdd) return false;
         JSONObject song = songs.optJSONObject(0);
         if (song == null || song.length() != 2) return false;
         Object songId = song.opt("songId"), songType = song.opt("songType");

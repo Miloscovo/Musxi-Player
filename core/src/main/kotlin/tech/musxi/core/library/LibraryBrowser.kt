@@ -77,10 +77,11 @@ class LibraryBrowser(
     fun cancel() = synchronized(gate) { ++revision; mutable.value = mutable.value.copy(refreshing = false) }
 
     /**
-     * Marks the current platform's displayed page stale and refreshes it without reading cache.
-     * Call on the UI executor after a verified favorites mutation.
+     * Marks the current platform's pages stale. A favorite burst can defer the read until the
+     * next ordinary page open, keeping its writes ahead of artwork and library requests.
+     * Call on the UI executor after a verified mutation.
      */
-    fun invalidate(expected: LibraryCacheIdentity) {
+    fun invalidate(expected: LibraryCacheIdentity, refreshNow: Boolean = true) {
         val latest = identity()
         if (latest == null || !expected.verified || !expected.sameAttempt(latest) || !latest.verified) return
         val query = synchronized(gate) {
@@ -97,7 +98,7 @@ class LibraryBrowser(
             queryOwner = latest.owner
             val query = mutable.value.query
             mutable.value = mutable.value.copy(
-                refreshing = true,
+                refreshing = refreshNow,
                 accountVerified = true,
                 error = null,
                 storageError = false,
@@ -106,6 +107,7 @@ class LibraryBrowser(
             )
             query
         }
+        if (!refreshNow) return
         fetchPage(
             synchronized(gate) { revision },
             latest,

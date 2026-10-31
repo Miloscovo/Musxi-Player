@@ -19,6 +19,20 @@ class ValidationReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         val app = context.applicationContext as MusxiApplication
         val step = intent.getStringExtra("step").orEmpty()
+        when (step) {
+            "kugou_web_open" -> { KugouWebLoginValidationActivity.launch(app); return }
+            "kugou_web_close" -> { KugouWebLoginValidationActivity.close(); return }
+            "kugou_web_restart_check" -> { KugouWebLoginValidationActivity.restartCheck(app); return }
+            "kugou_web_retry_check" -> { KugouWebLoginValidationActivity.retryCookieCheck(app); return }
+            "qq_web_open" -> { QqWebLoginValidationActivity.launch(app); return }
+            "qq_web_close" -> { QqWebLoginValidationActivity.close(); return }
+            "qq_web_restart_check" -> { QqWebLoginValidationActivity.restartCheck(app); return }
+        }
+        if (BackendLiveValidationRunner.run(app, step)) return
+        if (BackendToolsAcceptanceRunner.run(app, step) || OutputAcceptanceValidationRunner.run(app, step)) return
+        if (PlaybackToolsValidationRunner.run(app, step) || OutputTraceValidationRunner.run(app, step)) return
+        if (IconRenderValidationRunner.run(app, step)) return
+        if (step == "glass_preview") { context.startActivity(android.content.Intent(context, GlassPreviewActivity::class.java).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)); return }
         if (BackendSourceMatchValidationRunner.run(app, step) || BackendSystemValidationRunner.run(app, step)) return
         if (BackendFavoritesValidationRunner.run(app, step) || BackendBackgroundValidationRunner.run(app, step) || BackendPlaybackValidationRunner.run(app, step) || BackendCacheValidationRunner.run(app, step) || BackendEveningValidationRunner.run(app, step) || BackendMetricsValidationRunner.run(app, step) || KugouPlaybackValidationRunner.run(app, step)) return
         if (!LyricsTranslationValidationRunner.run(app, step) && !P2ValidationRunner.run(app, step) && !P1DataValidationRunner.run(app, step) && !P1ValidationRunner.run(app, step) && !P0ValidationRunner.run(app, step)) ValidationRunner.run(app, step)

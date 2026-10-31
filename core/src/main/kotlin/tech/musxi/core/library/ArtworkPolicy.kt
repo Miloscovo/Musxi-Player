@@ -14,7 +14,7 @@ object ArtworkPolicy {
             val allowed = when (platform) {
                 Platform.NETEASE -> host.matches(Regex("p[1-9]\\.music\\.126\\.net"))
                 Platform.QQ -> host in setOf("y.gtimg.cn", "qpic.y.qq.com", "i.gtimg.cn")
-                Platform.KUGOU -> host in setOf("imge.kugou.com", "imgessl.kugou.com")
+                Platform.KUGOU -> host in setOf("imge.kugou.com", "imgessl.kugou.com") || host.matches(Regex("[a-z0-9-]+\\.kgimg\\.com"))
             }
             if (!allowed || uri.scheme !in setOf("https", "http") || uri.rawUserInfo != null || uri.port != -1 ||
                 uri.rawQuery != null || uri.rawFragment != null || uri.rawAuthority.lowercase(Locale.ROOT) != host ||

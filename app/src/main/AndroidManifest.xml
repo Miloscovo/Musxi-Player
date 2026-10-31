@@ -27,7 +27,5 @@
                 <data android:scheme="musxiplayer" android:host="login-return" />
             </intent-filter>
         </activity>
-        <activity android:name=".DeveloperActivity" android:exported="false" android:launchMode="singleTask"
-            android:windowSoftInputMode="adjustResize" />
     </application>
 </manifest>

@@ -1,7 +1,6 @@
 ﻿package tech.musxi.player.ui.player
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -24,13 +23,12 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material.icons.outlined.Lyrics
 import androidx.compose.material.icons.outlined.MoreHoriz
 import androidx.compose.material.icons.automirrored.outlined.QueueMusic
+import androidx.compose.material.icons.outlined.HighQuality
 import androidx.compose.material.icons.outlined.Repeat
 import androidx.compose.material.icons.outlined.RepeatOne
 import androidx.compose.material.icons.outlined.Shuffle
@@ -55,15 +53,15 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import tech.musxi.core.library.EditablePlaylist
 import tech.musxi.player.ui.components.Cover
 import tech.musxi.player.ui.components.OpticallyCentredText
 import tech.musxi.player.ui.components.ProgressArc
 import tech.musxi.player.ui.model.formatDuration
-import tech.musxi.player.ui.theme.LocalMusxi
 import tech.musxi.player.ui.theme.displayName
-import tech.musxi.player.ui.theme.likedHeartColor
 import tech.musxi.player.ui.theme.tabular
 import tech.musxi.playback.PlaybackRepeatMode
+import tech.musxi.player.ui.theme.SystemBarIcons
 
 private val PlayerContentInset = 32.dp
 private val PlayerActionWidth = 48.dp
@@ -83,8 +81,10 @@ fun FullPlayer(
     onPrevious: () -> Unit = {},
     onNext: () -> Unit = {},
     onSeek: (Float) -> Unit = {},
-    onToggleShuffle: () -> Unit = {},
-    onCycleRepeat: () -> Unit = {},
+    /** Opens the play-order chooser; the shell owns the sheet so back can close it. */
+    onShowPlayMode: () -> Unit = {},
+    /** Opens the current source's available qualities. */
+    onShowQuality: () -> Unit = {},
     onShowQueue: () -> Unit = {},
     onShowLyrics: () -> Unit = {},
     onShowOutput: () -> Unit = {},
@@ -102,10 +102,35 @@ fun FullPlayer(
     /** Null hides the heart entirely (nothing is playing, or the queue has no song). */
     favorite: FavoriteUi? = null,
     onToggleFavorite: () -> Unit = {},
+    /** The play-order menu, anchored to the transport row's left button. */
+    playModeMenuOpen: Boolean = false,
+    onDismissPlayMode: () -> Unit = {},
+    onSelectPlayMode: (PlayMode) -> Unit = {},
+    /** Non-null opens the quality menu on the transport row's right button; null keeps it closed. */
+    qualityMenu: QualityMenuUi? = null,
+    onDismissQuality: () -> Unit = {},
+    onSelectQuality: (String) -> Unit = {},
+    /** Non-null opens the output menu on the tool row's speaker; null keeps it closed. */
+    outputMenu: OutputMenuUi? = null,
+    onDismissOutput: () -> Unit = {},
+    onSelectOutput: (String) -> Unit = {},
+    onOpenSystemOutput: () -> Unit = {},
+    /** Non-null opens the overflow menu under the top bar's "更多"; null keeps it closed. */
+    moreMenu: MoreMenuUi? = null,
+    onShowMore: () -> Unit = {},
+    onDismissMore: () -> Unit = {},
+    onMoreAction: (MoreAction) -> Unit = {},
+    /** Reads the playlists the current song can be added to. Both this and [onAddToPlaylist] are needed for "加入歌单" to show. */
+    loadPlaylists: (((Result<List<EditablePlaylist>>) -> Unit) -> Unit)? = null,
+    onAddToPlaylist: ((EditablePlaylist) -> Unit)? = null,
+    /** A sleep timer is running: marks "更多" with a dot even while its menu is closed. */
+    sleepTimerActive: Boolean = false,
 ) {
     // The page's colour comes from the cover, not from the theme: on this one screen the accent is
     // borrowed from the artwork so that other screens can stay neutral without feeling empty.
     val palette = playerPalette(ui.coverSeed, dark)
+    // The room's colour is under the status bar here, not the shell's.
+    SystemBarIcons(palette.backdropTop)
     val cs = MaterialTheme.colorScheme
     Box(
         Modifier.fillMaxSize()
@@ -119,7 +144,10 @@ fun FullPlayer(
             // top edge, and that is the picture the owner judges. 12dp here plus the inset on a real
             // phone.
             Spacer(Modifier.height(12.dp))
-            PlayerTopBar(ui, onCollapse)
+            PlayerTopBar(
+                ui, onCollapse, moreMenu, sleepTimerActive, onShowMore, onDismissMore, onMoreAction,
+                loadPlaylists, onAddToPlaylist,
+            )
             // Cover, information, progress AND the transport row share one elastic block.
             //
             // The transport row used to sit outside this block, pinned above the tool row. With the
@@ -138,6 +166,7 @@ fun FullPlayer(
                             seed = ui.coverSeed,
                             modifier = Modifier.fillMaxWidth().aspectRatio(1f),
                             shape = MaterialTheme.shapes.extraLarge,
+                            url = ui.coverUrl,
                         )
                     }
                 } else {
@@ -209,55 +238,19 @@ fun FullPlayer(
                 } else {
                     Spacer(Modifier.height(4.dp))
                 }
-                TransportRow(ui, palette, onPlayPause, onPrevious, onNext, onToggleShuffle, onCycleRepeat)
+                TransportRow(
+                    ui, palette, onPlayPause, onPrevious, onNext, onShowPlayMode, onShowQuality,
+                    playModeMenuOpen, onDismissPlayMode, onSelectPlayMode,
+                    qualityMenu, onDismissQuality, onSelectQuality,
+                )
             }
             Spacer(Modifier.height(12.dp))
-            ToolRow(onShowOutput, onShowLyrics, onShowQueue, lyricsActive = lyrics != null)
+            ToolRow(
+                onShowOutput, onShowLyrics, onShowQueue, lyricsActive = lyrics != null,
+                outputMenu = outputMenu, onDismissOutput = onDismissOutput,
+                onSelectOutput = onSelectOutput, onOpenSystemOutput = onOpenSystemOutput,
+            )
             Spacer(Modifier.height(12.dp))
-        }
-    }
-}
-
-/**
- * The favourite toggle.
- *
- * A confirmed like is a filled red heart; an unliked song keeps a muted outline.
- * While the backend verifies a write, keep the last confirmed state and show a waiting ring.
- */
-@Composable
-internal fun FavoriteButton(
-    favorite: FavoriteUi,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val cs = MaterialTheme.colorScheme
-    val likedColor = likedHeartColor(LocalMusxi.current.dark)
-    Box(modifier.size(48.dp), contentAlignment = Alignment.Center) {
-        // "Not confirmed yet" is a ring, not a dimmed heart. Dimming meant previewing the target
-        // state, and for an un-like that preview is an outline at 50% — indistinguishable from the
-        // read-only state. The icon therefore keeps showing the state the backend last verified,
-        // and the ring says a write is in flight.
-        if (favorite.pending) {
-            Box(
-                Modifier.size(34.dp).clip(CircleShape)
-                    .border(2.dp, cs.onSurface.copy(alpha = 0.22f), CircleShape),
-            )
-        }
-        IconButton(
-            onClick = onClick,
-            enabled = favorite.enabled && !favorite.pending,
-            modifier = Modifier.size(48.dp),
-        ) {
-            Icon(
-                if (favorite.liked) Icons.Filled.Favorite else Icons.Outlined.FavoriteBorder,
-                if (favorite.liked) "取消收藏" else "收藏",
-                tint = when {
-                    favorite.liked -> likedColor.copy(alpha = if (favorite.enabled) 1f else 0.4f)
-                    !favorite.enabled -> cs.onSurfaceVariant.copy(alpha = 0.3f)
-                    else -> cs.onSurfaceVariant
-                },
-                modifier = Modifier.size(22.dp),
-            )
         }
     }
 }
@@ -269,8 +262,21 @@ internal fun FavoriteButton(
  * heart to the right end moved the centre by 24dp, which is enough to read as a mistake.
  */
 @Composable
-private fun PlayerTopBar(ui: PlayerUi, onCollapse: () -> Unit) {
+private fun PlayerTopBar(
+    ui: PlayerUi,
+    onCollapse: () -> Unit,
+    moreMenu: MoreMenuUi?,
+    sleepTimerActive: Boolean,
+    onShowMore: () -> Unit,
+    onDismissMore: () -> Unit,
+    onMoreAction: (MoreAction) -> Unit,
+    loadPlaylists: (((Result<List<EditablePlaylist>>) -> Unit) -> Unit)?,
+    onAddToPlaylist: ((EditablePlaylist) -> Unit)?,
+) {
     val cs = MaterialTheme.colorScheme
+    // Which page of the overflow menu is showing. It is reset when the menu is opened rather than
+    // when it closes, so the card does not change size while it fades out.
+    var morePage by remember { mutableStateOf(MorePage.MAIN) }
     Box(Modifier.fillMaxWidth().height(56.dp)) {
         Row(
             Modifier.fillMaxSize().padding(horizontal = 8.dp),
@@ -280,8 +286,34 @@ private fun PlayerTopBar(ui: PlayerUi, onCollapse: () -> Unit) {
                 Icon(Icons.Filled.KeyboardArrowDown, "收起", tint = cs.onSurfaceVariant, modifier = Modifier.size(24.dp))
             }
             Spacer(Modifier.weight(1f))
-            IconButton(onClick = {}) {
-                Icon(Icons.Outlined.MoreHoriz, "更多", tint = cs.onSurfaceVariant, modifier = Modifier.size(24.dp))
+            Box {
+                IconButton(onClick = {
+                    morePage = MorePage.MAIN
+                    onShowMore()
+                }) {
+                    Icon(
+                        Icons.Outlined.MoreHoriz,
+                        if (sleepTimerActive) "更多，定时停止已开启" else "更多",
+                        tint = cs.onSurfaceVariant,
+                        modifier = Modifier.size(24.dp),
+                    )
+                }
+                if (sleepTimerActive) {
+                    // A running timer must stay visible with the menu closed, or it is forgotten.
+                    Box(
+                        Modifier.align(Alignment.TopEnd).padding(top = 11.dp, end = 11.dp)
+                            .size(6.dp).clip(CircleShape).background(cs.primary),
+                    )
+                }
+                MoreMenu(
+                    menu = moreMenu,
+                    page = morePage,
+                    onPage = { morePage = it },
+                    onDismiss = onDismissMore,
+                    onAction = onMoreAction,
+                    loadPlaylists = loadPlaylists,
+                    onAddToPlaylist = onAddToPlaylist,
+                )
             }
         }
         OpticallyCentredText(
@@ -416,21 +448,36 @@ private fun TransportRow(
     onPlayPause: () -> Unit,
     onPrevious: () -> Unit,
     onNext: () -> Unit,
-    onToggleShuffle: () -> Unit,
-    onCycleRepeat: () -> Unit,
+    onShowPlayMode: () -> Unit,
+    onShowQuality: () -> Unit,
+    playModeMenuOpen: Boolean,
+    onDismissPlayMode: () -> Unit,
+    onSelectPlayMode: (PlayMode) -> Unit,
+    qualityMenu: QualityMenuUi?,
+    onDismissQuality: () -> Unit,
+    onSelectQuality: (String) -> Unit,
 ) {
     val cs = MaterialTheme.colorScheme
+    val mode = playModeOf(ui.shuffle, ui.repeat)
     Row(
         Modifier.fillMaxWidth().height(80.dp).padding(horizontal = 16.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceEvenly,
     ) {
-        ModeToggle(
-            icon = Icons.Outlined.Shuffle,
-            label = "随机播放",
-            on = ui.shuffle,
-            onClick = onToggleShuffle,
-        )
+        // One button names the current order and opens the choice, as on PC: the glyph is the mode,
+        // so nothing has to be decoded from a shade of grey or a dot.
+        // The menu is the button's sibling in one Box so the popup anchors to the button itself.
+        Box {
+            IconButton(onClick = onShowPlayMode) {
+                Icon(mode.icon(), "播放顺序：${mode.label}", tint = cs.onSurfaceVariant, modifier = Modifier.size(24.dp))
+            }
+            PlayModeMenu(
+                expanded = playModeMenuOpen,
+                current = mode,
+                onDismiss = onDismissPlayMode,
+                onSelect = onSelectPlayMode,
+            )
+        }
         IconButton(onClick = onPrevious, enabled = ui.hasPrevious) {
             Icon(
                 Icons.Outlined.SkipPrevious, "上一首",
@@ -468,47 +515,20 @@ private fun TransportRow(
                 modifier = Modifier.size(32.dp),
             )
         }
-        ModeToggle(
-            icon = if (ui.repeat == PlaybackRepeatMode.ONE) Icons.Outlined.RepeatOne else Icons.Outlined.Repeat,
-            label = when (ui.repeat) {
-                PlaybackRepeatMode.OFF -> "循环关闭"
-                PlaybackRepeatMode.ALL -> "列表循环"
-                PlaybackRepeatMode.ONE -> "单曲循环"
-            },
-            on = ui.repeat != PlaybackRepeatMode.OFF,
-            onClick = onCycleRepeat,
-        )
+        Box {
+            IconButton(onClick = onShowQuality) {
+                Icon(Icons.Outlined.HighQuality, "音质选择", tint = cs.onSurfaceVariant, modifier = Modifier.size(24.dp))
+            }
+            QualityMenu(menu = qualityMenu, onDismiss = onDismissQuality, onSelect = onSelectQuality)
+        }
     }
 }
 
-/**
- * A mode control, off / on.
- *
- * Off is `onSurfaceVariant` at full strength and on is `onSurface` plus a 4dp dot underneath. The
- * dot exists because the first version told off from on by a shade of grey alone, which read the
- * same as the disabled arrow buttons next to it — three meanings, two visuals.
- */
-@Composable
-private fun ModeToggle(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    label: String,
-    on: Boolean,
-    onClick: () -> Unit,
-) {
-    val cs = MaterialTheme.colorScheme
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        IconButton(onClick = onClick) {
-            Icon(
-                icon, label,
-                tint = if (on) cs.onSurface else cs.onSurfaceVariant,
-                modifier = Modifier.size(24.dp),
-            )
-        }
-        Box(
-            Modifier.size(4.dp).clip(CircleShape)
-                .background(if (on) cs.onSurface else Color.Transparent),
-        )
-    }
+/** Glyph for each play order; the button and the chooser rows share it. */
+internal fun PlayMode.icon(): androidx.compose.ui.graphics.vector.ImageVector = when (this) {
+    PlayMode.SEQUENTIAL -> Icons.Outlined.Repeat
+    PlayMode.SHUFFLE -> Icons.Outlined.Shuffle
+    PlayMode.REPEAT_ONE -> Icons.Outlined.RepeatOne
 }
 
 /** 48dp: output device, lyrics, queue. All neutral — none of these is the page's main action. */
@@ -518,13 +538,25 @@ private fun ToolRow(
     onShowLyrics: () -> Unit,
     onShowQueue: () -> Unit,
     lyricsActive: Boolean,
+    outputMenu: OutputMenuUi?,
+    onDismissOutput: () -> Unit,
+    onSelectOutput: (String) -> Unit,
+    onOpenSystemOutput: () -> Unit,
 ) {
     Row(
         Modifier.fillMaxWidth().height(48.dp).padding(horizontal = 32.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceEvenly,
     ) {
-        ToolIcon(Icons.Outlined.Speaker, "输出设备", onShowOutput)
+        Box {
+            ToolIcon(Icons.Outlined.Speaker, "输出设备", onShowOutput)
+            OutputMenu(
+                menu = outputMenu,
+                onDismiss = onDismissOutput,
+                onSelect = onSelectOutput,
+                onOpenSystemOutput = onOpenSystemOutput,
+            )
+        }
         // The mode has to be visible on the control that opened it: without it the page gives no
         // hint of how to get back to the artwork.
         ToolIcon(Icons.Outlined.Lyrics, "歌词", onShowLyrics, active = lyricsActive)

@@ -13,6 +13,10 @@ import java.util.*;
 public final class KugouLibraryApi {
     private final KugouApi api;
     private final AudioProbe audioProbe;
+    private KugouApi.Session favoriteSession;
+    private FavoriteList cachedFavorite;
+    private FavoriteMutation pendingFavorite;
+    private long favoriteSnapshotAtNanos;
     private static final Set<String> HTTP_AUDIO_HOSTS = new HashSet<>(Arrays.asList("fs.youthandroid2.kugou.com", "fs.youthandroid.kugou.com"));
     public KugouLibraryApi(KugouApi api) { this(api, KugouLibraryApi::probeAudio); }
     KugouLibraryApi(KugouApi api, AudioProbe audioProbe) { this.api=Objects.requireNonNull(api); this.audioProbe=Objects.requireNonNull(audioProbe); }
@@ -24,9 +28,17 @@ public final class KugouLibraryApi {
     }
     public static final class Playlist {
         public final String id, name, coverUrl; public final int trackCount;
-        public final boolean favorite;
+        public final String sourceGlobalId;
+        public final boolean favorite, editable, readOnly;
         Playlist(String id, String name, String coverUrl, int count) { this(id,name,coverUrl,count,false); }
-        Playlist(String id, String name, String coverUrl, int count, boolean favorite) { this.id=id; this.name=name; this.coverUrl=coverUrl; trackCount=count; this.favorite=favorite; }
+        Playlist(String id, String name, String coverUrl, int count, boolean favorite) {
+            this(id,name,coverUrl,count,favorite,true,null);
+        }
+        Playlist(String id, String name, String coverUrl, int count, boolean favorite, boolean editable,
+            String sourceGlobalId) {
+            this.id=id; this.name=name; this.coverUrl=coverUrl; trackCount=count; this.favorite=favorite;
+            this.sourceGlobalId=sourceGlobalId; this.editable=editable; this.readOnly=!editable;
+        }
     }
     public static class Song {
         public final String id, name, album, coverUrl; public final List<String> artists; public final long durationMs;
@@ -44,10 +56,14 @@ public final class KugouLibraryApi {
         Track(String id,String name,String album,List<String> artists,long durationMs,String coverUrl) { super(id,name,album,artists,durationMs,coverUrl); }
     }
     public static final class Audio {
-        public final String url; public final long expiresAtElapsedMs;
+        public final String url, qualityId; public final long expiresAtElapsedMs;
         final List<String> candidates;
-        Audio(String url,long expiresAtElapsedMs,List<String> candidates) { this.url=url; this.expiresAtElapsedMs=expiresAtElapsedMs; this.candidates=Collections.unmodifiableList(new ArrayList<>(candidates)); }
+        Audio(String url,String qualityId,long expiresAtElapsedMs,List<String> candidates) { this.url=url; this.qualityId=qualityId; this.expiresAtElapsedMs=expiresAtElapsedMs; this.candidates=Collections.unmodifiableList(new ArrayList<>(candidates)); }
         @Override public String toString() { return "Audio(redacted)"; }
+    }
+    public static final class AudioQuality {
+        public final String id, name;
+        AudioQuality(String id,String name) { this.id=id; this.name=name; }
     }
     public Page<Playlist> playlists(KugouApi.Session session,int offset,int limit) throws IOException {
         bounds(offset,limit);
@@ -57,15 +73,69 @@ public final class KugouLibraryApi {
         return parsePlaylists(root,offset,limit);
     }
     public Page<Track> tracks(KugouApi.Session session,String playlistId,int offset,int limit) throws IOException {
+        return tracks(session,playlistId,null,offset,limit);
+    }
+    /** Only a Playlist parsed from the account list can pair a source GID with its detail list ID. */
+    public Page<Track> tracks(KugouApi.Session session,Playlist playlist,int offset,int limit) throws IOException {
+        if(playlist==null)throw error("identity");
+        return tracks(session,playlist.id,playlist.sourceGlobalId,offset,limit);
+    }
+    /** Uses the original collection endpoint only for a source GID learned from the current account list. */
+    public Page<Track> tracks(KugouApi.Session session,String playlistId,String sourceGlobalId,int offset,int limit) throws IOException {
         bounds(offset,limit); numeric(playlistId,false);
+        if(sourceGlobalId!=null) {
+            identifier(sourceGlobalId);
+            Map<String,String> params=map("global_collection_id",sourceGlobalId,"begin_idx",String.valueOf(offset),
+                "pagesize",String.valueOf(limit),"plat","1","type","1","mode","1","personal_switch","1",
+                "area_code","1","extend_fields","abtags,hot_cmt,popularization");
+            return parseTracks(api.libraryCall("/pubsongs/v2/get_other_list_file_nofilt",session,params,null,false),offset,limit);
+        }
         String body="{\"listid\":"+JSONObject.quote(playlistId)+",\"userid\":"+JSONObject.quote(session.userId)+
             ",\"area_code\":1,\"show_relate_goods\":0,\"pagesize\":"+limit+",\"allplatform\":1,\"show_cover\":1,\"type\":0,\"token\":"+
             JSONObject.quote(session.token)+",\"page\":"+(offset/limit+1)+"}";
         return parseTracks(api.libraryCall("/v4/get_list_all_file",session,Collections.emptyMap(),body,false),offset,limit);
     }
+    /**
+     * Playlist page counted from the newest addition, as the Kugou app shows it.
+     *
+     * get_list_all_file has no order parameter and returns oldest first, so "the newest 30" is the
+     * end of the list. A one-row probe learns the total; the logical window is then read from the
+     * one or two API pages that cover it and reversed. Logical offsets stay 0, limit, 2*limit...
+     * so callers and caches keep their contract. The total is re-checked on every API page; a list
+     * that changes between requests is reported as incomplete rather than shown out of order.
+     */
+    public Page<Track> tracksNewestFirst(KugouApi.Session session,String playlistId,int offset,int limit) throws IOException {
+        return tracksNewestFirst(session,playlistId,null,offset,limit);
+    }
+    public Page<Track> tracksNewestFirst(KugouApi.Session session,Playlist playlist,int offset,int limit) throws IOException {
+        if(playlist==null)throw error("identity");
+        return tracksNewestFirst(session,playlist.id,playlist.sourceGlobalId,offset,limit);
+    }
+    /** Source playlists retain their published order; only editable cloud lists use newest-first windows. */
+    public Page<Track> tracksNewestFirst(KugouApi.Session session,String playlistId,String sourceGlobalId,int offset,int limit) throws IOException {
+        bounds(offset,limit); numeric(playlistId,false);
+        if(sourceGlobalId!=null)return tracks(session,playlistId,sourceGlobalId,offset,limit);
+        int total=tracks(session,playlistId,null,0,1).total;
+        if(total<0)throw error("incomplete");
+        if(offset>=total) { if(offset>0 && total>0 && offset>total)throw error("incomplete"); return new Page<>(Collections.emptyList(),-1,total); }
+        int end=total-offset, start=Math.max(0,end-limit);
+        List<Track> window=new ArrayList<>(end-start);
+        for(int apiOffset=(start/limit)*limit; apiOffset<end; apiOffset+=limit) {
+            Page<Track> page=tracks(session,playlistId,null,apiOffset,limit);
+            if(page.total!=total)throw error("incomplete");
+            for(int i=0;i<page.items.size();i++) {
+                int position=apiOffset+i;
+                if(position>=start && position<end)window.add(page.items.get(i));
+            }
+        }
+        if(window.size()!=end-start)throw error("incomplete");
+        Collections.reverse(window);
+        return new Page<>(window,start==0?-1:offset+limit,total);
+    }
     /** A complete, bounded snapshot of the platform-designated editable favorite list. */
-    public List<String> likedIds(KugouApi.Session session, java.util.function.BooleanSupplier current) throws IOException {
+    public synchronized List<String> likedIds(KugouApi.Session session, java.util.function.BooleanSupplier current) throws IOException {
         FavoriteList favorite = favoriteList(session, current);
+        favoriteSession=session; cachedFavorite=favorite; pendingFavorite=null; favoriteSnapshotAtNanos=System.nanoTime();
         List<String> ids = new ArrayList<>();
         for (Track track : favorite.tracks) ids.add(track.id);
         return Collections.unmodifiableList(ids);
@@ -73,6 +143,45 @@ public final class KugouLibraryApi {
     private static final class FavoriteList {
         final String id; final List<Track> tracks;
         FavoriteList(String id,List<Track> tracks) { this.id=id;this.tracks=tracks; }
+    }
+    private static final class FavoriteMutation {
+        final String songId; final boolean liked; final FavoriteList expected; final int position;
+        FavoriteMutation(String songId,boolean liked,FavoriteList expected,int position) {
+            this.songId=songId;this.liked=liked;this.expected=expected;this.position=position;
+        }
+    }
+    private FavoriteList knownFavorite(KugouApi.Session session,java.util.function.BooleanSupplier current) throws IOException {
+        favoriteCurrent(current,System.nanoTime()+60_000_000_000L);
+        if(favoriteSession!=session || cachedFavorite==null || System.nanoTime()-favoriteSnapshotAtNanos>300_000_000_000L) {
+            cachedFavorite=favoriteList(session,current); favoriteSession=session; pendingFavorite=null;
+            favoriteSnapshotAtNanos=System.nanoTime();
+        }
+        return cachedFavorite;
+    }
+
+    /** Confirm the changed window and total, rather than downloading every favorite again.
+     * The pinned API has no per-song membership query. Any divergent page fails closed and
+     * the browser reconciles the complete collection; absence in an arbitrary page is never enough. */
+    public synchronized boolean verifyLiked(KugouApi.Session session,String songId,boolean liked,
+        java.util.function.BooleanSupplier current) throws IOException {
+        FavoriteMutation change=pendingFavorite;
+        if(favoriteSession!=session || change==null || !change.songId.equals(songId) || change.liked!=liked)
+            throw error("incomplete");
+        pendingFavorite=null;
+        try {
+            favoriteCurrent(current,System.nanoTime()+60_000_000_000L);
+            List<Track> expected=change.expected.tracks;
+            int offset=Math.min(change.position/100*100,Math.max(0,(expected.size()-1)/100*100));
+            Page<Track> page=tracks(session,change.expected.id,offset,100);
+            favoriteCurrent(current,System.nanoTime()+60_000_000_000L);
+            if(page.total!=expected.size() || page.items.size()!=Math.min(100,expected.size()-offset))throw error("incomplete");
+            for(int i=0;i<page.items.size();i++)
+                if(!page.items.get(i).id.equals(expected.get(offset+i).id))throw error("incomplete");
+            List<Track> confirmed=new ArrayList<>(expected);
+            for(int i=0;i<page.items.size();i++)confirmed.set(offset+i,page.items.get(i));
+            cachedFavorite=new FavoriteList(change.expected.id,confirmed);
+            return liked;
+        } catch(IOException | RuntimeException failure) { cachedFavorite=null;throw failure; }
     }
     private FavoriteList favoriteList(KugouApi.Session session, java.util.function.BooleanSupplier current) throws IOException {
         long deadline = System.nanoTime() + 60_000_000_000L;
@@ -110,16 +219,21 @@ public final class KugouLibraryApi {
         if(System.nanoTime()>deadline)throw error("timeout");
     }
     /** One explicit favorite mutation, never an arbitrary user-supplied playlist target. */
-    public void setLiked(KugouApi.Session session,String songId,String name,long durationMs,boolean liked,
+    public synchronized void setLiked(KugouApi.Session session,String songId,String name,long durationMs,boolean liked,
         java.util.function.BooleanSupplier current) throws IOException {
         String[] parts=songId.split("_",-1);
         if(parts.length!=3 || !parts[0].matches("[a-f0-9]{32}"))throw error("identity");
         numeric(parts[1],true);numeric(parts[2],true);
         if(name==null || name.isEmpty() || name.length()>4096 || durationMs<0 || durationMs>86_400_000)throw error("protocol");
-        FavoriteList favorite=favoriteList(session,current);
+        FavoriteList favorite=knownFavorite(session,current);
         List<Track> matches=new ArrayList<>();
         for(Track t:favorite.tracks) if(t.id.equals(songId))matches.add(t);
-        if(liked==!matches.isEmpty())return;
+        int position=matches.isEmpty()?favorite.tracks.size():favorite.tracks.indexOf(matches.get(0));
+        List<Track> expected=new ArrayList<>(favorite.tracks);
+        if(liked && matches.isEmpty())expected.add(new Track(songId,name,"",Collections.emptyList(),durationMs));
+        if(!liked)expected.removeAll(matches);
+        FavoriteMutation planned=new FavoriteMutation(songId,liked,new FavoriteList(favorite.id,expected),position);
+        if(liked==!matches.isEmpty()) { pendingFavorite=planned;return; }
         if(!current.getAsBoolean())throw error("account_changed");
         try {
             JSONObject body=new JSONObject().put("userid",session.userId).put("token",session.token)
@@ -140,6 +254,51 @@ public final class KugouLibraryApi {
             JSONObject response=api.libraryCall(path,session,query,body.toString(),false);
             successAudio(response);
             if(!Arrays.asList("1","200").contains(text(response.opt("status"))))throw error("protocol");
+            favoriteCurrent(current,System.nanoTime()+60_000_000_000L);
+            pendingFavorite=planned;
+        } catch(org.json.JSONException malformed) { cachedFavorite=null;pendingFavorite=null;throw error("protocol"); }
+        catch(IOException | RuntimeException failure) { cachedFavorite=null;pendingFavorite=null;throw failure; }
+    }
+
+    /** Revalidate ownership from the server before an explicit menu write. */
+    public List<Playlist> writablePlaylists(KugouApi.Session session,java.util.function.BooleanSupplier current) throws IOException {
+        List<Playlist> result=new ArrayList<>(); int offset=0;
+        do {
+            favoriteCurrent(current,System.nanoTime()+60_000_000_000L);
+            Page<Playlist> page=playlists(session,offset,100);
+            for(Playlist value:page.items)if(value.editable)result.add(value);
+            if(result.size()>20_000)throw error("limit");
+            if(page.nextOffset<0)break;
+            if(page.nextOffset<=offset || page.nextOffset>20_000)throw error("limit");
+            offset=page.nextOffset;
+        } while(true);
+        favoriteCurrent(current,System.nanoTime()+60_000_000_000L);
+        return Collections.unmodifiableList(result);
+    }
+
+    public void addToPlaylist(KugouApi.Session session,String playlistId,String songId,String name,long durationMs,
+        java.util.function.BooleanSupplier current) throws IOException {
+        numeric(playlistId,false);
+        Playlist target=null;
+        for(Playlist p:writablePlaylists(session,current))if(p.id.equals(playlistId))target=p;
+        if(target==null)throw error("permission");
+        String[] parts=songId.split("_",-1);
+        if(parts.length!=3 || !parts[0].matches("[a-f0-9]{32}"))throw error("identity");
+        numeric(parts[1],true);numeric(parts[2],true);
+        if(name==null || name.isEmpty() || name.length()>4096 || durationMs<0 || durationMs>86_400_000)throw error("protocol");
+        favoriteCurrent(current,System.nanoTime()+60_000_000_000L);
+        try {
+            JSONObject resource=new JSONObject().put("number",1).put("name",name).put("hash",parts[0])
+                .put("size",0).put("sort",0).put("timelen",durationMs).put("bitrate",0)
+                .put("album_id",Long.parseLong(parts[1])).put("mixsongid",Long.parseLong(parts[2]));
+            JSONObject body=new JSONObject().put("userid",session.userId).put("token",session.token)
+                .put("listid",playlistId).put("list_ver",0).put("type",0).put("slow_upload",1)
+                .put("scene","false;null").put("data",new JSONArray().put(resource));
+            JSONObject response=api.libraryCall("/cloudlist.service/v6/add_song",session,
+                map("last_time",String.valueOf(System.currentTimeMillis()/1000),"last_area","gztx"),body.toString(),false);
+            successAudio(response);
+            if(!Arrays.asList("1","200").contains(text(response.opt("status"))))throw error("protocol");
+            favoriteCurrent(current,System.nanoTime()+60_000_000_000L);
         } catch(org.json.JSONException malformed) { throw error("protocol"); }
     }
     public enum TranslationStatus { PRESENT, ABSENT, INVALID, UNSUPPORTED, NETWORK, TIMEOUT, PLATFORM_ERROR }
@@ -336,14 +495,49 @@ public final class KugouLibraryApi {
         return value.toLowerCase(Locale.ROOT).replaceAll("[\\s,、/&，]+","");
     }
     public Audio audio(KugouApi.Session session,String songId,long nowElapsedMs) throws IOException {
+        return audio(session,songId,nowElapsedMs,"kugou:128");
+    }
+    public Audio audio(KugouApi.Session session,String songId,long nowElapsedMs,String qualityId) throws IOException {
+        return selectAudio(requestAudio(session,songId,nowElapsedMs,qualityId),audioProbe);
+    }
+    public List<AudioQuality> qualities(KugouApi.Session session,String songId,long nowElapsedMs) throws IOException {
+        List<AudioQuality> out=new ArrayList<>();
+        for(String id:Arrays.asList("kugou:128","kugou:320","kugou:flac")) {
+            try {
+                selectAudio(requestAudio(session,songId,nowElapsedMs,id),audioProbe);
+                out.add(new AudioQuality(id,qualityName(id)));
+            } catch(KugouApi.ApiException unavailable) {
+                if(!Arrays.asList("permission","unavailable","network","source_expired").contains(unavailable.code))throw unavailable;
+            }
+        }
+        return Collections.unmodifiableList(out);
+    }
+    private Audio requestAudio(KugouApi.Session session,String songId,long nowElapsedMs,String qualityId) throws IOException {
         String[] parts=songId.split("_",-1);
         if(parts.length!=3 || !parts[0].matches("[a-f0-9]{32}")) throw error("identity");
         numeric(parts[1],true); numeric(parts[2],true);
+        String quality=qualityParameter(qualityId);
         Map<String,String> params=map("album_id",parts[1],"area_code","1","hash",parts[0],"ssa_flag","is_fromtrack",
-            "version","11430","page_id","967177915","quality","128","album_audio_id",parts[2],"behavior","play",
+            "version","11430","page_id","967177915","quality",quality,"album_audio_id",parts[2],"behavior","play",
             "pid","411","cmd","26","pidversion","3001","IsFreePart","0","ppage_id","356753938,823673182,967485191",
             "cdnBackup","1","module","","clientver","11430");
-        return selectAudio(parseAudio(api.libraryCall("/v5/url",session,params,null,true),parts[0],nowElapsedMs),audioProbe);
+        return parseAudio(api.libraryCall("/v5/url",session,params,null,true),parts[0],nowElapsedMs,qualityId);
+    }
+    private static String qualityParameter(String id) throws IOException {
+        switch(id) {
+            case "kugou:128": return "128";
+            case "kugou:320": return "320";
+            case "kugou:flac": return "flac";
+            default: throw error("request");
+        }
+    }
+    private static String qualityName(String id) {
+        switch(id) {
+            case "kugou:128": return "标准音质";
+            case "kugou:320": return "高品音质";
+            case "kugou:flac": return "无损音质";
+            default: return "";
+        }
     }
     static Page<Playlist> parsePlaylists(JSONObject root,int offset,int limit) throws IOException {
         JSONObject data=success(root); JSONArray rows=rows(data,"info","lists");
@@ -354,8 +548,13 @@ public final class KugouLibraryApi {
             String id=numeric(row.opt("listid"),false); if(!ids.add(id))throw error("identity");
             Object count=first(row,"count","songcount","song_count");
             int tracks=count==null?0:(int)nonnegative(count,1_000_000);
-            out.add(new Playlist(id,clean(row.opt("name"),"未命名歌单"),cover(row),tracks,
-                "2".equals(text(row.opt("is_def"))) && "1".equals(text(row.opt("is_edit")))));
+            boolean editable="1".equals(text(row.opt("is_edit")));
+            boolean favorite=editable && "2".equals(text(row.opt("is_def")));
+            // Own/default lists can carry a zero or empty source sentinel. Only collected
+            // lists need a source route; never reject unrelated lists for that sentinel.
+            String sourceGlobalId=!editable && !"2".equals(text(row.opt("is_def"))) && present(row,"list_create_gid")
+                ? identifier(row.opt("list_create_gid")) : null;
+            out.add(new Playlist(id,clean(row.opt("name"),"未命名歌单"),cover(row),tracks,favorite,editable,sourceGlobalId));
         }
         int total=total(data); return new Page<>(out,next(offset,rows.length(),total,limit),total);
     }
@@ -393,19 +592,31 @@ public final class KugouLibraryApi {
         int total=total(data); return new Page<>(out,next(offset,rows.length(),total,limit),total);
     }
     static Audio parseAudio(JSONObject root,String hash,long now) throws IOException {
+        return parseAudio(root,hash,now,"kugou:128");
+    }
+    static Audio parseAudio(JSONObject root,String hash,long now,String qualityId) throws IOException {
         if(root==null)throw error("protocol");
+        qualityParameter(qualityId);
         JSONObject data=root.optJSONObject("data"); if(data==null)data=root;
         if(Arrays.asList("2","3").contains(text(data.opt("status"))))throw error("permission");
         successAudio(root);
         String echoed=text(data.opt("hash"));
-        if(!echoed.isEmpty() && !hash.equalsIgnoreCase(echoed))throw error("identity");
+        // A playlist hash may name a higher-quality file; v5 then answers with the 128k standard
+        // file of the same track and echoes that hash as both `hash` and `std_hash`.
+        boolean standardVariant=echoed.matches("(?i)[a-f0-9]{32}") && echoed.equalsIgnoreCase(text(data.opt("std_hash")));
+        if(!echoed.isEmpty() && !hash.equalsIgnoreCase(echoed) && !standardVariant)throw error("identity");
         if(present(data,"freeTrialInfo") || present(data,"free_trial_info") || trialFlag(data,"is_free_part") || trialFlag(data,"IsFreePart") || trialFlag(data,"free_part"))throw error("permission");
         JSONObject range=data.optJSONObject("hash_offset");
         if(range!=null && (positive(range,"end_ms") || positive(range,"start_ms")))throw error("permission");
         Object rate=first(data,"bitRate","bitrate","bit_rate");
         long bitrate=nonnegative(rate==null?0:rate,100_000_000);
-        if(bitrate!=128 && Math.round(bitrate/1000.0)!=128)throw error("unavailable");
-        if("flac".equalsIgnoreCase(text(first(data,"extName","extname","ext_name"))))throw error("unavailable");
+        String extension=text(first(data,"extName","extname","ext_name"));
+        boolean matches=qualityId.equals("kugou:128")
+                ? (bitrate==128 || Math.round(bitrate/1000.0)==128) && !"flac".equalsIgnoreCase(extension)
+                : qualityId.equals("kugou:320")
+                ? (bitrate==320 || Math.round(bitrate/1000.0)==320) && !"flac".equalsIgnoreCase(extension)
+                : "flac".equalsIgnoreCase(extension) && bitrate>320_000;
+        if(!matches)throw error("unavailable");
         LinkedHashSet<String> candidates=new LinkedHashSet<>();
         Set<String> candidateHosts=new HashSet<>();
         Set<String> httpHosts=new HashSet<>();
@@ -435,7 +646,7 @@ public final class KugouLibraryApi {
         // No documented lifetime field is assumed. A conservative 60s in-memory lease
         // limits reuse; CDN expiry still uses the player's single refresh budget.
         if(now<0 || now>Long.MAX_VALUE-60_000)throw error("protocol");
-        return new Audio(candidates.iterator().next(),now+60_000,new ArrayList<>(candidates));
+        return new Audio(candidates.iterator().next(),qualityId,now+60_000,new ArrayList<>(candidates));
     }
     interface AudioProbe { void check(String url) throws IOException; }
     static Audio selectAudio(Audio audio,AudioProbe probe) throws IOException {
@@ -444,7 +655,7 @@ public final class KugouLibraryApi {
         List<String> diagnostics=new ArrayList<>();
         for(String candidate:audio.candidates) {
             if(System.nanoTime()>=deadline)break;
-            try {probe.check(candidate);return new Audio(candidate,audio.expiresAtElapsedMs,Collections.singletonList(candidate));}
+            try {probe.check(candidate);return new Audio(candidate,audio.qualityId,audio.expiresAtElapsedMs,Collections.singletonList(candidate));}
             catch(IOException rejected) {
                 failure=rejected;
                 String kind=rejected instanceof javax.net.ssl.SSLPeerUnverifiedException?"ssl_peer":rejected instanceof javax.net.ssl.SSLException?"ssl":
@@ -494,7 +705,7 @@ public final class KugouLibraryApi {
         if(!(value instanceof String))return null;
         String url=((String)value).replace("{size}","400");
         try{URI uri=new URI(url);String host=uri.getHost();
-            if(host==null || !Arrays.asList("imge.kugou.com","imgessl.kugou.com").contains(host.toLowerCase(Locale.ROOT)) ||
+            if(host==null || !(Arrays.asList("imge.kugou.com","imgessl.kugou.com").contains(host.toLowerCase(Locale.ROOT)) || host.toLowerCase(Locale.ROOT).matches("[a-z0-9-]+\\.kgimg\\.com")) ||
                 url.length()>2048 || url.codePoints().anyMatch(c->Character.isWhitespace(c) || Character.isISOControl(c)) ||
                 !("https".equals(uri.getScheme()) || "http".equals(uri.getScheme())) || uri.getRawUserInfo()!=null ||
                 uri.getPort()!=-1 || uri.getRawQuery()!=null || uri.getRawFragment()!=null || !host.equalsIgnoreCase(uri.getRawAuthority()) ||
@@ -526,6 +737,11 @@ public final class KugouLibraryApi {
     private static String numeric(Object value,boolean zero) throws IOException {
         String s=text(value); if(!s.matches(zero?"(?:0|[1-9][0-9]{0,15})":"[1-9][0-9]{0,15}"))throw error("identity");
         if(new java.math.BigInteger(s).compareTo(java.math.BigInteger.valueOf(9_007_199_254_740_991L))>0)throw error("identity");return s;
+    }
+    private static String identifier(Object value) throws IOException {
+        String s=text(value);
+        if(!s.matches("[1-9][0-9]{0,31}"))throw error("identity");
+        return s;
     }
     private static long nonnegative(Object value,long max) throws IOException {
         String s=text(value);if(!s.matches("(?:0|[1-9][0-9]{0,17})"))throw error("protocol");

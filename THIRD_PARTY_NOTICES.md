@@ -4,7 +4,7 @@
 
 本安卓工程源自 [Miloscovo/Musxi-Player](https://github.com/Miloscovo/Musxi-Player)，早期在个人 fork 的 android/development 分支开发，现于 [qwt1011/Musxi-Player-Android](https://github.com/qwt1011/Musxi-Player-Android) 独立保存。最初 PC 检出基线为 `80743c6aae9ab6b56c13200f53b0ebbb8e852de1`；上次安卓 PR #24 的提交为 `ac3ac80f4259244a50fb5269aa0fdf5bd1c59afd`，上游合并提交为 `c5821a70659a16ddbe08ad8fad6bf60cce5cf532`。独立仓库初始提交保留同一安卓源码树、许可与来源，不携入整个 PC 历史。
 
-基于 Musxi Player，Copyright (c) 2026 Miloscovo and contributors；派生工程采用 GPL-3.0-or-later，完整 GPLv3 文本见 [LICENSE](LICENSE)。本次归档安卓源码，未新增生产依赖或发布 APK。正式分发二进制时应提供匹配的源码及构建说明。
+基于 Musxi Player，Copyright (c) 2026 Miloscovo and contributors；派生工程采用 GPL-3.0-or-later，完整 GPLv3 文本见 [LICENSE](LICENSE)。v0.1 以 [预发布](https://github.com/qwt1011/Musxi-Player-Android/releases/tag/v0.1) 方式提供 debug 签名 APK；匹配源码固定于 [v0.1 标签](https://github.com/qwt1011/Musxi-Player-Android/tree/v0.1)，构建说明见 README.md。此轮发布未新增生产依赖。2026-10-27 新增 Coil 3 用于封面加载。
 
 模块中的原始版权、改编说明和完整许可均随本目录保留：
 
@@ -16,6 +16,8 @@
 | QR 生成 | Project Nayuki QR-Code-generator，3c6d0b3cefb4e049dc337e82237c9644399716a8，MIT | platform-netease 原源码头及 assets/licenses/QR-Code-generator-MIT.txt |
 | Kotlin 2.2.21、coroutines 1.10.2 | JetBrains，Apache-2.0 | app/src/main/assets/licenses/ |
 | AndroidX / Media3 1.8.0 | Android Open Source Project，Apache-2.0 | app/src/main/assets/licenses/AndroidX-Apache-2.0.txt |
+| Coil 3 3.3.0（io.coil-kt.coil3:coil-compose / coil-network-okhttp，封面图片加载；会引入 OkHttp 与 Okio，均为 Apache-2.0） | Coil Contributors，Apache-2.0 | 许可文本复用 app/src/main/assets/licenses/AndroidX-Apache-2.0.txt；OkHttp、Okio 同为 Apache-2.0，沿用同一文本 |
+| Haze 1.6.10（dev.chrisbanes.haze:haze，**仅 debug 构建**，用于 debug 专用的液态玻璃风格预览页；release 不包含） | Chris Banes，Apache-2.0 | 许可文本复用 app/src/main/assets/licenses/AndroidX-Apache-2.0.txt |
 | Guava 33.3.1-android / failureaccess 1.0.2 | Google / Guava Authors，Apache-2.0 | app/src/main/assets/licenses/Guava-LICENSE.txt、Guava-NOTICE.txt |
 | Gradle 8.13 wrapper | Gradle，Apache-2.0，构建工具 | wrapper 原文件头、app/src/main/assets/licenses/Gradle-Apache-2.0.txt |
 | JUnit 4.13.2 / Hamcrest 1.3 / JSON-java 20240303 | EPL-1.0 / BSD / Public Domain，仅宿主测试 | test-licenses/ |
@@ -29,5 +31,7 @@
 同日 P1 标准歌词继续使用同一固定来源：酷狗 module/search_lyric.js、module/lyric.js；网易云 module/lyric.js；QQ qqmusic-api-python 0.8.1 的 modules/lyric.py、models/lyric.py（通过 PyPI 原版本 wheel 只读核对，未安装或打包 Python）。标准 LRC 解析、队列元数据持久化及最近播放使用现有 Kotlin/Java/Android API，无新增生产依赖；不含 QRC/KRC 逐字解密。模块 assets NOTICE 已同步。
 
 同日 P2 收藏同步继续改编上述固定来源：酷狗 module/playlist_tracks_add.js、module/playlist_tracks_del.js；网易云 module/likelist.js、like.js；QQ qqmusic-api-python 0.8.1 的 qqmusic_api/modules/songlist.py 中 add_songs、del_songs、like_song、unlike_song，用于单曲收藏同步（通过 PyPI 原版本 wheel 只读核对，未安装或打包 Python）。酷狗和网易云沿用现有 MIT 许可，QQ 沿用现有 GPL-3.0-or-later 来源及许可；无新增生产依赖或许可更改。模块 assets NOTICE 已同步。
+
+2026-11-01 后端菜单与歌单读取继续使用相同固定版本：酷狗 module/playlist_track_all.js、playlist_tracks_add.js；网易云 module/playlist_tracks.js；QQ songlist.py 的本人歌单及 AddSonglist 协议。新增局部收藏核实、排队和播放服务装配为本项目实现。沿用各模块既有来源与许可，无新增生产依赖。
 
 酷狗歌词后续兼容修复将搜索路径从固定vendor的 `/v1/search` 改为同一官方 HTTPS 主机实测可用的 `/search`，其余来源标识、签名及标准LRC下载解码沿用；未引入新第三方代码或依赖。

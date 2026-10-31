@@ -35,6 +35,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -61,6 +62,7 @@ data class QueueRowUi(
     val title: String,
     val artist: String,
     val durationMs: Long,
+    val coverUrl: String? = null,
 )
 
 /**
@@ -110,6 +112,11 @@ fun QueuePanel(
     var dragRevision by remember { mutableStateOf<Long?>(null) }
     // A copy makes the pointer key sensitive to row content as well as the collection identity.
     val queueSnapshot = ui.items.toList()
+    // Opening the queue lands on the song that is playing, one row of context above it. In a long
+    // playlist the current song is rarely in the first screenful.
+    val listState = rememberLazyListState(
+        initialFirstVisibleItemIndex = (ui.currentIndex - 1).coerceAtLeast(0),
+    )
 
     // A pointerInput key change cancels the gesture coroutine. Clearing these values here also
     // removes the lifted row immediately if that cancellation is delivered before the next frame.
@@ -137,7 +144,8 @@ fun QueuePanel(
         Header(count = ui.items.size, editing = ui.editing, onClear = onClear, onClose = onClose)
         Spacer(Modifier.height(4.dp))
         LazyColumn(
-            Modifier.fillMaxWidth().heightIn(max = 380.dp)
+            state = listState,
+            modifier = Modifier.fillMaxWidth().heightIn(max = 380.dp)
                 // The list is taller than the screen on a short queue screen: fade the bottom so the
                 // cut row reads as "there is more" instead of as a rendering fault.
                 .graphicsLayer {
@@ -317,6 +325,7 @@ private fun QueueLine(
                 seed = row.title,
                 modifier = Modifier.size(40.dp),
                 shape = MaterialTheme.shapes.small,
+                url = row.coverUrl,
             )
             Spacer(Modifier.width(12.dp))
         }

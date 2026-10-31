@@ -1,6 +1,6 @@
 # 安卓 v0.1 集成与验收
 
-更新：2026-10-23。**v0.1 非常不完善，此次公开源码仅为后续修改奠定基础。** 当前源码为 `0.1.0-alpha02`，不是正式签名发行版；本次没有发布 APK 或 Release。
+更新：2026-10-23。**v0.1 非常不完善，此次公开源码仅为后续修改奠定基础。** 当前源码为 `0.1.0-alpha02`，以 [v0.1 预发布版](https://github.com/qwt1011/Musxi-Player-Android/releases/tag/v0.1) 收录相同 debug 签名 APK，仍不是正式稳定发行版。
 
 ## 当前能力与缺口
 
@@ -29,7 +29,7 @@
 
 alpha02 Debug APK SHA-256：`61a96fbea57670af3c44e592590ceaf554fa4f36087ba4f0430a885983153ca7`。已覆盖安装到 Android 16 实机，保留应用数据；本次没有重新播放音频，不将 alpha01 听音作为 alpha02 听音结果。
 
-图标原先把完整 PC 方形图铺满 108dp 自适应前景，Android 只呈现中央区域，导致 M 被裁切；现在前景增加 18dp inset，将完整图案放入 72dp 区域，保持原品牌图案与背景色。已在 Android 16 用已安装包的 AdaptiveIconDrawable 直接渲染并检查完整标识，见 [系统渲染图标](design/launcher_alpha02.png)。本地构建材料留在忽略的 .local/，不提供公开 APK 下载。
+图标原先把完整 PC 方形图铺满 108dp 自适应前景，Android 只呈现中央区域，导致 M 被裁切；现在前景增加 18dp inset，将完整图案放入 72dp 区域，保持原品牌图案与背景色。已在 Android 16 用已安装包的 AdaptiveIconDrawable 直接渲染并检查完整标识，见 [系统渲染图标](design/launcher_alpha02.png)。本地构建材料留在忽略的 .local/；v0.1 Release 提供相同 APK 及校验文件下载。
 
 ## alpha01 首轮设备记录
 
@@ -47,4 +47,4 @@ alpha02 Debug APK SHA-256：`61a96fbea57670af3c44e592590ceaf554fa4f36087ba4f0430
 
 优先补逐平台正式主流程与队列编辑/失败矩阵，再补中文/双语/长句/首尾/大字体以及浅底状态栏对比度。恢复、最近播放、真实封面及空入口需要明确版本归属。自然长后台、深度 Doze、真实系统回收、来电/输出切换和日常观察继续单独验证。
 
-历史报告记录当时包和边界；日志、截图、APK、源码散列与设备操作原始记录仅存本机 .local/artifacts/ 和 .local/archive/，不随 Git 提交，也不作为 GitHub 下载链接。
+历史报告记录当时包和边界；完整日志、设备截图、源码散列和操作记录保存在本机 .local/artifacts/ 和 .local/archive/，不随 Git 提交。仅本次候选 APK 与 SHA-256 校验文件作为 v0.1 Release 附件公开。

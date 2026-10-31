@@ -12,6 +12,9 @@ class KugouLibraryRepository(private val accounts: AccountRepository) : LibraryP
     private val queueRevision = java.util.concurrent.atomic.AtomicLong()
     private val metadata = linkedMapOf<MediaKey, SongSummary>()
     private var metadataGeneration = -1L
+    private val playlistPages = java.util.TreeMap<Int, List<String>>()
+    private val playlistRoutes = linkedMapOf<String, KugouLibraryApi.Playlist>()
+    private var playlistGeneration = -1L
     private fun summary(song: KugouLibraryApi.Song) =
         SongSummary(MediaKey(Platform.KUGOU, song.id), song.name, song.artists, song.album, song.durationMs,
             ArtworkPolicy.sanitize(Platform.KUGOU, song.coverUrl))
@@ -36,32 +39,96 @@ class KugouLibraryRepository(private val accounts: AccountRepository) : LibraryP
                 fixed.matches(Regex("transport_(connect|read)_(ssl|dns|connect|eof|io)")) ||
                     fixed.matches(Regex("cdn:(ssl_peer|ssl|dns|timeout|io)(,(ssl_peer|ssl|dns|timeout|io)){0,4}"))
             }
-            Result.failure(LibraryFailure(if (code in setOf("expired", "network", "risk", "rate", "protocol", "identity", "limit",
+            Result.failure(LibraryFailure(if (code in setOf("expired", "network", "risk", "rate", "protocol", "identity", "limit", "cancelled",
                     "incomplete", "permission", "unavailable", "endpoint", "platform", "http", "timeout", "source_expired", "account_changed")) code!! else "unclassified", detail))
         }))
     }
     override fun playlists(offset: Int, result: (Result<Page<PlaylistSummary>>) -> Unit) {
+        val generation = accounts.states.value.getValue(Platform.KUGOU).generation
         accounts.withKugouSession({ api, session ->
-            val page = KugouLibraryApi(api).playlists(session, offset, 30)
-            Page(page.items.map { PlaylistSummary(MediaKey(Platform.KUGOU, it.id), it.name,
-                ArtworkPolicy.sanitize(Platform.KUGOU, it.coverUrl), it.trackCount) },
-                page.nextOffset.takeIf { it >= 0 }, page.total.takeIf { it >= 0 })
+            val library = KugouLibraryApi(api)
+            val page = library.playlists(session, offset, 30)
+            if (!accounts.isKugouGenerationConnected(generation)) throw LibraryFailure("account_changed")
+            val items = synchronized(playlistPages) {
+                if (playlistGeneration != generation) {
+                    playlistGeneration = generation
+                    playlistPages.clear()
+                    playlistRoutes.clear()
+                }
+                playlistPages.tailMap(offset, true).clear()
+                val prior = playlistPages.values.flatten().toSet()
+                val current = page.items.distinctBy { it.id }
+                playlistPages[offset] = current.map { it.id }
+                current.forEach { playlistRoutes[it.id] = it }
+                current.filter { it.id !in prior }
+            }
+            // Kugou leaves the default and liked lists without artwork. Like the PC build, borrow the
+            // cover of the song the page shows first (newest first). Bounded and best-effort: a failed
+            // lookup keeps the placeholder and never fails the playlist page.
+            var lookups = 0
+            Page(items.map { item ->
+                val own = ArtworkPolicy.sanitize(Platform.KUGOU, item.coverUrl)
+                val cover = own ?: if (item.trackCount > 0 && lookups < 6) {
+                    lookups++
+                    val lookedUp = try {
+                        library.tracksNewestFirst(session, item, 0, 1).items.firstOrNull()?.coverUrl
+                    } catch (e: java.io.IOException) {
+                        null
+                    } catch (e: KugouApi.ApiException) {
+                        null
+                    }
+                    lookedUp?.let { ArtworkPolicy.sanitize(Platform.KUGOU, it) }
+                } else null
+                PlaylistSummary(MediaKey(Platform.KUGOU, item.id), item.name, cover, item.trackCount)
+            }, page.nextOffset.takeIf { it >= 0 }, page.total.takeIf { it >= 0 })
         }, safe(result), RequestOperation.PLAYLISTS)
     }
     override fun tracks(playlist: MediaKey, offset: Int, result: (Result<Page<SongSummary>>) -> Unit) {
         require(playlist.platform == Platform.KUGOU)
         val generation = accounts.states.value.getValue(Platform.KUGOU).generation
         accounts.withKugouSession({ api, session ->
-            val page = KugouLibraryApi(api).tracks(session, playlist.id, offset, 30)
+            val route = playlistRoute(api, session, playlist.id, generation)
+            // Editable cloud lists are newest first. Collected source lists retain their published order.
+            val page = KugouLibraryApi(api).tracksNewestFirst(session, route, offset, 30)
             Page(remember(page.items.map(::summary), generation),
                 page.nextOffset.takeIf { it >= 0 }, page.total.takeIf { it >= 0 })
         }, safe(result), RequestOperation.TRACKS)
     }
-    fun search(keywords: String, result: (Result<List<SongSummary>>) -> Unit) {
+    private fun playlistRoute(api: KugouApi, session: KugouApi.Session, id: String, generation: Long): KugouLibraryApi.Playlist {
+        synchronized(playlistPages) {
+            if (playlistGeneration == generation) playlistRoutes[id]?.let { return it }
+        }
+        // Cached page keys survive process death; resolve the source GID again before opening details.
+        val library = KugouLibraryApi(api)
+        val deadline = SystemClock.elapsedRealtime() + 60_000
+        var offset = 0
+        while (true) {
+            if (!accounts.isKugouGenerationConnected(generation)) throw LibraryFailure("account_changed")
+            if (SystemClock.elapsedRealtime() >= deadline) throw LibraryFailure("timeout")
+            val page = library.playlists(session, offset, 100)
+            if (!accounts.isKugouGenerationConnected(generation)) throw LibraryFailure("account_changed")
+            synchronized(playlistPages) {
+                if (playlistGeneration != generation) {
+                    playlistGeneration = generation; playlistPages.clear(); playlistRoutes.clear()
+                }
+                page.items.forEach { playlistRoutes[it.id] = it }
+                playlistRoutes[id]?.let { return it }
+            }
+            if (page.nextOffset < 0) throw LibraryFailure("unavailable")
+            if (page.nextOffset <= offset || page.nextOffset > 20_000) throw LibraryFailure("limit")
+            offset = page.nextOffset
+        }
+    }
+    fun search(keywords: String, result: (Result<List<SongSummary>>) -> Unit) = search(keywords, result, false)
+    fun search(keywords: String, result: (Result<List<SongSummary>>) -> Unit,
+        playbackSearch: Boolean, isCurrent: () -> Boolean = { true }) {
         val generation = accounts.states.value.getValue(Platform.KUGOU).generation
         accounts.withKugouSession({ api, session ->
-            remember(KugouLibraryApi(api).search(session, keywords).map(::summary), generation)
-        }, safe(result), RequestOperation.SEARCH)
+            if (!isCurrent()) throw LibraryFailure("cancelled")
+            val songs = KugouLibraryApi(api).search(session, keywords).map(::summary)
+            if (!isCurrent()) throw LibraryFailure("cancelled")
+            remember(songs, generation)
+        }, safe(result), RequestOperation.SEARCH, playbackSearch)
     }
     fun searchPage(keywords: String, offset: Int, result: (Result<Page<SongSummary>>) -> Unit,
         isCurrent: () -> Boolean = { true }) {
@@ -76,16 +143,21 @@ class KugouLibraryRepository(private val accounts: AccountRepository) : LibraryP
         }, safe(result), RequestOperation.SEARCH)
     }
     /** The pinned vendor has no general song-detail module. Reuse known metadata only. */
-    fun song(key: MediaKey, result: (Result<SongSummary>) -> Unit) {
+    fun song(key: MediaKey, result: (Result<SongSummary>) -> Unit) = song(key, result, false)
+    fun song(key: MediaKey, result: (Result<SongSummary>) -> Unit,
+        playbackSearch: Boolean, isCurrent: () -> Boolean = { true }) {
         val generation = accounts.states.value.getValue(Platform.KUGOU).generation
         accounts.withKugouSession({ _, _ ->
+            if (!isCurrent()) throw LibraryFailure("cancelled")
             if (key.platform != Platform.KUGOU) throw LibraryFailure("identity")
             if (!accounts.isKugouGenerationConnected(generation)) throw LibraryFailure("account_changed")
-            synchronized(metadata) {
+            val song = synchronized(metadata) {
                 if (metadataGeneration != generation) throw LibraryFailure("unavailable")
                 metadata[key] ?: throw LibraryFailure("unavailable")
             }
-        }, safe(result), RequestOperation.SONG)
+            if (!isCurrent()) throw LibraryFailure("cancelled")
+            song
+        }, safe(result), RequestOperation.SONG, playbackSearch)
     }
     fun queue(playlist: MediaKey, startSong: MediaKey, result: (Result<PlaybackQueue>) -> Unit) {
         require(playlist.platform == Platform.KUGOU && startSong.platform == Platform.KUGOU)
@@ -100,7 +172,8 @@ class KugouLibraryRepository(private val accounts: AccountRepository) : LibraryP
             while (true) {
                 if (queueRevision.get() != revision || !accounts.isKugouGenerationConnected(generation)) throw LibraryFailure("account_changed")
                 if (SystemClock.elapsedRealtime() >= deadline) throw LibraryFailure("timeout")
-                val page = library.tracks(session, playlist.id, offset, 100)
+                val route = playlistRoute(api, session, playlist.id, generation)
+                val page = library.tracks(session, route, offset, 100)
                 if (page.total >= 0) {
                     if (expectedTotal != null && expectedTotal != page.total) throw LibraryFailure("incomplete")
                     expectedTotal = page.total
@@ -115,21 +188,100 @@ class KugouLibraryRepository(private val accounts: AccountRepository) : LibraryP
             if (expectedTotal != null && songs.size != expectedTotal) throw LibraryFailure("incomplete")
             if (SystemClock.elapsedRealtime() >= deadline) throw LibraryFailure("timeout")
             if (queueRevision.get() != revision) throw LibraryFailure("account_changed")
+            val route = playlistRoute(api, session, playlist.id, generation)
+            if (route.sourceGlobalId == null) {
+                // Editable lists are displayed newest first; source lists keep their published order.
+                songs.reverse()
+            }
             val index = songs.indexOfFirst { it.key == startSong }
             if (index < 0) throw LibraryFailure("incomplete")
             remember(songs, generation)
             PlaybackQueue(songs, index, generation)
         }, safe(result), RequestOperation.QUEUE)
     }
+
+    fun queueHead(playlist: MediaKey, startSong: MediaKey, knownSongs: List<SongSummary>,
+        result: (Result<PlaylistQueueHead>) -> Unit) {
+        require(playlist.platform == Platform.KUGOU && startSong.platform == Platform.KUGOU)
+        val window = playlistQueueWindow(knownSongs, startSong, 30)
+        if (window == null) {
+            queue(playlist, startSong) { response -> result(response.map { PlaylistQueueHead(it,
+                QueueRemainder(emptyList(), emptyList(), { callback -> callback(Result.success(null)) }, {})) }) }
+            return
+        }
+        if (knownSongs.size > 20_000 || knownSongs.any { it.key.platform != Platform.KUGOU }) {
+            result(Result.failure(LibraryFailure("limit")))
+            return
+        }
+        val revision = queueRevision.incrementAndGet()
+        val generation = accounts.states.value.getValue(Platform.KUGOU).generation
+        if (!accounts.isKugouGenerationConnected(generation)) {
+            result(Result.failure(LibraryFailure("account_changed")))
+            return
+        }
+        val deadline = SystemClock.elapsedRealtime() + 60_000
+        var offset = knownSongs.size
+        var loadedCount = knownSongs.size
+        var expectedTotal: Int? = null
+        var finished = false
+        val remainder = QueueRemainder(window.before, window.after, { callback ->
+            if (finished) {
+                callback(Result.success(null))
+            } else {
+                accounts.withKugouSession({ api, session ->
+                    if (queueRevision.get() != revision || !accounts.isKugouGenerationConnected(generation))
+                        throw LibraryFailure("cancelled")
+                    if (SystemClock.elapsedRealtime() >= deadline) throw LibraryFailure("timeout")
+                    val request = playlistQueuePage(offset)
+                    val route = playlistRoute(api, session, playlist.id, generation)
+                    val page = KugouLibraryApi(api).tracksNewestFirst(session, route, request.offset, request.limit)
+                    if (expectedTotal != null && expectedTotal != page.total) throw LibraryFailure("incomplete")
+                    expectedTotal = page.total.takeIf { it >= 0 } ?: throw LibraryFailure("incomplete")
+                    if (expectedTotal!! > 20_000 || offset > expectedTotal!!) throw LibraryFailure("limit")
+                    if (queueRevision.get() != revision || !accounts.isKugouGenerationConnected(generation))
+                        throw LibraryFailure("cancelled")
+                    val songs = remember(request.unseen(page.items).map(::summary), generation)
+                    if (page.nextOffset >= 0 && (songs.isEmpty() || page.nextOffset <= offset))
+                        throw LibraryFailure("incomplete")
+                    loadedCount += songs.size
+                    if (page.nextOffset < 0) {
+                        if (loadedCount != expectedTotal) throw LibraryFailure("incomplete")
+                        finished = true
+                    } else offset = page.nextOffset
+                    if (SystemClock.elapsedRealtime() >= deadline) throw LibraryFailure("timeout")
+                    if (queueRevision.get() != revision) throw LibraryFailure("cancelled")
+                    songs
+                }, safe { response -> if (queueRevision.get() == revision) callback(response) }, RequestOperation.QUEUE)
+            }
+        }, { queueRevision.compareAndSet(revision, revision + 1) })
+        result(Result.success(PlaylistQueueHead(PlaybackQueue(window.head, window.startIndex, generation), remainder)))
+    }
+
     fun resolveAudio(song: MediaKey, result: (Result<AudioCapability>) -> Unit) {
+        resolveAudio(song, null, result)
+    }
+    fun qualities(song: MediaKey, result: (Result<tech.musxi.core.playback.QualityOptions>) -> Unit) {
+        require(song.platform == Platform.KUGOU)
+        accounts.withKugouSession({ api, session ->
+            val options = KugouLibraryApi(api).qualities(session, song.id, SystemClock.elapsedRealtime())
+            tech.musxi.core.playback.QualityOptions(options.map { tech.musxi.core.playback.QualityOption(it.id, it.name) }, null)
+        }, safe(result), RequestOperation.OTHER)
+    }
+    fun resolveAudio(song: MediaKey, qualityId: String?, result: (Result<AudioCapability>) -> Unit) {
         require(song.platform == Platform.KUGOU)
         val generation = accounts.states.value.getValue(Platform.KUGOU).generation
         accounts.withKugouSession({ api, session ->
-            val audio = KugouLibraryApi(api).audio(session, song.id, SystemClock.elapsedRealtime())
-            AudioCapability(audio.url, audio.expiresAtElapsedMs) { accounts.isKugouGenerationConnected(generation) }
+            val library = KugouLibraryApi(api)
+            val audio = resolvePreferredQuality("kugou", accounts.preferredQuality(Platform.KUGOU), qualityId,
+                { (it as? KugouApi.ApiException)?.code }) { id ->
+                library.audio(session, song.id, SystemClock.elapsedRealtime(), id)
+            }
+            if (qualityId != null && audio.qualityId != qualityId) throw LibraryFailure("unavailable")
+            AudioCapability(audio.url, audio.expiresAtElapsedMs, audio.qualityId) { accounts.isKugouGenerationConnected(generation) }
         }, safe(result), RequestOperation.AUDIO)
     }
-    class AudioCapability internal constructor(private val url: String, private val expiresAt: Long, private val current: () -> Boolean) {
+    class AudioCapability internal constructor(private val url: String, private val expiresAt: Long, val qualityId: String,
+        private val current: () -> Boolean) {
         fun deliverToPlayer(deliver: (String) -> Unit) {
             if (!current()) throw LibraryFailure("account_changed")
             if (SystemClock.elapsedRealtime() >= expiresAt) throw LibraryFailure("source_expired")

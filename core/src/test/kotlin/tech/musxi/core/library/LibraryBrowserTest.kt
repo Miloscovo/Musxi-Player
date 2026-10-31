@@ -301,6 +301,20 @@ class LibraryBrowserTest {
         assertFalse(f.browser.state.value.stale)
     }
 
+    @Test fun deferredInvalidationMarksCacheStaleWithoutBlockingFavoriteWrites() {
+        val f = Fixture()
+        f.store.playlists = saved
+        f.browser.playlists(); f.flush()
+        f.playlistCalls.single()(Result.success(fresh)); f.flush()
+        val count = f.playlistCalls.size
+        f.browser.invalidate(f.identity!!, refreshNow = false); f.flush()
+        assertTrue(f.browser.state.value.stale)
+        assertFalse(f.browser.state.value.refreshing)
+        assertEquals(count, f.playlistCalls.size)
+        f.browser.playlists(); f.flush()
+        assertEquals(count + 1, f.playlistCalls.size)
+    }
+
     @Test fun invalidationSkipsCacheAndLateOldRequestCannotOverwrite() {
         val f = Fixture()
         f.store.playlists = saved

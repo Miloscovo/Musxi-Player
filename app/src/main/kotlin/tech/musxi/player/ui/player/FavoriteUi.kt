@@ -3,14 +3,18 @@ package tech.musxi.player.ui.player
 /**
  * The favourite button's state.
  *
- * The backend verifies a write by re-reading the collection, so it never updates optimistically:
- * the heart must be able to say "working on it" without pretending the song is already liked. That
- * is what [pending] is for — `FavoritesState.pending` names the song whose write is in flight.
+ * The backend verifies a write by re-reading the whole collection, which takes seconds, and it
+ * never updates optimistically. The player therefore shows the state the user asked for at once:
+ * [liked] is the target, not the last confirmed value. [syncing] only says that the backend is
+ * still confirming it in the background; it must not change what the heart looks like.
  */
 data class FavoriteUi(
+    /** The state to show: the user's requested state while a request is open, else the confirmed one. */
     val liked: Boolean = false,
-    /** A write is in flight; keep the confirmed state and show a waiting ring. */
-    val pending: Boolean = false,
-    /** False when the account cannot write (read-only session, expired login). */
+    /** The backend is still confirming [liked]; shown as a small quiet marker, never as a ring. */
+    val syncing: Boolean = false,
+    /** False when the account is known to be read-only; the tap then explains why instead of writing. */
     val enabled: Boolean = true,
+    /** Counts refused requests; each increase shakes the heart once. */
+    val failures: Int = 0,
 )

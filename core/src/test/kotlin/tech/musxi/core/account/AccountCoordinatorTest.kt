@@ -21,6 +21,21 @@ class AccountCoordinatorTest {
         }
     }
 
+    @Test fun temporaryRestoreFailureKeepsSavedIdentityAndRequestsRetry() {
+        val token = coordinator.restore(platform, profile)
+        assertTrue(coordinator.fail(platform, token, AccountError.NETWORK))
+        assertEquals(AccountPhase.RETRYABLE_ERROR, state().phase)
+        assertEquals(profile, state().profile)
+        assertEquals(AccountError.NETWORK, state().error)
+    }
+
+    @Test fun confirmedExpirationRequiresReauthenticationAndKeepsIdentity() {
+        val token = coordinator.restore(platform, profile)
+        assertTrue(coordinator.fail(platform, token, AccountError.EXPIRED))
+        assertEquals(AccountPhase.REAUTH_REQUIRED, state().phase)
+        assertEquals(profile, state().profile)
+    }
+
     @Test fun loginCompletesOnceAndRejectsAllSubsequentCallbacks() {
         val token = coordinator.begin(platform)
         assertEquals(AccountPhase.PREPARING, state().phase)

@@ -1,65 +1,68 @@
 package tech.musxi.player
 
+import android.os.SystemClock
 import kotlinx.coroutines.*
 import tech.musxi.core.account.*
 import tech.musxi.core.library.*
 import tech.musxi.core.playback.*
 
-/** Platform order is stable, not determined by network completion time. No audio URLs here. */
+/** Search is cancellable and never returns credentials or audio URLs. */
 class CrossPlatformSourceSearch(private val app: MusxiApplication) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-    fun find(original: SongSummary, result: (Result<AlternativeSources>) -> Unit): Job = scope.launch {
-            val response = runCatching {
-                withTimeout(20_000) {
-                    val metadata = if (original.title == "待加载歌曲" || original.title.isBlank())
-                        awaitSong(original.key) else original
-                    val targets = listOf(Platform.NETEASE, Platform.QQ, Platform.KUGOU)
-                        .filter { it != original.key.platform }.mapNotNull { platform ->
-                            app.accounts.states.value.getValue(platform).let {
-                                if (it.phase == AccountPhase.CONNECTED) platform to it.generation else null
-                            }
-                        }
-                    val keyword = (metadata.title + " " + metadata.artists.firstOrNull().orEmpty()).trim().take(120)
-                    val pages = targets.map { (platform, generation) -> async {
-                        runCatching {
-                            withTimeout(12_000) { search(platform, keyword) }.filter { it.key.platform == platform }
-                                .take(10).map { SourceCandidate(it, generation) }
-                        }.also { page ->
-                            if (app.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE != 0) {
-                                val error = page.exceptionOrNull()
-                                val category = if (error is TimeoutCancellationException) "timeout" else
-                                    (error as? LibraryPageFailure)?.category?.takeIf {
-                                        it in setOf("network", "protocol", "expired", "permission", "unavailable", "risk", "rate", "http")
-                                    } ?: if (error == null) "none" else "other"
-                                android.util.Log.d("MusxiQueue", "search=$platform count=${page.getOrNull()?.size ?: 0} failure=$category")
-                            }
-                        }
-                    } }.awaitAll()
-                    val candidates = pages.flatMap { it.getOrDefault(emptyList()) }.filter {
-                        val current = app.accounts.states.value.getValue(it.song.key.platform)
-                        current.phase == AccountPhase.CONNECTED && current.generation == it.accountGeneration
-                    }
-                    AlternativeSources(metadata, candidates, pages.any { it.isFailure })
-                }
+    private val finder = AlternativeSourceFinder({ platform ->
+        app.accounts.states.value.getValue(platform).takeIf { it.phase == AccountPhase.CONNECTED }?.generation
+    }, ::awaitSong, ::search, SystemClock::elapsedRealtime)
+
+    fun remember(original: SongSummary, generation: Long, source: SourceCandidate) = finder.remember(original, generation, source)
+    fun forget(original: MediaKey, source: MediaKey) = finder.forget(original, source)
+    fun find(
+        original: SongSummary,
+        result: (Result<AlternativeSources>) -> Unit,
+        excluded: Set<String> = emptySet(),
+        mode: SourceSelectionMode = SourceSelectionMode.AUTO,
+        revision: Long? = null,
+        currentRevision: (() -> Long?)? = null,
+        onProgress: SourceSearchProgressListener? = null,
+    ): Job = scope.launch {
+        fun revisionCurrent() = revision == null || currentRevision?.invoke() == revision
+        if (!revisionCurrent()) return@launch
+        val started = SystemClock.elapsedRealtime()
+        val response = runCatching {
+            withTimeout(20_000) {
+                finder.find(
+                    original = original,
+                    excluded = excluded,
+                    mode = mode,
+                    revision = revision,
+                    currentRevision = currentRevision,
+                    onProgress = onProgress,
+                )
             }
-            ensureActive()
-            result(response.fold({ Result.success(it) }, { Result.failure(LibraryPageFailure(
-                if (it is TimeoutCancellationException) "timeout" else "unavailable")) }))
+        }
+        ensureActive()
+        if (!revisionCurrent()) return@launch
+        if (app.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE != 0) {
+            android.util.Log.d("MusxiQueue", "source_search_ms=${SystemClock.elapsedRealtime() - started} cache=${finder.lastCacheHit} candidates=${response.getOrNull()?.candidates?.size ?: 0}")
+        }
+        result(response.fold({ Result.success(it) }, { Result.failure(LibraryPageFailure(
+            if (it is TimeoutCancellationException) "timeout" else (it as? LibraryPageFailure)?.category ?: "unavailable")) }))
     }
     private suspend fun awaitSong(key: MediaKey): SongSummary = suspendCancellableCoroutine { continuation ->
         val callback: (Result<SongSummary>) -> Unit = { if (continuation.isActive) continuation.resumeWith(it) }
+        val current = { continuation.isActive }
         when (key.platform) {
-            Platform.NETEASE -> app.library.song(key, callback)
-            Platform.QQ -> app.qqLibrary.song(key, callback)
-            Platform.KUGOU -> app.kugouLibrary.song(key, callback)
+            Platform.NETEASE -> app.library.song(key, callback, playbackSearch = true, isCurrent = current)
+            Platform.QQ -> app.qqLibrary.song(key, callback, playbackSearch = true, isCurrent = current)
+            Platform.KUGOU -> app.kugouLibrary.song(key, callback, playbackSearch = true, isCurrent = current)
         }
     }
     private suspend fun search(platform: Platform, keyword: String): List<SongSummary> = suspendCancellableCoroutine { continuation ->
         val callback: (Result<List<SongSummary>>) -> Unit = { if (continuation.isActive) continuation.resumeWith(it) }
+        val current = { continuation.isActive }
         when (platform) {
-            Platform.NETEASE -> app.library.search(keyword, callback)
-            Platform.QQ -> app.qqLibrary.search(keyword, callback)
-            Platform.KUGOU -> app.kugouLibrary.search(keyword, callback)
+            Platform.NETEASE -> app.library.search(keyword, callback, playbackSearch = true, isCurrent = current)
+            Platform.QQ -> app.qqLibrary.search(keyword, callback, playbackSearch = true, isCurrent = current)
+            Platform.KUGOU -> app.kugouLibrary.search(keyword, callback, playbackSearch = true, isCurrent = current)
         }
     }
 }

@@ -55,6 +55,7 @@ data class MiniPlayerUi(
     val buffering: Boolean = false,
     /** 0..1, already clamped; drives whichever progress style the bar uses. */
     val progress: Float = 0f,
+    val coverUrl: String? = null,
     val hasPrevious: Boolean = false,
     val hasNext: Boolean = false,
     /** Set only when the queue platform and the streaming platform differ, i.e. after a source swap. */
@@ -80,6 +81,7 @@ fun miniPlayerUi(state: tech.musxi.playback.PlaybackState): MiniPlayerUi {
         playing = state.playing && !state.buffering,
         buffering = state.buffering,
         progress = progress,
+        coverUrl = state.coverUrl,
         hasPrevious = state.hasPrevious,
         hasNext = state.hasNext,
         sourcePlatform = swappedSourceOf(state),
@@ -182,6 +184,7 @@ fun MiniPlayer(
                 seed = ui.title,
                 modifier = Modifier.size(48.dp),
                 shape = MaterialTheme.shapes.medium,
+                url = ui.coverUrl,
             )
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {

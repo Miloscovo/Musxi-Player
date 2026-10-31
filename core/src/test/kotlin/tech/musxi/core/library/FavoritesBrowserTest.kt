@@ -21,12 +21,15 @@ class FavoritesBrowserTest {
         val result: (Result<Unit>) -> Unit,
     )
 
-    private class Fixture {
+    private data class VerifyCall(val song: SongSummary, val liked: Boolean, val current: () -> Boolean,
+        val result: (Result<Boolean>) -> Unit)
+    private class Fixture(singleSong: Boolean = false) {
         val identities = Platform.entries.associateWith {
             LibraryCacheIdentity("owner-${it.name}", 1, true)
         }.toMutableMap()
         val fetches = mutableListOf<FetchCall>()
         val writes = mutableListOf<WriteCall>()
+        val checks = mutableListOf<VerifyCall>()
         val verifiedCallbacks = mutableListOf<Pair<Platform, LibraryCacheIdentity>>()
         var fetchThrows = false
         var writeThrows = false
@@ -47,6 +50,9 @@ class FavoritesBrowserTest {
                 if (rejectVerifiedCallbacks) error("private listener detail")
                 verifiedCallbacks += platform to identity
             },
+            verify = if (singleSong) FavoritesVerify { song, liked, current, result ->
+                checks += VerifyCall(song, liked, current, result)
+            } else null,
         )
 
         fun refresh(platform: Platform): FetchCall {
@@ -269,7 +275,7 @@ class FavoritesBrowserTest {
     }
 
     @Test
-    fun activeWriteMakesPlatformBusyAndCannotBeCanceledByRefresh() {
+    fun activeWriteQueuesOtherSongsAndCannotBeCanceledByRefresh() {
         val fixture = Fixture()
         val platform = Platform.NETEASE
         fixture.seed(platform, fixture.keys(platform, "saved"))
@@ -282,14 +288,112 @@ class FavoritesBrowserTest {
         assertEquals(1, fixture.writes.size)
         assertEquals(1, fixture.fetches.size)
         assertEquals(song.key, fixture.browser.state.value.getValue(platform).pending)
-        assertEquals("busy", fixture.browser.state.value.getValue(platform).error)
+        assertNull(fixture.browser.state.value.getValue(platform).error)
+        assertEquals(listOf(fixture.song(platform, "another").key), fixture.browser.state.value.getValue(platform).queuedKeys)
 
         fixture.writes.single().result(Result.success(Unit))
         assertEquals(2, fixture.fetches.size)
         fixture.fetches.last().result(Result.success(
             FavoritesSnapshot(fixture.keys(platform, "saved", "new"))
         ))
+        assertEquals(2, fixture.writes.size)
+        assertEquals(fixture.song(platform, "another").key, fixture.browser.state.value.getValue(platform).pending)
+        fixture.writes.last().result(Result.success(Unit))
+        fixture.fetches.last().result(Result.success(FavoritesSnapshot(fixture.keys(platform, "saved", "new", "another"))))
         assertNull(fixture.browser.state.value.getValue(platform).pending)
+    }
+
+    @Test fun threeIntentsOver758KeysOnlyCheckChangedSongsAndKeepTheCollectionSynced() {
+        val fixture = Fixture(singleSong = true)
+        val platform = Platform.KUGOU
+        val baseline = (0 until 758).mapTo(linkedSetOf()) { MediaKey(platform, "saved-$it") }
+        fixture.seed(platform, baseline)
+        val results = mutableListOf<Result<Unit>>()
+        val songs = (1..3).map { fixture.song(platform, "new-$it") }
+        songs.forEach { fixture.browser.enqueueLiked(it, true, results::add) }
+        assertEquals(1, fixture.writes.size)
+        assertEquals(2, fixture.browser.state.value.getValue(platform).queuedKeys.size)
+        songs.forEachIndexed { index, song ->
+            assertEquals(song.key, fixture.writes[index].song.key)
+            fixture.writes[index].result(Result.success(Unit))
+            assertEquals(song.key, fixture.checks[index].song.key)
+            assertFalse(song.key in fixture.browser.state.value.getValue(platform).keys)
+            fixture.checks[index].result(Result.success(true))
+            fixture.checks[index].result(Result.success(false)) // Duplicate callback is ignored.
+            assertTrue(fixture.browser.state.value.getValue(platform).synced)
+        }
+        assertEquals(1, fixture.fetches.size)
+        assertEquals(3, fixture.checks.size)
+        assertEquals(3, results.size)
+        assertTrue(results.all { it.isSuccess })
+        assertEquals(baseline + songs.map { it.key }, fixture.browser.state.value.getValue(platform).keys)
+        assertEquals(1, fixture.verifiedCallbacks.size) // Defer costly library invalidation until drained.
+    }
+
+    @Test fun targetedMismatchReconcilesButNeverRetriesWrites() {
+        val fixture = Fixture(singleSong = true)
+        val p = Platform.QQ
+        val before = fixture.keys(p, "old")
+        fixture.seed(p, before)
+        val results = mutableListOf<Result<Unit>>()
+        fixture.browser.enqueueLiked(fixture.song(p, "new"), true, results::add)
+        fixture.browser.enqueueLiked(fixture.song(p, "queued"), true, results::add)
+        fixture.writes.single().result(Result.success(Unit))
+        fixture.checks.single().result(Result.success(false))
+        assertEquals(before, fixture.browser.state.value.getValue(p).keys)
+        assertFalse(fixture.browser.state.value.getValue(p).synced)
+        assertEquals(2, fixture.fetches.size)
+        assertEquals(1, fixture.writes.size)
+        assertEquals(1, results.size)
+        assertTrue(results.single().isFailure)
+        fixture.browser.enqueueLiked(fixture.song(p, "during-recovery"), true, results::add)
+        assertEquals(2, fixture.browser.state.value.getValue(p).queuedKeys.size)
+        fixture.fetches.last().result(Result.success(FavoritesSnapshot(before)))
+        assertTrue(fixture.browser.state.value.getValue(p).synced)
+        assertEquals(2, fixture.writes.size)
+        assertEquals("queued", fixture.writes.last().song.key.id)
+        fixture.writes.last().result(Result.success(Unit))
+        fixture.checks.last().result(Result.success(true))
+        assertEquals(2, results.size)
+        assertTrue(results.last().isSuccess)
+        assertEquals("during-recovery", fixture.writes.last().song.key.id)
+        fixture.writes.last().result(Result.success(Unit))
+        fixture.checks.last().result(Result.success(true))
+        assertEquals(3, results.size)
+        assertTrue(results.last().isSuccess)
+    }
+
+    @Test fun targetedNetworkFailurePreservesKeysUntilReconciliationSucceeds() {
+        val fixture = Fixture(singleSong = true)
+        val p = Platform.NETEASE
+        val before = fixture.keys(p, "old")
+        fixture.seed(p, before)
+        fixture.browser.setLiked(fixture.song(p, "old"), false)
+        fixture.writes.single().result(Result.success(Unit))
+        fixture.checks.single().result(Result.failure(LibraryPageFailure("network")))
+        fixture.fetches.last().result(Result.failure(LibraryPageFailure("network")))
+        assertEquals(before, fixture.browser.state.value.getValue(p).keys)
+        assertFalse(fixture.browser.state.value.getValue(p).synced)
+        assertEquals("network", fixture.browser.state.value.getValue(p).error)
+        assertEquals(1, fixture.writes.size)
+    }
+
+    @Test fun queuedAndActiveIntentsAreRejectedOnAccountChange() {
+        val fixture = Fixture(singleSong = true)
+        val p = Platform.KUGOU
+        fixture.seed(p, emptySet())
+        val results = mutableListOf<Result<Unit>>()
+        fixture.browser.enqueueLiked(fixture.song(p, "new"), true, results::add)
+        fixture.browser.enqueueLiked(fixture.song(p, "queued"), true, results::add)
+        fixture.writes.single().result(Result.success(Unit))
+        fixture.identities[p] = LibraryCacheIdentity("replacement", 2, true)
+        fixture.browser.accountChanged()
+        fixture.checks.single().result(Result.success(true))
+        assertEquals(2, results.size)
+        assertTrue(results.all { it.isFailure })
+        assertTrue(fixture.browser.state.value.getValue(p).keys.isEmpty())
+        assertTrue(fixture.browser.state.value.getValue(p).queuedKeys.isEmpty())
+        assertEquals(1, fixture.writes.size)
     }
 
     @Test

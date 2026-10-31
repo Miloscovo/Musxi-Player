@@ -57,10 +57,86 @@ class RequestLanesTest {
         } finally { release.countDown() }
     }
 
+    @Test fun twoPlaybackSearchesStartWhileLibraryAndAudioAreBlocked() = withLanes { lanes ->
+        val libraryStarted = CountDownLatch(1)
+        val releaseLibrary = CountDownLatch(1)
+        val audioStarted = CountDownLatch(1)
+        val releaseAudio = CountDownLatch(1)
+        val firstSearch = CountDownLatch(1)
+        val secondSearch = CountDownLatch(1)
+        try {
+            lanes.execute(RequestOperation.FAVORITES_READ) {
+                libraryStarted.countDown(); releaseLibrary.await()
+            }
+            lanes.execute(RequestOperation.AUDIO) {
+                audioStarted.countDown(); releaseAudio.await()
+            }
+            assertTrue(libraryStarted.await(3, TimeUnit.SECONDS))
+            assertTrue(audioStarted.await(3, TimeUnit.SECONDS))
+            lanes.execute(RequestOperation.SEARCH, playbackSearch = true) { firstSearch.countDown() }
+            lanes.execute(RequestOperation.SONG, playbackSearch = true) { secondSearch.countDown() }
+            assertTrue(firstSearch.await(3, TimeUnit.SECONDS))
+            assertTrue(secondSearch.await(3, TimeUnit.SECONDS))
+        } finally {
+            releaseLibrary.countDown()
+            releaseAudio.countDown()
+        }
+    }
+
+    @Test fun blockedPlaybackSearchesDoNotBlockAudioOrOrdinaryRequests() = withLanes { lanes ->
+        val firstSearch = CountDownLatch(1)
+        val secondSearch = CountDownLatch(1)
+        val releaseSearches = CountDownLatch(1)
+        val audio = CountDownLatch(1)
+        val ordinary = CountDownLatch(1)
+        try {
+            lanes.execute(RequestOperation.SEARCH, playbackSearch = true) {
+                firstSearch.countDown(); releaseSearches.await()
+            }
+            lanes.execute(RequestOperation.SONG, playbackSearch = true) {
+                secondSearch.countDown(); releaseSearches.await()
+            }
+            assertTrue(firstSearch.await(3, TimeUnit.SECONDS))
+            assertTrue(secondSearch.await(3, TimeUnit.SECONDS))
+            lanes.execute(RequestOperation.AUDIO) { audio.countDown() }
+            lanes.execute(RequestOperation.OTHER) { ordinary.countDown() }
+            assertTrue(audio.await(3, TimeUnit.SECONDS))
+            assertTrue(ordinary.await(3, TimeUnit.SECONDS))
+        } finally { releaseSearches.countDown() }
+    }
+
+    @Test fun writesCannotUsePlaybackSearchLane() = withLanes { lanes ->
+        val executed = CountDownLatch(1)
+        assertThrows(IllegalArgumentException::class.java) {
+            lanes.execute(RequestOperation.FAVORITES_WRITE, playbackSearch = true) { executed.countDown() }
+        }
+        assertEquals(1L, executed.count)
+    }
+
+    @Test fun defaultPlaybackSearchFallsBackToLibraryLane() {
+        val library = Executors.newSingleThreadExecutor()
+        val audio = Executors.newSingleThreadExecutor()
+        val release = CountDownLatch(1)
+        val search = CountDownLatch(1)
+        try {
+            val lanes = RequestLanes(library, audio)
+            lanes.execute(RequestOperation.OTHER) { release.await() }
+            lanes.execute(RequestOperation.SEARCH, playbackSearch = true) { search.countDown() }
+            assertEquals(1L, search.count)
+            release.countDown()
+            assertTrue(search.await(3, TimeUnit.SECONDS))
+        } finally {
+            release.countDown()
+            library.shutdownNow()
+            audio.shutdownNow()
+        }
+    }
+
     private fun withLanes(test: (RequestLanes) -> Unit) {
         val library = Executors.newSingleThreadExecutor()
         val audio = Executors.newSingleThreadExecutor()
-        try { test(RequestLanes(library, audio)) }
-        finally { library.shutdownNow(); audio.shutdownNow() }
+        val playbackSearch = Executors.newFixedThreadPool(2)
+        try { test(RequestLanes(library, audio, playbackSearch)) }
+        finally { library.shutdownNow(); audio.shutdownNow(); playbackSearch.shutdownNow() }
     }
 }

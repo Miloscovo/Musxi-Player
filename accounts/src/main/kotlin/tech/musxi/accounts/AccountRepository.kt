@@ -19,17 +19,29 @@ import java.util.concurrent.TimeUnit
 /** Process-owned login execution. Activities receive state, never platform credentials. */
 class AccountRepository(context: Context) {
     private val app = context.applicationContext
+    private val playbackPreferences = app.getSharedPreferences("playback-preferences-v1", Context.MODE_PRIVATE)
     private val coordinator = AccountCoordinator()
     val states: StateFlow<Map<Platform, AccountState>> = coordinator.states
     private val gate = Any()
     private val queue = Executors.newSingleThreadScheduledExecutor()
-    private val requests = RequestLanes(queue, Executors.newSingleThreadExecutor())
+    private val playbackSearch = Executors.newFixedThreadPool(2)
+    private val requests = RequestLanes(queue, Executors.newSingleThreadExecutor(), playbackSearch)
     private val main = Handler(Looper.getMainLooper())
     private val requestMetrics = RequestMetrics(SystemClock::elapsedRealtime)
 
     /** Bounded in-memory aggregates, with fixed platform/operation labels only. */
     fun requestTimingSnapshot(): List<RequestMetricSummary> = requestMetrics.snapshot()
     fun clearRequestTimings() = requestMetrics.clear()
+
+    fun preferredQuality(platform: Platform): String? = playbackPreferences.getString(qualityPreferenceKey(platform), null)
+        ?.takeIf { it.startsWith("${platform.name.lowercase()}:") }
+
+    fun rememberPreferredQuality(platform: Platform, qualityId: String) {
+        require(qualityId.startsWith("${platform.name.lowercase()}:") && qualityId.length <= 64 && qualityId.none(Char::isISOControl))
+        playbackPreferences.edit().putString(qualityPreferenceKey(platform), qualityId).apply()
+    }
+
+    private fun qualityPreferenceKey(platform: Platform) = "quality.${platform.name.lowercase()}"
     private val libraryCaches: Map<Platform, LibraryPageStore> = mapOf(
         Platform.NETEASE to FileLibraryPageStore(java.io.File(app.noBackupFilesDir, "library-pages-v1")),
         Platform.KUGOU to FileLibraryPageStore(java.io.File(app.noBackupFilesDir, "kugou-library-pages-v1"), Platform.KUGOU),
@@ -270,11 +282,12 @@ class AccountRepository(context: Context) {
         }
     }
 
-    /** Only audio bypasses bulk reads. Session snapshots and all result fences retain account ownership. */
-    internal fun <T> withNeteaseSession(work: (NeteaseApi, NeteaseApi.Session) -> T, result: (Result<T>) -> Unit, operation: RequestOperation = RequestOperation.OTHER) {
+    /** Audio and bounded playback searches bypass bulk reads; session and delivery fences retain account ownership. */
+    internal fun <T> withNeteaseSession(work: (NeteaseApi, NeteaseApi.Session) -> T, result: (Result<T>) -> Unit,
+        operation: RequestOperation = RequestOperation.OTHER, playbackSearch: Boolean = false) {
         val expected = states.value.getValue(Platform.NETEASE)
         val timing = requestMetrics.queued(Platform.NETEASE, operation)
-        requests.execute(operation) {
+        requests.execute(operation, playbackSearch) {
             requestMetrics.started(timing)
             var entered = false
             val response = runCatching {
@@ -319,10 +332,12 @@ class AccountRepository(context: Context) {
         return state.phase == AccountPhase.CONNECTED && state.generation == generation
     }
 
-    internal fun <T> withQqSession(work: (tech.musxi.qqloginpoc.QqMusicApi, tech.musxi.qqloginpoc.QqMusicApi.Session) -> T, result: (Result<T>) -> Unit, operation: RequestOperation = RequestOperation.OTHER) {
+    internal fun <T> withQqSession(work: (tech.musxi.qqloginpoc.QqMusicApi, tech.musxi.qqloginpoc.QqMusicApi.Session) -> T,
+        result: (Result<T>) -> Unit, operation: RequestOperation = RequestOperation.OTHER,
+        playbackSearch: Boolean = false) {
         val expected = states.value.getValue(Platform.QQ)
         val timing = requestMetrics.queued(Platform.QQ, operation)
-        requests.execute(operation) {
+        requests.execute(operation, playbackSearch) {
             requestMetrics.started(timing)
             var entered = false
             val response = runCatching {
@@ -368,10 +383,11 @@ class AccountRepository(context: Context) {
     }
 
     internal fun <T> withKugouSession(work: (tech.musxi.loginpoc.KugouApi, tech.musxi.loginpoc.KugouApi.Session) -> T,
-        result: (Result<T>) -> Unit, operation: RequestOperation = RequestOperation.OTHER) {
+        result: (Result<T>) -> Unit, operation: RequestOperation = RequestOperation.OTHER,
+        playbackSearch: Boolean = false) {
         val expected = states.value.getValue(Platform.KUGOU).generation
         val timing = requestMetrics.queued(Platform.KUGOU, operation)
-        requests.execute(operation) {
+        requests.execute(operation, playbackSearch) {
             requestMetrics.started(timing)
             var entered = false
             val response = runCatching {

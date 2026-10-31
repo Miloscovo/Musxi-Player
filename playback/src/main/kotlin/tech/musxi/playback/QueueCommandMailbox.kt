@@ -1,6 +1,9 @@
 package tech.musxi.playback
 
 import tech.musxi.core.library.PlaybackQueue
+import tech.musxi.core.library.SongSummary
+
+enum class QueueInsertAt { HEAD, TAIL }
 
 /** One in-process payload, never a large Binder bundle. Latest intent wins before dispatch. */
 internal class QueueCommandMailbox {
@@ -12,6 +15,8 @@ internal class QueueCommandMailbox {
         class Edit(val expectedRevision: Long, val edit: tech.musxi.core.playback.QueueEdit) : Action
         class Insert(val expectedRevision: Long, val song: tech.musxi.core.library.SongSummary,
             val playNext: Boolean) : Action
+        class InsertBatch(val queueEpoch: String, val batchId: String, val songs: List<SongSummary>,
+            val at: QueueInsertAt) : Action
     }
     private var revision = 0L
     private var pending: Action? = null

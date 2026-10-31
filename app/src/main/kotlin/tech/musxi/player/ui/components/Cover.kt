@@ -16,8 +16,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import coil3.compose.AsyncImage
 
 /**
  * Seeds the two colours of a placeholder cover. Kept separate because the player page derives its
@@ -39,9 +41,16 @@ fun coverTint(seed: String, base: Color, dark: Boolean): Color =
  * A nested-squares pattern was tried here and reverted. It was more "designed" but less pleasant,
  * and the owner of the product preferred this. Beauty calls belong to them; the argument that a
  * pattern is more distinctive than a gradient does not survive being looked at side by side.
+ *
+ * When [url] is set the real artwork is drawn over the placeholder, which shows through while loading or on failure.
  */
 @Composable
-fun Cover(seed: String, modifier: Modifier = Modifier, shape: Shape = MaterialTheme.shapes.large) {
+fun Cover(
+    seed: String,
+    modifier: Modifier = Modifier,
+    shape: Shape = MaterialTheme.shapes.large,
+    url: String? = null,
+) {
     val (a, b) = coverColors(seed)
     Box(modifier.clip(shape).background(Brush.linearGradient(listOf(a, b)))) {
         Canvas(Modifier.fillMaxSize()) {
@@ -55,6 +64,14 @@ fun Cover(seed: String, modifier: Modifier = Modifier, shape: Shape = MaterialTh
                 color = Color.Black.copy(alpha = 0.10f),
                 radius = m * 0.62f,
                 center = Offset(size.width * 0.12f, size.height * 1.02f),
+            )
+        }
+        if (!url.isNullOrBlank()) {
+            AsyncImage(
+                model = url,
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.matchParentSize(),
             )
         }
     }

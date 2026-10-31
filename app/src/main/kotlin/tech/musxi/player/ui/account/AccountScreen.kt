@@ -7,10 +7,16 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -33,9 +39,14 @@ fun AccountScreen(
     onCancel: (Platform) -> Unit,
     onRetry: (Platform) -> Unit,
     onRelogin: (Platform) -> Unit,
-    onManage: (Platform) -> Unit,
+    onReverify: (Platform) -> Unit,
+    onSignOut: (Platform) -> Unit,
+    /** Netease only: the gallery-QR fallback when the web page cannot be used. Null hides it. */
+    onConnectNeteaseScanner: (() -> Unit)? = null,
 ) {
     val cs = MaterialTheme.colorScheme
+    var managing by remember { mutableStateOf<Platform?>(null) }
+    var signingOut by remember { mutableStateOf<Platform?>(null) }
     val solidRow = solidActionPlatform(state.rows)
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState())
@@ -61,12 +72,24 @@ fun AccountScreen(
                         AccountAction.CANCEL -> onCancel(row.platform)
                         AccountAction.RETRY -> onRetry(row.platform)
                         AccountAction.RELOGIN -> onRelogin(row.platform)
-                        AccountAction.MANAGE -> onManage(row.platform)
+                        AccountAction.MANAGE -> managing = row.platform
                         AccountAction.NONE -> Unit
                     }
                 },
             )
             HorizontalDivider(color = cs.outlineVariant.copy(alpha = 0.45f))
+        }
+
+        // Netease's primary login is the web page; the scanner stays reachable, quietly, for the
+        // phones where the page will not load. Only offered while there is nothing to cancel.
+        val netease = state.rows.firstOrNull { it.platform == Platform.NETEASE }
+        if (onConnectNeteaseScanner != null && netease?.action == AccountAction.CONNECT) {
+            TextButton(onClick = onConnectNeteaseScanner) {
+                Text(
+                    "网易云网页登录打不开？改用扫码登录",
+                    style = MaterialTheme.typography.labelMedium, color = cs.onSurfaceVariant,
+                )
+            }
         }
 
         Spacer(Modifier.height(Space.section))
@@ -80,4 +103,39 @@ fun AccountScreen(
         )
         Spacer(Modifier.height(Space.section))
     }
+
+    managing?.let { platform ->
+        AlertDialog(
+            onDismissRequest = { managing = null },
+            title = { Text(platform.fullName()) },
+            text = { Text("重新验证会向平台确认登录是否仍然有效；退出后本机保存的账号和缓存歌单会被清除。") },
+            confirmButton = {
+                TextButton(onClick = { managing = null; onReverify(platform) }) { Text("重新验证") }
+            },
+            dismissButton = {
+                TextButton(onClick = { managing = null; signingOut = platform }) {
+                    Text("退出登录", color = cs.error)
+                }
+            },
+        )
+    }
+    signingOut?.let { platform ->
+        AlertDialog(
+            onDismissRequest = { signingOut = null },
+            title = { Text("退出${platform.fullName()}？") },
+            text = { Text("之后需要重新登录才能同步歌单和收藏。") },
+            confirmButton = {
+                TextButton(onClick = { signingOut = null; onSignOut(platform) }) {
+                    Text("退出", color = cs.error)
+                }
+            },
+            dismissButton = { TextButton(onClick = { signingOut = null }) { Text("取消") } },
+        )
+    }
+}
+
+private fun Platform.fullName(): String = when (this) {
+    Platform.NETEASE -> "网易云音乐"
+    Platform.QQ -> "QQ音乐"
+    Platform.KUGOU -> "酷狗音乐"
 }

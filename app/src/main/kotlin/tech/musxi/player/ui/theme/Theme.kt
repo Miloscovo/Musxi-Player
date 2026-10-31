@@ -51,11 +51,16 @@ val LocalNowPlayingAccent = staticCompositionLocalOf<Color?> { null }
 @Composable
 fun nowPlayingAccent(): Color = LocalNowPlayingAccent.current ?: MaterialTheme.colorScheme.primary
 
+/**
+ * 底色是纯中性灰阶，颜色只来自封面与主题色控件，不让主题色渗进底色。
+ * Surfaces use the neutral ladder as-is; the accent appears only in primary and its containers.
+ */
 fun musxiColorScheme(accent: Accent, mode: ThemeMode): ColorScheme {
     val dark = mode != ThemeMode.LIGHT
     val a = accent.tones(dark)
     val n = Neutrals
-    return if (!dark) lightColorScheme(
+    return if (!dark) {
+        lightColorScheme(
         primary = a.primary, onPrimary = a.onPrimary,
         primaryContainer = a.container, onPrimaryContainer = a.onContainer,
         secondary = n.lightOnVariant, onSecondary = Color.White,
@@ -66,17 +71,20 @@ fun musxiColorScheme(accent: Accent, mode: ThemeMode): ColorScheme {
         surface = n.lightBackground, onSurface = n.lightOn,
         surfaceVariant = n.lightHigh, onSurfaceVariant = n.lightOnVariant,
         surfaceTint = Color.Transparent,
-        surfaceContainerLowest = n.lightLowest, surfaceContainerLow = n.lightLow,
+        surfaceContainerLowest = n.lightLowest,
+        surfaceContainerLow = n.lightLow,
         surfaceContainer = n.light, surfaceContainerHigh = n.lightHigh,
         surfaceContainerHighest = n.lightHighest,
         surfaceBright = n.lightLowest, surfaceDim = n.lightHighest,
         outline = n.lightOutline, outlineVariant = n.lightOutlineVariant,
         inverseSurface = Color(0xFF2F302D), inverseOnSurface = Color(0xFFF1F1EE),
         inversePrimary = accent.tones(true).primary,
-    ) else {
+        )
+    } else {
         // Pure black only swaps the base surface. Container steps stay on the normal dark ladder
         // so cards keep their separation and the difference from DARK is visible.
         val black = mode == ThemeMode.BLACK
+        val base = if (black) n.blackBackground else n.darkBackground
         darkColorScheme(
             primary = a.primary, onPrimary = a.onPrimary,
             primaryContainer = a.container, onPrimaryContainer = a.onContainer,
@@ -84,8 +92,8 @@ fun musxiColorScheme(accent: Accent, mode: ThemeMode): ColorScheme {
             secondaryContainer = n.darkHigh, onSecondaryContainer = n.darkOn,
             tertiary = a.primary, onTertiary = a.onPrimary,
             tertiaryContainer = a.container, onTertiaryContainer = a.onContainer,
-            background = if (black) n.blackBackground else n.darkBackground, onBackground = n.darkOn,
-            surface = if (black) n.blackBackground else n.darkBackground, onSurface = n.darkOn,
+            background = base, onBackground = n.darkOn,
+            surface = base, onSurface = n.darkOn,
             surfaceVariant = n.darkHigh, onSurfaceVariant = n.darkOnVariant,
             surfaceTint = Color.Transparent,
             surfaceContainerLowest = if (black) n.blackBackground else n.darkLowest,
@@ -93,7 +101,7 @@ fun musxiColorScheme(accent: Accent, mode: ThemeMode): ColorScheme {
             surfaceContainer = n.dark,
             surfaceContainerHigh = n.darkHigh,
             surfaceContainerHighest = n.darkHighest,
-            surfaceBright = n.darkHighest, surfaceDim = if (black) n.blackBackground else n.darkBackground,
+            surfaceBright = n.darkHighest, surfaceDim = base,
             outline = n.darkOutline, outlineVariant = n.darkOutlineVariant,
             inverseSurface = Color(0xFFE6E6E2), inverseOnSurface = Color(0xFF2F302D),
             inversePrimary = accent.tones(false).primary,

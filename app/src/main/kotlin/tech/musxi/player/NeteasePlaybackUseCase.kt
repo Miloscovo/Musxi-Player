@@ -1,5 +1,8 @@
 package tech.musxi.player
 
+import android.os.Handler
+import android.os.Looper
+import java.util.UUID
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import tech.musxi.accounts.NeteaseLibraryRepository
@@ -7,7 +10,9 @@ import tech.musxi.core.library.MediaKey
 import tech.musxi.core.library.PlaybackQueue
 import tech.musxi.core.library.SongSummary
 import tech.musxi.core.library.ArtworkPolicy
+import tech.musxi.core.library.PlaylistQueueHead
 import tech.musxi.playback.PlaybackConnection
+import tech.musxi.playback.QueueInsertAt
 
 data class QueueLoadState(val loading: Boolean = false, val error: String? = null)
 
@@ -19,13 +24,25 @@ class NeteasePlaybackUseCase(
     private val generationFor: (MediaKey) -> Long? = { null },
     private val submitRestoredQueue: ((PlaybackQueue, tech.musxi.core.playback.SavedPlaybackQueue, (Result<Unit>) -> Unit) -> Unit)? = null,
     private val onNewIntent: () -> Unit = {},
+    private val loadQueueHead: ((MediaKey, MediaKey, List<SongSummary>, (Result<PlaylistQueueHead>) -> Unit) -> Unit)? = null,
+    private val enqueueBatch: ((List<SongSummary>, QueueInsertAt, String, String, (Result<Unit>) -> Unit) -> Unit)? = null,
+    private val currentQueueEpoch: () -> String = { "" },
+    private val scheduleBatchRetry: (Long, () -> Unit) -> Unit = { delay, action ->
+        Handler(Looper.getMainLooper()).postDelayed(action, delay)
+    },
 ) {
     constructor(library: NeteaseLibraryRepository, playback: PlaybackConnection) : this(library::queue, playback::playQueue, playback::stop)
     private val mutable = MutableStateFlow(QueueLoadState())
     val state = mutable.asStateFlow()
     private var request = 0L
+    private var activeRemainder: tech.musxi.core.library.QueueRemainder? = null
 
-    fun playPlaylist(playlist: MediaKey, startSong: MediaKey) {
+    fun playPlaylist(playlist: MediaKey, startSong: MediaKey, knownSongs: List<SongSummary> = emptyList()) {
+        val loadHead = loadQueueHead
+        if (loadHead != null && knownSongs.isNotEmpty()) {
+            startPlaylistHead(playlist, startSong, knownSongs, loadHead)
+            return
+        }
         start(load = { callback -> loadQueue(playlist, startSong, callback) })
     }
 
@@ -33,7 +50,7 @@ class NeteasePlaybackUseCase(
     fun playSong(song: SongSummary) {
         val generation = generationFor(song.key)
         if (generation == null) {
-            onNewIntent(); cancelPending(); stopPlayer(); mutable.value = QueueLoadState(error = "account_unavailable"); return
+            onNewIntent(); cancelPending(); mutable.value = QueueLoadState(error = "account_unavailable"); return
         }
         start(load = { callback -> callback(Result.success(PlaybackQueue(listOf(song.copy(artists = song.artists.toList(),
             coverUrl = ArtworkPolicy.sanitize(song.key.platform, song.coverUrl))), 0, generation))) })
@@ -56,8 +73,8 @@ class NeteasePlaybackUseCase(
         submit: (PlaybackQueue, (Result<Unit>) -> Unit) -> Unit = submitQueue,
         result: (Result<Unit>) -> Unit = {}, notifyIntent: Boolean = true) {
         if (notifyIntent) onNewIntent()
+        cancelRemainder()
         val token = ++request
-        stopPlayer()
         mutable.value = QueueLoadState(loading = true)
         load callback@{ response ->
             if (token != request) return@callback
@@ -79,6 +96,124 @@ class NeteasePlaybackUseCase(
             }
         }
     }
-    fun cancelPending() { ++request; mutable.value = QueueLoadState() }
+
+    private fun startPlaylistHead(playlist: MediaKey, startSong: MediaKey, knownSongs: List<SongSummary>,
+        loadHead: (MediaKey, MediaKey, List<SongSummary>, (Result<PlaylistQueueHead>) -> Unit) -> Unit) {
+        onNewIntent()
+        cancelRemainder()
+        val token = ++request
+        mutable.value = QueueLoadState(loading = true)
+        try {
+            loadHead(playlist, startSong, knownSongs) { response ->
+                if (token != request) return@loadHead
+                response.onSuccess { head ->
+                    activeRemainder = head.remainder
+                    try {
+                        submitQueue(head.queue) { accepted ->
+                            if (token != request) return@submitQueue
+                            if (accepted.isFailure) {
+                                finishRemainder(token, head.remainder, "player")
+                            } else {
+                                val epoch = currentQueueEpoch()
+                                if (epoch.isBlank()) finishRemainder(token, head.remainder, "player")
+                                else insertKnownRemainder(token, head.remainder, epoch, UUID.randomUUID().toString())
+                            }
+                        }
+                    } catch (_: Exception) {
+                        finishRemainder(token, head.remainder, "player")
+                    }
+                }.onFailure { error ->
+                    mutable.value = QueueLoadState(error = (error as? tech.musxi.core.library.LibraryPageFailure)?.category ?: "unclassified")
+                }
+            }
+        } catch (_: Exception) {
+            if (token == request) mutable.value = QueueLoadState(error = "unclassified")
+        }
+    }
+
+    private fun insertKnownRemainder(token: Long, remainder: tech.musxi.core.library.QueueRemainder,
+        epoch: String, batchPrefix: String) {
+        val known = listOf(QueueInsertAt.HEAD to remainder.before, QueueInsertAt.TAIL to remainder.after)
+        fun insertKnownAt(index: Int) {
+            if (token != request) return
+            if (index >= known.size) {
+                loadNextRemainder(token, remainder, epoch, batchPrefix, 0)
+                return
+            }
+            val (at, songs) = known[index]
+            if (songs.isEmpty()) {
+                insertKnownAt(index + 1)
+                return
+            }
+            submitBatch(token, songs, at, "$batchPrefix:$index", epoch) { accepted ->
+                if (accepted.isFailure) finishRemainder(token, remainder, "player")
+                else insertKnownAt(index + 1)
+            }
+        }
+        insertKnownAt(0)
+    }
+
+    private fun loadNextRemainder(token: Long, remainder: tech.musxi.core.library.QueueRemainder,
+        epoch: String, batchPrefix: String, pageIndex: Int) {
+        if (token != request) return
+        remainder.loadNext { response ->
+            if (token != request) return@loadNext
+            response.onSuccess { songs ->
+                if (songs == null) {
+                    activeRemainder = null
+                    mutable.value = QueueLoadState()
+                } else if (songs.isEmpty()) {
+                    loadNextRemainder(token, remainder, epoch, batchPrefix, pageIndex)
+                } else {
+                    submitBatch(token, songs, QueueInsertAt.TAIL, "$batchPrefix:page:$pageIndex", epoch) { accepted ->
+                        if (accepted.isFailure) finishRemainder(token, remainder, "player")
+                        else loadNextRemainder(token, remainder, epoch, batchPrefix, pageIndex + 1)
+                    }
+                }
+            }.onFailure { error ->
+                finishRemainder(token, remainder,
+                    (error as? tech.musxi.core.library.LibraryPageFailure)?.category ?: "unclassified")
+            }
+        }
+    }
+
+    private fun submitBatch(token: Long, songs: List<SongSummary>, at: QueueInsertAt,
+        batchId: String, epoch: String, attempt: Int = 0, result: (Result<Unit>) -> Unit) {
+        if (token != request) return
+        val submit = enqueueBatch ?: return result(Result.failure(IllegalStateException("Batch insert unavailable")))
+        try {
+            submit(songs, at, batchId, epoch) { accepted ->
+                if (token != request) return@submit
+                if (accepted.isSuccess || attempt >= MAX_BATCH_RETRIES) result(accepted)
+                else scheduleBatchRetry(RETRY_BATCH_MS * (attempt + 1)) {
+                    if (token == request) submitBatch(token, songs, at, batchId, epoch, attempt + 1, result)
+                }
+            }
+        } catch (_: Exception) {
+            if (attempt >= MAX_BATCH_RETRIES) result(Result.failure(IllegalStateException("Batch insert rejected")))
+            else scheduleBatchRetry(RETRY_BATCH_MS * (attempt + 1)) {
+                if (token == request) submitBatch(token, songs, at, batchId, epoch, attempt + 1, result)
+            }
+        }
+    }
+
+    private fun finishRemainder(token: Long, remainder: tech.musxi.core.library.QueueRemainder, error: String) {
+        if (token != request) return
+        remainder.cancel()
+        activeRemainder = null
+        mutable.value = QueueLoadState(error = error)
+    }
+
+    private fun cancelRemainder() {
+        activeRemainder?.cancel()
+        activeRemainder = null
+    }
+
+    fun cancelPending() { ++request; cancelRemainder(); mutable.value = QueueLoadState() }
     fun stop() { onNewIntent(); cancelPending(); stopPlayer() }
+
+    private companion object {
+        const val MAX_BATCH_RETRIES = 4
+        const val RETRY_BATCH_MS = 120L
+    }
 }

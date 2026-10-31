@@ -146,7 +146,8 @@ public final class KugouApi {
     }
 
     JSONObject libraryCall(String path, Session session, Map<String, String> extra, String body, boolean audio) throws IOException {
-        if (!java.util.Arrays.asList("/v7/get_all_list", "/v4/get_list_all_file", "/v5/url", "/v3/search/song", "/cloudlist.service/v6/add_song", "/v4/delete_songs").contains(path)
+        if (!java.util.Arrays.asList("/v7/get_all_list", "/v4/get_list_all_file", "/pubsongs/v2/get_other_list_file_nofilt",
+            "/v5/url", "/v3/search/song", "/cloudlist.service/v6/add_song", "/v4/delete_songs").contains(path)
             || audio != "/v5/url".equals(path))
             throw error("endpoint", "Unsupported library endpoint");
         long time = now();
@@ -158,7 +159,7 @@ public final class KugouApi {
         Map<String, String> requestHeaders = headers(device, time);
         // This endpoint carries the gateway route in its path, as in the pinned upstream.
         // An x-router override sends the prefixed path to the service and returns HTTP 404.
-        if (!"/cloudlist.service/v6/add_song".equals(path))
+        if (!"/cloudlist.service/v6/add_song".equals(path) && !"/pubsongs/v2/get_other_list_file_nofilt".equals(path))
             requestHeaders.put("x-router", audio ? "trackercdn.kugou.com" : "/v3/search/song".equals(path) ? "complexsearch.kugou.com" : "cloudlist.service.kugou.com");
         return transport.execute(new Request("https://gateway.kugou.com" + path, params, body, requestHeaders));
     }
@@ -480,7 +481,9 @@ public final class KugouApi {
             if (status >= 300 && status < 400) throw error("redirect", "酷狗返回重定向，当前验证已停止");
             if (status < 200 || status >= 300) throw new ApiException("http", "酷狗服务暂时拒绝请求，请稍后重试", "http_status_" + status);
             boolean lyricsRequest = "lyrics.kugou.com".equals(url.getHost());
-            int responseLimit = lyricsRequest || request.endpoint.endsWith("/get_all_list") || request.endpoint.endsWith("/get_list_all_file") ? 2 * 1024 * 1024 : RESPONSE_LIMIT;
+            int responseLimit = lyricsRequest || request.endpoint.endsWith("/get_all_list") ||
+                request.endpoint.endsWith("/get_list_all_file") || request.endpoint.endsWith("/get_other_list_file_nofilt")
+                ? 2 * 1024 * 1024 : RESPONSE_LIMIT;
             if (connection.getContentLengthLong() > responseLimit)
                 throw new ApiException("protocol", "酷狗响应超过验证程序限制", lyricsRequest ? "lyrics_transport_limit" : null);
             String body;
@@ -524,7 +527,9 @@ public final class KugouApi {
         boolean login = "login-user.kugou.com".equals(url.getHost())
             && ("/v2/qrcode".equals(url.getPath()) || "/v2/get_userinfo_qrcode".equals(url.getPath()));
         boolean profile = "gateway.kugou.com".equals(url.getHost()) && "/v3/get_my_info".equals(url.getPath());
-        boolean library = "gateway.kugou.com".equals(url.getHost()) && java.util.Arrays.asList("/v7/get_all_list", "/v4/get_list_all_file", "/v5/url", "/v3/search/song", "/cloudlist.service/v6/add_song", "/v4/delete_songs").contains(url.getPath());
+        boolean library = "gateway.kugou.com".equals(url.getHost()) && java.util.Arrays.asList(
+            "/v7/get_all_list", "/v4/get_list_all_file", "/pubsongs/v2/get_other_list_file_nofilt",
+            "/v5/url", "/v3/search/song", "/cloudlist.service/v6/add_song", "/v4/delete_songs").contains(url.getPath());
         boolean lyrics = "lyrics.kugou.com".equals(url.getHost()) &&
             java.util.Arrays.asList("/search", "/download").contains(url.getPath());
         if (!"https".equals(url.getProtocol()) || (!login && !profile && !library && !lyrics)

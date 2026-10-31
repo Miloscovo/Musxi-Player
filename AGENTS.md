@@ -2,7 +2,7 @@
 
 ## 当前入口
 
-当前源码版本为 `0.1.0-alpha02`，属于很不完善的 v0.1 开发基础，不是稳定版。开工先读 README.md、docs/v0.1-foundation.md、docs/android-0.1-acceptance.md 与 docs/next-session-handoff.md。带日期文档记录历史包，不能当作最新结论。
+当前源码版本为 `0.1.0-alpha03`，是交互层整体重构之前的开发存档点，很不完善，不是稳定版。开工先读 README.md 与 docs/next-session-handoff.md，再按需读 docs/v0.1-foundation.md、docs/android-0.1-acceptance.md。带日期文档记录历史包，不能当作最新结论。
 
 安卓独立仓库为 https://github.com/qwt1011/Musxi-Player-Android ，默认分支 main；PC 来源为 https://github.com/Miloscovo/Musxi-Player 。向 PC 上游提交安卓代码时目标是 android/development，遵守 fork 网络和上次已合并 PR 的基线，不直接合并 PC 根目录到安卓工程。
 

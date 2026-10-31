@@ -2,12 +2,60 @@ package tech.musxi.core.playback
 
 import java.text.Normalizer
 import java.util.Locale
+import tech.musxi.core.account.Platform
 import tech.musxi.core.library.SongSummary
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
-data class SourceCandidate(val song: SongSummary, val accountGeneration: Long)
-data class AlternativeSources(val original: SongSummary, val candidates: List<SourceCandidate>, val partial: Boolean = false)
+enum class SourceAudioQuality { UNKNOWN, STANDARD, HIGH, LOSSLESS }
+enum class SourcePreviewAvailability { UNKNOWN, UNAVAILABLE, AVAILABLE }
+enum class SourcePlayability { UNKNOWN, UNAVAILABLE, AVAILABLE }
+data class SourceAudioMetadata(
+    val quality: SourceAudioQuality = SourceAudioQuality.UNKNOWN,
+    val preview: SourcePreviewAvailability = SourcePreviewAvailability.UNKNOWN,
+    val playability: SourcePlayability = SourcePlayability.UNKNOWN,
+    val qualities: List<QualityOption> = emptyList(),
+    val loading: Boolean = false,
+    val error: String? = null,
+)
+
+data class SourceCandidate(
+    val song: SongSummary,
+    val accountGeneration: Long,
+    val audio: SourceAudioMetadata = SourceAudioMetadata(),
+)
+
+enum class SourceSelectionMode { AUTO, MANUAL }
+enum class SourceSearchStatus { SEARCHING, COMPLETE, FAILURE }
+enum class SourceSearchCompletion { COMPLETE, PARTIAL, FAILED }
+data class SourceSearchProgress(
+    val platform: Platform,
+    val status: SourceSearchStatus,
+    val completedPlatforms: Int,
+    val totalPlatforms: Int,
+    val candidateCount: Int = 0,
+    val error: String? = null,
+)
+fun interface SourceSearchProgressListener {
+    fun onProgress(progress: SourceSearchProgress)
+}
+
+data class AlternativeSources(
+    val original: SongSummary,
+    val candidates: List<SourceCandidate>,
+    val partial: Boolean = false,
+    val platformProgress: List<SourceSearchProgress> = emptyList(),
+) {
+    val completion: SourceSearchCompletion
+        get() = when {
+            platformProgress.isNotEmpty() && platformProgress.all { it.status == SourceSearchStatus.FAILURE } ->
+                SourceSearchCompletion.FAILED
+            partial || platformProgress.any { it.status != SourceSearchStatus.COMPLETE } ->
+                SourceSearchCompletion.PARTIAL
+            else -> SourceSearchCompletion.COMPLETE
+        }
+}
+
 enum class SourceSelectionPhase { NONE, SEARCHING, CHOOSING, SELECTED, FAILED }
 data class SourceSelectionState(
     val revision: Long = 0,
@@ -19,23 +67,55 @@ data class SourceSelectionState(
     val automaticIndex: Int? = null,
     val partial: Boolean = false,
     val error: String? = null,
+    val mode: SourceSelectionMode = SourceSelectionMode.AUTO,
+    val platformProgress: List<SourceSearchProgress> = emptyList(),
+    val playbackFailures: Map<Platform, PlaybackFailure> = emptyMap(),
 )
 
-/** Single owner thread. Tokens fence search, user actions and timer delivery alike.
- * A deadline starts only when a stable candidate list becomes available.
+/** Single owner thread. Tokens fence search, user actions and callbacks alike.
+ * AUTO selects the first strictly matched candidate as soon as results are offered.
+ * MANUAL waits for the caller's complete result and never invokes the choice callback automatically.
  */
-class SourceSelection(private val now: () -> Long) {
+class SourceSelection(@Suppress("UNUSED_PARAMETER") now: () -> Long) {
     private var revision = 0L
     private var choose: ((SourceCandidate) -> Unit)? = null
     private var dismiss: (() -> Unit)? = null
     private val mutable = MutableStateFlow(SourceSelectionState())
     val state = mutable.asStateFlow()
 
-    fun begin(original: SongSummary, onChoose: (SourceCandidate) -> Unit, onDismiss: () -> Unit): Long {
+    fun begin(
+        original: SongSummary,
+        onChoose: (SourceCandidate) -> Unit,
+        onDismiss: () -> Unit,
+        mode: SourceSelectionMode = SourceSelectionMode.AUTO,
+    ): Long {
         val token = ++revision
         choose = onChoose; dismiss = onDismiss
-        mutable.value = SourceSelectionState(token, SourceSelectionPhase.SEARCHING, original)
+        mutable.value = SourceSelectionState(
+            revision = token,
+            phase = SourceSelectionPhase.SEARCHING,
+            mode = mode,
+            original = original,
+        )
         return token
+    }
+    fun progress(token: Long, progress: SourceSearchProgress) {
+        if (token != revision) return
+        val current = mutable.value
+        if (current.phase != SourceSelectionPhase.SEARCHING &&
+            current.phase != SourceSelectionPhase.CHOOSING) return
+        mutable.value = current.copy(platformProgress =
+            current.platformProgress.filterNot { it.platform == progress.platform } + progress)
+    }
+    fun candidateAudio(token: Long, key: tech.musxi.core.library.MediaKey, audio: SourceAudioMetadata): Boolean {
+        val current = mutable.value
+        if (token != revision || current.phase != SourceSelectionPhase.CHOOSING || current.candidates.none { it.song.key == key }) return false
+        mutable.value = current.copy(candidates = current.candidates.map { if (it.song.key == key) it.copy(audio = audio) else it })
+        return true
+    }
+    fun playbackFailure(token: Long, platform: Platform, failure: PlaybackFailure) {
+        if (token != revision) return
+        mutable.value = mutable.value.copy(playbackFailures = mutable.value.playbackFailures + (platform to failure))
     }
     fun offer(token: Long, result: AlternativeSources) {
         if (token != revision || mutable.value.phase != SourceSelectionPhase.SEARCHING) return
@@ -45,14 +125,32 @@ class SourceSelection(private val now: () -> Long) {
         // The repository may enrich an unavailable original's missing display metadata.
         val original = result.original
         val items = result.candidates.filter { it.song.key.platform != result.original.key.platform }
-            .distinctBy { it.song.key }.take(20).toList()
+            .filter { mutable.value.mode != SourceSelectionMode.MANUAL || SourceMatchPolicy.assess(original, it.song) == SourceMatchReason.ELIGIBLE }
+            .distinctBy { it.song.key }.take(20)
         val first = items.indexOfFirst { SourceMatchPolicy.assess(original, it.song) == SourceMatchReason.ELIGIBLE }
             .takeIf { it >= 0 }
-        mutable.value = SourceSelectionState(token,
-            if (items.isEmpty()) SourceSelectionPhase.FAILED else SourceSelectionPhase.CHOOSING,
-            result.original, items, deadlineElapsedMs = first?.let { now() + AUTO_SELECT_MS },
-            automaticIndex = first, partial = result.partial, error = if (items.isEmpty()) "no_candidates" else null)
-        if (items.isEmpty()) { choose = null; dismiss = null }
+        val current = mutable.value
+        val automatic = first.takeIf { current.mode == SourceSelectionMode.AUTO }
+        mutable.value = current.copy(
+            phase = if (items.isEmpty()) SourceSelectionPhase.FAILED else SourceSelectionPhase.CHOOSING,
+            original = result.original,
+            candidates = items,
+            selected = null,
+            deadlineElapsedMs = null,
+            automaticIndex = automatic,
+            partial = result.partial,
+            platformProgress = result.platformProgress.ifEmpty { current.platformProgress },
+            error = when {
+                items.isNotEmpty() -> null
+                result.completion == SourceSearchCompletion.FAILED -> "search_failed"
+                else -> "no_matching_candidates"
+            },
+        )
+        if (items.isEmpty()) {
+            choose = null; dismiss = null
+        } else {
+            automatic?.let { select(token, it) }
+        }
     }
     fun fail(token: Long, category: String) {
         if (token != revision || mutable.value.phase != SourceSelectionPhase.SEARCHING) return
@@ -70,11 +168,8 @@ class SourceSelection(private val now: () -> Long) {
         callback(candidate)
         return true
     }
-    fun tick(token: Long) {
-        val current = mutable.value
-        val deadline = current.deadlineElapsedMs ?: return
-        if (token == revision && now() >= deadline) current.automaticIndex?.let { select(token, it) }
-    }
+    @Suppress("UNUSED_PARAMETER")
+    fun tick(token: Long) = Unit
     fun cancel(token: Long): Boolean {
         if (token != revision || mutable.value.phase !in setOf(SourceSelectionPhase.SEARCHING, SourceSelectionPhase.CHOOSING)) return false
         val callback = dismiss
@@ -84,7 +179,6 @@ class SourceSelection(private val now: () -> Long) {
     fun clear() { ++revision; choose = null; dismiss = null; mutable.value = SourceSelectionState(revision) }
 
     companion object {
-        const val AUTO_SELECT_MS = 5_000L
         fun sameTitle(a: String, b: String): Boolean = normalized(a).let { it.isNotEmpty() && it == normalized(b) }
         private fun normalized(value: String) = Normalizer.normalize(value, Normalizer.Form.NFKC)
             .lowercase(Locale.ROOT).filterNot { it.isWhitespace() || Character.isSpaceChar(it) }

@@ -5,6 +5,7 @@ import org.junit.Test
 import tech.musxi.accounts.NeteaseLibraryRepository
 import tech.musxi.core.account.Platform
 import tech.musxi.core.library.*
+import tech.musxi.playback.QueueInsertAt
 
 class NeteasePlaybackUseCaseTest {
     @Test fun savedQueueUsesFreshGenerationAndRestoreSubmitWithoutOrdinaryAutoplay() {
@@ -68,11 +69,12 @@ class NeteasePlaybackUseCaseTest {
         val useCase = useCase()
         useCase.playPlaylist(playlist, song)
         assertTrue(useCase.state.value.loading)
+        assertEquals(0, stops)
         useCase.stop()
         pending.single()(Result.success(queue()))
         assertTrue(submitted.isEmpty())
         assertFalse(useCase.state.value.loading)
-        assertEquals(2, stops)
+        assertEquals(1, stops)
     }
 
     @Test fun switchingPlatformsRejectsAnOlderPlaylistResponse() {
@@ -109,7 +111,7 @@ class NeteasePlaybackUseCaseTest {
         useCase.cancelPending()
         pending.single()(Result.success(queue()))
         assertTrue(submitted.isEmpty())
-        assertEquals(1, stops) // Only the internal pre-clear; system STOP must not send another one.
+        assertEquals(0, stops) // The system STOP owns the actual player clear.
         assertEquals(QueueLoadState(), useCase.state.value)
         useCase.playPlaylist(playlist, song)
         pending.last()(Result.success(queue(2)))
@@ -157,4 +159,57 @@ class NeteasePlaybackUseCaseTest {
         acks[0](Result.failure(IllegalStateException()))
         assertEquals(QueueLoadState(), useCase.state.value)
     }
+
+    @Test fun playlistStartsWithSelectedPageThenSeriallyInsertsBothSidesAndLaterPages() {
+        val known = listOf(
+            SongSummary(MediaKey(Platform.NETEASE, "0"), "before", emptyList(), "", 0),
+            SongSummary(song, "selected", emptyList(), "", 0),
+            SongSummary(MediaKey(Platform.NETEASE, "2"), "after-known", emptyList(), "", 0),
+        )
+        val headQueue = PlaybackQueue(listOf(known[1]), 0, 1)
+        val pageAcks = mutableListOf<(Result<List<SongSummary>?>) -> Unit>()
+        val batchCalls = mutableListOf<BatchCall>()
+        val remainder = QueueRemainder(known.take(1), known.drop(2), { pageAcks += it }, {})
+        val useCase = NeteasePlaybackUseCase(
+            loadQueue = { _, _, _ -> fail("Full queue path used") },
+            submitQueue = { _, ack -> ack(Result.success(Unit)) },
+            stopPlayer = { stops++ },
+            loadQueueHead = { _, _, received, result ->
+                assertEquals(known, received)
+                result(Result.success(PlaylistQueueHead(headQueue, remainder)))
+            },
+            enqueueBatch = { songs, at, id, epoch, ack -> batchCalls += BatchCall(songs, at, id, epoch, ack) },
+            currentQueueEpoch = { "epoch-1" },
+            scheduleBatchRetry = { _, action -> action() },
+        )
+        useCase.playPlaylist(playlist, song, known)
+        assertEquals(0, stops)
+        assertEquals(QueueLoadState(loading = true), useCase.state.value)
+        assertEquals(QueueInsertAt.HEAD, batchCalls.single().at)
+        val first = batchCalls.single()
+        first.ack(Result.failure(IllegalStateException()))
+        assertEquals(2, batchCalls.size)
+        assertEquals(first.batchId, batchCalls[1].batchId)
+        assertEquals(first.queueEpoch, batchCalls[1].queueEpoch)
+        batchCalls[1].ack(Result.success(Unit))
+        assertEquals(QueueInsertAt.TAIL, batchCalls[2].at)
+        assertEquals("2", batchCalls[2].songs.single().key.id)
+        batchCalls[2].ack(Result.success(Unit))
+        assertEquals(1, pageAcks.size)
+        val later = SongSummary(MediaKey(Platform.NETEASE, "3"), "later", emptyList(), "", 0)
+        pageAcks.single()(Result.success(listOf(later)))
+        assertEquals(QueueInsertAt.TAIL, batchCalls[3].at)
+        assertEquals("3", batchCalls[3].songs.single().key.id)
+        batchCalls[3].ack(Result.success(Unit))
+        pageAcks.last()(Result.success(null))
+        assertEquals(QueueLoadState(), useCase.state.value)
+    }
+
+    private data class BatchCall(
+        val songs: List<SongSummary>,
+        val at: QueueInsertAt,
+        val batchId: String,
+        val queueEpoch: String,
+        val ack: (Result<Unit>) -> Unit,
+    )
 }

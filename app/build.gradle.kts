@@ -10,8 +10,8 @@ android {
         applicationId = "tech.musxi.player"
         minSdk = 26
         targetSdk = 36
-        versionCode = 2
-        versionName = "0.1.0-alpha02"
+        versionCode = 3
+        versionName = "0.1.0-alpha03"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     buildTypes {
@@ -42,8 +42,13 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.9.4")
     implementation("androidx.lifecycle:lifecycle-process:2.9.4")
     implementation("androidx.navigation:navigation-compose:2.9.6")
+    implementation("io.coil-kt.coil3:coil-compose:3.3.0")
+    implementation("io.coil-kt.coil3:coil-network-okhttp:3.3.0")
     debugImplementation("androidx.compose.ui:ui-tooling")
+    debugImplementation(project(":platform-qq")) // Isolated official web-login acceptance only.
+    debugImplementation(project(":platform-kugou")) // Isolated official web-login acceptance only.
     debugImplementation("androidx.compose.ui:ui-test-manifest")
+    debugImplementation("dev.chrisbanes.haze:haze:1.6.10") // Debug-only liquid-glass style preview (Apache-2.0).
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.robolectric:robolectric:4.17")
