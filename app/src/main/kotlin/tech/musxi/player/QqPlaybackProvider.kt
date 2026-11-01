@@ -20,18 +20,28 @@ class QqPlaybackProvider(private val accounts: AccountRepository, private val li
     override fun currentGeneration(): Long? = accounts.states.value.getValue(Platform.QQ).let {
         it.generation.takeIf { _ -> it.phase == AccountPhase.CONNECTED }
     }
-    override fun resolve(mediaId: String, generation: Long): StreamLease {
+    override fun resolve(mediaId: String, generation: Long): StreamLease = resolve(mediaId, generation, null)
+    override fun qualityOptions(mediaId: String, generation: Long): tech.musxi.core.playback.QualityOptions {
+        if (!mediaId.startsWith("qq:") || currentGeneration() != generation)
+            throw PlaybackSourceException(PlaybackFailure.AUTH_REQUIRED)
+        val options = awaitPlaybackResult(::mapFailure) { done ->
+            library.qualities(MediaKey(Platform.QQ, mediaId.substringAfter(':')), done)
+        }
+        if (currentGeneration() != generation) throw PlaybackSourceException(PlaybackFailure.AUTH_REQUIRED)
+        return options
+    }
+    override fun resolve(mediaId: String, generation: Long, qualityId: String?): StreamLease {
         check(Looper.myLooper() != Looper.getMainLooper())
         if (!mediaId.startsWith("qq:") || !PlaybackSourcePolicy.acceptsMediaId(mediaId) || currentGeneration() != generation)
             throw PlaybackSourceException(PlaybackFailure.AUTH_REQUIRED)
         val latch = CountDownLatch(1)
         val response = AtomicReference<Result<QqLibraryRepository.AudioCapability>?>()
-        library.resolveAudio(MediaKey(Platform.QQ, mediaId.substringAfter(':'))) { response.set(it); latch.countDown() }
-        try { if (!latch.await(45, TimeUnit.SECONDS)) throw PlaybackSourceException(PlaybackFailure.TIMEOUT) }
+        library.resolveAudio(MediaKey(Platform.QQ, mediaId.substringAfter(':')), qualityId) { response.set(it); latch.countDown() }
+        try { if (!latch.await(90, TimeUnit.SECONDS)) throw PlaybackSourceException(PlaybackFailure.TIMEOUT) }
         catch (_: InterruptedException) { Thread.currentThread().interrupt(); throw PlaybackSourceException(PlaybackFailure.NETWORK) }
         if (currentGeneration() != generation) throw PlaybackSourceException(PlaybackFailure.AUTH_REQUIRED)
         val capability = response.get()?.getOrElse { throw mapFailure(it) } ?: throw PlaybackSourceException(PlaybackFailure.PROTOCOL)
-        return StreamLease(null) {
+        return StreamLease(null, capability.qualityId, tech.musxi.core.playback.PlaybackQualities.name(capability.qualityId)) {
             if (currentGeneration() != generation) throw PlaybackSourceException(PlaybackFailure.AUTH_REQUIRED)
             var url: String? = null
             try { capability.deliverToPlayer { url = it } } catch (error: Exception) { throw mapFailure(error) }

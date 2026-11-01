@@ -22,17 +22,27 @@ class NeteasePlaybackProvider(private val accounts: AccountRepository, private v
         it.generation.takeIf { _ -> it.phase == AccountPhase.CONNECTED }
     }
 
-    override fun resolve(mediaId: String, generation: Long): StreamLease {
+    override fun resolve(mediaId: String, generation: Long): StreamLease = resolve(mediaId, generation, null)
+    override fun qualityOptions(mediaId: String, generation: Long): tech.musxi.core.playback.QualityOptions {
+        if (!mediaId.startsWith("netease:") || currentGeneration() != generation)
+            throw PlaybackSourceException(PlaybackFailure.AUTH_REQUIRED)
+        val options = awaitPlaybackResult(::mapFailure) { done ->
+            library.qualities(MediaKey(Platform.NETEASE, mediaId.substringAfter(':')), done)
+        }
+        if (currentGeneration() != generation) throw PlaybackSourceException(PlaybackFailure.AUTH_REQUIRED)
+        return options
+    }
+    override fun resolve(mediaId: String, generation: Long, qualityId: String?): StreamLease {
         check(Looper.myLooper() != Looper.getMainLooper())
         if (!mediaId.startsWith("netease:") || !PlaybackSourcePolicy.acceptsMediaId(mediaId) || currentGeneration() != generation)
             throw PlaybackSourceException(PlaybackFailure.AUTH_REQUIRED)
         val latch = CountDownLatch(1)
         val response = AtomicReference<Result<NeteaseLibraryRepository.AudioCapability>?>()
-        library.resolveAudio(MediaKey(Platform.NETEASE, mediaId.substringAfter(':'))) {
+        library.resolveAudio(MediaKey(Platform.NETEASE, mediaId.substringAfter(':')), qualityId) {
             response.set(it); latch.countDown()
         }
         try {
-            if (!latch.await(30, TimeUnit.SECONDS)) throw PlaybackSourceException(PlaybackFailure.TIMEOUT)
+            if (!latch.await(90, TimeUnit.SECONDS)) throw PlaybackSourceException(PlaybackFailure.TIMEOUT)
         } catch (_: InterruptedException) {
             Thread.currentThread().interrupt()
             throw PlaybackSourceException(PlaybackFailure.NETWORK)
@@ -40,7 +50,7 @@ class NeteasePlaybackProvider(private val accounts: AccountRepository, private v
         if (currentGeneration() != generation) throw PlaybackSourceException(PlaybackFailure.AUTH_REQUIRED)
         val capability = response.get()?.getOrElse { throw mapFailure(it) }
             ?: throw PlaybackSourceException(PlaybackFailure.PROTOCOL)
-        return StreamLease(capability.metadata) {
+        return StreamLease(capability.metadata, capability.qualityId, tech.musxi.core.playback.PlaybackQualities.name(capability.qualityId)) {
             if (currentGeneration() != generation) throw PlaybackSourceException(PlaybackFailure.AUTH_REQUIRED)
             var url: String? = null
             try { capability.deliverToPlayer { url = it } } catch (error: Exception) { throw mapFailure(error) }

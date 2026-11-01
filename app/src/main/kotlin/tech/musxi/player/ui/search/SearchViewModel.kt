@@ -26,6 +26,8 @@ data class SearchUiState(
     val canLoadMore: Boolean = false,
     val total: Int? = null,
     val errorText: String? = null,
+    /** Recent search terms, newest first. Shown while the page is idle. */
+    val recent: List<String> = emptyList(),
 ) {
     val canSearch: Boolean get() = keywords.isNotBlank() && !loading
 }
@@ -37,9 +39,13 @@ data class SearchUiState(
  * shape as `LibraryViewModel`. The browser is also the only owner of account gating and stale
  * result rejection; this class never decides whether a delivery is still current.
  */
-class SearchViewModel(private val browser: SearchBrowser) : ViewModel() {
+class SearchViewModel(
+    private val browser: SearchBrowser,
+    /** Where recent terms persist. `null` keeps them in memory only, which is what tests use. */
+    private val recent: RecentSearches? = null,
+) : ViewModel() {
 
-    private val _state = MutableStateFlow(SearchUiState())
+    private val _state = MutableStateFlow(SearchUiState(recent = recent?.load().orEmpty()))
     val state: StateFlow<SearchUiState> = _state.asStateFlow()
 
     /** The query the accumulated list belongs to; a new key resets accumulation. */
@@ -82,9 +88,29 @@ class SearchViewModel(private val browser: SearchBrowser) : ViewModel() {
             items = emptyList()
             return
         }
-        _state.value = _state.value.copy(keywords = keywords)
+        _state.value = _state.value.copy(keywords = keywords, recent = recordRecent(keywords))
         browser.search(_state.value.platform, keywords, 0)
     }
+
+    /** Runs a term from the recent list as a fresh search. */
+    fun searchRecent(term: String) {
+        _state.value = _state.value.copy(keywords = term)
+        search()
+    }
+
+    fun removeRecent(term: String) {
+        _state.value = _state.value.copy(
+            recent = recent?.remove(term)
+                ?: _state.value.recent.filterNot { it.equals(term.trim(), ignoreCase = true) },
+        )
+    }
+
+    fun clearRecent() {
+        _state.value = _state.value.copy(recent = recent?.clear() ?: emptyList())
+    }
+
+    private fun recordRecent(term: String): List<String> =
+        recent?.record(term) ?: mergeRecent(_state.value.recent, term)
 
     fun loadMore() {
         val current = _state.value

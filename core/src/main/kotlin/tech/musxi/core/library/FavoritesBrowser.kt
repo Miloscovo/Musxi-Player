@@ -27,6 +27,11 @@ fun interface FavoritesWrite {
     )
 }
 
+/** A fresh check of this song only. A failure never means "not liked". */
+fun interface FavoritesVerify {
+    fun verify(song: SongSummary, liked: Boolean, isCurrent: () -> Boolean, result: (Result<Boolean>) -> Unit)
+}
+
 data class FavoritesState(
     val keys: Set<MediaKey> = emptySet(),
     val synced: Boolean = false,
@@ -35,6 +40,7 @@ data class FavoritesState(
     val canWrite: Boolean = false,
     val error: String? = null,
     val syncedAtEpochMs: Long = 0,
+    val queuedKeys: List<MediaKey> = emptyList(),
 )
 
 /**
@@ -47,12 +53,18 @@ class FavoritesBrowser(
     private val write: FavoritesWrite,
     private val now: () -> Long = System::currentTimeMillis,
     private val onVerifiedChange: (Platform, LibraryCacheIdentity) -> Unit = { _, _ -> },
+    private val verify: FavoritesVerify? = null,
 ) {
     private val mutable = MutableStateFlow(immutableMap(Platform.entries.associateWith { FavoritesState() }))
     val state = mutable.asStateFlow()
 
     private val revisions = Platform.entries.associateWith { AtomicLong(0) }
     private val observedIdentities = mutableMapOf<Platform, LibraryCacheIdentity?>()
+    private data class Intent(val song: SongSummary, val liked: Boolean, val result: (Result<Unit>) -> Unit)
+    private val queues = Platform.entries.associateWith { ArrayDeque<Intent>() }
+    private val active = mutableMapOf<Platform, Intent>()
+    private val changedOwners = mutableMapOf<Platform, LibraryCacheIdentity>()
+    private val recovering = mutableSetOf<Platform>()
 
     fun refresh(platform: Platform) {
         val currentIdentity = identityOrInvalidate(platform) ?: return
@@ -87,35 +99,57 @@ class FavoritesBrowser(
         }
     }
 
-    fun setLiked(song: SongSummary, liked: Boolean) {
-        val platform = song.key.platform
-        val currentIdentity = identityOrInvalidate(platform) ?: return
-        if (!currentIdentity.verified) {
-            setState(platform, state(platform).copy(
-                loading = false,
-                pending = null,
-                error = "account_unverified",
-            ))
-            return
-        }
+    fun setLiked(song: SongSummary, liked: Boolean) = enqueueLiked(song, liked)
 
-        val before = state(platform)
-        if (before.loading || before.pending != null) {
-            setState(platform, before.copy(error = "busy"))
+    /** Accepted intents execute once, in order, under the same account identity. */
+    fun enqueueLiked(song: SongSummary, liked: Boolean, result: (Result<Unit>) -> Unit = {}) {
+        val platform = song.key.platform
+        val currentIdentity = identityOrInvalidate(platform) ?: run {
+            deliver(result, Result.failure(LibraryPageFailure("account_unavailable"))); return
+        }
+        if (!currentIdentity.verified) {
+            reject(platform, result, "account_unverified")
             return
         }
-        if (!before.synced) {
-            setState(platform, before.copy(error = "not_synced"))
+        val before = state(platform)
+        if (!before.synced && platform !in recovering) {
+            reject(platform, result, "not_synced")
             return
         }
         if (!before.canWrite) {
-            setState(platform, before.copy(error = "permission"))
+            reject(platform, result, "permission")
             return
         }
-        if ((song.key in before.keys) == liked) return
+        val queue = queues.getValue(platform)
+        if (queue.size >= 128) { reject(platform, result, "limit"); return }
+        queue.addLast(Intent(song.copy(artists = song.artists.toList()), liked, result))
+        setState(platform, before.copy(error = null, queuedKeys = queue.map { it.song.key }))
+        drain(platform)
+    }
+
+    private fun drain(platform: Platform) {
+        val before = state(platform)
+        if (before.loading || active.containsKey(platform) || platform in recovering) return
+        if (!before.synced || !before.canWrite) { failQueue(platform, before.error ?: "not_synced"); return }
+        val intent = queues.getValue(platform).removeFirstOrNull() ?: return
+        val currentIdentity = identityOrInvalidate(platform) ?: run {
+            deliver(intent.result, Result.failure(LibraryPageFailure("account_changed"))); return
+        }
+        val song = intent.song
+        val liked = intent.liked
+        if (liked && song.key !in before.keys && before.keys.size >= MAX_KEYS) {
+            setState(platform, state(platform).copy(error = "limit", queuedKeys = queues.getValue(platform).map { it.song.key }))
+            deliver(intent.result, Result.failure(LibraryPageFailure("limit"))); drain(platform); return
+        }
+        if ((song.key in before.keys) == liked) {
+            setState(platform, state(platform).copy(queuedKeys = queues.getValue(platform).map { it.song.key }))
+            deliver(intent.result, Result.success(Unit)); drain(platform); return
+        }
+        active[platform] = intent
 
         val token = nextRevision(platform)
-        setState(platform, before.copy(loading = true, pending = song.key, error = null))
+        setState(platform, before.copy(loading = true, pending = song.key, error = null,
+            queuedKeys = queues.getValue(platform).map { it.song.key }))
         val done = AtomicBoolean()
         val callback: (Result<Unit>) -> Unit = callback@{ response ->
             if (!done.compareAndSet(false, true) ||
@@ -130,6 +164,8 @@ class FavoritesBrowser(
                         pending = null,
                         error = failureText(failure),
                     ))
+                    settle(platform, Result.failure(LibraryPageFailure(failureText(failure))), reconcile = verify != null)
+                    if (verify != null) refresh(platform)
                 },
             )
         }
@@ -161,6 +197,29 @@ class FavoritesBrowser(
         song: SongSummary,
         liked: Boolean,
     ) {
+        val single = verify
+        if (single != null) {
+            val done = AtomicBoolean()
+            val callback: (Result<Boolean>) -> Unit = callback@{ response ->
+                if (!done.compareAndSet(false, true) || !current(platform, token, currentIdentity)) return@callback
+                if (response.getOrNull() != liked) {
+                    finishUnverifiedWrite(platform, token, currentIdentity)
+                    // Only an inconclusive targeted check needs a full reconciliation.
+                    refresh(platform)
+                    return@callback
+                }
+                val keys = LinkedHashSet(state(platform).keys)
+                if (liked) keys.add(song.key) else keys.remove(song.key)
+                revisions.getValue(platform).incrementAndGet()
+                setState(platform, state(platform).copy(keys = Collections.unmodifiableSet(keys), synced = true,
+                    loading = false, pending = null, error = null, syncedAtEpochMs = timestamp()))
+                notifyVerified(platform, currentIdentity)
+                settle(platform, Result.success(Unit))
+            }
+            try { single.verify(song, liked, currentCheck(platform, token, currentIdentity), callback) }
+            catch (_: Throwable) { callback(Result.failure(LibraryPageFailure("unclassified"))) }
+            return
+        }
         val done = AtomicBoolean()
         val callback: (Result<FavoritesSnapshot>) -> Unit = callback@{ response ->
             if (!done.compareAndSet(false, true) ||
@@ -181,13 +240,8 @@ class FavoritesBrowser(
                 error = null,
                 syncedAtEpochMs = timestamp(),
             ))
-            try {
-                if (identity(platform) == currentIdentity) {
-                    onVerifiedChange(platform, currentIdentity)
-                }
-            } catch (_: Throwable) {
-                // A listener cannot turn a verified collection into an error state.
-            }
+            notifyVerified(platform, currentIdentity)
+            settle(platform, Result.success(Unit))
         }
         try {
             fetch.fetch(platform, currentCheck(platform, token, currentIdentity), callback)
@@ -228,7 +282,10 @@ class FavoritesBrowser(
             canWrite = snapshot.canWrite,
             error = null,
             syncedAtEpochMs = timestamp(),
+            queuedKeys = queues.getValue(platform).map { it.song.key },
         ))
+        recovering.remove(platform)
+        drain(platform)
     }
 
     private fun finishRefreshFailure(
@@ -240,6 +297,9 @@ class FavoritesBrowser(
         if (!current(platform, token, currentIdentity)) return
         revisions.getValue(platform).incrementAndGet()
         setState(platform, state(platform).copy(loading = false, pending = null, error = error))
+        recovering.remove(platform)
+        failQueue(platform, error)
+        flushVerified(platform)
     }
 
     private fun finishUnverifiedWrite(
@@ -255,6 +315,42 @@ class FavoritesBrowser(
             pending = null,
             error = "write_unverified",
         ))
+        settle(platform, Result.failure(LibraryPageFailure("write_unverified")), reconcile = verify != null)
+    }
+
+    private fun notifyVerified(platform: Platform, owner: LibraryCacheIdentity) {
+        changedOwners[platform] = owner
+    }
+
+    private fun flushVerified(platform: Platform) {
+        if (active.containsKey(platform) || queues.getValue(platform).isNotEmpty()) return
+        val owner = changedOwners.remove(platform) ?: return
+        try { if (identity(platform) == owner) onVerifiedChange(platform, owner) } catch (_: Throwable) { }
+    }
+
+    private fun settle(platform: Platform, response: Result<Unit>, reconcile: Boolean = false) {
+        val intent = active.remove(platform)
+        if (reconcile) recovering.add(platform)
+        else if (response.isFailure) failQueue(platform, state(platform).error ?: "write_unverified")
+        if (intent != null) deliver(intent.result, response)
+        drain(platform)
+        flushVerified(platform)
+    }
+
+    private fun failQueue(platform: Platform, category: String) {
+        val waiting = queues.getValue(platform).toList()
+        queues.getValue(platform).clear()
+        setState(platform, state(platform).copy(queuedKeys = emptyList()))
+        waiting.forEach { deliver(it.result, Result.failure(LibraryPageFailure(category))) }
+    }
+
+    private fun reject(platform: Platform, callback: (Result<Unit>) -> Unit, error: String) {
+        setState(platform, state(platform).copy(error = error))
+        deliver(callback, Result.failure(LibraryPageFailure(error)))
+    }
+
+    private fun deliver(callback: (Result<Unit>) -> Unit, response: Result<Unit>) {
+        try { callback(response) } catch (_: Throwable) { }
     }
 
     private fun validatedKeys(platform: Platform, snapshot: FavoritesSnapshot): Set<MediaKey>? {
@@ -293,7 +389,11 @@ class FavoritesBrowser(
 
     private fun invalidate(platform: Platform, error: String) {
         nextRevision(platform)
+        changedOwners.remove(platform)
+        recovering.remove(platform)
         setState(platform, FavoritesState(error = error))
+        active.remove(platform)?.let { deliver(it.result, Result.failure(LibraryPageFailure(error))) }
+        failQueue(platform, error)
     }
 
     private fun current(

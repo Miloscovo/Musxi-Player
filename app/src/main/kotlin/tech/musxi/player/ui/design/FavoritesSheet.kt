@@ -45,10 +45,11 @@ fun FavoritesSheet(
 /** Not liked, and the account can write. */
 fun favoriteNone() = FavoriteUi(liked = false)
 
-/** Saving: keep the confirmed state with a waiting ring until the backend verifies the write. */
-fun favoriteSavingLike() = FavoriteUi(liked = false, pending = true)
+/** Saving a like: the heart already shows the requested state, plus the small syncing dot. */
+fun favoriteSavingLike() = FavoriteUi(liked = true, syncing = true)
 
-fun favoriteSavingUnlike() = FavoriteUi(liked = true, pending = true)
+/** Saving an un-like: the outline is shown at once, plus the small syncing dot. */
+fun favoriteSavingUnlike() = FavoriteUi(liked = false, syncing = true)
 
 fun favoriteLiked() = FavoriteUi(liked = true)
 

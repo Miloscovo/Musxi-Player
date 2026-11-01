@@ -11,6 +11,10 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.indication
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.CircleShape
@@ -23,7 +27,11 @@ import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -33,7 +41,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import tech.musxi.player.ui.components.OpticallyCentredText
 import tech.musxi.player.ui.theme.chromeBarColor
-import tech.musxi.player.ui.theme.nowPlayingAccent
 
 /**
  * The three top-level destinations. Each carries a filled and an outlined icon: selected tabs fill
@@ -133,18 +140,37 @@ private fun TabItem(
     onSelect: () -> Unit,
 ) {
     val cs = MaterialTheme.colorScheme
-    // Selected tabs take the now-playing accent, so the bar changes colour with the song.
-    val tint = if (selected) nowPlayingAccent() else cs.onSurfaceVariant
+    // Navigation is part of the app's structure, so the selected tab uses the stable theme colour.
+    // Colour that follows the cover is reserved for playback-related elements.
+    val tint = if (selected) cs.primary else cs.onSurfaceVariant
+    val interaction = remember { MutableInteractionSource() }
+    // The selected tab is marked by a capsule behind the icon; the press ripple lives only there,
+    // so there is no rectangular press shadow over the whole tab.
+    val capsule by animateColorAsState(
+        if (selected) cs.primary.copy(alpha = 0.12f) else Color.Transparent,
+        animationSpec = tween(200),
+        label = "tabCapsule",
+    )
     Column(
-        Modifier.selectable(selected = selected, onClick = onSelect, role = Role.Tab)
-            .padding(horizontal = if (compact) 10.dp else 18.dp, vertical = 6.dp),
+        Modifier.selectable(
+            selected = selected, onClick = onSelect, role = Role.Tab,
+            interactionSource = interaction, indication = null,
+        ).padding(horizontal = if (compact) 10.dp else 18.dp, vertical = 6.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
-        Icon(
-            if (selected) tab.selectedIcon else tab.unselectedIcon,
-            null, tint = tint, modifier = Modifier.size(24.dp),
-        )
+        Box(
+            Modifier.size(width = 56.dp, height = 32.dp)
+                .clip(CircleShape)
+                .background(capsule)
+                .indication(interaction, ripple()),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                if (selected) tab.selectedIcon else tab.unselectedIcon,
+                null, tint = tint, modifier = Modifier.size(24.dp),
+            )
+        }
         Spacer(Modifier.height(3.dp))
         // labelMedium + Medium instead of labelSmall + Normal: at 11sp Normal the three labels read
         // as a nearly empty strip, which is what made the bar feel hollow.

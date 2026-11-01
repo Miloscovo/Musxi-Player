@@ -41,8 +41,7 @@ import tech.musxi.player.ui.theme.tabular
 /**
  * Source panel: a bottom sheet, not a page.
  *
- * A swap interrupts playback for five seconds and then gets out of the way; a full screen would
- * erase the context the user needs to decide. The sheet keeps the player visible behind it.
+ * Uncertain versions stay available for manual choice while keeping the player visible behind it.
  */
 @Composable
 fun SourcePanel(

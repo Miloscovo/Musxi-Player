@@ -18,8 +18,12 @@ import java.util.function.BooleanSupplier;
 public final class QqLibraryApi {
     public static final class Playlist {
         public final String id, name, coverUrl; public final int trackCount;
-        Playlist(String id,String name,int count){this(id,name,count,null);}
-        Playlist(String id,String name,int count,String coverUrl){this.id=id;this.name=name;trackCount=count;this.coverUrl=coverUrl;}
+        public final boolean liked, writable;
+        Playlist(String id,String name,int count){this(id,name,count,null,false,false);}
+        Playlist(String id,String name,int count,String coverUrl){this(id,name,count,coverUrl,false,false);}
+        Playlist(String id,String name,int count,String coverUrl,boolean liked,boolean writable){
+            this.id=id;this.name=name;trackCount=count;this.coverUrl=coverUrl;this.liked=liked;this.writable=writable;
+        }
     }
     public static final class Song {
         public final String id,name,album,coverUrl; public final List<String> artists; public final long durationMs;
@@ -40,9 +44,13 @@ public final class QqLibraryApi {
         Page(List<T> items,int next,int total){this.items=Collections.unmodifiableList(new ArrayList<>(items));nextOffset=next;this.total=total;}
     }
     public static final class Audio {
-        public final String url; public final long expiresAtElapsedMs;
-        Audio(String url,long expires){this.url=url;expiresAtElapsedMs=expires;}
+        public final String url, qualityId; public final long expiresAtElapsedMs;
+        Audio(String url,String qualityId,long expires){this.url=url;this.qualityId=qualityId;expiresAtElapsedMs=expires;}
         @Override public String toString(){return "Audio(redacted)";}
+    }
+    public static final class AudioQuality {
+        public final String id, name;
+        AudioQuality(String id,String name){this.id=id;this.name=name;}
     }
     public enum TranslationStatus { PRESENT, ABSENT, INVALID }
     public static final class LyricsDocument {
@@ -107,9 +115,53 @@ public final class QqLibraryApi {
             if(tid.equals("0") && dir!=201)throw error("identity");
             String id=tid+"_"+dir;playlistParts(id);
             Playlist list=new Playlist(id,clean(first(row,"title","dirName","dissname","name"),"未命名歌单"),number(first(row,"songNum","songnum","song_cnt"),1_000_000),
-                image(first(row,"cover_url_big","cover_url_medium","cover_url_small","picurl","picUrl","logo","cover","coverUrl")));
+                image(first(row,"cover_url_big","cover_url_medium","cover_url_small","picurl","picUrl","logo","cover","coverUrl")),
+                false,created);
             lists.putIfAbsent(id,list);
         }
+    }
+    /** Current-account lists that the server identifies as owned, plus the liked-songs alias.
+     * Pinned QQMusicApi 0.8.1 modules/songlist.py exposes these through GetPlaylistByUin. */
+    public List<Playlist> writablePlaylists(QqMusicApi.Session session) throws IOException {
+        if(session==null)throw error("identity");
+        JSONObject created=call(session,"music.musicasset.PlaylistBaseRead","GetPlaylistByUin",obj("uin",session.musicId));
+        if(!flag(created,"bFinish",true))throw error("incomplete");
+        JSONArray rows=array(created,"v_playlist");
+        if(rows.length()>20_000)throw error("limit");
+        LinkedHashMap<String,Playlist> lists=new LinkedHashMap<>();
+        appendLists(rows,lists,true);
+        List<Playlist> writable=new ArrayList<>();
+        for(Playlist value:lists.values())if(value.id.endsWith("_0"))writable.add(value);
+        Page<Song> liked=tracks(session,"0_201",0,1);
+        if(liked.total>20_000)throw error("limit");
+        writable.add(0,new Playlist("0_201","我喜欢",liked.total,null,true,true));
+        return Collections.unmodifiableList(writable);
+    }
+    /** Add one same-platform track. The liked alias uses the existing verified favorite write.
+     * Other ids are revalidated against GetPlaylistByUin before AddSonglist is attempted. */
+    public void addToPlaylist(QqMusicApi.Session session,String playlistId,String songMid) throws IOException {
+        if(session==null)throw error("identity");
+        String[] parts=playlistParts(playlistId);
+        if(parts[0].equals("0") && parts[1].equals("201")){
+            setLiked(session,songMid,true);
+            return;
+        }
+        if(!parts[1].equals("0") || parts[0].equals("0"))throw error("permission");
+        JSONObject created=call(session,"music.musicasset.PlaylistBaseRead","GetPlaylistByUin",obj("uin",session.musicId));
+        if(!flag(created,"bFinish",true))throw error("incomplete");
+        JSONArray rows=array(created,"v_playlist");
+        if(rows.length()>20_000)throw error("limit");
+        LinkedHashMap<String,Playlist> lists=new LinkedHashMap<>();
+        appendLists(rows,lists,true);
+        Playlist owned=lists.get(playlistId);
+        if(owned==null || !owned.writable)throw error("permission");
+        Song song=song(session,songMid);
+        if(song.numericId<=0)throw error("identity");
+        JSONArray info=new JSONArray().put(obj("songId",song.numericId,"songType",song.type));
+        JSONObject param=obj("dirId",Integer.parseInt(parts[1]),"tid",Long.parseLong(parts[0]),
+            "bFmtUtf8",true,"v_songInfo",info);
+        JSONObject result=call(session,"music.musicasset.PlaylistDetailWrite","AddSonglist",param);
+        if(!successCode(result))throw error("permission");
     }
     public Page<Song> tracks(QqMusicApi.Session session,String playlist,int offset,int limit) throws IOException {
         bounds(offset,limit);String[] parts=playlistParts(playlist);
@@ -264,12 +316,7 @@ public final class QqLibraryApi {
         JSONArray info=new JSONArray().put(obj("songId",song.numericId,"songType",song.type));
         JSONObject param=obj("dirId",201,"tid",0,"bFmtUtf8",true,"v_songInfo",info);
         JSONObject result=call(session,"music.musicasset.PlaylistDetailWrite",liked?"AddSonglist":"DelSonglist",param);
-        Object ret=result.opt("retCode");
-        if(!(ret instanceof Number))throw error("protocol");
-        String raw=String.valueOf(ret);
-        if(!raw.matches("(?:0|80092)"))throw error("permission");
-        int code=Integer.parseInt(raw);
-        if(code==80092)throw error("permission");
+        if(!successCode(result))throw error("permission");
     }
     public String lyrics(QqMusicApi.Session session,String songMid) throws IOException {
         return lyricsDocument(session,songMid).original;
@@ -398,7 +445,28 @@ public final class QqLibraryApi {
     }
     public Audio audio(QqMusicApi.Session session,String mid,long now) throws IOException {
         Song song=song(session,mid);
-        String filename="M500"+(song.mediaMid.isEmpty()?mid+mid:song.mediaMid)+".mp3";
+        return requestAudio(session,mid,song,now,"qq:standard",true);
+    }
+    public Audio audio(QqMusicApi.Session session,String mid,long now,String qualityId) throws IOException {
+        Song song=song(session,mid);
+        return requestAudio(session,mid,song,now,qualityId,true);
+    }
+    public List<AudioQuality> qualities(QqMusicApi.Session session,String mid,long now) throws IOException {
+        Song song=song(session,mid);
+        List<AudioQuality> out=new ArrayList<>();
+        for(String id:new String[]{"qq:standard","qq:high","qq:lossless"}) {
+            try {
+                requestAudio(session,mid,song,now,id,true);
+                out.add(new AudioQuality(id,qualityName(id)));
+            } catch(QqMusicApi.ApiException unavailable) {
+                if(!Arrays.asList("permission","unavailable","network","source_expired").contains(unavailable.code))throw unavailable;
+            }
+        }
+        return Collections.unmodifiableList(out);
+    }
+    private Audio requestAudio(QqMusicApi.Session session,String mid,Song song,long now,String qualityId,boolean probeAudio) throws IOException {
+        QualitySpec quality=quality(qualityId);
+        String filename=quality.prefix+(song.mediaMid.isEmpty()?mid+mid:song.mediaMid)+quality.extension;
         String guid=Long.toString(1_000_000_000L+new java.security.SecureRandom().nextInt(1_000_000_000));
         JSONObject vkey=call(session,"music.vkey.GetVkey","UrlGetVkey",obj("uin",session.musicId,"filename",new JSONArray().put(filename),
             "guid",guid,
@@ -406,13 +474,37 @@ public final class QqLibraryApi {
         audioPath(vkey,mid,filename);
         JSONObject dispatch=call(session,"music.audioCdnDispatch.cdnDispatch","GetCdnDispatch",obj("guid",guid,"uid","0","use_new_domain",1,"use_ipv6",1));
         List<String> urls=audioCandidates(vkey,dispatch,mid,filename);
+        if(!probeAudio) {
+            if(now<0 || now>Long.MAX_VALUE-60_000)throw error("protocol");
+            return new Audio(urls.get(0),qualityId,now+60_000);
+        }
         long probeDeadline=System.nanoTime()+12_000_000_000L;
         for(String url:urls){checkpoint();if(System.nanoTime()>probeDeadline)break;
-            try{probe.check(url);checkpoint();if(now<0 || now>Long.MAX_VALUE-60_000)throw error("protocol");return new Audio(url,now+60_000);}
+            try{probe.check(url);checkpoint();if(now<0 || now>Long.MAX_VALUE-60_000)throw error("protocol");return new Audio(url,qualityId,now+60_000);}
             catch(QqMusicApi.ApiException failure){if(!failure.code.equals("network") && !failure.code.equals("source_expired"))throw failure;}
             catch(IOException unavailable){ /* Bounded HTTPS candidates only. */ }
         }
         throw error("network");
+    }
+    private static final class QualitySpec {
+        final String prefix, extension;
+        QualitySpec(String prefix,String extension){this.prefix=prefix;this.extension=extension;}
+    }
+    private static QualitySpec quality(String id) throws IOException {
+        switch(id) {
+            case "qq:standard": return new QualitySpec("M500",".mp3");
+            case "qq:high": return new QualitySpec("M800",".mp3");
+            case "qq:lossless": return new QualitySpec("F000",".flac");
+            default: throw error("request");
+        }
+    }
+    private static String qualityName(String id) {
+        switch(id) {
+            case "qq:standard": return "标准音质";
+            case "qq:high": return "高品音质";
+            case "qq:lossless": return "无损音质";
+            default: return "";
+        }
     }
     private static String audioPath(JSONObject vkey,String mid,String filename) throws IOException {
         JSONArray rows=array(vkey,"midurlinfo");if(rows.length()!=1)throw error("protocol");
@@ -475,6 +567,11 @@ public final class QqLibraryApi {
     private static int number(Object value,int max) throws IOException {String raw=text(value);if(!raw.matches("(?:0|[1-9][0-9]{0,9})"))throw error("protocol");
         long n=Long.parseLong(raw);if(n>max)throw error("limit");return (int)n;}
     private static String numeric(Object value,boolean zero) throws IOException {String raw=text(value);if(!raw.matches(zero?"(?:0|[1-9][0-9]{0,15})":"[1-9][0-9]{0,15}") || Long.parseLong(raw)>9_007_199_254_740_991L)throw error("identity");return raw;}
+    private static boolean successCode(JSONObject value) throws IOException {
+        Object ret=value.opt("retCode");if(!(ret instanceof Number))throw error("protocol");
+        String raw=String.valueOf(ret);if(!raw.matches("(?:0|80092)"))throw error("permission");
+        return "0".equals(raw);
+    }
     private static Object first(JSONObject value,String...names){for(String name:names){Object v=value.opt(name);if(v!=null && v!=JSONObject.NULL && !"".equals(v))return v;}return null;}
     private static String text(Object value){return value instanceof String || value instanceof Number?String.valueOf(value):"";}
     private static String clean(Object value,String fallback){String s=text(value).replaceAll("[\\p{Cc}\\p{Cf}]","").trim();return s.isEmpty()?fallback:s.substring(0,Math.min(s.length(),240));}

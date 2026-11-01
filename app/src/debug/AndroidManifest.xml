@@ -1,6 +1,13 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android" xmlns:tools="http://schemas.android.com/tools">
     <application android:name="tech.musxi.player.DebugMusxiApplication" tools:replace="android:name">
+        <!-- Fixed-step developer page. Debug only: the release manifest must carry no validation entry. -->
+        <activity android:name="tech.musxi.player.DeveloperActivity" android:exported="false" android:launchMode="singleTask"
+            android:windowSoftInputMode="adjustResize" />
         <activity android:name="tech.musxi.player.ValidationFocusActivity" android:exported="false" />
+        <activity android:name="tech.musxi.player.QqWebLoginValidationActivity" android:exported="false" />
+        <activity android:name="tech.musxi.player.KugouWebLoginValidationActivity" android:exported="false" />
+        <activity android:name="tech.musxi.player.GlassPreviewActivity" android:exported="false"
+            android:theme="@android:style/Theme.Material.Light.NoActionBar" />
         <receiver android:name="tech.musxi.player.ValidationReceiver" android:exported="true"
             android:permission="android.permission.DUMP" />
     </application>

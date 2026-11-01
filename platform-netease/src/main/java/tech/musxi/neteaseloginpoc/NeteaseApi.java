@@ -51,6 +51,8 @@ public final class NeteaseApi {
     static final String LYRIC = "https://interfacepc.music.163.com/eapi/song/lyric";
     static final String LIKED_IDS = "https://interfacepc.music.163.com/eapi/song/like/get";
     static final String SET_LIKE = "https://interfacepc.music.163.com/eapi/radio/like";
+    static final String PLAYLIST_TRACKS =
+            "https://interfacepc.music.163.com/eapi/playlist/manipulate/tracks";
     private final Transport transport;
     private final SecureRandom random = new SecureRandom();
     private final String deviceId = java.util.UUID.randomUUID().toString().replace("-", "");
@@ -179,7 +181,8 @@ public final class NeteaseApi {
         if (session == null || !validId(session.userId)) throw error("credentials", "请先完成网易云登录");
         if (!USER_PLAYLIST.equals(endpoint) && !PLAYLIST_DETAIL.equals(endpoint)
                 && !SONG_DETAIL.equals(endpoint) && !SONG_URL.equals(endpoint) && !SEARCH.equals(endpoint)
-                && !LYRIC.equals(endpoint) && !LIKED_IDS.equals(endpoint) && !SET_LIKE.equals(endpoint))
+                && !LYRIC.equals(endpoint) && !LIKED_IDS.equals(endpoint) && !SET_LIKE.equals(endpoint)
+                && !PLAYLIST_TRACKS.equals(endpoint))
             throw error("endpoint", "请求目标不在允许的网易云官方接口范围内");
         Response response = call(endpoint, input, session.cookies);
         if (!LYRIC.equals(endpoint)) requireSuccess(response.body);
@@ -346,7 +349,8 @@ public final class NeteaseApi {
         if ((!KEY.equals(endpoint) && !POLL.equals(endpoint) && !STATUS.equals(endpoint)
                 && !USER_PLAYLIST.equals(endpoint) && !PLAYLIST_DETAIL.equals(endpoint)
                 && !SONG_DETAIL.equals(endpoint) && !SONG_URL.equals(endpoint) && !SEARCH.equals(endpoint)
-                && !LYRIC.equals(endpoint) && !LIKED_IDS.equals(endpoint) && !SET_LIKE.equals(endpoint))
+                && !LYRIC.equals(endpoint) && !LIKED_IDS.equals(endpoint) && !SET_LIKE.equals(endpoint)
+                && !PLAYLIST_TRACKS.equals(endpoint))
                 || url.getUserInfo() != null
                 || url.getQuery() != null || url.getRef() != null || (url.getPort() != -1 && url.getPort() != 443))
             throw error("endpoint", "请求目标不在允许的网易云官方接口范围内");

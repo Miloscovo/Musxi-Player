@@ -32,18 +32,21 @@ internal fun Accent.tones(dark: Boolean): AccentTones = when (this) {
         else AccentTones(Color(0xFFE6B988), Color(0xFF452708), Color(0xFF684420), Color(0xFFF4E2CF))
 }
 
-/** Near-neutral greys with a barely visible warm cast (about 2% saturation). */
+/**
+ * Pure neutral greys (no hue). musxiColorScheme uses the light surface ladder as it is, without
+ * mixing the theme accent into it.
+ */
 internal object Neutrals {
-    val lightBackground = Color(0xFFF7F7F5)
+    val lightBackground = Color(0xFFFAFAFA)
     val lightLowest = Color(0xFFFFFFFF)
-    val lightLow = Color(0xFFF1F1EE)
-    val light = Color(0xFFEBEBE7)
-    val lightHigh = Color(0xFFE4E4E0)
-    val lightHighest = Color(0xFFDDDDD8)
+    val lightLow = Color(0xFFF4F4F5)
+    val light = Color(0xFFEFEFF0)
+    val lightHigh = Color(0xFFE9E9EB)
+    val lightHighest = Color(0xFFE3E3E5)
     val lightOn = Color(0xFF1B1C1A)
     val lightOnVariant = Color(0xFF5E5F5A)
     val lightOutline = Color(0xFF8E8F89)
-    val lightOutlineVariant = Color(0xFFD5D5CF)
+    val lightOutlineVariant = Color(0xFFE0E0E3)
 
     val darkBackground = Color(0xFF121212)
     val darkLowest = Color(0xFF0C0C0C)

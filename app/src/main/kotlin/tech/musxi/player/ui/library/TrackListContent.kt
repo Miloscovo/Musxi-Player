@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -25,7 +26,9 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -39,7 +42,9 @@ import androidx.compose.ui.unit.dp
 import tech.musxi.core.library.PlaylistSummary
 import tech.musxi.core.library.SongSummary
 import tech.musxi.player.ui.components.Cover
+import tech.musxi.player.ui.components.LoadMorePill
 import tech.musxi.player.ui.components.PlatformTag
+import tech.musxi.player.ui.components.pressableRow
 import tech.musxi.player.ui.components.songSubtitle
 import tech.musxi.player.ui.model.formatDuration
 import tech.musxi.player.ui.theme.Space
@@ -102,6 +107,7 @@ private fun NumberStyle.label(index: Int, digits: Int): String =
  * The header keeps the playlist's known name and cover even when the read failed — a page that goes
  * blank on failure loses the only context the user has.
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun TrackListContent(
     state: TrackListUiState,
@@ -111,8 +117,12 @@ fun TrackListContent(
     onSongClick: (SongSummary) -> Unit,
     onLoadMore: () -> Unit,
     onRetry: () -> Unit,
+    /** Pull-to-refresh: re-read the first page from the platform. */
+    onPullRefresh: () -> Unit = {},
     /** Identity of the track that is playing right now, if it belongs to this list. */
     nowPlayingId: String? = null,
+    /** The row the user just tapped, while its queue is still being prepared. */
+    pendingSongId: String? = null,
     /** Room for the floating dock: content scrolls under it, so the last row must clear it. */
     bottomInset: Dp = 0.dp,
     rowStyle: TrackRowStyle = TrackRowStyle.NUMBERED,
@@ -123,31 +133,38 @@ fun TrackListContent(
     val digits = maxOf(2, playlist.trackCount.toString().length)
     Column(Modifier.fillMaxSize().padding(horizontal = Space.page)) {
         TopBar(onBack)
-        LazyColumn(
-            Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(bottom = bottomInset),
+        PullToRefreshBox(
+            isRefreshing = state.refreshing,
+            onRefresh = onPullRefresh,
+            modifier = Modifier.fillMaxSize(),
         ) {
-            item { Header(state, playlist, dark) }
-            item { ActionRow(state, onPlayAll) }
-            when {
-                state.items.isEmpty() && state.loading -> item { LoadingBlock() }
-                state.items.isEmpty() && state.error != null -> item { FailureBlock(onRetry) }
-                else -> itemsIndexed(
-                    state.items,
-                    key = { _, song -> song.key.stableId },
-                ) { index, song ->
-                    TrackLine(
-                        index = index,
-                        song = song,
-                        style = rowStyle,
-                        numberStyle = numberStyle,
-                        digits = digits,
-                        playing = song.key.stableId == nowPlayingId,
-                        onClick = { onSongClick(song) },
-                    )
+            LazyColumn(
+                Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(bottom = bottomInset),
+            ) {
+                item { Header(state, playlist, dark) }
+                item { ActionRow(state, onPlayAll) }
+                when {
+                    state.items.isEmpty() && state.loading -> item { LoadingBlock() }
+                    state.items.isEmpty() && state.error != null -> item { FailureBlock(onRetry) }
+                    else -> itemsIndexed(
+                        state.items,
+                        key = { _, song -> song.key.stableId },
+                    ) { index, song ->
+                        TrackLine(
+                            index = index,
+                            song = song,
+                            style = rowStyle,
+                            numberStyle = numberStyle,
+                            digits = digits,
+                            playing = song.key.stableId == nowPlayingId,
+                            preparing = song.key.stableId == pendingSongId,
+                            onClick = { onSongClick(song) },
+                        )
+                    }
                 }
+                item { Footer(state, onLoadMore, onRetry) }
             }
-            item { Footer(state, onLoadMore, onRetry) }
         }
     }
 }
@@ -190,6 +207,7 @@ private fun Header(state: TrackListUiState, playlist: PlaylistSummary, dark: Boo
             seed = playlist.key.stableId,
             modifier = Modifier.size(112.dp),
             shape = MaterialTheme.shapes.large,
+            url = playlist.coverUrl,
         )
         Spacer(Modifier.width(16.dp))
         Column(Modifier.weight(1f)) {
@@ -202,11 +220,11 @@ private fun Header(state: TrackListUiState, playlist: PlaylistSummary, dark: Boo
             )
             Spacer(Modifier.height(12.dp))
             Text(
-                if (state.fromCache && state.error == null) {
-                    "${playlist.trackCount} 首 · 本机缓存"
-                } else {
-                    "${playlist.trackCount} 首"
-                },
+                listOfNotNull(
+                    "${playlist.trackCount} 首",
+                    freshnessLabel(state.fetchedAtEpochMs, System.currentTimeMillis())
+                        .takeIf { state.error == null },
+                ).joinToString(" · "),
                 style = MaterialTheme.typography.bodyMedium.tabular,
                 color = cs.onSurfaceVariant,
             )
@@ -272,13 +290,14 @@ private fun TrackLine(
     numberStyle: NumberStyle,
     digits: Int,
     playing: Boolean,
+    preparing: Boolean = false,
     onClick: () -> Unit,
 ) {
     val cs = MaterialTheme.colorScheme
     val slot = numberStyle.slot(digits)
     val accent = nowPlayingAccent()
     Row(
-        Modifier.fillMaxWidth().height(56.dp).clickable(onClick = onClick),
+        Modifier.fillMaxWidth().height(56.dp).pressableRow(onClick = onClick),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (style == TrackRowStyle.COVER) {
@@ -286,6 +305,7 @@ private fun TrackLine(
                 seed = song.album.ifBlank { song.key.stableId },
                 modifier = Modifier.size(40.dp),
                 shape = MaterialTheme.shapes.small,
+                url = song.coverUrl,
             )
             Spacer(Modifier.width(12.dp))
         }
@@ -329,9 +349,9 @@ private fun TrackLine(
                 )
             }
             Text(
-                songSubtitle(song),
+                if (preparing) "正在准备…" else songSubtitle(song),
                 style = MaterialTheme.typography.bodySmall,
-                color = cs.onSurfaceVariant,
+                color = if (preparing) accent else cs.onSurfaceVariant,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 modifier = if (style == TrackRowStyle.NUMBERED) {
@@ -399,7 +419,7 @@ private fun FailureBlock(onRetry: () -> Unit) {
 private fun Footer(state: TrackListUiState, onLoadMore: () -> Unit, onRetry: () -> Unit) {
     val cs = MaterialTheme.colorScheme
     val total = state.playlist?.trackCount
-    Box(Modifier.fillMaxWidth().height(56.dp), contentAlignment = Alignment.Center) {
+    Box(Modifier.fillMaxWidth().heightIn(min = 56.dp), contentAlignment = Alignment.Center) {
         when {
             state.error != null && state.items.isNotEmpty() -> Text(
                 "第 ${state.items.size} 首之后读取失败 · 重试",
@@ -408,13 +428,8 @@ private fun Footer(state: TrackListUiState, onLoadMore: () -> Unit, onRetry: () 
                 modifier = Modifier.clip(MaterialTheme.shapes.small).clickable(onClick = onRetry)
                     .padding(horizontal = 12.dp, vertical = 8.dp),
             )
-            state.canLoadMore -> Text(
-                "加载更多",
-                style = MaterialTheme.typography.labelLarge,
-                color = cs.primary,
-                modifier = Modifier.fillMaxWidth().clickable(onClick = onLoadMore)
-                    .padding(vertical = 16.dp),
-            )
+            state.canLoadMore || (state.loading && state.items.isNotEmpty()) ->
+                LoadMorePill(loading = state.loading, onClick = onLoadMore)
             state.loading -> Text(
                 "正在读取…",
                 style = MaterialTheme.typography.bodySmall,

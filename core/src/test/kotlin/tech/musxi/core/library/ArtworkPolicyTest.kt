@@ -26,4 +26,11 @@ class ArtworkPolicyTest {
             assertNull(value, ArtworkPolicy.sanitize(Platform.NETEASE, value))
         }
     }
+
+    @Test fun kugouAcceptsKgimgSubdomainsOnly() {
+        assertEquals("https://c1.kgimg.com/a.jpg", ArtworkPolicy.sanitize(Platform.KUGOU, "http://c1.kgimg.com/a.jpg"))
+        assertNull(ArtworkPolicy.sanitize(Platform.KUGOU, "https://kgimg.com/a.jpg"))
+        assertNull(ArtworkPolicy.sanitize(Platform.KUGOU, "https://c1.kgimg.com.evil.test/a.jpg"))
+        assertNull(ArtworkPolicy.sanitize(Platform.NETEASE, "https://c1.kgimg.com/a.jpg"))
+    }
 }

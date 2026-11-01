@@ -27,7 +27,7 @@ enum class LibraryFilter(val label: String, val platform: Platform?) {
  * aggregation lives here so a refresh or filter change can drop stale pages in one place.
  */
 data class PlaylistUiState(
-    val filter: LibraryFilter = LibraryFilter.ALL,
+    val filter: LibraryFilter = LibraryFilter.NETEASE,
     val items: List<PlaylistSummary> = emptyList(),
     val nextOffset: Int? = null,
     val loading: Boolean = false,
@@ -36,6 +36,8 @@ data class PlaylistUiState(
     val fetchedAtEpochMs: Long? = null,
     val accountVerified: Boolean = false,
     val storageError: Boolean = false,
+    /** A pull-to-refresh the user started is still running. Load-more never sets this. */
+    val refreshing: Boolean = false,
 ) {
     val canLoadMore: Boolean get() = nextOffset != null && !loading
     val isEmpty: Boolean get() = items.isEmpty() && !loading && error == null
@@ -52,6 +54,7 @@ data class TrackListUiState(
     val fetchedAtEpochMs: Long? = null,
     val accountVerified: Boolean = false,
     val storageError: Boolean = false,
+    val refreshing: Boolean = false,
 ) {
     val canLoadMore: Boolean get() = nextOffset != null && !loading
 }
@@ -68,12 +71,29 @@ class LibraryViewModel(private val app: MusxiApplication) : ViewModel() {
     private val _tracks = MutableStateFlow(TrackListUiState())
     val tracks: StateFlow<TrackListUiState> = _tracks.asStateFlow()
 
-    /** Platform currently feeding the grid; `null` means the ALL tab shows one platform at a time. */
+    /** Platform currently feeding the grid. */
     private var browsingPlatform: Platform = Platform.NETEASE
+    /** Set once the user taps a chip; from then on start-up no longer picks the platform. */
+    private var userChosePlatform = false
 
     init {
+        // Saved accounts are restored off the main thread, so the first account state may not have
+        // a profile yet. Until the user picks a chip, follow the first signed-in platform; each
+        // browser loads its own playlists when its account appears.
         viewModelScope.launch {
-            app.libraryBrowser.state.collect { merge(it) }
+            app.accounts.states.collect { states ->
+                if (userChosePlatform) return@collect
+                val preferred = listOf(Platform.KUGOU, Platform.NETEASE, Platform.QQ)
+                    .firstOrNull { states.getValue(it).profile != null } ?: return@collect
+                if (preferred != browsingPlatform) {
+                    browsingPlatform = preferred
+                    _playlists.value = PlaylistUiState(filter = filterOf(preferred))
+                    merge(browserFor(preferred).state.value)
+                }
+            }
+        }
+        viewModelScope.launch {
+            app.libraryBrowser.state.collect { if (browsingPlatform == Platform.NETEASE) merge(it) }
         }
         viewModelScope.launch {
             app.kugouLibraryBrowser.state.collect { if (browsingPlatform == Platform.KUGOU) merge(it) }
@@ -89,8 +109,11 @@ class LibraryViewModel(private val app: MusxiApplication) : ViewModel() {
         Platform.QQ -> app.qqLibraryBrowser
     }
 
+    private fun filterOf(platform: Platform) = LibraryFilter.entries.first { it.platform == platform }
+
     fun selectFilter(filter: LibraryFilter) {
         val platform = filter.platform ?: return
+        userChosePlatform = true
         if (platform != browsingPlatform) {
             browserFor(browsingPlatform).cancel()
             browsingPlatform = platform
@@ -135,6 +158,16 @@ class LibraryViewModel(private val app: MusxiApplication) : ViewModel() {
 
     /** Merges one page delivery, dropping pages that belong to a superseded query. */
     private fun merge(state: LibraryBrowseState) {
+        // A pull-to-refresh ends with whatever the browser settles on, including a failure with no
+        // page at all; otherwise the spinner would wait for content that never comes.
+        if (!state.refreshing) {
+            if (state.query.playlist == null && _playlists.value.refreshing) {
+                _playlists.value = _playlists.value.copy(refreshing = false, loading = false, error = state.error)
+            } else if (state.query.playlist != null && state.query.playlist == _tracks.value.playlist?.key &&
+                _tracks.value.refreshing) {
+                _tracks.value = _tracks.value.copy(refreshing = false, loading = false, error = state.error)
+            }
+        }
         val content = state.content
         if (content is LibraryContent.Playlists) {
             if (state.query.playlist != null) return
@@ -150,6 +183,7 @@ class LibraryViewModel(private val app: MusxiApplication) : ViewModel() {
                 fetchedAtEpochMs = state.fetchedAtEpochMs,
                 accountVerified = state.accountVerified,
                 storageError = state.storageError,
+                refreshing = current.refreshing && state.refreshing,
             )
         } else if (content is LibraryContent.Tracks) {
             val playlist = _tracks.value.playlist ?: return
@@ -169,6 +203,7 @@ class LibraryViewModel(private val app: MusxiApplication) : ViewModel() {
                 fetchedAtEpochMs = state.fetchedAtEpochMs,
                 accountVerified = state.accountVerified,
                 storageError = state.storageError,
+                refreshing = current.refreshing && state.refreshing,
             )
         }
     }
@@ -176,6 +211,21 @@ class LibraryViewModel(private val app: MusxiApplication) : ViewModel() {
     /** Retry is always explicit; a failure never turns into an empty success. */
     fun retryPlaylists() = loadPlaylists(reset = _playlists.value.items.isEmpty())
     fun retryTracks() = _tracks.value.playlist?.let { browserFor(it.key.platform).refresh() }
+
+    /**
+     * Pull-to-refresh: re-reads the first page from the platform and starts the list again. The old
+     * rows stay visible until the new page lands, so the page never flashes empty.
+     */
+    fun refreshPlaylists() {
+        _playlists.value = _playlists.value.copy(refreshing = true, loading = true, error = null)
+        browserFor(browsingPlatform).playlists(0)
+    }
+
+    fun refreshTracks() {
+        val playlist = _tracks.value.playlist ?: return
+        _tracks.value = _tracks.value.copy(refreshing = true, loading = true, error = null)
+        browserFor(playlist.key.platform).tracks(playlist.key, 0)
+    }
 
     fun songKeyOf(song: SongSummary): MediaKey = song.key
 }

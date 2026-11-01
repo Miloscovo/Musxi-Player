@@ -57,7 +57,7 @@ class AccountViewModelTest {
     @Test fun waitingConfirmationNamesTheRightApp() {
         assertEquals("在 QQ 音乐里确认后返回", state(AccountPhase.WAITING_CONFIRMATION, platform = Platform.QQ).toRowUi().detail)
         assertEquals(
-            "在网易云音乐里扫码确认后返回",
+            "在登录页完成后返回",
             state(AccountPhase.WAITING_CONFIRMATION, platform = Platform.NETEASE).toRowUi().detail,
         )
     }
@@ -144,5 +144,19 @@ class AccountViewModelTest {
         AccountPhase.entries.forEach { phase ->
             assertNull("$phase must not invent a name", state(phase, name = null).toRowUi().name)
         }
+    }
+
+    @Test fun allConnectedHasNoSolidAction() {
+        val rows = Platform.entries.map { state(AccountPhase.CONNECTED, platform = it, name = "x").toRowUi() }
+        assertNull(solidActionPlatform(rows))
+    }
+
+    @Test fun expiredOutranksDisconnectedForSolidAction() {
+        val rows = listOf(
+            state(AccountPhase.CONNECTED, platform = Platform.KUGOU, name = "x").toRowUi(),
+            state(AccountPhase.DISCONNECTED, platform = Platform.QQ).toRowUi(),
+            state(AccountPhase.REAUTH_REQUIRED, platform = Platform.NETEASE).toRowUi(),
+        )
+        assertEquals(Platform.NETEASE, solidActionPlatform(rows))
     }
 }

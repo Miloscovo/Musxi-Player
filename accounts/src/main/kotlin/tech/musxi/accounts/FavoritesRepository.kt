@@ -13,6 +13,12 @@ import tech.musxi.qqloginpoc.QqLibraryApi
 /** Explicit account-local favorite sync. No cross-platform copying or automatic write retries. */
 class FavoritesRepository(private val accounts: AccountRepository,
     private val diagnostic: (Platform, String, String) -> Unit = { _, _, _ -> }) {
+    private var kugouOwner: KugouApi? = null
+    private var kugouLibrary: KugouLibraryApi? = null
+    @Synchronized private fun kugou(api: KugouApi): KugouLibraryApi {
+        if (kugouOwner !== api) { kugouOwner = api; kugouLibrary = KugouLibraryApi(api) }
+        return requireNotNull(kugouLibrary)
+    }
     fun fetch(platform: Platform, current: () -> Boolean, result: (Result<FavoritesSnapshot>) -> Unit) {
         val callback: (Result<List<String>>) -> Unit = { response -> result(safe(response, platform, "fetch").map { ids ->
             FavoritesSnapshot(ids.map { MediaKey(platform, it) }.toSet())
@@ -23,7 +29,7 @@ class FavoritesRepository(private val accounts: AccountRepository,
                 NeteaseLibraryApi(api).likedIds(session).also { requireCurrent(current) }
             }, callback, RequestOperation.FAVORITES_READ)
             Platform.KUGOU -> accounts.withKugouSession({ api, session ->
-                requireCurrent(current); KugouLibraryApi(api).likedIds(session, current)
+                requireCurrent(current); kugou(api).likedIds(session, current)
             }, callback, RequestOperation.FAVORITES_READ)
             Platform.QQ -> accounts.withQqSession({ api, session ->
                 requireCurrent(current); QqLibraryApi(api, current).likedIds(session)
@@ -39,11 +45,36 @@ class FavoritesRepository(private val accounts: AccountRepository,
             }, callback, RequestOperation.FAVORITES_WRITE)
             Platform.KUGOU -> accounts.withKugouSession({ api, session ->
                 requireCurrent(current)
-                KugouLibraryApi(api).setLiked(session, song.key.id, song.title, song.durationMs, liked, current)
+                kugou(api).setLiked(session, song.key.id, song.title, song.durationMs, liked, current)
             }, callback, RequestOperation.FAVORITES_WRITE)
             Platform.QQ -> accounts.withQqSession({ api, session ->
                 requireCurrent(current); QqLibraryApi(api, current).setLiked(session, song.key.id, liked)
             }, callback, RequestOperation.FAVORITES_WRITE)
+        }
+    }
+
+    fun verifyLiked(song: SongSummary, liked: Boolean, current: () -> Boolean, result: (Result<Boolean>) -> Unit) {
+        val callback: (Result<Boolean>) -> Unit = { result(safe(it, song.key.platform, "verify")) }
+        when (song.key.platform) {
+            Platform.KUGOU -> accounts.withKugouSession({ api, session ->
+                requireCurrent(current)
+                kugou(api).verifyLiked(session, song.key.id, liked, current).also { requireCurrent(current) }
+            }, callback, RequestOperation.FAVORITES_READ)
+            Platform.NETEASE -> accounts.withNeteaseSession({ api, session ->
+                requireCurrent(current)
+                // Pinned protocol has a single lightweight ID request, no per-track query.
+                (song.key.id in NeteaseLibraryApi(api).likedIds(session)).also { requireCurrent(current) }
+            }, callback, RequestOperation.FAVORITES_READ)
+            Platform.QQ -> accounts.withQqSession({ api, session ->
+                requireCurrent(current)
+                val page = QqLibraryApi(api, current).tracks(session, "0_201", 0, 100)
+                requireCurrent(current)
+                when {
+                    page.items.any { it.id == song.key.id } -> true
+                    page.nextOffset < 0 -> false
+                    else -> throw LibraryPageFailure("incomplete")
+                }
+            }, callback, RequestOperation.FAVORITES_READ)
         }
     }
 
@@ -58,6 +89,7 @@ class FavoritesRepository(private val accounts: AccountRepository,
             is NeteaseApi.ApiException -> error.code
             is KugouApi.ApiException -> error.code
             is QqMusicApi.ApiException -> error.code
+            is java.io.IOException -> "network"
             else -> "unavailable"
         }
         val safeCategory = category.takeIf { it in setOf("account_changed", "unavailable", "network",

@@ -94,4 +94,27 @@ class QueueCommandMailboxTest {
         assertFalse(mailbox.isPending(retry))
         assertNull(mailbox.take(retry))
     }
+
+    @Test fun batchInsertCanBeRetriedWithTheSameIdAfterACompetingCommandWins() {
+        val mailbox = QueueCommandMailbox()
+        val song = replace().queue.songs.first()
+        val batch = QueueCommandMailbox.Action.InsertBatch("epoch", "batch-1", listOf(song), QueueInsertAt.TAIL)
+        val first = mailbox.submit(batch)
+        val edit = QueueCommandMailbox.Action.Edit(7, tech.musxi.core.playback.QueueEdit.Move(0, 1))
+        val editToken = mailbox.submit(edit)
+        assertNull(mailbox.take(first))
+        assertSame(edit, mailbox.take(editToken))
+        val retry = mailbox.submit(batch)
+        assertSame(batch, mailbox.take(retry))
+    }
+
+    @Test fun queueEpochIsPartOfBatchIdentityButOrdinaryEditsDoNotAlterIt() {
+        val first = QueueCommandMailbox.Action.InsertBatch("epoch-a", "same-id", listOf(replace().queue.songs.first()), QueueInsertAt.HEAD)
+        val otherQueue = first.copyForEpoch("epoch-b")
+        assertNotEquals(first.queueEpoch, otherQueue.queueEpoch)
+        assertEquals(first.batchId, otherQueue.batchId)
+    }
+
+    private fun QueueCommandMailbox.Action.InsertBatch.copyForEpoch(epoch: String) =
+        QueueCommandMailbox.Action.InsertBatch(epoch, batchId, songs, at)
 }

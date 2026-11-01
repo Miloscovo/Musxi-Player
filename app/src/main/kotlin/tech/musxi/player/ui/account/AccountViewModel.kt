@@ -61,15 +61,16 @@ class AccountViewModel(private val accounts: AccountRepository) : ViewModel() {
     }
 
     /**
-     * Connect or recover. Official browsers (Kugou/QQ) need an Activity to launch the login
-     * intent; Netease scans through the installed app instead.
+     * Connect Kugou/QQ through their official apps. Netease is not handled here: its primary path is
+     * the in-app web login, which needs an Activity window and therefore lives in the UI layer.
      */
     fun connect(platform: Platform, launch: (Intent) -> Unit) {
-        when (platform) {
-            Platform.NETEASE -> accounts.connectNeteaseScanner(launch)
-            Platform.KUGOU, Platform.QQ -> accounts.connectOfficial(platform, launch)
-        }
+        require(platform != Platform.NETEASE)
+        accounts.connectOfficial(platform, launch)
     }
+
+    /** Fallback for Netease: save a QR image to the gallery and open the app's scanner. */
+    fun connectNeteaseScanner(launch: (Intent) -> Unit) = accounts.connectNeteaseScanner(launch)
 
     /** Both the explicit cancel and the reverse of a stuck prepare go through the same path. */
     fun cancel(platform: Platform) = accounts.cancel(platform)
@@ -81,12 +82,16 @@ class AccountViewModel(private val accounts: AccountRepository) : ViewModel() {
      */
     fun retry(platform: Platform) = accounts.restore(platform)
 
-    /** An expired session cannot be refreshed; it has to be connected again. */
+    /**
+     * An expired session cannot be refreshed; it has to be connected again. Clearing it first is
+     * the backend's rule; the caller then starts a fresh connection.
+     */
     fun relogin(platform: Platform) = accounts.disconnect(platform)
 
     fun disconnect(platform: Platform) = accounts.disconnect(platform)
 
-    fun manage(platform: Platform) = accounts.restore(platform)
+    /** Re-checks a saved account with the platform without signing it out. */
+    fun reverify(platform: Platform) = accounts.restore(platform)
 }
 
 /** Pure mapping so every branch is testable without a repository or a running Activity. */
@@ -170,7 +175,7 @@ private fun AccountState.row(
 private fun Platform.waitHint(): String = when (this) {
     Platform.KUGOU -> "在酷狗里确认后返回"
     Platform.QQ -> "在 QQ 音乐里确认后返回"
-    Platform.NETEASE -> "在网易云音乐里扫码确认后返回"
+    Platform.NETEASE -> "在登录页完成后返回"
 }
 
 /**
@@ -184,7 +189,10 @@ private fun Platform.waitHint(): String = when (this) {
  * the one the app ships — which it did briefly, because the sheet hard-coded "first row".
  */
 fun solidActionPlatform(rows: List<AccountRowUi>): Platform? =
-    rows.minByOrNull { urgency(it.phase) }?.platform
+    // Only a row that needs the user earns the solid button. With every platform connected there is
+    // nothing to do, and picking one anyway made a healthy account look like the one in trouble.
+    rows.filter { urgency(it.phase) <= urgency(AccountPhase.DISCONNECTED) }
+        .minByOrNull { urgency(it.phase) }?.platform
 
 private fun urgency(phase: AccountPhase): Int = when (phase) {
     AccountPhase.REAUTH_REQUIRED -> 0

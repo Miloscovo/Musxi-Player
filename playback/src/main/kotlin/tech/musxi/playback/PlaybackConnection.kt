@@ -18,6 +18,10 @@ import tech.musxi.core.library.PlaybackQueue
 import tech.musxi.core.account.Platform
 import tech.musxi.core.library.ArtworkPolicy
 import tech.musxi.core.playback.PlaybackFailure
+import tech.musxi.core.playback.QualityOption
+import tech.musxi.core.playback.QualityOptions
+import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.collect
 
 enum class PlaybackSuppression { NONE, AUDIO_FOCUS, OUTPUT, OTHER }
 enum class PlaybackRepeatMode { OFF, ONE, ALL }
@@ -83,6 +87,9 @@ data class PlaybackState(
     val connectionPhase: PlaybackConnectionPhase = PlaybackConnectionPhase.CONNECTING,
     val connectionAttempt: Int = 0,
     val canRetryConnection: Boolean = false,
+    val qualityName: String? = null,
+    val outputDevice: OutputDevice? = null,
+    val outputInferred: Boolean = false,
 )
 
 /** Main-thread facade. Signed stream URLs stay in memory; diagnostics never include them. */
@@ -92,7 +99,11 @@ class PlaybackConnection(context: Context) {
     private val mutable = MutableStateFlow(PlaybackState())
     val state = mutable.asStateFlow()
     val queueState = queueSnapshot.asStateFlow()
+    val outputs = outputSnapshot.asStateFlow()
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var controller: MediaController? = null
+    private var queriedQualityTicket: String? = null
+    private var queriedQualitySource: tech.musxi.core.library.MediaKey? = null
     private val pendingCommands = mutableMapOf<Long, (Result<Unit>) -> Unit>()
     private val main = Handler(Looper.getMainLooper())
     private val progressTick = Runnable { controller?.let(::update) }
@@ -158,7 +169,101 @@ class PlaybackConnection(context: Context) {
             }
         })
 
-    init { recovery.start() }
+    init {
+        recovery.start()
+        scope.launch { outputs.collect { snapshot ->
+            mutable.value = mutable.value.copy(outputDevice = snapshot.devices.firstOrNull { it.selected }, outputInferred = snapshot.inferred)
+        } }
+    }
+
+    fun availableOutputs(): List<OutputDevice> = outputs.value.devices
+    /** Opaque slot identity for rejecting a late panel result, including duplicate songs. */
+    fun currentQueueTicket(): String? = controller?.sessionExtras?.getString(MusxiPlaybackService.EXTRA_CURRENT_TICKET)
+
+    /** Open a manual search for this exact queue slot; results live in sourceSelection. */
+    fun findAlternativeSources(callback: (Result<Unit>) -> Unit = {}) {
+        qualityCommand(MusxiPlaybackService.COMMAND_FIND_SOURCES, null) { callback(it.map { Unit }) }
+    }
+
+    fun qualities(mediaKey: tech.musxi.core.library.MediaKey? = state.value.sourceKey,
+        callback: (Result<QualityOptions>) -> Unit) {
+        if (mediaKey == null || mediaKey != state.value.sourceKey)
+            return callback(Result.failure(PlaybackSourceException(PlaybackFailure.AUTH_REQUIRED)))
+        qualityCommand(MusxiPlaybackService.COMMAND_QUALITIES, null) { result ->
+            if (result.isSuccess) {
+                queriedQualityTicket = controller?.sessionExtras?.getString(MusxiPlaybackService.EXTRA_CURRENT_TICKET)
+                queriedQualitySource = state.value.sourceKey
+            }
+            callback(result.mapCatching { extras ->
+                val ids = extras.getStringArrayList(MusxiPlaybackService.EXTRA_QUALITY_IDS).orEmpty()
+                val names = extras.getStringArrayList(MusxiPlaybackService.EXTRA_QUALITY_NAMES).orEmpty()
+                check(ids.size == names.size)
+                QualityOptions(ids.zip(names) { id, name -> QualityOption(id, name) }, extras.getString(MusxiPlaybackService.EXTRA_QUALITY_ID))
+            })
+        }
+    }
+
+    fun setQuality(id: String, callback: (Result<Unit>) -> Unit = {}) {
+        if (queriedQualityTicket != null && (queriedQualityTicket != controller?.sessionExtras?.getString(MusxiPlaybackService.EXTRA_CURRENT_TICKET) ||
+                queriedQualitySource != state.value.sourceKey))
+            return callback(Result.failure(PlaybackSourceException(PlaybackFailure.AUTH_REQUIRED)))
+        qualityCommand(MusxiPlaybackService.COMMAND_SET_QUALITY, id) { callback(it.map { Unit }) }
+    }
+
+    private fun qualityCommand(command: String, id: String?, callback: (Result<Bundle>) -> Unit) {
+        val player = controller ?: return callback(Result.failure(PlaybackSourceException(PlaybackFailure.UNAVAILABLE)))
+        val ticket = player.sessionExtras.getString(MusxiPlaybackService.EXTRA_CURRENT_TICKET)
+            ?: return callback(Result.failure(PlaybackSourceException(PlaybackFailure.UNAVAILABLE)))
+        val future = player.sendCustomCommand(SessionCommand(command, Bundle.EMPTY), Bundle().apply {
+            putString(MusxiPlaybackService.EXTRA_CURRENT_TICKET, ticket); putString(MusxiPlaybackService.EXTRA_QUALITY_ID, id)
+        })
+        future.addListener({
+            val response = runCatching {
+                val result = future.get()
+                if (player !== controller || player.sessionExtras.getString(MusxiPlaybackService.EXTRA_CURRENT_TICKET) != ticket ||
+                    result.resultCode != SessionResult.RESULT_SUCCESS) {
+                    val failure = result.extras.getString(MusxiPlaybackService.EXTRA_FAILURE)?.let { category ->
+                        PlaybackFailure.entries.firstOrNull { it.name == category }
+                    } ?: PlaybackFailure.UNAVAILABLE
+                    throw PlaybackSourceException(failure)
+                }
+                result.extras
+            }
+            callback(response)
+        }, Executor { main.post(it) })
+    }
+
+    fun selectOutput(id: String, callback: (Result<Unit>) -> Unit = {}) {
+        val player = controller ?: return callback(Result.failure(OutputSelectionException(OutputFailure.DISCONNECTED)))
+        val result = player.sendCustomCommand(SessionCommand(MusxiPlaybackService.COMMAND_SELECT_OUTPUT, Bundle.EMPTY),
+            Bundle().apply { putString(MusxiPlaybackService.EXTRA_OUTPUT_ID, id) })
+        result.addListener({
+            callback(runCatching {
+                val response = result.get()
+                if (player !== controller) throw OutputSelectionException(OutputFailure.DISCONNECTED)
+                if (response.resultCode != SessionResult.RESULT_SUCCESS) throw OutputSelectionException(
+                    OutputFailure.entries.firstOrNull { it.name == response.extras.getString(MusxiPlaybackService.EXTRA_OUTPUT_FAILURE) }
+                        ?: OutputFailure.REJECTED)
+            })
+        }, Executor { main.post(it) })
+    }
+
+    /** Called by a visible Activity. Some OEMs expose no media panel, so settings is the final fallback. */
+    fun openOutputSwitcher(context: Context): Boolean {
+        if (android.os.Build.VERSION.SDK_INT >= 34 && runCatching {
+            android.media.MediaRouter2.getInstance(context).showSystemOutputSwitcher()
+        }.getOrDefault(false)) return true
+        return outputSwitcherIntents().any { intent -> runCatching { context.startActivity(intent); true }.getOrDefault(false) }
+    }
+
+    fun outputSwitcherIntents(): List<android.content.Intent> = buildList {
+        if (android.os.Build.VERSION.SDK_INT >= 30) {
+            add(android.content.Intent("android.settings.panel.action.MEDIA_OUTPUT").putExtra("package_name", app.packageName))
+            add(android.content.Intent("com.android.settings.panel.action.MEDIA_OUTPUT").putExtra("package_name", app.packageName))
+        }
+        if (android.os.Build.VERSION.SDK_INT >= 29) add(android.content.Intent(android.provider.Settings.Panel.ACTION_VOLUME))
+        add(android.content.Intent(android.provider.Settings.ACTION_BLUETOOTH_SETTINGS))
+    }
 
     /** Explicit retry after the automatic budget is exhausted. Never resubmits playback intent. */
     fun retryConnection() { recovery.retry() }
@@ -272,6 +377,14 @@ class PlaybackConnection(context: Context) {
     /** Only same-platform, account-bound active queues; this never starts an empty queue. */
     fun enqueue(song: tech.musxi.core.library.SongSummary, expectedRevision: Long, playNext: Boolean = false,
         callback: (Result<Unit>) -> Unit = {}) = editQueue(QueueCommandMailbox.Action.Insert(expectedRevision, song, playNext), callback)
+
+    /** Queue completion is tied to a playlist epoch and can survive ordinary queue edits. */
+    fun enqueueBatch(songs: List<tech.musxi.core.library.SongSummary>, at: QueueInsertAt,
+        batchId: String, queueEpoch: String, callback: (Result<Unit>) -> Unit = {}) {
+        if (queueEpoch.isBlank()) return callback(Result.failure(IllegalStateException("Queue unavailable")))
+        if (controller == null) return callback(Result.failure(IllegalStateException("Player unavailable")))
+        dispatch(controller!!, QueueCommandMailbox.Action.InsertBatch(queueEpoch, batchId, songs.toList(), at), callback)
+    }
 
     private fun editQueue(action: QueueCommandMailbox.Action, callback: (Result<Unit>) -> Unit) {
         val player = controller ?: return callback(Result.failure(IllegalStateException("Player unavailable")))
@@ -418,6 +531,9 @@ class PlaybackConnection(context: Context) {
                     runCatching { tech.musxi.core.library.MediaKey(platform, id) }.getOrNull()
                 }
             },
+            qualityName = extras.getString(MusxiPlaybackService.EXTRA_QUALITY_NAME),
+            outputDevice = outputs.value.devices.firstOrNull { it.selected },
+            outputInferred = outputs.value.inferred,
             connectionPhase = PlaybackConnectionPhase.CONNECTED,
             connectionAttempt = recovery.state.attempt,
             canSetPlaybackModes = player.isCommandAvailable(Player.COMMAND_SET_REPEAT_MODE) &&

@@ -21,7 +21,7 @@ public class KugouLibraryApiTest {
         rejects("account_changed",()->library.likedIds(session,()->false));
         int count=calls.size();
         library.setLiked(session,HASH+"_12_34","Fixture",0,true,()->true);
-        assertEquals(count+2,calls.size()); // Already liked: no mutation.
+        assertEquals(count,calls.size()); // A synchronized snapshot needs no pre-write list scan.
     }
     @Test public void favoriteMutationsSignStructuredDataAndRefuseUnknownDeleteIds() throws Exception {
         List<KugouApi.Request> calls=new ArrayList<>();
@@ -45,6 +45,17 @@ public class KugouLibraryApiTest {
         assertEquals(KugouApi.androidSignature(params,write.body),signature);
         KugouApi.requireEndpoint(new URL(write.endpoint));
         rejects("endpoint",()->KugouApi.requireEndpoint(new URL("https://gateway.kugou.com/v4/delete_lists")));
+    }
+    @Test public void sourceSentinelsDoNotBlockOwnFavoritesOrLegacyLists() throws Exception {
+        KugouLibraryApi.Page<KugouLibraryApi.Playlist> page=KugouLibraryApi.parsePlaylists(json(
+            "{status:1,data:{total:4,info:["+
+            "{listid:11,is_edit:1,is_def:2,list_create_gid:0},"+
+            "{listid:12,is_edit:1,is_def:0,list_create_gid:''},"+
+            "{listid:13,is_edit:0,is_def:0,list_create_gid:0},"+
+            "{listid:14,is_edit:0,is_def:0,list_create_gid:''}]}}"),0,100);
+        assertEquals(4,page.items.size());
+        assertTrue(page.items.get(0).favorite);
+        for(KugouLibraryApi.Playlist item:page.items)assertNull(item.sourceGlobalId);
     }
     @Test public void deletingFavoriteUsesOnlyDeleteEndpointAndActualFileId() throws Exception {
         List<KugouApi.Request> calls=new ArrayList<>();
@@ -350,6 +361,85 @@ public class KugouLibraryApiTest {
         }
         assertEquals("12",new JSONObject(requests.get(1).body).getString("listid"));
     }
+    /** Fake get_list_all_file over [count] rows stored oldest first; row i is named "S<i>". */
+    private KugouLibraryApi oldestFirstList(int count,List<Integer> pagesRead) {
+        KugouApi api=new KugouApi(new KugouApi.Device("b".repeat(32)),r->{ try {
+            JSONObject body=new JSONObject(r.body);int size=body.getInt("pagesize"),page=body.getInt("page");
+            pagesRead.add(page*1000+size);
+            org.json.JSONArray rows=new org.json.JSONArray();
+            for(int i=(page-1)*size;i<Math.min(count,page*size);i++) {
+                String hash=String.format("%032x",i+1);
+                rows.put(new JSONObject().put("hash",hash).put("album_id",1).put("album_audio_id",i+1).put("name","A - S"+i));
+            }
+            return new JSONObject().put("status",1).put("data",new JSONObject().put("info",rows).put("count",count));
+        } catch(org.json.JSONException e) { throw new IOException(e); } });
+        return new KugouLibraryApi(api);
+    }
+    private static List<String> names(KugouLibraryApi.Page<KugouLibraryApi.Track> page) {
+        List<String> out=new ArrayList<>();for(KugouLibraryApi.Track t:page.items)out.add(t.name);return out;
+    }
+    @Test public void newestFirstReadsTheEndOfTheListAndReverses() throws Exception {
+        List<Integer> reads=new ArrayList<>();
+        KugouLibraryApi library=oldestFirstList(75,reads);KugouApi.Session session=new KugouApi.Session("t","1","n");
+        KugouLibraryApi.Page<KugouLibraryApi.Track> first=library.tracksNewestFirst(session,"9",0,30);
+        assertEquals(30,first.items.size());assertEquals("S74",first.items.get(0).name);assertEquals("S45",first.items.get(29).name);
+        assertEquals(30,first.nextOffset);assertEquals(75,first.total);
+        KugouLibraryApi.Page<KugouLibraryApi.Track> second=library.tracksNewestFirst(session,"9",30,30);
+        assertEquals("S44",second.items.get(0).name);assertEquals("S15",second.items.get(29).name);assertEquals(60,second.nextOffset);
+        KugouLibraryApi.Page<KugouLibraryApi.Track> last=library.tracksNewestFirst(session,"9",60,30);
+        assertEquals(List.of("S14","S13","S12","S11","S10","S9","S8","S7","S6","S5","S4","S3","S2","S1","S0"),names(last));
+        assertEquals(-1,last.nextOffset);
+    }
+    @Test public void newestFirstHandlesExactAndEmptyLists() throws Exception {
+        KugouApi.Session session=new KugouApi.Session("t","1","n");
+        KugouLibraryApi.Page<KugouLibraryApi.Track> exact=oldestFirstList(30,new ArrayList<>()).tracksNewestFirst(session,"9",0,30);
+        assertEquals(30,exact.items.size());assertEquals("S29",exact.items.get(0).name);assertEquals(-1,exact.nextOffset);
+        KugouLibraryApi.Page<KugouLibraryApi.Track> empty=oldestFirstList(0,new ArrayList<>()).tracksNewestFirst(session,"9",0,30);
+        assertTrue(empty.items.isEmpty());assertEquals(-1,empty.nextOffset);
+    }
+    @Test public void completionFromThirtyRowPrefixEqualsFullReadAndReverseFor755Songs() throws Exception {
+        KugouApi.Session session=new KugouApi.Session("t","1","n");
+        KugouLibraryApi library=oldestFirstList(755,new ArrayList<>());
+        List<String> expected=new ArrayList<>();
+        for(int offset=0;;) {
+            KugouLibraryApi.Page<KugouLibraryApi.Track> page=library.tracks(session,"9",offset,100);
+            expected.addAll(names(page));
+            if(page.nextOffset<0)break;
+            offset=page.nextOffset;
+        }
+        Collections.reverse(expected);
+        for(int prefixSize:new int[]{30,60,120,750}) {
+            List<String> prefix=new ArrayList<>();
+            for(int offset=0;offset<prefixSize;offset+=30)prefix.addAll(names(library.tracksNewestFirst(session,"9",offset,30)));
+            int selected=prefixSize/2, start=selected/30*30, end=Math.min(start+30,prefix.size());
+            List<String> queue=new ArrayList<>(prefix.subList(start,end));
+            String playing=queue.get(selected-start);
+            queue.addAll(0,prefix.subList(0,start));
+            queue.addAll(prefix.subList(end,prefix.size()));
+            int loaded=prefix.size();
+            while(loaded<755) {
+                int aligned=loaded/100*100;
+                List<String> page=names(library.tracksNewestFirst(session,"9",aligned,100));
+                List<String> added=page.subList(loaded-aligned,page.size());
+                queue.addAll(added);loaded+=added.size();
+            }
+            assertEquals(expected,queue);
+            assertEquals(playing,queue.get(selected));
+        }
+    }
+    @Test public void newestFirstRejectsAListThatChangesMidRead() throws Exception {
+        int[] count={75};
+        KugouApi api=new KugouApi(new KugouApi.Device("b".repeat(32)),r->{ try {
+            JSONObject body=new JSONObject(r.body);int size=body.getInt("pagesize"),page=body.getInt("page");
+            int now=count[0];if(size>1)count[0]=76;
+            org.json.JSONArray rows=new org.json.JSONArray();
+            for(int i=(page-1)*size;i<Math.min(now,page*size);i++)
+                rows.put(new JSONObject().put("hash",String.format("%032x",i+1)).put("album_id",1).put("album_audio_id",i+1).put("name","A - S"+i));
+            return new JSONObject().put("status",1).put("data",new JSONObject().put("info",rows).put("count",now));
+        } catch(org.json.JSONException e) { throw new IOException(e); } });
+        KugouApi.Session session=new KugouApi.Session("t","1","n");
+        rejects("incomplete",()->new KugouLibraryApi(api).tracksNewestFirst(session,"9",0,30));
+    }
     @Test public void playlistPaginationAndExplicitEmptyFinalPage() throws Exception {
         KugouLibraryApi.Page<KugouLibraryApi.Playlist> p=KugouLibraryApi.parsePlaylists(json("{status:1,data:{info:[{listid:1,name:'Fixture',count:3}],total:2}}"),0,1);
         assertEquals(1,p.nextOffset);assertEquals(2,p.total);assertEquals(3,p.items.get(0).trackCount);
@@ -358,6 +448,73 @@ public class KugouLibraryApiTest {
         rejects("protocol",()->KugouLibraryApi.parsePlaylists(json("{status:1,data:{}}"),0,30));
         rejects("incomplete",()->KugouLibraryApi.parsePlaylists(json("{status:1,data:{info:[],total:2}}"),0,30));
         rejects("incomplete",()->KugouLibraryApi.parsePlaylists(json("{status:1,data:{info:[{listid:1,count:0}],total:2}}"),0,30));
+    }
+    @Test public void collectedPlaylistsKeepReadOnlyIdentityAndOnlyUseSourceGidForOthers() throws Exception {
+        KugouLibraryApi.Page<KugouLibraryApi.Playlist> page=KugouLibraryApi.parsePlaylists(json(
+            "{status:1,data:{total:4,info:["+
+            "{listid:10,name:'Own',count:1,is_edit:1,is_def:0,list_create_gid:777},"+
+            "{listid:11,name:'Favorite',count:1,is_edit:1,is_def:2},"+
+            "{listid:12,name:'Other',count:2,is_edit:0,is_def:0,list_create_gid:'9001'},"+
+            "{listid:13,name:'Legacy',count:1,is_edit:0,is_def:0,list_create_gid:null}]}}"),0,4);
+        KugouLibraryApi.Playlist own=page.items.get(0),favorite=page.items.get(1);
+        KugouLibraryApi.Playlist other=page.items.get(2),legacy=page.items.get(3);
+        assertTrue(own.editable);assertFalse(own.readOnly);assertNull(own.sourceGlobalId);
+        assertTrue(favorite.favorite);assertTrue(favorite.editable);assertFalse(favorite.readOnly);
+        assertEquals("9001",other.sourceGlobalId);assertFalse(other.editable);assertTrue(other.readOnly);
+        assertNull(legacy.sourceGlobalId);assertFalse(legacy.editable);assertTrue(legacy.readOnly);
+    }
+    @Test public void sourcePlaylistDetailUsesFixedEndpointAndKeepsPublishedOrder() throws Exception {
+        List<KugouApi.Request> requests=new ArrayList<>();
+        String lists="{status:1,data:{total:2,info:["+
+            "{listid:10,name:'Own',count:1,is_edit:1,is_def:0},"+
+            "{listid:12,name:'Other',count:60,is_edit:0,is_def:0,list_create_gid:9001}]}}";
+        KugouLibraryApi library=new KugouLibraryApi(new KugouApi(new KugouApi.Device("b".repeat(32)),r->{
+            requests.add(r);
+            if(r.endpoint.endsWith("/get_all_list"))return json(lists);
+            try {
+            org.json.JSONArray rows=new org.json.JSONArray();
+            for(int i=0;i<30;i++)rows.put(new JSONObject().put("hash",String.format("%032x",i+1))
+                .put("album_id",1).put("album_audio_id",100+i).put("name","Source "+i));
+            if(r.endpoint.endsWith("/get_other_list_file_nofilt"))
+                return new JSONObject().put("status",1).put("data",new JSONObject().put("total",60).put("info",rows));
+            return json("{status:1,data:{total:1,info:[{hash:'"+HASH+"',album_id:1,album_audio_id:1,name:'Own song'}]}}");
+            } catch(org.json.JSONException malformed) { throw new IOException(malformed); }
+        }));
+        KugouApi.Session session=new KugouApi.Session("fixture-token","123","Fixture");
+        List<KugouLibraryApi.Playlist> playlists=library.playlists(session,0,30).items;
+        KugouLibraryApi.Page<KugouLibraryApi.Track> source=library.tracksNewestFirst(session,playlists.get(1),30,30);
+        assertEquals("Source 0",source.items.get(0).name);
+        assertEquals("Source 29",source.items.get(29).name);
+        assertEquals(-1,source.nextOffset);assertEquals(60,source.total);
+        KugouApi.Request detail=requests.get(1);
+        assertEquals("https://gateway.kugou.com/pubsongs/v2/get_other_list_file_nofilt",detail.endpoint);
+        assertFalse(detail.headers.containsKey("x-router"));assertNull(detail.body);
+        assertEquals("9001",detail.params.get("global_collection_id"));
+        assertEquals("30",detail.params.get("begin_idx"));assertEquals("30",detail.params.get("pagesize"));
+        assertEquals("1",detail.params.get("plat"));assertEquals("1",detail.params.get("type"));
+        assertEquals("1",detail.params.get("mode"));assertEquals("1",detail.params.get("personal_switch"));
+        assertEquals("1",detail.params.get("area_code"));
+        assertEquals("abtags,hot_cmt,popularization",detail.params.get("extend_fields"));
+        Map<String,String> signed=new LinkedHashMap<>(detail.params);String signature=signed.remove("signature");
+        assertEquals(KugouApi.androidSignature(signed,null),signature);
+        KugouApi.requireEndpoint(new URL(detail.endpoint));
+
+        library.tracks(session,playlists.get(0),0,30);
+        KugouApi.Request own=requests.get(2);
+        assertEquals("https://gateway.kugou.com/v4/get_list_all_file",own.endpoint);
+        assertEquals("10",new JSONObject(own.body).getString("listid"));
+    }
+    @Test public void sourcePlaylistShortPageIsIncomplete() throws Exception {
+        KugouApi api=new KugouApi(new KugouApi.Device("b".repeat(32)),r->{
+            try {
+            org.json.JSONArray rows=new org.json.JSONArray();
+            for(int i=0;i<29;i++)rows.put(new JSONObject().put("hash",String.format("%032x",i+1))
+                .put("album_id",1).put("album_audio_id",100+i).put("name","Source "+i));
+            return new JSONObject().put("status",1).put("data",new JSONObject().put("total",60).put("info",rows));
+            } catch(org.json.JSONException malformed) { throw new IOException(malformed); }
+        });
+        KugouApi.Session session=new KugouApi.Session("fixture-token","123","Fixture");
+        rejects("incomplete",()->new KugouLibraryApi(api).tracksNewestFirst(session,"12","9001",0,30));
     }
     @Test public void trackUsesHashAndBothAlbumIdsWithoutConflatingFileId() throws Exception {
         JSONObject body=json("{status:1,data:{info:[{fileid:999,album_id:12,album_audio_id:34,filename:'Artist - Title.mp3',audio_info:{hash:'"+HASH.toUpperCase()+"',timelen:120000}}],total:1}}");
@@ -516,6 +673,13 @@ public class KugouLibraryApiTest {
     @Test public void standardAudioUpgradesHttpsWithBoundedLease() throws Exception {
         KugouLibraryApi.Audio a=KugouLibraryApi.parseAudio(audio(),HASH,10);
         assertTrue(a.url.startsWith("https://"));assertEquals(60010,a.expiresAtElapsedMs);assertEquals("Audio(redacted)",a.toString());
+        assertEquals("kugou:128",a.qualityId);
+    }
+    @Test public void higherQualitiesRequireMatchingFullAudioBitrateAndFormat() throws Exception {
+        assertEquals("kugou:320",KugouLibraryApi.parseAudio(audio().put("bitRate",320000),HASH,0,"kugou:320").qualityId);
+        assertEquals("kugou:flac",KugouLibraryApi.parseAudio(audio().put("bitRate",900000).put("extName","flac"),HASH,0,"kugou:flac").qualityId);
+        rejects("unavailable",()->KugouLibraryApi.parseAudio(audio(),HASH,0,"kugou:320"));
+        rejects("unavailable",()->KugouLibraryApi.parseAudio(audio().put("bitRate",128000),HASH,0,"kugou:flac"));
     }
     @Test public void onlyOfficialReturnedCandidatesCanFailOverWithTlsValidation() throws Exception {
         JSONObject body=audio().put("backupUrl",new org.json.JSONArray().put("https://evil.test/never-fetch").put("https://fsandroid.wx.kugou.com/backup.mp3"));
@@ -529,6 +693,11 @@ public class KugouLibraryApiTest {
         rejects("source_expired",()->KugouLibraryApi.selectAudio(a,url->{throw new KugouApi.ApiException("source_expired","fixture");}));
         rejects("rate",()->KugouLibraryApi.selectAudio(a,url->{throw new KugouApi.ApiException("rate","fixture");}));
     }
+    @Test public void acceptsStandardFileEchoedForHigherQualityPlaylistHash() throws Exception {
+        String standard="B".repeat(32);
+        KugouLibraryApi.Audio a=KugouLibraryApi.parseAudio(audio().put("hash",standard).put("std_hash",standard.toLowerCase()),HASH,0);
+        assertTrue(a.url.startsWith("https://"));
+    }
     @Test public void rejectsTrialAndWrongHashAndWrongQuality() throws Exception {
         rejects("permission",()->KugouLibraryApi.parseAudio(audio().put("freeTrialInfo",new JSONObject()),HASH,0));
         rejects("permission",()->KugouLibraryApi.parseAudio(audio().put("is_free_part",1),HASH,0));
@@ -536,6 +705,7 @@ public class KugouLibraryApiTest {
         rejects("permission",()->KugouLibraryApi.parseAudio(audio().put("is_free_part","unknown"),HASH,0));
         rejects("permission",()->KugouLibraryApi.parseAudio(audio().put("hash_offset",json("{end_ms:30000}")),HASH,0));
         rejects("identity",()->KugouLibraryApi.parseAudio(audio().put("hash","b".repeat(32)),HASH,0));
+        rejects("identity",()->KugouLibraryApi.parseAudio(audio().put("hash","b".repeat(32)).put("std_hash","c".repeat(32)),HASH,0));
         rejects("unavailable",()->KugouLibraryApi.parseAudio(audio().put("bitRate",320000),HASH,0));
         rejects("unavailable",()->KugouLibraryApi.parseAudio(audio().put("extName","flac"),HASH,0));
     }
@@ -568,6 +738,31 @@ public class KugouLibraryApiTest {
         assertEquals(java.util.HexFormat.of().formatHex(digest),request.params.get("key"));
         Map<String,String> params=new LinkedHashMap<>(request.params);String signature=params.remove("signature");
         assertEquals(KugouApi.androidSignature(params,null),signature);assertEquals(1,probes.size());
+    }
+    @Test public void qualitiesProbeEachExactQualityAndExactAudioReturnsActualId() throws Exception {
+        List<KugouApi.Request> requests=new ArrayList<>();
+        KugouApi api=new KugouApi(new KugouApi.Device("b".repeat(32)),r->{
+            requests.add(r);
+            switch(r.params.get("quality")) {
+                case "128": return audio();
+                case "320":
+                    try { return audio().put("bitRate",320000); }
+                    catch(org.json.JSONException failure) { throw new IOException(failure); }
+                default: return audio();
+            }
+        });
+        List<String> probes=new ArrayList<>();
+        KugouLibraryApi library=new KugouLibraryApi(api,probes::add);
+        KugouApi.Session session=new KugouApi.Session("fixture-token","123","Fixture");
+        List<KugouLibraryApi.AudioQuality> qualities=library.qualities(session,HASH+"_12_34",0);
+        assertEquals(Arrays.asList("kugou:128","kugou:320"),
+            Arrays.asList(qualities.get(0).id,qualities.get(1).id));
+        assertEquals(2,probes.size());
+        try{qualities.clear();fail("Quality options must be read-only");}catch(UnsupportedOperationException expected){}
+        KugouLibraryApi.Audio audio=library.audio(session,HASH+"_12_34",0,"kugou:320");
+        assertEquals("kugou:320",audio.qualityId);
+        assertEquals("320",requests.get(requests.size()-1).params.get("quality"));
+        assertEquals(3,probes.size());
     }
     @Test public void fixedEndpointsAndCdnAuthorityRejectForeignTargets() throws Exception {
         KugouApi.requireEndpoint(new URL("https://gateway.kugou.com/v5/url"));

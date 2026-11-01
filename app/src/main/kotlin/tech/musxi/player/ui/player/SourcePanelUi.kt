@@ -39,7 +39,7 @@ data class SourcePanelUi(
     val failureDetail: String = "",
 )
 
-/** How long the automatic pick waits; mirrors `SourceSelection.AUTO_SELECT_MS`. */
+/** Legacy countdown presentation for previews; runtime selection uses no deadline. */
 const val AUTO_SELECT_MS = 5_000L
 
 /** Differences above this are worth printing: they separate live takes from the studio version. */
@@ -56,9 +56,9 @@ fun sourcePanelUiOf(
     nowElapsedMs: Long,
 ): SourcePanelUi {
     val phase = when (state.phase) {
-        SourceSelectionPhase.NONE -> SourcePhase.HIDDEN
+        SourceSelectionPhase.NONE, SourceSelectionPhase.SELECTED -> SourcePhase.HIDDEN
         SourceSelectionPhase.SEARCHING -> SourcePhase.SEARCHING
-        SourceSelectionPhase.CHOOSING, SourceSelectionPhase.SELECTED -> SourcePhase.CHOOSING
+        SourceSelectionPhase.CHOOSING -> SourcePhase.CHOOSING
         SourceSelectionPhase.FAILED -> SourcePhase.FAILED
     }
     val original = state.original

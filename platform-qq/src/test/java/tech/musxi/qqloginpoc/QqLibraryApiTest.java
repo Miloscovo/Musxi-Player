@@ -80,8 +80,10 @@ public class QqLibraryApiTest {
         return new JSONObject().put("body",new JSONObject().put("item_song",rows)).put("meta",
             new JSONObject().put("perpage",10).put("nextpage",-1).put("sum",count));
     }
-    private static String filename(){return "M500"+MEDIA+".mp3";}
-    private static JSONObject vkey() throws Exception {return new JSONObject().put("midurlinfo",new JSONArray().put(new JSONObject().put("songmid",MID).put("filename",filename()).put("result",0).put("ekey","").put("purl",filename()+"?vkey=fixture-url-key")));}
+    private static String filename(String prefix,String extension){return prefix+MEDIA+extension;}
+    private static String filename(){return filename("M500",".mp3");}
+    private static JSONObject vkey(String filename) throws Exception {return new JSONObject().put("midurlinfo",new JSONArray().put(new JSONObject().put("songmid",MID).put("filename",filename).put("result",0).put("ekey","").put("purl",filename+"?vkey=fixture-url-key")));}
+    private static JSONObject vkey() throws Exception{return vkey(filename());}
     private static JSONObject dispatch() throws Exception{return new JSONObject().put("sip",new JSONArray().put("http://dl.stream.qqmusic.qq.com/").put("https://isure.stream.qqmusic.qq.com/"));}
 
     @Test public void createdAndFavoriteListsMergeBeforeSlicingAndNeverLoseContinuation() throws Exception {
@@ -112,6 +114,40 @@ public class QqLibraryApiTest {
         assertEquals(1,new QqLibraryApi(f.api).tracks(session(),"0_201",0,30).total);
         assertEquals("fixture-euin",f.param(0).getString("enc_host_uin"));
     }
+    @Test public void writablePlaylistsUseServerCreatedListsAndLikedAlias() throws Exception {
+        Fixture f=new Fixture();
+        f.data.add(json("{\"bFinish\":1,\"v_playlist\":["
+            +"{\"tid\":9,\"dirId\":0,\"dirName\":\"Mine\",\"songNum\":2,\"invalid\":0},"
+            +"{\"tid\":11,\"dirId\":0,\"dirName\":\"Hidden\",\"songNum\":3,\"invalid\":1}]}"));
+        f.data.add(json("{\"dirinfo\":{\"tid\":9,\"dirid\":201},\"songlist\":[],"
+            +"\"total_song_num\":0,\"hasmore\":0,\"songlist_size\":0}"));
+        List<QqLibraryApi.Playlist> result=new QqLibraryApi(f.api).writablePlaylists(session());
+        assertEquals(2,result.size());
+        assertEquals("0_201",result.get(0).id);assertTrue(result.get(0).liked);assertTrue(result.get(0).writable);
+        assertEquals("9_0",result.get(1).id);assertFalse(result.get(1).liked);assertTrue(result.get(1).writable);
+        assertEquals(12345,f.param(0).getLong("uin"));
+        try{result.clear();fail("Writable playlists must be read-only");}catch(UnsupportedOperationException expected){}
+    }
+    @Test public void addToLikedUsesVerifiedFavoriteAndOwnedCustomWriteUsesPinnedPayload() throws Exception {
+        Fixture liked=new Fixture();
+        liked.data.add(new JSONObject().put("track_info",song().put("id",99)));
+        liked.data.add(new JSONObject().put("retCode",0));
+        new QqLibraryApi(liked.api).addToPlaylist(session(),"0_201",MID);
+        assertEquals(201,liked.param(1).getInt("dirId"));assertEquals(0,liked.param(1).getLong("tid"));
+        assertEquals("AddSonglist",new JSONObject(liked.requests.get(1).body).getJSONObject("req_0").getString("method"));
+
+        Fixture custom=new Fixture();
+        custom.data.add(json("{\"bFinish\":1,\"v_playlist\":[{\"tid\":9,\"dirId\":0,\"dirName\":\"Mine\",\"songNum\":1,\"invalid\":0}]}"));
+        custom.data.add(new JSONObject().put("track_info",song().put("id",99)));
+        custom.data.add(new JSONObject().put("retCode",0));
+        new QqLibraryApi(custom.api).addToPlaylist(session(),"9_0",MID);
+        assertEquals(3,custom.requests.size());
+        JSONObject params=custom.param(2);
+        assertEquals(0,params.getInt("dirId"));assertEquals(9,params.getLong("tid"));
+        assertEquals("AddSonglist",new JSONObject(custom.requests.get(2).body).getJSONObject("req_0").getString("method"));
+        Fixture denied=new Fixture();denied.data.add(json("{bFinish:1,v_playlist:[]}"));
+        rejects("permission",()->new QqLibraryApi(denied.api).addToPlaylist(session(),"8_0",MID));
+    }
     @Test public void trackOrderCountsIdentityAndMissingStructuresAreChecked() throws Exception {
         QqLibraryApi.Page<QqLibraryApi.Song> result=QqLibraryApi.parseTracks(tracks(2,true),"9_0",0,30);
         assertEquals(1,result.nextOffset);assertEquals(MID,result.items.get(0).id);assertEquals(123000,result.items.get(0).durationMs);
@@ -133,9 +169,42 @@ public class QqLibraryApiTest {
         QqLibraryApi.Audio audio=new QqLibraryApi(f.api,()->true,url->{probed.add(url);}).audio(session(),MID,1000);
         assertEquals(61000,audio.expiresAtElapsedMs);assertEquals("Audio(redacted)",audio.toString());
         assertTrue(audio.url.startsWith("https://dl.stream.qqmusic.qq.com/"));assertEquals(1,probed.size());
+        assertEquals("qq:standard",audio.qualityId);
         assertEquals(filename(),f.param(1).getJSONArray("filename").getString(0));
         assertEquals(MID,f.param(1).getJSONArray("songmid").getString(0));
         assertEquals("12345",f.param(1).getString("uin"));
+    }
+    @Test public void qualitiesOnlyListFilesThatPassExactAudioProbe() throws Exception {
+        String high=filename("M800",".mp3"),lossless=filename("F000",".flac");
+        Fixture f=new Fixture();f.data.add(new JSONObject().put("track_info",song()));
+        f.data.add(vkey());f.data.add(dispatch());
+        f.data.add(vkey(high));f.data.add(dispatch());
+        f.data.add(vkey(lossless));f.data.add(dispatch());
+        QqLibraryApi library=new QqLibraryApi(f.api,()->true,url->{
+            if(url.contains(high))throw new IOException("fixture");
+        });
+        List<QqLibraryApi.AudioQuality> qualities=library.qualities(session(),MID,1000);
+        assertEquals(Arrays.asList("qq:standard","qq:lossless"),
+            Arrays.asList(qualities.get(0).id,qualities.get(1).id));
+        try{qualities.clear();fail("Quality options must be read-only");}catch(UnsupportedOperationException expected){}
+        assertEquals(high,f.param(3).getJSONArray("filename").getString(0));
+        assertEquals(lossless,f.param(5).getJSONArray("filename").getString(0));
+
+        Fixture exact=new Fixture();exact.data.add(new JSONObject().put("track_info",song()));
+        exact.data.add(vkey(high));exact.data.add(dispatch());
+        QqLibraryApi.Audio audio=new QqLibraryApi(exact.api,()->true,url->{}).audio(session(),MID,1000,"qq:high");
+        assertEquals("qq:high",audio.qualityId);
+        assertEquals(high,exact.param(1).getJSONArray("filename").getString(0));
+    }
+    @Test public void qualitiesReturnEmptyWhenNoExactFileIsConfirmed() throws Exception {
+        Fixture f=new Fixture();f.data.add(new JSONObject().put("track_info",song()));
+        for(String file:new String[]{filename(),filename("M800",".mp3"),filename("F000",".flac")}) {
+            JSONObject denied=vkey(file);
+            denied.getJSONArray("midurlinfo").getJSONObject(0).put("result",104003);
+            f.data.add(denied);
+        }
+        assertTrue(new QqLibraryApi(f.api,()->true,url->{fail("Denied files must not probe");})
+            .qualities(session(),MID,1000).isEmpty());
     }
     @Test public void wrongSongFileEncryptedAndPreviewOutputsCannotBecomeAudio() throws Exception {
         JSONObject wrong=vkey();wrong.getJSONArray("midurlinfo").getJSONObject(0).put("songmid","009abcDEF01234");

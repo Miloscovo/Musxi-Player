@@ -38,6 +38,21 @@ class QueueSourcesTest {
         assertEquals(PlaybackFailure.AUTH_REQUIRED, failure { sources.append("netease:2", 1) })
         assertEquals(PlaybackFailure.AUTH_REQUIRED, failure { sources.resolve(ticket) })
     }
+
+    @Test fun appendAllPreservesDuplicatesAndRejectsMixedBatchesWithoutPartialMutation() {
+        val provider = Provider(); val sources = QueueSources(provider)
+        val existing = sources.replace(listOf("netease:1"), 1).single()
+        try {
+            sources.appendAll(listOf("netease:2", "qq:A0000000000001"), 1)
+            fail("Mixed-platform batch accepted")
+        } catch (_: IllegalArgumentException) { }
+        assertEquals(fixtureUrl, sources.resolve(existing).url)
+        val duplicates = sources.appendAll(listOf("netease:2", "netease:2"), 1)
+        assertEquals(2, duplicates.size)
+        assertNotEquals(duplicates[0], duplicates[1])
+        assertTrue(duplicates.all { sources.resolve(it).url == fixtureUrl })
+        assertEquals(3, provider.calls.get())
+    }
     @Test fun substituteBindsBothAccountsAndReturnsToOriginalWithoutChangingQueueTickets() {
         val provider = Provider()
         var qqGeneration: Long? = 9

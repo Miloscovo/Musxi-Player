@@ -7,19 +7,33 @@ import kotlinx.coroutines.Job
 import tech.musxi.core.library.SongSummary
 import tech.musxi.core.playback.PlaybackFailure
 import tech.musxi.core.playback.SourceSelection
+import tech.musxi.core.playback.SourceCandidate
 import tech.musxi.core.playback.AlternativeSources
+import tech.musxi.core.playback.QualityOptions
 
 /** Supplied by Application; authentication and platform IO remain outside the player module. */
 interface PlaybackHost {
     val playbackSources: PlaybackSourceProvider
     val sourceSelection: SourceSelection
     fun findAlternativeSources(original: SongSummary, result: (Result<AlternativeSources>) -> Unit): Job
+    fun findAlternativeSources(original: SongSummary, excluded: Set<String>, result: (Result<AlternativeSources>) -> Unit): Job =
+        findAlternativeSources(original) { response -> result(response.map { found ->
+            found.copy(candidates = found.candidates.filter { it.song.key.stableId !in excluded })
+        }) }
+    fun findAlternativeSources(original: SongSummary, excluded: Set<String>,
+        mode: tech.musxi.core.playback.SourceSelectionMode,
+        progress: tech.musxi.core.playback.SourceSearchProgressListener,
+        result: (Result<AlternativeSources>) -> Unit): Job = findAlternativeSources(original, excluded, result)
     /** Ordinary MediaSession STOP cancels a pending playlist read, without issuing another STOP. */
     fun onPlaybackStopRequested()
     /** Original account-owned metadata only; capabilities and candidate tickets never persist. */
     fun onPlaybackCheckpoint(generation: Long, snapshot: tech.musxi.core.playback.SavedPlaybackQueue,
         recent: tech.musxi.core.playback.RecentPlay?) = Unit
     fun onPlaybackQueueCleared(platform: tech.musxi.core.account.Platform, generation: Long) = Unit
+    fun onPlaybackQualityChanged(platform: tech.musxi.core.account.Platform, qualityId: String) = Unit
+    /** Called only after a selected alternative actually reaches playback. Metadata only. */
+    fun onAlternativeSourcePlayed(original: SongSummary, generation: Long, source: SourceCandidate) = Unit
+    fun onAlternativeSourceFailed(original: tech.musxi.core.library.MediaKey, source: tech.musxi.core.library.MediaKey) = Unit
 }
 
 interface PlaybackSourceProvider {
@@ -29,12 +43,15 @@ interface PlaybackSourceProvider {
     fun generationFor(mediaId: String): Long? = currentGeneration()
     /** Called on an ExoPlayer loader thread, never the main thread. */
     fun resolve(mediaId: String, generation: Long): StreamLease
+    fun resolve(mediaId: String, generation: Long, qualityId: String?): StreamLease = resolve(mediaId, generation)
+    fun qualityOptions(mediaId: String, generation: Long): QualityOptions = QualityOptions(emptyList(), null)
 }
 
 class PlaybackSourceException(val failure: PlaybackFailure) : IOException("Playback source unavailable")
 
 /** In-memory capability. Its reader must check both expiry and account generation on every use. */
-class StreamLease(val metadata: SongSummary?, private val reader: () -> String) {
+class StreamLease(val metadata: SongSummary?, val qualityId: String? = null, val qualityName: String? = null,
+    private val reader: () -> String) {
     fun readUrl(): String = reader()
     override fun toString() = "StreamLease(redacted)"
 }
@@ -42,7 +59,7 @@ class StreamLease(val metadata: SongSummary?, private val reader: () -> String) 
 /** Opaque queue URIs are never sent to the network. Only the loader receives signed URLs. */
 class QueueSources(private val provider: PlaybackSourceProvider) {
     private class Ticket(val mediaId: String, val generation: Long,
-        val sourceId: String = mediaId, val sourceGeneration: Long = generation)
+        val sourceId: String = mediaId, val sourceGeneration: Long = generation, val qualityId: String? = null)
     class Resolved internal constructor(val url: String, val metadata: SongSummary?, private val current: () -> Boolean) {
         /** Metadata posted to the owner thread must still belong to this source ticket. */
         fun isCurrent() = current()
@@ -51,6 +68,9 @@ class QueueSources(private val provider: PlaybackSourceProvider) {
     private val gate = Any()
     private var tickets: Map<String, Ticket> = emptyMap()
     private val leases = LinkedHashMap<String, StreamLease>(4, 0.75f, true)
+    private val qualityNames = mutableMapOf<String, String>()
+    class QualityChange internal constructor(internal val uri: String, internal val identity: Any,
+        internal val previousLease: StreamLease?, val lease: StreamLease)
 
     fun replace(mediaIds: List<String>, generation: Long): List<String> {
         require(mediaIds.isNotEmpty() && mediaIds.size <= MAX_QUEUE_SIZE && mediaIds.all(PlaybackSourcePolicy::acceptsMediaId))
@@ -58,24 +78,36 @@ class QueueSources(private val provider: PlaybackSourceProvider) {
         if (provider.generationFor(mediaIds.first()) != generation) throw PlaybackSourceException(PlaybackFailure.AUTH_REQUIRED)
         val nonce = UUID.randomUUID().toString()
         val next = mediaIds.mapIndexed { index, id -> "musxi://queue/$nonce/$index" to Ticket(id, generation) }.toMap()
-        synchronized(gate) { tickets = next; leases.clear() }
+        synchronized(gate) { tickets = next; leases.clear(); qualityNames.clear() }
         return next.keys.toList()
     }
 
-    fun clear() = synchronized(gate) { tickets = emptyMap(); leases.clear() }
+    fun clear() = synchronized(gate) { tickets = emptyMap(); leases.clear(); qualityNames.clear() }
     /** Keep surviving slots and their selected-source capabilities; revoke removed slots immediately. */
     fun retain(uris: Set<String>) = synchronized(gate) {
         require(uris.all(tickets::containsKey))
         tickets = tickets.filterKeys { it in uris }
         leases.keys.retainAll(uris)
+        qualityNames.keys.retainAll(uris)
     }
-    fun append(mediaId: String, generation: Long): String = synchronized(gate) {
-        require(tickets.size < MAX_QUEUE_SIZE && PlaybackSourcePolicy.acceptsMediaId(mediaId))
-        require(tickets.values.all { it.mediaId.substringBefore(':') == mediaId.substringBefore(':') && it.generation == generation })
-        if (provider.generationFor(mediaId) != generation) throw PlaybackSourceException(PlaybackFailure.AUTH_REQUIRED)
-        val uri = "musxi://queue/${UUID.randomUUID()}/0"
-        tickets = tickets + (uri to Ticket(mediaId, generation))
-        uri
+    fun append(mediaId: String, generation: Long): String = appendAll(listOf(mediaId), generation).single()
+
+    fun appendAll(mediaIds: List<String>, generation: Long): List<String> = synchronized(gate) {
+        require(mediaIds.isNotEmpty() && mediaIds.size <= MAX_QUEUE_SIZE - tickets.size)
+        require(mediaIds.all(PlaybackSourcePolicy::acceptsMediaId))
+        val platform = tickets.values.firstOrNull()?.mediaId?.substringBefore(':')
+            ?: mediaIds.first().substringBefore(':')
+        require(mediaIds.all { it.substringBefore(':') == platform })
+        require(tickets.values.all { it.mediaId.substringBefore(':') == platform && it.generation == generation })
+        if (provider.generationFor(mediaIds.first()) != generation ||
+            mediaIds.any { provider.generationFor(it) != generation })
+            throw PlaybackSourceException(PlaybackFailure.AUTH_REQUIRED)
+        val added = mediaIds.map { mediaId ->
+            val uri = "musxi://queue/${UUID.randomUUID()}/0"
+            uri to Ticket(mediaId, generation)
+        }
+        tickets = tickets + added.toMap()
+        added.map { it.first }
     }
     fun invalidate(uri: String) { synchronized(gate) { leases.remove(uri) } }
     fun selectSource(uri: String, mediaId: String, generation: Long) = synchronized(gate) {
@@ -85,6 +117,7 @@ class QueueSources(private val provider: PlaybackSourceProvider) {
         if (provider.generationFor(mediaId) != generation) throw PlaybackSourceException(PlaybackFailure.AUTH_REQUIRED)
         tickets = tickets + (uri to Ticket(original.mediaId, original.generation, mediaId, generation))
         leases.remove(uri)
+        qualityNames.remove(uri)
     }
     fun sourceAuthorized(uri: String): Boolean = synchronized(gate) {
         tickets[uri]?.let { provider.generationFor(it.sourceId) == it.sourceGeneration } == true
@@ -93,6 +126,58 @@ class QueueSources(private val provider: PlaybackSourceProvider) {
         val ticket = tickets[uri] ?: return@synchronized
         tickets = tickets + (uri to Ticket(ticket.mediaId, ticket.generation))
         leases.remove(uri)
+        qualityNames.remove(uri)
+    }
+
+    fun currentSource(uri: String): Pair<String, Long>? = synchronized(gate) {
+        tickets[uri]?.let { it.sourceId to it.sourceGeneration }
+    }
+
+    fun currentQualityName(uri: String): String? = synchronized(gate) { qualityNames[uri] }
+    fun currentQualityId(uri: String): String? = synchronized(gate) { leases[uri]?.qualityId ?: tickets[uri]?.qualityId }
+
+    fun qualities(uri: String): QualityOptions {
+        val ticket = synchronized(gate) { tickets[uri] } ?: throw PlaybackSourceException(PlaybackFailure.AUTH_REQUIRED)
+        checkCurrent(uri, ticket)
+        val options = provider.qualityOptions(ticket.sourceId, ticket.sourceGeneration)
+        checkCurrent(uri, ticket)
+        return options.copy(current = currentQualityId(uri))
+    }
+
+    fun prepareQuality(uri: String, qualityId: String): QualityChange {
+        val ticket = synchronized(gate) { tickets[uri] } ?: throw PlaybackSourceException(PlaybackFailure.AUTH_REQUIRED)
+        checkCurrent(uri, ticket)
+        val lease = provider.resolve(ticket.sourceId, ticket.sourceGeneration, qualityId)
+        if (lease.qualityId != qualityId || lease.qualityName.isNullOrBlank())
+            throw PlaybackSourceException(PlaybackFailure.UNAVAILABLE)
+        validateLease(uri, ticket, lease)
+        checkCurrent(uri, ticket)
+        return QualityChange(uri, ticket, synchronized(gate) { leases[uri] }, lease)
+    }
+
+    fun commitQuality(change: QualityChange) = synchronized(gate) {
+        val uri = change.uri
+        val ticket = change.identity as Ticket
+        checkCurrent(uri, ticket)
+        val lease = change.lease
+        validateLease(uri, ticket, lease)
+        tickets = tickets + (uri to Ticket(ticket.mediaId, ticket.generation, ticket.sourceId, ticket.sourceGeneration, lease.qualityId))
+        leases[uri] = lease
+        qualityNames[uri] = requireNotNull(lease.qualityName)
+    }
+
+    fun rollbackQuality(change: QualityChange) = synchronized(gate) {
+        val ticket = change.identity as Ticket
+        val current = tickets[change.uri] ?: return@synchronized
+        if (current.mediaId != ticket.mediaId || current.sourceId != ticket.sourceId ||
+            current.sourceGeneration != ticket.sourceGeneration || leases[change.uri] !== change.lease) return@synchronized
+        tickets = tickets + (change.uri to ticket)
+        leases.remove(change.uri)
+        qualityNames.remove(change.uri)
+        change.previousLease?.let { previous ->
+            leases[change.uri] = previous
+            previous.qualityName?.let { qualityNames[change.uri] = it }
+        }
     }
 
     fun resolve(uri: String): Resolved {
@@ -110,23 +195,35 @@ class QueueSources(private val provider: PlaybackSourceProvider) {
                 }
             }
             if (lease == null) {
-                lease = provider.resolve(ticket.sourceId, ticket.sourceGeneration)
+                lease = if (ticket.qualityId == null) provider.resolve(ticket.sourceId, ticket.sourceGeneration)
+                    else provider.resolve(ticket.sourceId, ticket.sourceGeneration, ticket.qualityId)
                 url = lease.readUrl()
             }
             val officialUrl = url ?: throw PlaybackSourceException(PlaybackFailure.PROTOCOL)
-            if (!PlaybackSourcePolicy.accepts(ticket.sourceId, officialUrl)) throw PlaybackSourceException(PlaybackFailure.PROTOCOL)
-            if (lease.metadata?.key?.stableId?.let { it != ticket.sourceId } == true)
-                throw PlaybackSourceException(PlaybackFailure.PROTOCOL)
+            validateResolved(ticket, lease, officialUrl)
             checkCurrent(uri, ticket)
             synchronized(gate) {
                 if (tickets[uri] !== ticket) throw PlaybackSourceException(PlaybackFailure.AUTH_REQUIRED)
                 leases[uri] = lease
+                lease.qualityName?.let { qualityNames[uri] = it }
                 while (leases.size > 3) leases.remove(leases.keys.first())
             }
             Resolved(officialUrl, lease.metadata) {
                 try { checkCurrent(uri, ticket); true } catch (_: PlaybackSourceException) { false }
             }
         }
+    }
+
+    private fun validateLease(uri: String, ticket: Ticket, lease: StreamLease) {
+        val url = try { lease.readUrl() } catch (error: PlaybackSourceException) { throw error }
+        validateResolved(ticket, lease, url)
+        if (synchronized(gate) { tickets[uri] !== ticket }) throw PlaybackSourceException(PlaybackFailure.AUTH_REQUIRED)
+    }
+
+    private fun validateResolved(ticket: Ticket, lease: StreamLease, url: String) {
+        if (!PlaybackSourcePolicy.accepts(ticket.sourceId, url)) throw PlaybackSourceException(PlaybackFailure.PROTOCOL)
+        if (lease.metadata?.key?.stableId?.let { it != ticket.sourceId } == true)
+            throw PlaybackSourceException(PlaybackFailure.PROTOCOL)
     }
 
     private fun checkCurrent(uri: String, ticket: Ticket) {
