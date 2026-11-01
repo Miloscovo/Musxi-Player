@@ -32,7 +32,6 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material3.Button
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -64,13 +63,17 @@ import tech.musxi.core.library.EditablePlaylist
 import tech.musxi.core.library.SongSummary
 import tech.musxi.player.ui.components.Cover
 import tech.musxi.player.ui.components.LoadMorePill
+import tech.musxi.player.ui.components.PlainRow
 import tech.musxi.player.ui.components.PlatformSegmented
 import tech.musxi.player.ui.components.PlayingBars
 import tech.musxi.player.ui.components.ProgressArc
+import tech.musxi.player.ui.components.RowDivider
+import tech.musxi.player.ui.components.RowSpec
+import tech.musxi.player.ui.components.SectionTitle
 import tech.musxi.player.ui.components.SongActionsMenu
 import tech.musxi.player.ui.components.SongActionsUi
 import tech.musxi.player.ui.components.SongRow
-import tech.musxi.player.ui.components.pressableRow
+import tech.musxi.player.ui.components.listLines
 import tech.musxi.player.ui.components.songSubtitle
 import tech.musxi.player.ui.model.formatDuration
 import tech.musxi.player.ui.theme.Space
@@ -267,22 +270,26 @@ private fun ResultList(
     ) {
         if (best != null) {
             item(key = "best:${best.key.stableId}") {
-                BestMatchCard(
-                    song = best,
-                    playing = best.key.stableId == nowPlayingId,
-                    onClick = {
-                        keyboard?.hide()
-                        onSongClick(best)
-                    },
-                )
+                Column {
+                    // The heading sits above the row like every other group's; the row itself no
+                    // longer carries a label. 8dp under the segmented control plus this is Space.section.
+                    SectionTitle("最佳匹配", Modifier.padding(top = Space.sibling))
+                    BestMatchCard(
+                        song = best,
+                        playing = best.key.stableId == nowPlayingId,
+                        onClick = {
+                            keyboard?.hide()
+                            onSongClick(best)
+                        },
+                    )
+                }
             }
         }
         if (rest.isNotEmpty()) {
             item(key = "section-title") {
-                Text(
+                SectionTitle(
                     "歌曲 · 共 ${state.total ?: state.items.size} 首",
-                    style = MaterialTheme.typography.titleSmall, color = cs.onSurface,
-                    modifier = Modifier.padding(top = 16.dp, bottom = 8.dp),
+                    Modifier.padding(top = Space.section),
                 )
             }
         }
@@ -319,12 +326,7 @@ private fun ResultList(
             }
             // The hairline is the app-wide separator: account, library and search all use it. It
             // starts under the title text, not under the cover, and the last row has none.
-            if (index < rest.lastIndex) {
-                HorizontalDivider(
-                    modifier = Modifier.padding(start = 60.dp),
-                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f),
-                )
-            }
+            if (index < rest.lastIndex) RowDivider(start = RowSpec.textStart(RowSpec.cover))
         }
         item {
             if (state.loadingMore) {
@@ -352,25 +354,21 @@ private fun ResultList(
 
 /**
  * The first result, given more room than the rest: a 96dp cover, a larger title and a play button.
- * Hierarchy comes from size and space, not from a coloured block.
+ * Hierarchy comes from size and space, not from a coloured block. Its heading ("最佳匹配") is the
+ * group title above it, so the row does not repeat it.
  */
 @Composable
 private fun BestMatchCard(song: SongSummary, playing: Boolean, onClick: () -> Unit) {
     val cs = MaterialTheme.colorScheme
-    Row(
-        Modifier.fillMaxWidth().pressableRow(onClick = onClick).padding(vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
+    PlainRow(onClick = onClick) {
         Cover(
             seed = song.album.ifBlank { song.key.stableId },
-            modifier = Modifier.size(96.dp),
+            modifier = Modifier.size(RowSpec.coverTile),
             shape = MaterialTheme.shapes.medium,
             url = song.coverUrl,
         )
-        Spacer(Modifier.width(16.dp))
+        Spacer(Modifier.width(Space.inner))
         Column(Modifier.weight(1f)) {
-            Text("最佳匹配", style = MaterialTheme.typography.labelMedium, color = cs.onSurfaceVariant)
-            Spacer(Modifier.height(2.dp))
             Text(
                 song.title, style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.SemiBold, color = cs.onSurface,
@@ -379,7 +377,7 @@ private fun BestMatchCard(song: SongSummary, playing: Boolean, onClick: () -> Un
             Text(
                 songSubtitle(song), style = MaterialTheme.typography.bodyMedium,
                 color = cs.onSurfaceVariant,
-                maxLines = 1, overflow = TextOverflow.Ellipsis,
+                maxLines = listLines(), overflow = TextOverflow.Ellipsis,
             )
             Spacer(Modifier.height(2.dp))
             Text(
@@ -468,11 +466,8 @@ private fun IdlePanel(
     val keyboard = LocalSoftwareKeyboardController.current
     // Ten terms can wrap onto several lines; scrolling keeps the last one reachable above the keyboard.
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(top = 8.dp)) {
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                "最近搜索", style = MaterialTheme.typography.titleSmall, color = cs.onSurface,
-                modifier = Modifier.weight(1f),
-            )
+        // The group heading every page uses; the text actions sit on its line.
+        SectionTitle("最近搜索") {
             if (editing) {
                 RecentAction("全部清除", cs.error, onClick = onRecentClear)
                 RecentAction("完成", cs.onSurfaceVariant, onClick = { editing = false })
@@ -480,7 +475,6 @@ private fun IdlePanel(
                 RecentAction("编辑", cs.onSurfaceVariant, onClick = { editing = true })
             }
         }
-        Spacer(Modifier.height(8.dp))
         FlowRow(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),

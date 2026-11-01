@@ -1,41 +1,52 @@
 package tech.musxi.player.ui.library
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.dp
+import tech.musxi.core.library.PlaylistKind
 import tech.musxi.core.library.PlaylistSummary
 import tech.musxi.core.library.SongSummary
 import tech.musxi.core.playback.PlaybackJournalState
+import tech.musxi.player.ui.components.ALL_LINES
+import tech.musxi.player.ui.components.AnchoredMenu
+import tech.musxi.player.ui.components.CardRow
 import tech.musxi.player.ui.components.Cover
+import tech.musxi.player.ui.components.MenuAlign
+import tech.musxi.player.ui.components.MenuItem
 import tech.musxi.player.ui.components.ProgressArc
-import tech.musxi.player.ui.components.pressableRow
+import tech.musxi.player.ui.components.RowChevron
+import tech.musxi.player.ui.components.RowSpec
+import tech.musxi.player.ui.components.RowText
+import tech.musxi.player.ui.components.listLines
 import tech.musxi.player.ui.model.formatDuration
 import tech.musxi.player.ui.theme.Space
 import tech.musxi.player.ui.theme.nowPlayingAccent
@@ -101,163 +112,185 @@ internal fun libraryHomeUiOf(
 /**
  * Whether [p] is the user's own "liked songs" list.
  *
- * Temporary rule: the backend does not yet say what kind of playlist this is, so it goes by name.
- * 网易云 calls it "<nickname>喜欢的音乐", QQ音乐 and 酷狗 "我喜欢". A user playlist that happens to be
- * named like this would be promoted too. Replace with the backend's `kind` field once it exists.
+ * The backend's [PlaylistKind] decides. Only [PlaylistKind.OTHER] falls back to the name, because
+ * caches written before the backend sent `kind` have every playlist as OTHER. 网易云 calls it
+ * "<nickname>喜欢的音乐", QQ音乐 and 酷狗 "我喜欢". A playlist of unknown kind that happens to be
+ * named like this is still promoted; that is the cost of the fallback.
  */
-internal fun isLikedPlaylist(p: PlaylistSummary): Boolean {
-    val title = p.title.filterNot { it.isWhitespace() }
-    return title == "我喜欢" || title == "我喜欢的音乐" || title.endsWith("喜欢的音乐")
+internal fun isLikedPlaylist(p: PlaylistSummary): Boolean = when (p.kind) {
+    PlaylistKind.LIKED -> true
+    PlaylistKind.OTHER -> {
+        val title = p.title.filterNot { it.isWhitespace() }
+        title == "我喜欢" || title == "我喜欢的音乐" || title.endsWith("喜欢的音乐")
+    }
+    PlaylistKind.CREATED, PlaylistKind.COLLECTED -> false
 }
 
 /**
- * "Continue playing": one row, the same height as a song row's bigger sibling. The whole row and the
- * round button on its right do the same thing. While the queue is being restored both are inert, so a
- * second tap cannot cancel and resubmit the restore that is already running.
+ * Row of the "继续播放" module: the song the saved queue stops at. The module's heading says what
+ * it is, so the row carries only the song and where in the queue it stands. The whole row and the
+ * round button on its right do the same thing. While the queue is being restored both are inert, so
+ * a second tap cannot cancel and resubmit the restore that is already running.
  */
 @Composable
-fun ResumeCard(ui: ResumeUi, onResume: () -> Unit) {
+fun ResumeRow(ui: ResumeUi, onResume: () -> Unit) {
     val cs = MaterialTheme.colorScheme
-    Row(
-        Modifier.fillMaxWidth().height(72.dp)
-            .pressableRow(onClick = onResume, enabled = !ui.restoring),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
+    CardRow(onClick = onResume, enabled = !ui.restoring) {
         Cover(
             seed = ui.song.key.stableId,
-            modifier = Modifier.size(56.dp),
+            modifier = Modifier.size(RowSpec.coverFeature),
             shape = MaterialTheme.shapes.medium,
             url = ui.song.coverUrl,
         )
-        Spacer(Modifier.width(14.dp))
-        Column(Modifier.weight(1f)) {
-            Text(
-                "继续播放",
-                style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary,
-            )
-            Text(
-                ui.song.title,
-                style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold,
-                color = cs.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis,
-            )
-            Text(
-                "${ui.index + 1} / ${ui.count} 首 · 上次听到 ${formatDuration(ui.positionMs)}",
-                style = MaterialTheme.typography.bodySmall.tabular, color = cs.onSurfaceVariant,
-                maxLines = 1, overflow = TextOverflow.Ellipsis,
-            )
-        }
-        Spacer(Modifier.width(12.dp))
+        Spacer(Modifier.width(RowSpec.leadGap))
+        RowText(
+            ui.song.title,
+            subtitle = "${ui.index + 1} / ${ui.count} 首 · 上次听到 ${formatDuration(ui.positionMs)}",
+            titleStyle = MaterialTheme.typography.titleMedium,
+            subtitleStyle = MaterialTheme.typography.bodySmall.tabular,
+            // The position is the point of this row: it wraps at large font sizes instead of being cut.
+            subtitleLines = ALL_LINES,
+        )
+        Spacer(Modifier.width(RowSpec.trailGap))
+        // Only a picture of the row's action: the row is the touch target, so there is one, not two.
         Box(
-            Modifier.size(40.dp).clip(CircleShape).background(cs.surfaceContainerHigh)
-                .clickable(enabled = !ui.restoring, role = Role.Button, onClickLabel = "继续播放", onClick = onResume),
+            Modifier.size(RowSpec.action).clip(CircleShape).background(cs.onSurface.copy(alpha = 0.07f)),
             contentAlignment = Alignment.Center,
         ) {
             if (ui.restoring) {
-                ProgressArc(color = cs.onSurface, size = 20.dp, strokeWidth = 2.dp)
+                ProgressArc(color = cs.onSurface, size = RowSpec.actionGlyph, strokeWidth = RowSpec.actionStroke)
             } else {
-                Icon(Icons.Filled.PlayArrow, contentDescription = null, modifier = Modifier.size(20.dp), tint = cs.onSurface)
+                Icon(
+                    Icons.Filled.PlayArrow, contentDescription = null,
+                    modifier = Modifier.size(RowSpec.actionGlyph), tint = cs.onSurface,
+                )
             }
         }
     }
 }
 
 /**
- * Recently played songs as a strip of covers.
+ * Body of the "最近播放" module: a strip of covers that scrolls inside its card.
  *
- * The strip runs to both screen edges so a cover slides off the glass rather than stopping at the page
- * margin. That is [LazyRow]'s own `contentPadding`, not a negative-margin layout trick: content
- * placed outside its parent's measured bounds is dropped by touch hit-testing, so a widened row would
- * have dead zones exactly where a swipe starts. The price is that the caller must not pad this
- * horizontally; [LibraryContent] pads each of its other items individually instead.
+ * The card has no side padding of its own (`SectionCard(padded = false)`); this strip's
+ * `contentPadding` is the inset, so a cover slides under the card's rounded edge instead of stopping
+ * short of it. That is [LazyRow]'s own padding, not a negative-margin layout trick: content placed
+ * outside its parent's measured bounds is dropped by touch hit-testing, so a widened row would have
+ * dead zones exactly where a swipe starts.
  */
 @Composable
-fun RecentRow(songs: List<SongSummary>, nowPlayingId: String?, onPlay: (SongSummary) -> Unit) {
-    val cs = MaterialTheme.colorScheme
-    Column(Modifier.fillMaxWidth()) {
-        Text(
-            "最近播放",
-            style = MaterialTheme.typography.titleSmall, color = cs.onSurface,
-            modifier = Modifier.padding(horizontal = Space.page),
-        )
-        Spacer(Modifier.height(8.dp))
-        LazyRow(
-            contentPadding = PaddingValues(horizontal = Space.page),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            items(songs) { song ->
-                RecentItem(song, playing = song.key.stableId == nowPlayingId) { onPlay(song) }
-            }
+fun RecentStrip(
+    songs: List<SongSummary>,
+    nowPlayingId: String?,
+    onPlay: (SongSummary) -> Unit,
+    /** Long press on a cover offers to take the song off the strip. */
+    onRemoveRecent: (SongSummary) -> Unit = {},
+) {
+    LazyRow(
+        contentPadding = PaddingValues(Space.inner),
+        horizontalArrangement = Arrangement.spacedBy(Space.sibling),
+    ) {
+        items(songs) { song ->
+            RecentItem(
+                song,
+                playing = song.key.stableId == nowPlayingId,
+                onClick = { onPlay(song) },
+                onRemove = { onRemoveRecent(song) },
+            )
         }
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun RecentItem(song: SongSummary, playing: Boolean, onClick: () -> Unit) {
+private fun RecentItem(song: SongSummary, playing: Boolean, onClick: () -> Unit, onRemove: () -> Unit) {
     val cs = MaterialTheme.colorScheme
-    Column(
-        Modifier.width(96.dp)
-            .clip(MaterialTheme.shapes.medium)
-            .clickable(role = Role.Button, onClick = onClick),
-    ) {
-        Cover(
-            seed = song.key.stableId,
-            modifier = Modifier.size(96.dp),
-            shape = MaterialTheme.shapes.medium,
-            url = song.coverUrl,
-        )
-        Spacer(Modifier.height(6.dp))
-        Text(
-            song.title,
-            style = MaterialTheme.typography.bodyMedium,
-            color = if (playing) nowPlayingAccent() else cs.onSurface,
-            maxLines = 1, overflow = TextOverflow.Ellipsis,
-        )
-        Text(
-            song.artists.joinToString(" / ").ifBlank { "未知歌手" },
-            style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant,
-            maxLines = 1, overflow = TextOverflow.Ellipsis,
-        )
+    val haptics = LocalHapticFeedback.current
+    var menuOpen by remember { mutableStateOf(false) }
+    // A tile is narrow: at large font sizes it reserves two lines for the title, so the tiles stay one height.
+    val titleLines = listLines()
+    // The menu anchors to this Box, which is exactly the cover and its title, so it opens over the item.
+    Box(Modifier.width(RowSpec.coverTile)) {
+        Column(
+            Modifier.fillMaxWidth()
+                .clip(MaterialTheme.shapes.medium)
+                .combinedClickable(
+                    role = Role.Button,
+                    onClick = onClick,
+                    onLongClickLabel = "移除最近播放",
+                    onLongClick = {
+                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                        menuOpen = true
+                    },
+                ),
+        ) {
+            Cover(
+                seed = song.key.stableId,
+                modifier = Modifier.size(RowSpec.coverTile),
+                shape = MaterialTheme.shapes.medium,
+                url = song.coverUrl,
+            )
+            Spacer(Modifier.height(RowSpec.tileGap))
+            Text(
+                song.title,
+                style = MaterialTheme.typography.bodyMedium,
+                color = if (playing) nowPlayingAccent() else cs.onSurface,
+                minLines = titleLines, maxLines = titleLines, overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                song.artists.joinToString(" / ").ifBlank { "未知歌手" },
+                style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant,
+                maxLines = 1, overflow = TextOverflow.Ellipsis,
+            )
+        }
+        AnchoredMenu(expanded = menuOpen, onDismiss = { menuOpen = false }, align = MenuAlign.START) {
+            MenuItem(
+                "从最近播放中移除",
+                onClick = {
+                    menuOpen = false
+                    onRemove()
+                },
+            )
+        }
     }
 }
 
+/** Heading of the liked-songs module. The row below must not say it again, see [likedRowTitle]. */
+internal const val LIKED_HEADING = "我喜欢"
+
 /**
- * The liked-songs playlist, given more room than the rest: a bigger cover and a bigger title are the
- * whole hierarchy. No colour block; size and white space do the work.
+ * What the liked-songs row calls itself. The heading above it already says "我喜欢", and the
+ * platforms name this list the same way (QQ音乐 and 酷狗 "我喜欢", 网易云 "<昵称>喜欢的音乐"), so
+ * printing the playlist's own title there gave the same words twice. A title that adds something
+ * (a nickname) is kept; one that only repeats the heading becomes "全部歌曲".
+ */
+internal fun likedRowTitle(playlistTitle: String): String {
+    val plain = playlistTitle.filterNot { it.isWhitespace() }
+    val repeatsHeading = plain == LIKED_HEADING || plain == "${LIKED_HEADING}的音乐"
+    return if (repeatsHeading || plain.isEmpty()) "全部歌曲" else playlistTitle
+}
+
+/**
+ * Row of the "我喜欢" module: the liked-songs playlist as one row in its card. The heading above
+ * names it, so the row gives the count, which is what changes.
  */
 @Composable
-fun FeaturedPlaylistCard(playlist: PlaylistSummary, onOpen: () -> Unit) {
-    val cs = MaterialTheme.colorScheme
-    Row(
-        Modifier.fillMaxWidth().height(104.dp).pressableRow(onClick = onOpen),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
+fun LikedPlaylistRow(playlist: PlaylistSummary, onOpen: () -> Unit) {
+    CardRow(onClick = onOpen) {
         Cover(
             seed = playlist.key.stableId,
-            modifier = Modifier.size(88.dp),
-            shape = MaterialTheme.shapes.large,
+            modifier = Modifier.size(RowSpec.coverFeature),
+            shape = MaterialTheme.shapes.medium,
             url = playlist.coverUrl,
         )
-        Spacer(Modifier.width(16.dp))
-        Column(Modifier.weight(1f)) {
-            Text(
-                "我喜欢的音乐",
-                style = MaterialTheme.typography.labelMedium, color = cs.onSurfaceVariant,
-            )
-            Text(
-                playlist.title,
-                style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold,
-                color = cs.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis,
-            )
-            Text(
-                "${playlist.trackCount} 首",
-                style = MaterialTheme.typography.bodyMedium.tabular, color = cs.onSurfaceVariant,
-            )
-        }
-        Icon(
-            Icons.AutoMirrored.Outlined.KeyboardArrowRight,
-            contentDescription = null,
-            modifier = Modifier.size(24.dp),
-            tint = cs.onSurfaceVariant,
+        Spacer(Modifier.width(RowSpec.leadGap))
+        RowText(
+            likedRowTitle(playlist.title),
+            subtitle = "${playlist.trackCount} 首",
+            titleStyle = MaterialTheme.typography.titleMedium,
+            subtitleStyle = MaterialTheme.typography.bodySmall.tabular,
         )
+        Spacer(Modifier.width(RowSpec.chevronGap))
+        RowChevron()
     }
 }

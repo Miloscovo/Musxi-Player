@@ -26,13 +26,13 @@ import java.io.File
 @Config(sdk = [35], qualifiers = "w360dp-h800dp-xhdpi", application = DesignTestApplication::class)
 class ThemeSheetTest {
 
-    @Test fun mistLight() = capture(Accent.MIST, ThemeMode.LIGHT, "#F7F7F5", "#4A6A9A")
+    @Test fun mistLight() = capture(Accent.MIST, ThemeMode.LIGHT, "#FAFAFA", "#4A6A9A")
     @Test fun mistDark() = capture(Accent.MIST, ThemeMode.DARK, "#121212", "#A9BEE0")
     @Test fun mistBlack() = capture(Accent.MIST, ThemeMode.BLACK, "#000000", "#A9BEE0")
-    @Test fun tealLight() = capture(Accent.TEAL, ThemeMode.LIGHT, "#F7F7F5", "#2B7A71")
+    @Test fun tealLight() = capture(Accent.TEAL, ThemeMode.LIGHT, "#FAFAFA", "#2B7A71")
     @Test fun tealDark() = capture(Accent.TEAL, ThemeMode.DARK, "#121212", "#8DCFC5")
     @Test fun tealBlack() = capture(Accent.TEAL, ThemeMode.BLACK, "#000000", "#8DCFC5")
-    @Test fun amberLight() = capture(Accent.AMBER, ThemeMode.LIGHT, "#F7F7F5", "#9C6229")
+    @Test fun amberLight() = capture(Accent.AMBER, ThemeMode.LIGHT, "#FAFAFA", "#9C6229")
     @Test fun amberDark() = capture(Accent.AMBER, ThemeMode.DARK, "#121212", "#E6B988")
     @Test fun amberBlack() = capture(Accent.AMBER, ThemeMode.BLACK, "#000000", "#E6B988")
 

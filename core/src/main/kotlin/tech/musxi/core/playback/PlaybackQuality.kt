@@ -9,15 +9,17 @@ data class QualityOptions(val options: List<QualityOption>, val current: String?
 /** Platform-scoped request vocabulary; availability always comes from the official response. */
 object PlaybackQualities {
     private val levels = listOf(
-        listOf("kugou:128", "kugou:320", "kugou:flac"),
+        listOf("kugou:128", "kugou:320", "kugou:flac", "kugou:high"),
         listOf("qq:standard", "qq:high", "qq:lossless"),
-        listOf("netease:standard", "netease:higher", "netease:exhigh", "netease:lossless"),
+        listOf("netease:standard", "netease:higher", "netease:exhigh", "netease:lossless", "netease:hires"),
     )
     fun candidates(platform: String, preferred: String?): List<String> {
         val ids = levels.singleOrNull { it.first().substringBefore(':') == platform } ?: return emptyList()
+        if (preferred == "$platform:best") return ids.reversed()
         return ids.take((ids.indexOf(preferred).takeIf { it >= 0 } ?: 0) + 1).reversed()
     }
     fun name(id: String): String? = when (id) {
+        "netease:hires", "kugou:high" -> "Hi-Res"
         "kugou:128", "qq:standard", "netease:standard" -> "标准音质"
         "kugou:320", "qq:high" -> "高品音质"
         "netease:higher" -> "较高音质"

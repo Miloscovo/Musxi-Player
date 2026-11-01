@@ -32,6 +32,20 @@ public class NeteaseLibraryApiTest {
         fails("protocol", () -> NeteaseLibraryApi.parsePlaylists(j("{playlist:[{id:1.5,name:'Bad',trackCount:0}],more:false}"), 0, 30));
     }
 
+    @Test public void regularPlaylistFixturesClassifyLikedCreatedCollectedAndUnknown() throws Exception {
+        JSONObject body = j("{playlist:["
+            +"{id:41,name:'External',trackCount:3,specialType:0,creator:{userId:8}},"
+            +"{id:42,name:'Mine',trackCount:2,specialType:0,creator:{userId:7}},"
+            +"{id:43,name:'Liked',trackCount:1,specialType:5,creator:{userId:7}},"
+            +"{id:44,name:'Unknown',trackCount:0}],more:false}");
+        java.util.List<NeteaseLibraryApi.Playlist> lists =
+            NeteaseLibraryApi.parsePlaylists(body, 0, 30, "7").items;
+        assertEquals(NeteaseLibraryApi.Playlist.Kind.COLLECTED, lists.get(0).kind);
+        assertEquals(NeteaseLibraryApi.Playlist.Kind.CREATED, lists.get(1).kind);
+        assertEquals(NeteaseLibraryApi.Playlist.Kind.LIKED, lists.get(2).kind);
+        assertEquals(NeteaseLibraryApi.Playlist.Kind.OTHER, lists.get(3).kind);
+    }
+
     @Test public void writablePlaylistsKeepOnlySessionCreatorAndRequireLikedSongs() throws Exception {
         final java.util.List<NeteaseApi.Request> requests = new java.util.ArrayList<>();
         JSONObject page = j("{code:200,playlist:["
@@ -119,6 +133,40 @@ public class NeteaseLibraryApiTest {
         fails("identity", () -> NeteaseLibraryApi.parseTracks(body, Collections.singletonList("3")));
     }
 
+    @Test public void legacySongNavigationIdsAreOptionalWithoutWeakeningSongIdentity() throws Exception {
+        JSONObject legacy = j("{songs:[{id:2,name:'Legacy',dt:2000,"
+                + "ar:[{id:0,name:'Artist'}],al:{id:0,name:'Album'}}]}");
+        NeteaseLibraryApi.Track parsed = NeteaseLibraryApi.parseTracks(
+                legacy, Collections.singletonList("2")).get(0);
+        assertTrue(parsed.artistIds.isEmpty());
+        assertNull(parsed.albumId);
+
+        JSONObject partial = j("{songs:[{id:3,name:'Partial',dt:2000,"
+                + "ar:[{id:11,name:'Artist'},{name:'Unknown'}],al:{name:'Album'}}]}");
+        NeteaseLibraryApi.Track missing = NeteaseLibraryApi.parseTracks(
+                partial, Collections.singletonList("3")).get(0);
+        assertTrue(missing.artistIds.isEmpty());
+        assertNull(missing.albumId);
+
+        JSONObject valid = j("{songs:[{id:4,name:'Valid',dt:2000,"
+                + "ar:[{id:12,name:'Artist'}],al:{id:13,name:'Album'}}]}");
+        NeteaseLibraryApi.Track retained = NeteaseLibraryApi.parseTracks(
+                valid, Collections.singletonList("4")).get(0);
+        assertEquals(Collections.singletonList("12"), retained.artistIds);
+        assertEquals("13", retained.albumId);
+
+        JSONObject invalidKey = j("{songs:[{id:0,name:'Bad key',dt:2000,ar:[],al:{name:'Album'}}]}");
+        fails("protocol", () -> NeteaseLibraryApi.parseTracks(
+                invalidKey, Collections.singletonList("2")));
+
+        JSONObject wrongArtist = j("{more:false,total:1,songs:[{id:5,name:'Song',dt:2000,"
+                + "ar:[{id:13,name:'Other'}],al:{name:'Album'}}]}");
+        fails("identity", () -> NeteaseLibraryApi.parseArtistTracks(wrongArtist, "12", 0, 30));
+        JSONObject wrongAlbum = j("{album:{id:13},songs:[{id:6,name:'Song',dt:2000,"
+                + "ar:[],al:{id:14,name:'Other'}}]}");
+        fails("identity", () -> NeteaseLibraryApi.parseAlbumTracks(wrongAlbum, "13", 0, 30));
+    }
+
     @Test public void searchUsesFixedFirstPageAndReturnsMetadataInSearchOrder() throws Exception {
         final java.util.List<NeteaseApi.Request> requests = new java.util.ArrayList<>();
         JSONObject fixture = j("{code:200,result:{songCount:12,songs:["
@@ -202,11 +250,18 @@ public class NeteaseLibraryApiTest {
     private static JSONObject confirmedAudio(NeteaseApi.Request request) throws java.io.IOException {
         try {
             JSONObject payload=eapiPayload(request, "/api/song/enhance/player/url/v1");
-            switch(payload.getString("level")) {
-                case "standard": return audioAt(128000,false);
-                case "higher": return audioAt(192000,false);
-                case "exhigh": return audioAt(192000,false);
-                case "lossless": return audioAt(999000,true);
+            String level=payload.getString("level");
+            switch(level) {
+                case "standard": return audioAt(128000,false,level);
+                case "higher": return audioAt(192000,false,level);
+                case "exhigh": return audioAt(192000,false,level);
+                case "lossless": return audioAt(999000,false,level);
+                case "hires": {
+                    JSONObject body=audioAt(4616000,false,level);
+                    body.getJSONArray("data").getJSONObject(0)
+                        .put("sampleRate",96000).put("bitDepth",24);
+                    return body;
+                }
                 default: throw new AssertionError("Unexpected level");
             }
         } catch (Exception failure) { throw new java.io.IOException(failure); }
@@ -217,7 +272,7 @@ public class NeteaseLibraryApiTest {
             JSONObject payload=eapiPayload(request, "/api/song/enhance/player/url/v1");
             assertEquals("higher",payload.getString("level"));
             assertEquals("flac",payload.getString("encodeType"));
-            return audioAt(192000,false);
+            return audioAt(192000,false,"higher");
         } catch (Exception failure) { throw new java.io.IOException(failure); }
     }
 
@@ -242,10 +297,11 @@ public class NeteaseLibraryApiTest {
     private static JSONObject audio() throws Exception {
         return j("{data:[{id:1,code:200,url:'https://m7.music.126.net/path/secret.mp3',br:128000,expi:120,freeTrialInfo:null}]}");
     }
-    private static JSONObject audioAt(int bitrate,boolean trial) throws Exception {
+    private static JSONObject audioAt(int bitrate,boolean trial,String level) throws Exception {
         JSONObject body=audio();
         body.put("code",200);
-        JSONObject row=body.getJSONArray("data").getJSONObject(0).put("br",bitrate).put("type",bitrate>320000?"flac":"mp3");
+        JSONObject row=body.getJSONArray("data").getJSONObject(0)
+            .put("br",bitrate).put("type",bitrate>320000?"flac":"mp3").put("level",level);
         if(trial)row.put("freeTrialInfo",new JSONObject());
         return body;
     }
@@ -253,14 +309,15 @@ public class NeteaseLibraryApiTest {
         NeteaseLibraryApi.Audio result = NeteaseLibraryApi.parseAudio(audio(),"1",1000);
         assertEquals(121000,result.expiresAtElapsedMs);
         assertEquals("netease:standard",result.qualityId);
-        JSONObject lossless=audio();lossless.getJSONArray("data").getJSONObject(0).put("br",999000).put("type","flac");
+        JSONObject lossless=audio();lossless.getJSONArray("data").getJSONObject(0)
+            .put("br",999000).put("type","flac").put("level","lossless");
         assertEquals("netease:lossless",NeteaseLibraryApi.parseAudio(lossless,"1",1000,"netease:lossless").qualityId);
         fails("unavailable", () -> NeteaseLibraryApi.parseAudio(lossless,"1",1000,"netease:standard"));
-        JSONObject mislabeled=audioAt(400000,false);mislabeled.getJSONArray("data").getJSONObject(0).put("type","mp3");
+        JSONObject mislabeled=audioAt(400000,false,"lossless");mislabeled.getJSONArray("data").getJSONObject(0).put("type","mp3");
         fails("unavailable", () -> NeteaseLibraryApi.parseAudio(mislabeled,"1",1000,"netease:lossless"));
         fails("identity", () -> NeteaseLibraryApi.parseAudio(audio(),"2",1000));
         JSONObject trial=audio();trial.getJSONArray("data").getJSONObject(0).put("freeTrialInfo",new JSONObject());
-        fails("permission", () -> NeteaseLibraryApi.parseAudio(trial,"1",1000));
+        fails("preview", () -> NeteaseLibraryApi.parseAudio(trial,"1",1000));
         for (String url : new String[]{"https://m7.music.126.net.evil.test/a", "https://user@music.126.net/a", "file:///a", "https://127.0.0.1/a", "https://m7.music.126.net:8080/a", "https://m7.music.126.net:/a", "https://m7.music.126.net:0443/a"}) {
             JSONObject bad=audio();bad.getJSONArray("data").getJSONObject(0).put("url",url);
             fails("endpoint", () -> NeteaseLibraryApi.parseAudio(bad,"1",1000));
@@ -280,13 +337,13 @@ public class NeteaseLibraryApiTest {
             "{userId:'7',nickname:'User',cookies:{MUSIC_U:'fixture',__csrf:'csrf'}}"));
         java.util.List<NeteaseLibraryApi.AudioQuality> qualities=
             new NeteaseLibraryApi(api).qualities(session,"1",1000);
-        assertEquals(4,calls[0]);
-        assertEquals(Arrays.asList("netease:standard","netease:higher"),
-            Arrays.asList(qualities.get(0).id,qualities.get(1).id));
-        assertEquals(2,qualities.size());
+        assertEquals(5,calls[0]);
+        assertEquals(Arrays.asList("netease:standard","netease:higher","netease:exhigh","netease:lossless","netease:hires"),
+            Arrays.asList(qualities.get(0).id,qualities.get(1).id,qualities.get(2).id,qualities.get(3).id,qualities.get(4).id));
+        assertEquals(5,qualities.size());
         try{qualities.clear();fail("Quality options must be read-only");}catch(UnsupportedOperationException expected){}
     }
-    @Test public void qualitiesOmitOnlyTheUnconfirmedNetworkFailure() throws Exception {
+    @Test public void qualitiesDoNotDowngradeANetworkFailure() throws Exception {
         final int[] calls={0};
         NeteaseApi api=new NeteaseApi(request -> {
             calls[0]++;
@@ -296,12 +353,66 @@ public class NeteaseLibraryApiTest {
         });
         NeteaseApi.Session session=NeteaseApi.Session.fromJson(j(
             "{userId:'7',nickname:'User',cookies:{MUSIC_U:'fixture',__csrf:'csrf'}}"));
-        java.util.List<NeteaseLibraryApi.AudioQuality> qualities=
-            new NeteaseLibraryApi(api).qualities(session,"1",1000);
-        assertEquals(4,calls[0]);
-        assertEquals(Arrays.asList("netease:standard","netease:higher"),
-            Arrays.asList(qualities.get(0).id,qualities.get(1).id));
-        assertEquals(2,qualities.size());
+        fails("network", () -> new NeteaseLibraryApi(api).qualities(session,"1",1000));
+        assertEquals(2,calls[0]);
+    }
+    @Test public void hiresRequiresItsActualLevelAndSamplingEvidence() throws Exception {
+        JSONObject hires=audioAt(4616000,false,"hires");
+        hires.getJSONArray("data").getJSONObject(0)
+            .put("sampleRate",96000).put("bitDepth",24);
+        NeteaseLibraryApi.Audio result=
+            NeteaseLibraryApi.parseAudio(hires,"1",1000,"netease:hires");
+        assertEquals("netease:hires",result.qualityId);
+        assertEquals("netease:hires",NeteaseLibraryApi.parseAudio(
+            audioAt(4616000,false,"hires"),"1",1000,"netease:hires").qualityId);
+
+        JSONObject ordinaryLossless=audioAt(999000,false,"lossless");
+        ordinaryLossless.getJSONArray("data").getJSONObject(0)
+            .put("sampleRate",44100).put("bitDepth",16);
+        NeteaseLibraryApi.Audio downgraded=
+            NeteaseLibraryApi.parseAudio(ordinaryLossless,"1",1000,"netease:hires");
+        assertEquals("netease:lossless",downgraded.qualityId);
+
+        JSONObject downsampled=audioAt(2308000,false,"hires");
+        downsampled.getJSONArray("data").getJSONObject(0)
+            .put("sampleRate",44100).put("bitDepth",16);
+        assertEquals("netease:lossless",
+            NeteaseLibraryApi.parseAudio(downsampled,"1",1000,"netease:hires").qualityId);
+
+        JSONObject plainFlac=audio();plainFlac.getJSONArray("data").getJSONObject(0)
+            .put("br",4616000).put("type","flac");
+        assertEquals("netease:lossless",
+            NeteaseLibraryApi.parseAudio(plainFlac,"1",1000,"netease:lossless").qualityId);
+
+        fails("unavailable", () -> NeteaseLibraryApi.parseAudio(
+            hires,"1",1000,"netease:lossless"));
+    }
+    @Test public void hiresRequestUsesV1LevelAndRejectsMislabeledFormats() throws Exception {
+        final java.util.List<NeteaseApi.Request> requests=new java.util.ArrayList<>();
+        NeteaseApi api=new NeteaseApi(request -> {
+            try {
+                requests.add(request);
+                JSONObject payload=eapiPayload(request, "/api/song/enhance/player/url/v1");
+                assertEquals("hires",payload.getString("level"));
+                assertEquals("flac",payload.getString("encodeType"));
+                return new NeteaseApi.Response(
+                    audioAt(4616000,false,"hires"),Collections.emptyMap());
+            } catch (Exception failure) {
+                throw new java.io.IOException(failure);
+            }
+        });
+        NeteaseApi.Session session=NeteaseApi.Session.fromJson(j(
+            "{userId:'7',nickname:'User',cookies:{MUSIC_U:'fixture',__csrf:'csrf'}}"));
+        NeteaseLibraryApi.Audio audio=
+            new NeteaseLibraryApi(api).audio(session,"1",1000,"netease:hires");
+        assertEquals("netease:hires",audio.qualityId);
+        assertEquals(1,requests.size());
+
+        JSONObject mp3=audioAt(320000,false,"hires");
+        mp3.getJSONArray("data").getJSONObject(0)
+            .put("sampleRate",96000).put("bitDepth",24);
+        fails("unavailable", () -> NeteaseLibraryApi.parseAudio(
+            mp3,"1",1000,"netease:hires"));
     }
     @Test public void exactAudioRequestReturnsPlatformActualQualityId() throws Exception {
         final java.util.List<NeteaseApi.Request> requests=new java.util.ArrayList<>();

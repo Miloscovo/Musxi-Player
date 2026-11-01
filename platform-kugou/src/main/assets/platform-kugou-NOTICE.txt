@@ -45,3 +45,8 @@ JDK/Android facilities, following this project's services/krc.cjs and
 src/lyrics/krc.cpp reference. Only validated v1 type=1/language=0 line
 translations are exposed after original-text/timeline compatibility checks.
 Romanization is excluded. No new runtime dependency or word-level UI API.
+
+2026-11-01 account-authorized audio and Hi-Res additionally adapt
+module/privilege_lite.js, user_verify.js, song_auth.js and song_url_auth.js
+from the same pinned MIT source. Account membership queries are read-only;
+automatic VIP claiming is not included. No new runtime dependency is added.

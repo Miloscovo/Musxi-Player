@@ -13,6 +13,24 @@ class AccountCoordinatorTest {
     private val profile = AccountProfile(platform, "private-account-123", "Listener")
     private fun state() = coordinator.states.value.getValue(platform)
 
+    @Test fun refreshedAvatarPreservesGenerationMembershipAndRejectsDifferentAccount() {
+        val token = coordinator.begin(platform)
+        assertTrue(coordinator.connected(platform, token, profile))
+        val membership = Membership(MembershipLevel.YES, "Member")
+        coordinator.membership(platform, token, membership)
+        val updated = profile.copy(avatarUrl = "https://p3.music.126.net/new.jpg", displayName = "Updated")
+        assertTrue(coordinator.refreshProfile(platform, token, updated))
+        assertEquals(token, state().generation)
+        assertEquals(membership, state().membership)
+        assertEquals(updated, state().profile)
+        assertFalse(coordinator.refreshProfile(platform, token, updated.copy(id = "other")))
+        assertFalse(coordinator.refreshProfile(platform, token + 1, updated))
+        assertFalse(coordinator.refreshProfile(platform, token, updated.copy(platform = Platform.QQ)))
+        coordinator.disconnect(platform)
+        assertFalse(coordinator.refreshProfile(platform, token, updated))
+        assertNull(state().profile)
+    }
+
     @Test fun initialStatesCoverEveryPlatform() {
         assertEquals(Platform.entries.toSet(), coordinator.states.value.keys)
         coordinator.states.value.forEach { (platform, state) ->

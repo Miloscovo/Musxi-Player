@@ -14,9 +14,11 @@ import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.DevicesOther
 import androidx.compose.material.icons.outlined.Headphones
 import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.outlined.Lyrics
 import androidx.compose.material.icons.outlined.PersonSearch
 import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material.icons.outlined.Speaker
+import androidx.compose.material.icons.outlined.SwapHoriz
 import androidx.compose.material.icons.outlined.Timer
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
@@ -71,7 +73,6 @@ enum class MoreAction {
  * only needed while the menu is open; the dot on the button comes from the separate `sleepTimerActive`.
  */
 data class MoreMenuUi(
-    val title: String,
     val artist: String,
     val album: String,
     val sleepRemaining: String?,
@@ -191,6 +192,9 @@ internal enum class MorePage { MAIN, SLEEP, PLAYLIST }
  *
  * "加入歌单" is on the first page when both [loadPlaylists] and [onAddToPlaylist] are given. It opens
  * the playlist page, the same one the song menu uses.
+ *
+ * "匹配歌词" is shown when [onMatchLyrics] is given. It closes the menu first, then calls it; the
+ * caller opens the lyrics match sheet.
  */
 @Composable
 internal fun MoreMenu(
@@ -201,6 +205,9 @@ internal fun MoreMenu(
     onAction: (MoreAction) -> Unit,
     loadPlaylists: (((Result<List<EditablePlaylist>>) -> Unit) -> Unit)? = null,
     onAddToPlaylist: ((EditablePlaylist) -> Unit)? = null,
+    onMatchLyrics: (() -> Unit)? = null,
+    /** "换个音源": a manual search of the other platforms. Null hides the item. */
+    onFindSources: (() -> Unit)? = null,
 ) {
     val shown = rememberLatest(menu)
     val canPick = loadPlaylists != null && onAddToPlaylist != null
@@ -245,7 +252,8 @@ internal fun MoreMenu(
                 onBack = { onPage(MorePage.MAIN) },
             )
         } else {
-            MenuHeader(shown.title, supporting = shown.artist.ifBlank { null })
+            // No song heading: the page behind already names the song, and "歌曲信息" has the rest.
+            // The card's own inset is then the same above "定时停止" as below "歌曲信息".
             MenuItem(
                 label = "定时停止",
                 onClick = { onPage(MorePage.SLEEP) },
@@ -273,6 +281,27 @@ internal fun MoreMenu(
                     onClick = { onPage(MorePage.PLAYLIST) },
                     icon = Icons.AutoMirrored.Outlined.PlaylistAdd,
                     trailing = { MenuChevron() },
+                )
+            }
+            // Also offered while the song plays: the user may want another platform's version.
+            if (onFindSources != null) {
+                MenuItem(
+                    label = "换个音源",
+                    onClick = {
+                        onDismiss()
+                        onFindSources()
+                    },
+                    icon = Icons.Outlined.SwapHoriz,
+                )
+            }
+            if (onMatchLyrics != null) {
+                MenuItem(
+                    label = "匹配歌词",
+                    onClick = {
+                        onDismiss()
+                        onMatchLyrics()
+                    },
+                    icon = Icons.Outlined.Lyrics,
                 )
             }
             MenuItem("复制歌名", onClick = { onAction(MoreAction.COPY) }, icon = Icons.Outlined.ContentCopy)

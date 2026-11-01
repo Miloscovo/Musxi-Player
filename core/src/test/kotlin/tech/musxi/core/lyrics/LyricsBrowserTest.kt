@@ -13,6 +13,61 @@ class LyricsBrowserTest {
     private val browser = LyricsBrowser({ identities[it] }) { key, callback -> calls.add(key to callback) }
     private fun lyrics() = LrcParser.parse("[00:01.00]first\n[00:03.00]second")
 
+    @Test fun clearingCacheReleasesDocumentsAndRejectsPendingLyrics() {
+        val released = mutableListOf<ParsedLyrics>()
+        val cache = LyricsBrowser({ identities[it] }, { key, done -> calls.add(key to done) },
+            null, releaseDocument = { released += it })
+        cache.follow(original, source, 0)
+        val parsed = lyrics()
+        calls.single().second(Result.success(parsed))
+        cache.follow(original, original, 0)
+        val pending = calls.last().second
+        cache.clearCache()
+        assertEquals(listOf(parsed), released)
+        pending(Result.success(lyrics()))
+        assertEquals(LyricsStatus.IDLE, cache.state.value.status)
+        cache.follow(original, source, 0)
+        assertEquals(3, calls.size)
+        assertEquals(LyricsStatus.LOADING, cache.state.value.status)
+    }
+
+    @Test fun manualBindingUsesOriginalQueueAndOffsetDelaysHighlighting() {
+        var requestedOriginal: MediaKey? = null
+        var requestedSource: MediaKey? = null
+        val matched = LyricsBrowser({ identities[it] }, { _, _ -> fail("Unexpected legacy fetch") }, null,
+            fetchForOriginal = { queue, automatic, _, done ->
+                requestedOriginal = queue
+                requestedSource = automatic
+                done(Result.success(lyrics().copy(origin = LyricsOrigin.MATCHED, offsetMs = 2000)))
+            })
+        matched.follow(original, source, 1500)
+        assertEquals(original, requestedOriginal)
+        assertEquals(source, requestedSource)
+        assertEquals(LyricsOrigin.MATCHED, matched.state.value.origin)
+        assertEquals(-1, matched.state.value.activeIndex)
+        matched.follow(original, source, 3500)
+        assertEquals(0, matched.state.value.activeIndex)
+        matched.follow(original, source, 5500)
+        assertEquals(1, matched.state.value.activeIndex)
+    }
+
+    @Test fun explicitDiskReaderCanDisplayOfflineOwnerButCannotAcceptFormerVerifiedRequest() {
+        val pending = mutableListOf<(Result<ParsedLyrics>) -> Unit>()
+        val cached = LyricsBrowser({ identities[it] }, { _, done -> pending.add(done) }, null,
+            allowCachedUnverified = true)
+        cached.follow(original, source, 2000)
+        identities[Platform.NETEASE] = identities.getValue(Platform.NETEASE).copy(verified = false)
+        pending.single()(Result.success(lyrics()))
+        assertEquals(LyricsStatus.LOADING, cached.state.value.status)
+        cached.follow(original, source, 2000)
+        pending.last()(Result.success(lyrics()))
+        assertEquals(LyricsStatus.TIMED, cached.state.value.status)
+        assertEquals(0, cached.state.value.activeIndex)
+        identities[Platform.NETEASE] = identities.getValue(Platform.NETEASE).copy(owner = "different", generation = 2)
+        cached.follow(original, source, 2000)
+        assertEquals(LyricsStatus.LOADING, cached.state.value.status)
+    }
+
     @Test fun followsActualSourceAndSeeksBothDirectionsWithoutRefetching() {
         browser.follow(original, source, 0)
         assertEquals(source, calls.single().first)

@@ -8,6 +8,7 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
+import tech.musxi.player.ui.design.LargeFontBatch
 import tech.musxi.player.ui.design.ShellSheet
 import tech.musxi.player.ui.design.miniBuffering
 import tech.musxi.player.ui.design.miniHidden
@@ -24,8 +25,10 @@ import java.io.File
 /**
  * Chrome sheets: the mini player's four states over the tab bar, plus a dark variant.
  *
- * The bar is only 68dp with icons and labels inside, so the check that matters most is that it is
- * actually drawn — an earlier layout let the parent shrink it until nothing was visible.
+ * The tab row is a 56dp minimum with the icon and label inside a 48dp capsule, so the check that
+ * matters most is that it is actually drawn — an earlier layout let the parent shrink it until
+ * nothing was visible. The dock variants put the dock over the page in a glass host, like the shell;
+ * under Robolectric the glass draws its solid fallback.
  */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -61,6 +64,18 @@ class ShellSheetTest {
     @Test fun variantTonalDark() = capture("variant_g_tonal_64_dark", Accent.MIST, ThemeMode.DARK,
         miniPlayingSwapped(), ShellTab.LIBRARY, BarShape.WIDE_PILL, ProgressStyle.RING, tonalButton = true)
 
+    /** The selected capsule on the other two tabs, and the dock with nothing playing. */
+    @Test fun dockSearchTab() = capture("shell_dock_search_mist_light", Accent.MIST, ThemeMode.LIGHT,
+        miniPlayingSwapped(), ShellTab.SEARCH, dock = true)
+    @Test fun dockMeTabDark() = capture("shell_dock_me_mist_dark", Accent.MIST, ThemeMode.DARK,
+        miniPlayingSwapped(), ShellTab.ME, dock = true)
+    @Test fun dockWithoutPlayer() = capture("shell_dock_hidden_mist_light", Accent.MIST, ThemeMode.LIGHT,
+        miniHidden(), ShellTab.LIBRARY, dock = true)
+
+    /** Font scale 2.0: the tab row grows with the label instead of clipping it (spec section 12). */
+    @Test fun dockLargeFont() = capture("shell_dock_largefont_mist_light", Accent.MIST, ThemeMode.LIGHT,
+        miniPlayingSwapped(), ShellTab.LIBRARY, dock = true, largeFont = true)
+
     private fun capture(
         name: String,
         accent: Accent,
@@ -72,15 +87,20 @@ class ShellSheetTest {
         extraRound: Boolean = false,
         tonalButton: Boolean = false,
         dock: Boolean = false,
+        largeFont: Boolean = false,
     ) {
         val out = File("build/design/$name.png")
         captureRoboImage(out.path) {
-            ShellSheet(accent, mode, mini, tab, barShape, progressStyle, extraRound, tonalButton, dock)
+            if (largeFont) {
+                LargeFontBatch { ShellSheet(accent, mode, mini, tab, barShape, progressStyle, extraRound, tonalButton, dock) }
+            } else {
+                ShellSheet(accent, mode, mini, tab, barShape, progressStyle, extraRound, tonalButton, dock)
+            }
         }
         if (!out.exists()) return
         val bitmap = BitmapFactory.decodeFile(out.path)
         assertTrue("$name failed to decode", bitmap != null)
-        val background = parse(if (mode == ThemeMode.LIGHT) "#F7F7F5" else "#121212")
+        val background = parse(if (mode == ThemeMode.LIGHT) "#FAFAFA" else "#121212")
         val samples = IntArray(bitmap.width * bitmap.height)
         bitmap.getPixels(samples, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height)
         val bgShare = samples.count { it == background } / samples.size.toFloat()

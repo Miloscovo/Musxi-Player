@@ -8,6 +8,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import tech.musxi.core.account.Platform
 import tech.musxi.core.library.MediaKey
+import tech.musxi.core.library.PlaylistKind
 import tech.musxi.core.library.PlaylistSummary
 import tech.musxi.core.library.SongSummary
 import tech.musxi.core.playback.PlaybackJournalState
@@ -41,8 +42,8 @@ class LibraryHomeTest {
         restoring: Boolean = false,
     ) = PlaybackJournalState(queue = queue, recent = recent, accountVerified = verified, restoring = restoring)
 
-    private fun playlist(title: String) =
-        PlaylistSummary(MediaKey(Platform.NETEASE, title.hashCode().toString()), title, null, 10)
+    private fun playlist(title: String, kind: PlaylistKind = PlaylistKind.OTHER) =
+        PlaylistSummary(MediaKey(Platform.NETEASE, title.hashCode().toString()), title, null, 10, kind)
 
     @Test fun noJournalGivesAnEmptyHome() {
         assertEquals(LibraryHomeUi(), libraryHomeUiOf(null, null, playingQueue = false))
@@ -163,5 +164,32 @@ class LibraryHomeTest {
         assertFalse(isLikedPlaylist(playlist("")))
         assertFalse(isLikedPlaylist(playlist("喜欢")))
         assertFalse(isLikedPlaylist(playlist("我喜欢的歌手")))
+    }
+
+    @Test fun theKindDecidesWhenItIsKnown() {
+        // A LIKED playlist is liked whatever its title says.
+        assertTrue(isLikedPlaylist(playlist("周杰伦精选", PlaylistKind.LIKED)))
+        // A created or collected playlist named like the liked list is not promoted.
+        assertFalse(isLikedPlaylist(playlist("我喜欢的音乐", PlaylistKind.CREATED)))
+        assertFalse(isLikedPlaylist(playlist("我喜欢", PlaylistKind.COLLECTED)))
+    }
+
+    @Test fun otherFallsBackToTheNameForOldCaches() {
+        // OTHER is what every playlist reads as in a cache written before `kind` existed.
+        assertTrue(isLikedPlaylist(playlist("我喜欢", PlaylistKind.OTHER)))
+    }
+
+    // The module's heading is "我喜欢"; the row under it must not say the same words again.
+
+    @Test fun aTitleThatOnlyRepeatsTheHeadingBecomesAllSongs() {
+        assertEquals("全部歌曲", likedRowTitle("我喜欢"))
+        assertEquals("全部歌曲", likedRowTitle("我喜欢的音乐"))
+        assertEquals("全部歌曲", likedRowTitle("  我 喜欢 的音乐 "))
+        assertEquals("全部歌曲", likedRowTitle(""))
+    }
+
+    @Test fun aTitleThatAddsSomethingIsKept() {
+        assertEquals("阿青喜欢的音乐", likedRowTitle("阿青喜欢的音乐"))
+        assertEquals("Liked Songs", likedRowTitle("Liked Songs"))
     }
 }

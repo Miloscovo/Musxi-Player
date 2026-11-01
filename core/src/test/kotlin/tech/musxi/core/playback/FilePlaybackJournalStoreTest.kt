@@ -25,6 +25,14 @@ class FilePlaybackJournalStoreTest {
     private val ownerA = "a".repeat(64)
     private val ownerB = "b".repeat(64)
 
+    @Test fun navigationIdsSurviveColdJournalRead() {
+        val directory = temporary.newFolder("navigation")
+        val original = neteaseSong(1, "Song", mutableListOf("Artist"), null).copy(artistIds = listOf("123"), albumId = "456")
+        val journal = PlaybackJournal(recent = listOf(RecentPlay(original, original, 100)))
+        FilePlaybackJournalStore(directory, Platform.NETEASE).write(ownerA, journal)
+        assertEquals(journal, FilePlaybackJournalStore(directory, Platform.NETEASE).read(ownerA))
+    }
+
     @Test
     fun coldInstanceRoundTripSanitizesArtworkAndExposesImmutableLists() {
         val directory = temporary.newFolder("round-trip")
@@ -80,6 +88,23 @@ class FilePlaybackJournalStoreTest {
 
         assertEquals(PlaybackJournal(), store.read(ownerA))
         assertEquals(PlaybackJournal(), store.read(ownerB))
+    }
+
+    @Test
+    fun supportsThreeHundredRecentEntriesAndReadsExistingVersionOneJournal() {
+        val directory = temporary.newFolder("recent-capacity")
+        val store = FilePlaybackJournalStore(directory, Platform.QQ)
+        val existing = PlaybackJournal(recent = List(100) {
+            recent(qqSong(it.toString().padStart(14, '0')), qqSong("b".padStart(14, '0')), it.toLong())
+        })
+        store.write(ownerA, existing)
+        assertEquals(existing, FilePlaybackJournalStore(directory, Platform.QQ).read(ownerA))
+
+        val expanded = PlaybackJournal(recent = List(300) {
+            recent(qqSong(it.toString().padStart(14, '0')), qqSong("b".padStart(14, '0')), it.toLong())
+        })
+        store.write(ownerA, expanded)
+        assertEquals(expanded, FilePlaybackJournalStore(directory, Platform.QQ).read(ownerA))
     }
 
     @Test
@@ -158,7 +183,7 @@ class FilePlaybackJournalStoreTest {
             SavedPlaybackQueue(tooManySongs, 0, 0, "OFF", false, 1),
         ))
 
-        val recent = List(101) { recent(qqSong("a"), qqSong("b"), it.toLong()) }
+        val recent = List(301) { recent(qqSong("a"), qqSong("b"), it.toLong()) }
         assertRejectedAndPreserved(directory, store, PlaybackJournal(recent = recent))
         val largeFile = List(20_000) {
             qqSong(it.toString().padStart(14, '0')).copy(title = "x".repeat(512))

@@ -43,3 +43,8 @@ platform endpoints, not a newly registered Musxi OAuth application.
 Matching source and build script: android/player/ in the accompanying
 Musxi Player checkout. This local debug APK is not a public release.
 JSON-java 20240303 is a Public Domain host-test dependency, not in the APK.
+
+2026-11-01 read-only membership additionally adapts modules/user.py and
+models/user.py from the same pinned QQMusicApi 0.8.1 commit. Only the fixed
+VipLogin.VipLoginInter/vip_login_base query is used; no entitlement mutation
+or additional runtime dependency is included. Existing GPL-3.0-or-later applies.

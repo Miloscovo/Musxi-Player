@@ -7,24 +7,23 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import tech.musxi.core.account.Platform
+import tech.musxi.player.ui.components.RowDivider
+import tech.musxi.player.ui.components.RowSpec
+import tech.musxi.player.ui.components.SectionGroup
+import tech.musxi.player.ui.me.MeAccountRow
 import tech.musxi.player.ui.theme.Space
 
 /**
- * Account screen: three platforms as lines on a page, separated by hairlines.
+ * Account screen: three platforms as lines on a page, separated by hairlines. No longer shown in
+ * the app: the "我的" page and the per-platform [AccountDetailPage] replaced it.
  *
  * One solid accent button at most. The order below is "how stuck is the user", so a page with an
  * expired session and a disconnected platform shows one solid action, not two competing ones.
@@ -32,6 +31,8 @@ import tech.musxi.player.ui.theme.Space
 @Composable
 fun AccountScreen(
     state: AccountUiState,
+    /** The "我的" page's rows: each card's avatar, name and grey line, by platform. */
+    identities: List<MeAccountRow>,
     dark: Boolean,
     /** Room for the floating dock: the page scrolls underneath it. */
     bottomInset: Dp = 0.dp,
@@ -43,11 +44,16 @@ fun AccountScreen(
     onSignOut: (Platform) -> Unit,
     /** Netease only: the gallery-QR fallback when the web page cannot be used. Null hides it. */
     onConnectNeteaseScanner: (() -> Unit)? = null,
+    /** Empty hides the About group. */
+    appVersion: String = "",
+    update: AboutUpdateUi = AboutUpdateUi(
+        developmentBuild = false, checking = false, checkNote = null, release = null,
+        autoCheck = null, badge = false,
+    ),
+    updateActions: UpdateActions = UpdateActions(),
 ) {
     val cs = MaterialTheme.colorScheme
-    var managing by remember { mutableStateOf<Platform?>(null) }
-    var signingOut by remember { mutableStateOf<Platform?>(null) }
-    val solidRow = solidActionPlatform(state.rows)
+    val dialogs = rememberAccountDialogs()
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState())
             .padding(horizontal = Space.page),
@@ -61,23 +67,26 @@ fun AccountScreen(
         )
         Spacer(Modifier.height(8.dp))
 
-        state.rows.forEach { row ->
-            AccountRowCard(
-                row = row,
-                dark = dark,
-                solidAction = row.platform == solidRow,
-                onAction = {
-                    when (row.action) {
-                        AccountAction.CONNECT -> onConnect(row.platform)
-                        AccountAction.CANCEL -> onCancel(row.platform)
-                        AccountAction.RETRY -> onRetry(row.platform)
-                        AccountAction.RELOGIN -> onRelogin(row.platform)
-                        AccountAction.MANAGE -> managing = row.platform
-                        AccountAction.NONE -> Unit
-                    }
-                },
-            )
-            HorizontalDivider(color = cs.outlineVariant.copy(alpha = 0.45f))
+        SectionGroup(title = null) {
+            state.rows.forEachIndexed { index, row ->
+                val identity = identities.firstOrNull { it.platform == row.platform } ?: return@forEachIndexed
+                // The line starts at the text, not under the avatar.
+                if (index > 0) RowDivider(start = RowSpec.textStart(RowSpec.avatar))
+                AccountRowCard(
+                    identity = identity,
+                    row = row,
+                    onAction = {
+                        when (row.action) {
+                            AccountAction.CONNECT -> onConnect(row.platform)
+                            AccountAction.CANCEL -> onCancel(row.platform)
+                            AccountAction.RETRY -> onRetry(row.platform)
+                            AccountAction.RELOGIN -> onRelogin(row.platform)
+                            AccountAction.MANAGE -> dialogs.manage(row.platform)
+                            AccountAction.NONE -> Unit
+                        }
+                    },
+                )
+            }
         }
 
         // Netease's primary login is the web page; the scanner stays reachable, quietly, for the
@@ -101,41 +110,17 @@ fun AccountScreen(
             "播放由本机直连平台。",
             style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant,
         )
-        Spacer(Modifier.height(Space.section))
+        if (appVersion.isNotEmpty()) {
+            Spacer(Modifier.height(Space.section))
+            SectionGroup(title = "关于") {
+                AboutSection(
+                    version = appVersion, ui = update, actions = updateActions, showHeading = false,
+                )
+            }
+        }
+        // Clears the floating dock, so the last group can scroll above it.
+        Spacer(Modifier.height(Space.section + bottomInset))
     }
 
-    managing?.let { platform ->
-        AlertDialog(
-            onDismissRequest = { managing = null },
-            title = { Text(platform.fullName()) },
-            text = { Text("重新验证会向平台确认登录是否仍然有效；退出后本机保存的账号和缓存歌单会被清除。") },
-            confirmButton = {
-                TextButton(onClick = { managing = null; onReverify(platform) }) { Text("重新验证") }
-            },
-            dismissButton = {
-                TextButton(onClick = { managing = null; signingOut = platform }) {
-                    Text("退出登录", color = cs.error)
-                }
-            },
-        )
-    }
-    signingOut?.let { platform ->
-        AlertDialog(
-            onDismissRequest = { signingOut = null },
-            title = { Text("退出${platform.fullName()}？") },
-            text = { Text("之后需要重新登录才能同步歌单和收藏。") },
-            confirmButton = {
-                TextButton(onClick = { signingOut = null; onSignOut(platform) }) {
-                    Text("退出", color = cs.error)
-                }
-            },
-            dismissButton = { TextButton(onClick = { signingOut = null }) { Text("取消") } },
-        )
-    }
-}
-
-private fun Platform.fullName(): String = when (this) {
-    Platform.NETEASE -> "网易云音乐"
-    Platform.QQ -> "QQ音乐"
-    Platform.KUGOU -> "酷狗音乐"
+    AccountDialogsHost(dialogs, onReverify = onReverify, onSignOut = onSignOut)
 }

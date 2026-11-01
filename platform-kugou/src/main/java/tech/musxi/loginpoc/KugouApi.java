@@ -52,17 +52,27 @@ public final class KugouApi {
 
     public static final class Session {
         public final String token, userId, nickname;
+        /** Optional raw profile image address; blank or oversized values become null. */
+        public final String avatarUrl;
         /** True only when the authenticated profile response echoed matching account IDs. */
         public final boolean accountIdEchoed;
         public Session(String token, String userId, String nickname) {
-            this(token, userId, nickname, false);
+            this(token, userId, nickname, null, false);
+        }
+        public Session(String token, String userId, String nickname, String avatarUrl) {
+            this(token, userId, nickname, avatarUrl, false);
         }
         private Session(String token, String userId, String nickname, boolean accountIdEchoed) {
+            this(token, userId, nickname, null, accountIdEchoed);
+        }
+        private Session(String token, String userId, String nickname, String avatarUrl,
+                boolean accountIdEchoed) {
             if (!validToken(token) || !validUserId(userId))
                 throw new IllegalArgumentException("登录凭证无效");
             this.token = token;
             this.userId = userId;
             this.nickname = cleanNickname(nickname);
+            this.avatarUrl = cleanAvatar(avatarUrl);
             this.accountIdEchoed = accountIdEchoed;
         }
     }
@@ -77,6 +87,18 @@ public final class KugouApi {
                 throw new IllegalArgumentException("登录状态无效");
             this.status = status;
             this.session = session;
+        }
+    }
+
+    public static final class Membership {
+        /** 1 confirmed active, 0 confirmed inactive, -1 insufficient or invalid data. */
+        public final int isVip;
+        public final Long expiresAtEpochMs;
+        public Membership(int isVip, Long expiresAtEpochMs) {
+            if (isVip < -1 || isVip > 1)
+                throw new IllegalArgumentException("Unsupported membership state");
+            this.isVip = isVip;
+            this.expiresAtEpochMs = expiresAtEpochMs;
         }
     }
 
@@ -109,6 +131,7 @@ public final class KugouApi {
     }
 
     public KugouApi(Device device) { this(device, KugouApi::executeHttps); }
+    KugouAuthorizedAudio authorizedAudio() { return new KugouAuthorizedAudio(device); }
     KugouApi(Device device, Transport transport) {
         if (device == null || transport == null) throw new IllegalArgumentException("缺少登录配置");
         this.device = device;
@@ -145,6 +168,66 @@ public final class KugouApi {
         return parseVerify(transport.execute(verifyRequest(device, session, now())), session);
     }
 
+    /** Fixed read-only membership query. Failure is isolated from account-session validity. */
+    public Membership membership(Session session) throws IOException {
+        if (session == null) throw error("credentials", "Missing authenticated session");
+        return membershipFromResponse(transport.execute(membershipRequest(device, session, now())));
+    }
+
+    static Request membershipRequest(Device device, Session session, long time) {
+        Map<String, String> params = defaults(device, time);
+        params.put("userid", session.userId);
+        params.put("token", session.token);
+        params.put("busi_type", "concept");
+        params.put("signature", androidSignature(params, ""));
+        return new Request("https://kugouvip.kugou.com/v1/get_union_vip", params, null,
+            headers(device, time));
+    }
+
+    static Membership membershipFromResponse(JSONObject body) throws IOException {
+        if (body == null) throw error("protocol", "Membership response is null");
+        JSONObject data = body.optJSONObject("data");
+        if (data == null) data = body;
+        Object rawUserVip = data.opt("is_vip");
+        Object rawBusiVip = data.opt("busi_vip");
+        if (rawUserVip != null && !(rawUserVip instanceof Number) && !(rawUserVip instanceof String))
+            throw error("protocol", "Membership is_vip has invalid type");
+        if (rawBusiVip != null && !(rawBusiVip instanceof org.json.JSONArray) && !(rawBusiVip instanceof JSONObject))
+            throw error("protocol", "Membership busi_vip has invalid type");
+
+        JSONObject concept = null;
+        boolean conceptComplete = false;
+        JSONObject[] values = rawBusiVip instanceof org.json.JSONArray
+            ? arrayObjects((org.json.JSONArray) rawBusiVip)
+            : rawBusiVip instanceof JSONObject ? new JSONObject[] {(JSONObject) rawBusiVip}
+            : new JSONObject[0];
+        for (JSONObject value : values) {
+            if (!"concept".equals(scalar(value, "busi_type"))) continue;
+            if (concept != null) {
+                concept = null;
+                conceptComplete = false;
+                break;
+            }
+            concept = value;
+            conceptComplete = true;
+        }
+
+        Long expiresAt = null;
+        if (conceptComplete && concept != null && concept.has("vip_end_time"))
+            expiresAt = parseKugouExpiry(concept.opt("vip_end_time"));
+
+        // A positive flag is authoritative; NO requires all state fields to be present and zero.
+        Boolean top = explicitKugouFlag(rawUserVip);
+        Boolean nested = conceptComplete && concept != null
+            ? explicitKugouFlag(concept.opt("is_vip")) : null;
+        if (Boolean.TRUE.equals(top) || Boolean.TRUE.equals(nested))
+            return new Membership(1, expiresAt);
+        boolean topZero = rawUserVip != null && Boolean.FALSE.equals(top);
+        boolean nestedZero = conceptComplete && concept != null && Boolean.FALSE.equals(nested);
+        return topZero && nestedZero && expiresAt != null
+            ? new Membership(0, expiresAt) : new Membership(-1, expiresAt);
+    }
+
     JSONObject libraryCall(String path, Session session, Map<String, String> extra, String body, boolean audio) throws IOException {
         if (!java.util.Arrays.asList("/v7/get_all_list", "/v4/get_list_all_file", "/pubsongs/v2/get_other_list_file_nofilt",
             "/v5/url", "/v3/search/song", "/cloudlist.service/v6/add_song", "/v4/delete_songs").contains(path)
@@ -162,6 +245,26 @@ public final class KugouApi {
         if (!"/cloudlist.service/v6/add_song".equals(path) && !"/pubsongs/v2/get_other_list_file_nofilt".equals(path))
             requestHeaders.put("x-router", audio ? "trackercdn.kugou.com" : "/v3/search/song".equals(path) ? "complexsearch.kugou.com" : "cloudlist.service.kugou.com");
         return transport.execute(new Request("https://gateway.kugou.com" + path, params, body, requestHeaders));
+    }
+
+    JSONObject collectionCall(Session session, boolean artist, String id, int page, int limit) throws IOException {
+        if(session==null || id==null || !id.matches("[1-9][0-9]{0,18}") || page<1 || page>667 || limit<1 || limit>30)
+            throw error("request","Invalid collection request");
+        long time=now();
+        Map<String,String> params=defaults(device,time);
+        params.put("userid",session.userId);params.put("token",session.token);
+        JSONObject data=new JSONObject();
+        try {
+            data.put(artist?"author_id":"album_id",id).put("page",page).put("pagesize",limit);
+            if(artist)data.put("appid",3116).put("clientver",11440).put("mid",device.mid).put("clienttime",time)
+                .put("key",md5("3116"+LITE_SALT+"11440"+time)).put("sort",1).put("area_code","all");
+            else data.put("is_buy","");
+        } catch(JSONException malformed){throw error("request","Invalid collection payload");}
+        String body=data.toString();params.put("signature",androidSignature(params,body));
+        Map<String,String> requestHeaders=headers(device,time);
+        requestHeaders.put("x-router","openapi.kugou.com");requestHeaders.put("kg-tid",artist?"220":"255");
+        String endpoint=artist?"https://openapi.kugou.com/kmr/v1/audio_group/author":"https://gateway.kugou.com/v1/album_audio/lite";
+        return transport.execute(new Request(endpoint,params,body,requestHeaders));
     }
 
     /**
@@ -330,7 +433,15 @@ public final class KugouApi {
             appendSchema(data, "data", 0, new int[] {0}, diagnostic);
             throw new ApiException("identity", "酷狗账号身份校验未通过，请重新登录", diagnostic.toString());
         }
-        return new Session(session.token, session.userId, nickname, found);
+        String avatarUrl = avatarFromData(data);
+        return new Session(session.token, session.userId, nickname,
+                avatarUrl == null ? session.avatarUrl : avatarUrl, found);
+    }
+
+    private static String avatarFromData(JSONObject data) {
+        Object value = data.opt("pic");
+        if (!(value instanceof String)) return null;
+        return cleanAvatar((String) value);
     }
 
     private static boolean validProfile(JSONObject data) {
@@ -530,11 +641,54 @@ public final class KugouApi {
         boolean library = "gateway.kugou.com".equals(url.getHost()) && java.util.Arrays.asList(
             "/v7/get_all_list", "/v4/get_list_all_file", "/pubsongs/v2/get_other_list_file_nofilt",
             "/v5/url", "/v3/search/song", "/cloudlist.service/v6/add_song", "/v4/delete_songs").contains(url.getPath());
+        boolean membership = "kugouvip.kugou.com".equals(url.getHost())
+            && "/v1/get_union_vip".equals(url.getPath());
+        boolean collection = ("openapi.kugou.com".equals(url.getHost()) && "/kmr/v1/audio_group/author".equals(url.getPath())) ||
+            ("gateway.kugou.com".equals(url.getHost()) && "/v1/album_audio/lite".equals(url.getPath()));
         boolean lyrics = "lyrics.kugou.com".equals(url.getHost()) &&
             java.util.Arrays.asList("/search", "/download").contains(url.getPath());
-        if (!"https".equals(url.getProtocol()) || (!login && !profile && !library && !lyrics)
+        if (!"https".equals(url.getProtocol()) || (!login && !profile && !library && !membership && !lyrics && !collection)
             || url.getUserInfo() != null || (url.getPort() != -1 && url.getPort() != 443) || url.getRef() != null)
             throw error("endpoint", "请求目标不在允许的酷狗官方接口范围内");
+    }
+
+    private static JSONObject[] arrayObjects(org.json.JSONArray values) throws IOException {
+        JSONObject[] result = new JSONObject[values.length()];
+        for (int i = 0; i < result.length; i++) {
+            result[i] = values.optJSONObject(i);
+            if (result[i] == null) throw error("protocol", "Membership busi_vip contains a non-object");
+        }
+        return result;
+    }
+
+    private static Boolean explicitKugouFlag(Object value) {
+        if (value instanceof Number) {
+            double number = ((Number) value).doubleValue();
+            if (!Double.isFinite(number)) return null;
+            if (number == 1d) return Boolean.TRUE;
+            if (number == 0d) return Boolean.FALSE;
+            return null;
+        }
+        if (value instanceof String) {
+            String text = ((String) value).trim();
+            if ("1".equals(text)) return Boolean.TRUE;
+            if ("0".equals(text)) return Boolean.FALSE;
+        }
+        return null;
+    }
+
+    private static Long parseKugouExpiry(Object value) {
+        if (!(value instanceof Number) && !(value instanceof String)) return null;
+        String text = String.valueOf(value).trim();
+        if (!text.matches("[0-9]{1,13}")) return null;
+        try {
+            long raw = Long.parseLong(text);
+            if (raw <= 0) return null;
+            long millis = raw < 100_000_000_000L ? Math.multiplyExact(raw, 1000L) : raw;
+            return Math.subtractExact(millis, 8L * 60L * 60L * 1000L);
+        } catch (ArithmeticException | NumberFormatException invalid) {
+            return null;
+        }
     }
 
     private static String md5(String text) {
@@ -556,6 +710,13 @@ public final class KugouApi {
         if (nickname == null || nickname.isEmpty()) return "酷狗用户";
         String result = nickname.replaceAll("[\\p{Cc}\\p{Cf}]", "");
         return result.length() > 120 ? result.substring(0, 120) : result;
+    }
+    private static String cleanAvatar(String avatarUrl) {
+        if (avatarUrl == null) return null;
+        String clean = avatarUrl.trim();
+        if (clean.isEmpty() || clean.length() > 2048
+                || clean.matches("(?s).*[\\p{Cc}\\p{Cf}].*")) return null;
+        return clean;
     }
     private static void requireKey(String key) throws IOException {
         if (!validKey(key)) throw error("protocol", "登录请求标识无效，请重新发起登录");

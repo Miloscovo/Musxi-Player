@@ -9,7 +9,7 @@ internal fun <T> resolvePreferredQuality(platform: String, preferred: String?, e
     var last: Throwable? = null
     for (id in PlaybackQualities.candidates(platform, preferred)) {
         try { return request(id) } catch (error: Exception) {
-            if (category(error) !in setOf("permission", "unavailable")) throw error
+            if (category(error) !in setOf("permission", "membership", "copyright", "preview", "unavailable")) throw error
             last = error
         }
     }

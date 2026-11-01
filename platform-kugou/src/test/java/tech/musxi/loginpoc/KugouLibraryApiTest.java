@@ -444,6 +444,8 @@ public class KugouLibraryApiTest {
         KugouLibraryApi.Page<KugouLibraryApi.Playlist> p=KugouLibraryApi.parsePlaylists(json("{status:1,data:{info:[{listid:1,name:'Fixture',count:3}],total:2}}"),0,1);
         assertEquals(1,p.nextOffset);assertEquals(2,p.total);assertEquals(3,p.items.get(0).trackCount);
         assertEquals(-1,KugouLibraryApi.parsePlaylists(json("{status:1,data:{info:null}}"),30,30).nextOffset);
+        rejects("incomplete",()->KugouLibraryApi.parsePlaylists(json("{status:1,data:{info:null}}"),0,30));
+        assertTrue(KugouLibraryApi.parsePlaylists(json("{status:1,data:{info:null,total:0}}"),0,30).items.isEmpty());
         assertEquals(30,KugouLibraryApi.parsePlaylists(json("{status:1,data:{info:[{listid:1,count:3}]}}"),0,30).nextOffset);
         rejects("protocol",()->KugouLibraryApi.parsePlaylists(json("{status:1,data:{}}"),0,30));
         rejects("incomplete",()->KugouLibraryApi.parsePlaylists(json("{status:1,data:{info:[],total:2}}"),0,30));
@@ -459,9 +461,13 @@ public class KugouLibraryApiTest {
         KugouLibraryApi.Playlist own=page.items.get(0),favorite=page.items.get(1);
         KugouLibraryApi.Playlist other=page.items.get(2),legacy=page.items.get(3);
         assertTrue(own.editable);assertFalse(own.readOnly);assertNull(own.sourceGlobalId);
+        assertEquals(KugouLibraryApi.Playlist.Kind.CREATED,own.kind);
         assertTrue(favorite.favorite);assertTrue(favorite.editable);assertFalse(favorite.readOnly);
+        assertEquals(KugouLibraryApi.Playlist.Kind.LIKED,favorite.kind);
         assertEquals("9001",other.sourceGlobalId);assertFalse(other.editable);assertTrue(other.readOnly);
+        assertEquals(KugouLibraryApi.Playlist.Kind.COLLECTED,other.kind);
         assertNull(legacy.sourceGlobalId);assertFalse(legacy.editable);assertTrue(legacy.readOnly);
+        assertEquals(KugouLibraryApi.Playlist.Kind.OTHER,legacy.kind);
     }
     @Test public void sourcePlaylistDetailUsesFixedEndpointAndKeepsPublishedOrder() throws Exception {
         List<KugouApi.Request> requests=new ArrayList<>();
@@ -699,11 +705,11 @@ public class KugouLibraryApiTest {
         assertTrue(a.url.startsWith("https://"));
     }
     @Test public void rejectsTrialAndWrongHashAndWrongQuality() throws Exception {
-        rejects("permission",()->KugouLibraryApi.parseAudio(audio().put("freeTrialInfo",new JSONObject()),HASH,0));
-        rejects("permission",()->KugouLibraryApi.parseAudio(audio().put("is_free_part",1),HASH,0));
-        rejects("permission",()->KugouLibraryApi.parseAudio(audio().put("is_free_part",true),HASH,0));
-        rejects("permission",()->KugouLibraryApi.parseAudio(audio().put("is_free_part","unknown"),HASH,0));
-        rejects("permission",()->KugouLibraryApi.parseAudio(audio().put("hash_offset",json("{end_ms:30000}")),HASH,0));
+        rejects("preview",()->KugouLibraryApi.parseAudio(audio().put("freeTrialInfo",new JSONObject()),HASH,0));
+        rejects("preview",()->KugouLibraryApi.parseAudio(audio().put("is_free_part",1),HASH,0));
+        rejects("preview",()->KugouLibraryApi.parseAudio(audio().put("is_free_part",true),HASH,0));
+        rejects("preview",()->KugouLibraryApi.parseAudio(audio().put("is_free_part","unknown"),HASH,0));
+        rejects("preview",()->KugouLibraryApi.parseAudio(audio().put("hash_offset",json("{end_ms:30000}")),HASH,0));
         rejects("identity",()->KugouLibraryApi.parseAudio(audio().put("hash","b".repeat(32)),HASH,0));
         rejects("identity",()->KugouLibraryApi.parseAudio(audio().put("hash","b".repeat(32)).put("std_hash","c".repeat(32)),HASH,0));
         rejects("unavailable",()->KugouLibraryApi.parseAudio(audio().put("bitRate",320000),HASH,0));
@@ -739,6 +745,67 @@ public class KugouLibraryApiTest {
         Map<String,String> params=new LinkedHashMap<>(request.params);String signature=params.remove("signature");
         assertEquals(KugouApi.androidSignature(params,null),signature);assertEquals(1,probes.size());
     }
+    @Test public void permissionSurvivesEveryAuthorizedAudioFailure() throws Exception {
+        List<IOException> failures=List.of(
+            new KugouApi.ApiException("identity","fixture"),
+            new KugouApi.ApiException("protocol","fixture"),
+            new KugouApi.ApiException("risk","fixture"),
+            new KugouApi.ApiException("rate","fixture"),
+            new KugouApi.ApiException("expired","fixture"),
+            new java.net.SocketTimeoutException("fixture"),
+            new IOException("fixture"));
+        List<String> codes=List.of("identity","protocol","risk","rate","expired","timeout","network");
+        for(int index=0;index<failures.size();index++) {
+            IOException failure=failures.get(index);
+            KugouApi.Device device=new KugouApi.Device("b".repeat(32));
+            int[] authorizedRequests={0};
+            KugouLibraryApi library=new KugouLibraryApi(
+                new KugouApi(device,r->{throw new KugouApi.ApiException("permission","fixture");}),
+                url->{},new KugouAuthorizedAudio(device,r->{authorizedRequests[0]++;throw failure;}));
+            try {
+                library.audio(new KugouApi.Session("fixture-token","123","Fixture"),HASH+"_12_34",0,
+                    "kugou:320",true);
+                fail("Expected the confirmed permission denial");
+            } catch(KugouApi.ApiException expected) {
+                assertEquals("permission",expected.code);
+                KugouApi.ApiException suppressed=(KugouApi.ApiException)expected.getSuppressed()[0];
+                assertEquals(codes.get(index),suppressed.code);
+                assertFalse(suppressed.getMessage().contains("fixture"));
+            }
+            assertEquals(1,authorizedRequests[0]);
+        }
+    }
+    @Test public void disabledAuthorizedAudioSkipsAuthorizationAndKeepsFreePlayback() throws Exception {
+        KugouApi.Device device=new KugouApi.Device("b".repeat(32));
+        List<String> qualities=new ArrayList<>();
+        int[] authorizedRequests={0};
+        KugouLibraryApi library=new KugouLibraryApi(new KugouApi(device,r->{
+            qualities.add(r.params.get("quality"));
+            if("128".equals(r.params.get("quality")))return audio();
+            throw new KugouApi.ApiException("permission","fixture");
+        }),url->{},new KugouAuthorizedAudio(device,r->{
+            authorizedRequests[0]++;throw new AssertionError("Authorized request must stay disabled");
+        }));
+        KugouApi.Session session=new KugouApi.Session("fixture-token","123","Fixture");
+        assertEquals("kugou:128",
+            library.audio(session,HASH+"_12_34",0,"kugou:128",false).qualityId);
+        try {
+            library.audio(session,HASH+"_12_34",0,"kugou:320",false);
+            fail("Expected the basic permission denial");
+        } catch(KugouApi.ApiException expected) {
+            assertEquals("permission",expected.code);assertEquals(0,expected.getSuppressed().length);
+        }
+        try {
+            library.audio(session,HASH+"_12_34",0,"kugou:high",false);
+            fail("Expected high quality to require permission");
+        } catch(KugouApi.ApiException expected) {
+            assertEquals("permission",expected.code);
+        }
+        List<KugouLibraryApi.AudioQuality> menu=library.qualities(session,HASH+"_12_34",0,false);
+        assertEquals(1,menu.size());assertEquals("kugou:128",menu.get(0).id);
+        assertEquals(0,authorizedRequests[0]);
+        assertFalse(qualities.contains("high"));
+    }
     @Test public void qualitiesProbeEachExactQualityAndExactAudioReturnsActualId() throws Exception {
         List<KugouApi.Request> requests=new ArrayList<>();
         KugouApi api=new KugouApi(new KugouApi.Device("b".repeat(32)),r->{
@@ -763,6 +830,68 @@ public class KugouLibraryApiTest {
         assertEquals("kugou:320",audio.qualityId);
         assertEquals("320",requests.get(requests.size()-1).params.get("quality"));
         assertEquals(3,probes.size());
+    }
+    @Test public void optionalHighProbeFailuresKeepUsableQualitiesAndExplicitPlaybackStillFails() throws Exception {
+        for(String code:List.of("protocol","risk","rate","timeout","http","expired")) {
+            KugouApi.Device device=new KugouApi.Device("b".repeat(32));
+            KugouApi.ApiException denial=new KugouApi.ApiException(code,"fixture");
+            KugouApi api=new KugouApi(device,r->{
+                JSONObject response=audio();
+                try { if("320".equals(r.params.get("quality")))response.put("bitRate",320000); }
+                catch(org.json.JSONException malformed){throw new IOException(malformed);}
+                return response;
+            });
+            KugouAuthorizedAudio authorized=new KugouAuthorizedAudio(device,r->{throw denial;});
+            KugouLibraryApi library=new KugouLibraryApi(api,url->{},authorized);
+            KugouApi.Session session=new KugouApi.Session("fixture-token","123","Fixture");
+            List<KugouLibraryApi.AudioQuality> choices=library.qualities(session,HASH+"_12_34",0);
+            assertEquals(code,2,choices.size());
+            assertEquals("kugou:128",choices.get(0).id);
+            assertEquals("kugou:320",choices.get(1).id);
+            try {library.audio(session,HASH+"_12_34",0,"kugou:high");fail(code);}
+            catch(KugouApi.ApiException expected){assertSame(denial,expected);}
+        }
+    }
+    @Test public void optionalHighTransportFailureDoesNotBreakTheMenu() throws Exception {
+        KugouApi.Device device=new KugouApi.Device("b".repeat(32));
+        KugouLibraryApi library=new KugouLibraryApi(new KugouApi(device,r->audio()),url->{},
+            new KugouAuthorizedAudio(device,r->{throw new java.net.SocketTimeoutException();}));
+        assertEquals(1,library.qualities(new KugouApi.Session("fixture-token","123","Fixture"),HASH+"_12_34",0).size());
+    }
+    @Test public void rejectedStandardVariantKeepsAnIndependentlyVerifiedHigherVariant() throws Exception {
+        KugouApi.Device device=new KugouApi.Device("b".repeat(32));
+        KugouApi api=new KugouApi(device,r->{
+            if(!"320".equals(r.params.get("quality")))throw new KugouApi.ApiException("identity","fixture");
+            try{return audio().put("bitRate",320000);}
+            catch(org.json.JSONException failure){throw new IOException(failure);}
+        });
+        KugouLibraryApi library=new KugouLibraryApi(api,url->{},
+            new KugouAuthorizedAudio(device,r->{throw new KugouApi.ApiException("protocol","fixture");}));
+        KugouApi.Session session=new KugouApi.Session("fixture-token","123","Fixture");
+        List<KugouLibraryApi.AudioQuality> choices=library.qualities(session,HASH+"_12_34",0);
+        assertEquals(1,choices.size());assertEquals("kugou:320",choices.get(0).id);
+        rejects("identity",()->library.audio(session,HASH+"_12_34",0,"kugou:128"));
+    }
+    @Test public void noVerifiedVariantPreservesTheOriginalFailure() throws Exception {
+        KugouApi.Device device=new KugouApi.Device("b".repeat(32));
+        KugouApi.ApiException failure=new KugouApi.ApiException("identity","fixture");
+        KugouLibraryApi library=new KugouLibraryApi(new KugouApi(device,r->{throw failure;}),url->{},
+            new KugouAuthorizedAudio(device,r->{throw new java.net.SocketTimeoutException();}));
+        try { library.qualities(new KugouApi.Session("fixture-token","123","Fixture"),HASH+"_12_34",0);fail(); }
+        catch(KugouApi.ApiException expected){assertSame(failure,expected);}
+    }
+    @Test public void accountRiskStopsFurtherProbesAndKeepsAlreadyVerifiedChoices() throws Exception {
+        for(String code:List.of("risk","rate","expired")) {
+            KugouApi.Device device=new KugouApi.Device("b".repeat(32));
+            List<String> requested=new ArrayList<>();
+            KugouLibraryApi library=new KugouLibraryApi(new KugouApi(device,r->{
+                requested.add(r.params.get("quality"));
+                if("128".equals(r.params.get("quality")))return audio();
+                throw new KugouApi.ApiException(code,"fixture");
+            }),url->{},new KugouAuthorizedAudio(device,r->{fail("Do not sign another probe");return null;}));
+            List<KugouLibraryApi.AudioQuality> choices=library.qualities(new KugouApi.Session("fixture-token","123","Fixture"),HASH+"_12_34",0);
+            assertEquals(1,choices.size());assertEquals(List.of("128","320"),requested);
+        }
     }
     @Test public void fixedEndpointsAndCdnAuthorityRejectForeignTargets() throws Exception {
         KugouApi.requireEndpoint(new URL("https://gateway.kugou.com/v5/url"));

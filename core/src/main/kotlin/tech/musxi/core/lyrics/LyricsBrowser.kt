@@ -17,6 +17,8 @@ data class LyricsState(
     val error: String? = null,
     val translation: LyricsTranslation = LyricsTranslation(),
     val canRefreshTranslation: Boolean = false,
+    val origin: LyricsOrigin = LyricsOrigin.AUTO,
+    val offsetMs: Long = 0,
 )
 
 /** Main-thread source/account fences. Fetch parses off-thread; no raw responses enter state. */
@@ -26,6 +28,8 @@ class LyricsBrowser(
     private val fetchTranslation: ((MediaKey, ParsedLyrics, Boolean, (Result<ParsedLyrics>) -> Unit) -> Unit)?,
     private val guardedFetch: ((MediaKey, () -> Boolean, (Result<ParsedLyrics>) -> Unit) -> Unit)? = null,
     private val releaseDocument: (ParsedLyrics) -> Unit = {},
+    private val fetchForOriginal: ((MediaKey, MediaKey, () -> Boolean, (Result<ParsedLyrics>) -> Unit) -> Unit)? = null,
+    private val allowCachedUnverified: Boolean = false,
 ) {
     constructor(identity: (Platform) -> LibraryCacheIdentity?,
         fetch: (MediaKey, (Result<ParsedLyrics>) -> Unit) -> Unit) : this(identity, fetch, null)
@@ -43,8 +47,8 @@ class LyricsBrowser(
 
     fun follow(queue: MediaKey?, source: MediaKey?, positionMs: Long) {
         position = positionMs.coerceAtLeast(0)
-        val queueOwner = queue?.let { identity(it.platform) }?.takeIf { it.verified }
-        val sourceOwner = source?.let { identity(it.platform) }?.takeIf { it.verified }
+        val queueOwner = queue?.let { identity(it.platform) }?.takeIf { it.verified || allowCachedUnverified }
+        val sourceOwner = source?.let { identity(it.platform) }?.takeIf { it.verified || allowCachedUnverified }
         val next = if (queue != null && source != null && queueOwner != null && sourceOwner != null)
             Target(queue, source, queueOwner, sourceOwner) else null
         cache.keys.filter { !authorized(it) }.forEach { remove(it) }
@@ -73,6 +77,12 @@ class LyricsBrowser(
     }
 
     fun cancel() { ++revision; ++translationRevision; target = null; mutable.value = LyricsState() }
+
+    /** Drop retained documents and fence old callbacks; playback itself is unaffected. */
+    fun clearCache() {
+        cancel()
+        cache.keys.toList().forEach(::remove)
+    }
 
     private fun remove(current: Target) { cache.remove(current)?.let { releaseDocument(it.original) } }
 
@@ -103,7 +113,8 @@ class LyricsBrowser(
                 mutable.value = LyricsState(current.source, LyricsStatus.ERROR, error = category)
             }
         }
-        if (guardedFetch != null) guardedFetch.invoke(current.source, ::isCurrent, callback)
+        if (fetchForOriginal != null) fetchForOriginal.invoke(current.queue, current.source, ::isCurrent, callback)
+        else if (guardedFetch != null) guardedFetch.invoke(current.source, ::isCurrent, callback)
         else fetch(current.source, callback)
     }
 
@@ -142,23 +153,23 @@ class LyricsBrowser(
         }
     }
 
-    private fun authorized(value: Target) = value.queueOwner.sameAttempt(identity(value.queue.platform)) &&
-        value.sourceOwner.sameAttempt(identity(value.source.platform)) &&
-        identity(value.queue.platform)?.verified == true && identity(value.source.platform)?.verified == true
+    private fun authorized(value: Target) = value.queueOwner == identity(value.queue.platform) &&
+        value.sourceOwner == identity(value.source.platform)
 
     private fun publish(key: MediaKey, parsed: ParsedLyrics) {
         mutable.value = LyricsState(key, when {
             parsed.lines.isNotEmpty() -> LyricsStatus.TIMED
             parsed.plainText.isNotBlank() -> LyricsStatus.PLAIN
             else -> LyricsStatus.EMPTY
-        }, parsed.lines, parsed.plainText, LrcParser.activeIndex(parsed.lines, position),
+        }, parsed.lines, parsed.plainText, LrcParser.activeIndex(parsed.lines, position - parsed.offsetMs),
             translation = parsed.translation,
-            canRefreshTranslation = fetchTranslation != null && parsed.lines.isNotEmpty())
+            canRefreshTranslation = fetchTranslation != null && parsed.lines.isNotEmpty(),
+            origin = parsed.origin, offsetMs = parsed.offsetMs)
     }
 
     private fun synchronize() {
         val value = state.value
-        val index = LrcParser.activeIndex(value.lines, position)
+        val index = LrcParser.activeIndex(value.lines, position - value.offsetMs)
         if (index != value.activeIndex) mutable.value = value.copy(activeIndex = index)
     }
 }

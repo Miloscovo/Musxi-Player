@@ -79,18 +79,8 @@ public final class SessionStore {
                 if (plaintext.length > MAX_PLAINTEXT_BYTES) {
                     throw new IOException("Saved login exceeds the storage limit.");
                 }
-                JSONObject json = new JSONObject(new String(plaintext, StandardCharsets.UTF_8));
-                if (!(json.opt("version") instanceof Integer)
-                        || json.getInt("version") != 1
-                        || !(json.opt("token") instanceof String)
-                        || !(json.opt("userId") instanceof String)
-                        || !(json.opt("nickname") instanceof String)) {
-                    throw new IOException("Saved login has an invalid format.");
-                }
-                KugouApi.Session session = new KugouApi.Session(json.getString("token"),
-                        json.getString("userId"), json.getString("nickname"));
-                validate(session);
-                return session;
+                return decodeSession(
+                        new JSONObject(new String(plaintext, StandardCharsets.UTF_8)));
             } catch (GeneralSecurityException | JSONException | RuntimeException error) {
                 // Provider/JSON exceptions may include private material: do not chain them.
                 throw new IOException("Saved login cannot be decrypted or is invalid. Sign in again.");
@@ -107,12 +97,8 @@ public final class SessionStore {
             byte[] plaintext = null;
             byte[] encrypted = null;
             try {
-                JSONObject json = new JSONObject();
-                json.put("version", 1);
-                json.put("token", session.token);
-                json.put("userId", session.userId);
-                json.put("nickname", session.nickname);
-                plaintext = json.toString().getBytes(StandardCharsets.UTF_8);
+                plaintext = encodeSession(session).toString()
+                        .getBytes(StandardCharsets.UTF_8);
                 if (plaintext.length > MAX_PLAINTEXT_BYTES) {
                     throw new IOException("Login exceeds the storage limit.");
                 }
@@ -199,9 +185,45 @@ public final class SessionStore {
                 || session.token.length() > 4096 || containsControl(session.token)
                 || session.userId == null || !session.userId.matches("[1-9][0-9]{0,31}")
                 || session.nickname == null || session.nickname.length() > 256
-                || containsControl(session.nickname)) {
+                || containsControl(session.nickname)
+                || (session.avatarUrl != null && (session.avatarUrl.isEmpty()
+                    || session.avatarUrl.length() > 2048
+                    || session.avatarUrl.trim().isEmpty()))) {
             throw new IOException("Login data is invalid.");
         }
+    }
+
+    static JSONObject encodeSession(KugouApi.Session session) throws IOException, JSONException {
+        validate(session);
+        JSONObject json = new JSONObject();
+        json.put("version", 1);
+        json.put("token", session.token);
+        json.put("userId", session.userId);
+        json.put("nickname", session.nickname);
+        if (session.avatarUrl != null) json.put("avatarUrl", session.avatarUrl);
+        return json;
+    }
+
+    static KugouApi.Session decodeSession(JSONObject json) throws IOException, JSONException {
+        if (!(json.opt("version") instanceof Integer)
+                || json.getInt("version") != 1
+                || !(json.opt("token") instanceof String)
+                || !(json.opt("userId") instanceof String)
+                || !(json.opt("nickname") instanceof String)) {
+            throw new IOException("Saved login has an invalid format.");
+        }
+        String avatarUrl = null;
+        Object savedAvatar = json.opt("avatarUrl");
+        if (savedAvatar instanceof String) {
+            String value = (String) savedAvatar;
+            if (!value.isEmpty() && value.length() <= 2048 && !value.trim().isEmpty()) {
+                avatarUrl = value;
+            }
+        }
+        KugouApi.Session session = new KugouApi.Session(json.getString("token"),
+                json.getString("userId"), json.getString("nickname"), avatarUrl);
+        validate(session);
+        return session;
     }
 
     private static boolean containsControl(String value) {

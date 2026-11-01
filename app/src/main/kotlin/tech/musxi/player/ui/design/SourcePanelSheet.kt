@@ -1,18 +1,19 @@
 package tech.musxi.player.ui.design
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import tech.musxi.core.account.Platform
 import tech.musxi.core.library.MediaKey
 import tech.musxi.core.library.SongSummary
+import tech.musxi.core.playback.FailureReason
 import tech.musxi.core.playback.SourceCandidate
+import tech.musxi.core.playback.SourceSearchProgress
+import tech.musxi.core.playback.SourceSearchStatus
+import tech.musxi.core.playback.SourceSelectionMode
 import tech.musxi.core.playback.SourceSelectionPhase
 import tech.musxi.core.playback.SourceSelectionState
 import tech.musxi.player.ui.player.FullPlayer
@@ -26,38 +27,38 @@ import tech.musxi.player.ui.theme.MusxiTheme
 import tech.musxi.player.ui.theme.ThemeMode
 
 /**
- * Source panel sheet, composed the way it really appears: the player behind a scrim, the panel on
- * top. Rendering the panel alone would hide the one thing the design leans on — that the user can
- * still see which track is in trouble.
+ * Source panel sheet, composed the way it really appears: the player behind, the sheet on top with
+ * its own scrim, resting at the middle detent. Rendering the panel alone would hide the one thing
+ * the design leans on, that the user can still see which track is in trouble.
+ *
+ * Like the shell today there is no glass host here, so the sheet draws its solid fallback.
  */
 @Composable
 fun SourcePanelSheet(accent: Accent, mode: ThemeMode, player: PlayerUi, panel: SourcePanelUi) {
     MusxiTheme(accent = accent, mode = mode) {
         Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
             FullPlayer(ui = player, dark = mode != ThemeMode.LIGHT)
-            Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.32f)))
-            Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.Bottom) {
-                SourcePanel(ui = panel, dark = mode != ThemeMode.LIGHT)
-            }
+            SourcePanel(ui = panel, dark = mode != ThemeMode.LIGHT)
         }
     }
 }
 
 // --- samples ---------------------------------------------------------------------------------
 
+/** The song the Kugou account cannot play without membership. */
 private val original = SongSummary(
-    key = MediaKey(Platform.NETEASE, "1173100"),
+    key = MediaKey(Platform.KUGOU, "k-1173100"),
     title = "晴天",
     artists = listOf("周杰伦"),
     album = "叶惠美",
     durationMs = 269_000,
 )
 
-private fun candidate(id: String, platform: Platform, album: String, durationMs: Long) =
+private fun candidate(id: String, platform: Platform, title: String, album: String, durationMs: Long) =
     SourceCandidate(
         song = SongSummary(
             key = MediaKey(platform, id),
-            title = "晴天",
+            title = title,
             artists = listOf("周杰伦"),
             album = album,
             durationMs = durationMs,
@@ -65,29 +66,35 @@ private fun candidate(id: String, platform: Platform, album: String, durationMs:
         accountGeneration = 1,
     )
 
-/** Two plausible candidates, the first of which is an exact-length match. */
+/** Four versions around the original's length: a studio match, a live take (+32s), a short cut (-8s). */
 private val candidates = listOf(
-    candidate("k1", Platform.KUGOU, "叶惠美", 269_400),
-    candidate("q1", Platform.QQ, "叶惠美", 271_000),
-    // A live take: same title, clearly longer. This is the case the duration note exists for.
-    candidate("k2", Platform.KUGOU, "魔天伦 世界巡回演唱会", 302_000),
+    candidate("n1", Platform.NETEASE, "晴天", "叶惠美", 270_000),
+    candidate("n2", Platform.NETEASE, "晴天（Live）", "魔天伦 世界巡回演唱会", 301_000),
+    candidate("q1", Platform.QQ, "晴天", "叶惠美", 261_000),
+    candidate("q2", Platform.QQ, "晴天", "周杰伦的床边故事", 272_000),
 )
+
+private fun progress(platform: Platform, status: SourceSearchStatus, count: Int = 0) =
+    SourceSearchProgress(platform, status, completedPlatforms = 1, totalPlatforms = 2, candidateCount = count)
 
 private fun state(
     phase: SourceSelectionPhase,
+    mode: SourceSelectionMode = SourceSelectionMode.AUTO,
     list: List<SourceCandidate> = emptyList(),
-    automaticIndex: Int? = null,
-    deadline: Long? = null,
+    progress: List<SourceSearchProgress> = emptyList(),
+    reasons: Map<Platform, FailureReason> = mapOf(Platform.KUGOU to FailureReason.MEMBERSHIP_REQUIRED),
     partial: Boolean = false,
     error: String? = null,
 ) = SourceSelectionState(
+    revision = 1,
     phase = phase,
+    mode = mode,
     original = original,
     candidates = list,
-    automaticIndex = automaticIndex,
-    deadlineElapsedMs = deadline,
     partial = partial,
     error = error,
+    platformProgress = progress,
+    failureReasons = reasons,
 )
 
 /** The player behind the sheet: this track is the one that failed. */
@@ -96,7 +103,7 @@ fun playerForPanel() = PlayerUi(
     artist = "周杰伦",
     album = "叶惠美",
     coverSeed = "晴天",
-    queuePlatform = Platform.NETEASE,
+    queuePlatform = Platform.KUGOU,
     positionMs = 42_000,
     durationMs = 269_000,
     playing = false,
@@ -116,16 +123,27 @@ fun playerForPanelFailed() = playerForPanel().copy(swapSearching = false)
 
 private const val NOW = 1_000_000L
 
-/** Searching: placeholders, no counts yet. */
-fun panelSearching() = sourcePanelUiOf(state(SourceSelectionPhase.SEARCHING), NOW)
+/** Searching: NetEase has answered, QQ is still looking, Kugou is the original. */
+fun panelSearching() = sourcePanelUiOf(
+    state(
+        SourceSelectionPhase.SEARCHING,
+        progress = listOf(
+            progress(Platform.NETEASE, SourceSearchStatus.COMPLETE, count = 2),
+            progress(Platform.QQ, SourceSearchStatus.SEARCHING),
+        ),
+    ),
+    NOW,
+)
 
-/** Choosing with a live countdown: two seconds into the five-second wait. */
+/** Choosing between four versions of the song. */
 fun panelChoosing() = sourcePanelUiOf(
     state(
         SourceSelectionPhase.CHOOSING,
         list = candidates,
-        automaticIndex = 0,
-        deadline = NOW + 3_000L,
+        progress = listOf(
+            progress(Platform.NETEASE, SourceSearchStatus.COMPLETE, count = 2),
+            progress(Platform.QQ, SourceSearchStatus.COMPLETE, count = 2),
+        ),
     ),
     NOW,
 )
@@ -135,21 +153,53 @@ fun panelChoosingPartial() = sourcePanelUiOf(
     state(
         SourceSelectionPhase.CHOOSING,
         list = candidates.take(2),
-        automaticIndex = 0,
-        deadline = NOW + 3_000L,
+        progress = listOf(
+            progress(Platform.NETEASE, SourceSearchStatus.COMPLETE, count = 2),
+            progress(Platform.QQ, SourceSearchStatus.FAILURE),
+        ),
         partial = true,
     ),
     NOW,
 )
 
-/** Nothing found at all. */
+/** The user asked for another source: the headline is "换个音源", nothing has failed. */
+fun panelSearchingManual() = sourcePanelUiOf(
+    state(
+        SourceSelectionPhase.SEARCHING,
+        mode = SourceSelectionMode.MANUAL,
+        progress = listOf(progress(Platform.NETEASE, SourceSearchStatus.SEARCHING)),
+        reasons = emptyMap(),
+    ),
+    NOW,
+)
+
+/** Nothing found: NetEase has no rights, QQ returned nothing, Kugou needs membership. */
 fun panelFailed() = sourcePanelUiOf(
-    state(SourceSelectionPhase.FAILED, error = "no_candidates"),
+    state(
+        SourceSelectionPhase.FAILED,
+        progress = listOf(
+            progress(Platform.NETEASE, SourceSearchStatus.COMPLETE),
+            progress(Platform.QQ, SourceSearchStatus.COMPLETE),
+        ),
+        reasons = mapOf(
+            Platform.KUGOU to FailureReason.MEMBERSHIP_REQUIRED,
+            Platform.NETEASE to FailureReason.COPYRIGHT_RESTRICTED,
+        ),
+        error = "no_matching_candidates",
+    ),
     NOW,
 )
 
 /** Nothing found, but not every platform answered. */
 fun panelFailedPartial() = sourcePanelUiOf(
-    state(SourceSelectionPhase.FAILED, partial = true, error = "no_candidates"),
+    state(
+        SourceSelectionPhase.FAILED,
+        progress = listOf(
+            progress(Platform.NETEASE, SourceSearchStatus.COMPLETE),
+            progress(Platform.QQ, SourceSearchStatus.FAILURE),
+        ),
+        partial = true,
+        error = "no_matching_candidates",
+    ),
     NOW,
 )

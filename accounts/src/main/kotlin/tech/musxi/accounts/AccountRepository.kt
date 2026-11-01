@@ -11,6 +11,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.distinctUntilChanged
 import tech.musxi.core.account.*
 import tech.musxi.core.library.*
+import tech.musxi.core.lyrics.*
 import tech.musxi.core.diagnostics.*
 import tech.musxi.neteaseloginpoc.NeteaseApi
 import java.util.concurrent.Executors
@@ -19,11 +20,15 @@ import java.util.concurrent.TimeUnit
 /** Process-owned login execution. Activities receive state, never platform credentials. */
 class AccountRepository(context: Context) {
     private val app = context.applicationContext
+    val settingsRepository = AppSettingsRepository(app)
     private val playbackPreferences = app.getSharedPreferences("playback-preferences-v1", Context.MODE_PRIVATE)
     private val coordinator = AccountCoordinator()
     val states: StateFlow<Map<Platform, AccountState>> = coordinator.states
     private val gate = Any()
     private val queue = Executors.newSingleThreadScheduledExecutor()
+    private val membershipQueue = Executors.newSingleThreadExecutor()
+    private val membershipRequests = mutableMapOf<Platform, Long>() // every access holds gate
+    private val membershipRefreshGate = MembershipRefreshGate(SystemClock::elapsedRealtime)
     private val playbackSearch = Executors.newFixedThreadPool(2)
     private val requests = RequestLanes(queue, Executors.newSingleThreadExecutor(), playbackSearch)
     private val main = Handler(Looper.getMainLooper())
@@ -33,8 +38,29 @@ class AccountRepository(context: Context) {
     fun requestTimingSnapshot(): List<RequestMetricSummary> = requestMetrics.snapshot()
     fun clearRequestTimings() = requestMetrics.clear()
 
-    fun preferredQuality(platform: Platform): String? = playbackPreferences.getString(qualityPreferenceKey(platform), null)
-        ?.takeIf { it.startsWith("${platform.name.lowercase()}:") }
+    enum class DefaultAudioQuality { STANDARD, HIGH, LOSSLESS, BEST }
+    fun defaultAudioQuality(): DefaultAudioQuality = DefaultAudioQuality.valueOf(settingsRepository.settings.value.defaultQuality.name)
+
+    /** Applies to subsequent resolutions; a saved explicit platform choice has priority. */
+    fun setDefaultAudioQuality(value: DefaultAudioQuality) {
+        settingsRepository.setDefaultQuality(tech.musxi.core.playback.PreferredAudioQuality.valueOf(value.name))
+    }
+
+    fun clearPreferredQuality(platform: Platform) {
+        playbackPreferences.edit().remove(qualityPreferenceKey(platform)).apply()
+    }
+
+    fun preferredQuality(platform: Platform): String {
+        val prefix = platform.name.lowercase()
+        return playbackPreferences.getString(qualityPreferenceKey(platform), null)
+            ?.takeIf { tech.musxi.core.playback.PlaybackQualities.name(it) != null && it.startsWith("$prefix:") }
+            ?: "$prefix:" + when (defaultAudioQuality()) {
+                DefaultAudioQuality.BEST -> "best"
+                DefaultAudioQuality.STANDARD -> if (platform == Platform.KUGOU) "128" else "standard"
+                DefaultAudioQuality.HIGH -> when (platform) { Platform.KUGOU -> "320"; Platform.NETEASE -> "exhigh"; else -> "high" }
+                DefaultAudioQuality.LOSSLESS -> if (platform == Platform.KUGOU) "flac" else "lossless"
+            }
+    }
 
     fun rememberPreferredQuality(platform: Platform, qualityId: String) {
         require(qualityId.startsWith("${platform.name.lowercase()}:") && qualityId.length <= 64 && qualityId.none(Char::isISOControl))
@@ -42,12 +68,13 @@ class AccountRepository(context: Context) {
     }
 
     private fun qualityPreferenceKey(platform: Platform) = "quality.${platform.name.lowercase()}"
-    private val libraryCaches: Map<Platform, LibraryPageStore> = mapOf(
-        Platform.NETEASE to FileLibraryPageStore(java.io.File(app.noBackupFilesDir, "library-pages-v1")),
-        Platform.KUGOU to FileLibraryPageStore(java.io.File(app.noBackupFilesDir, "kugou-library-pages-v1"), Platform.KUGOU),
-        Platform.QQ to FileLibraryPageStore(java.io.File(app.noBackupFilesDir, "qq-library-pages-v1"), Platform.QQ),
-    )
+    private val contentMetadataCache = ContentMetadataCache(app.noBackupFilesDir)
+    private val libraryCaches: Map<Platform, LibraryPageStore> = contentMetadataCache.libraryPages
     private val cacheQueue = Executors.newSingleThreadExecutor()
+    private val lyricsCacheStore = contentMetadataCache.lyrics
+    private val lyricsBindings = Platform.entries.associateWith {
+        FileLyricsBindingStore(java.io.File(app.noBackupFilesDir, "lyrics-bindings-${it.name.lowercase()}-v1"))
+    }
     private val playbackJournals = Platform.entries.associateWith { platform ->
         tech.musxi.core.playback.FilePlaybackJournalStore(java.io.File(app.noBackupFilesDir,
             "playback-journal-${platform.name.lowercase()}-v1"), platform)
@@ -107,9 +134,11 @@ class AccountRepository(context: Context) {
                         clearLibraryCache(platform)
                     synchronized(gate) {
                         if (!coordinator.isCurrent(platform, token)) return@verify
+                        driver.save(verified)
                         sessions[platform] = verified
                         coordinator.connected(platform, token, profile(platform, driver.identity(verified)))
                     }
+                    refreshMembership(platform)
                 } catch (failure: Exception) { fail(platform, token, failure) }
             }
             verify
@@ -220,13 +249,38 @@ class AccountRepository(context: Context) {
     }
 
     fun setForeground(visible: Boolean) {
+        val returning = visible && !foreground
         foreground = visible
+        if (returning) Platform.entries.forEach { refreshMembership(it, force = false) }
         if (visible) queue.execute {
             pending.toMap().forEach { (platform, attempt) -> poll(platform, attempt.token) }
         }
     }
 
     fun checkNow(platform: Platform) { queue.execute { pending[platform]?.let { poll(platform, it.token) } } }
+
+    /** Optional, read-only entitlement metadata must never invalidate a verified login. */
+    fun refreshMembership(platform: Platform, force: Boolean = true) {
+        val generation = synchronized(gate) {
+            val state = states.value.getValue(platform)
+            if (state.phase != AccountPhase.CONNECTED || membershipRequests[platform] == state.generation) return
+            if (!membershipRefreshGate.accept(platform, state.generation, force)) return
+            state.generation.also { membershipRequests[platform] = it }
+        }
+        membershipQueue.execute {
+            val value = runCatching {
+                drivers.getValue(platform).membership(sessionSnapshot(platform, generation))
+            }.getOrDefault(Membership())
+            main.post {
+                synchronized(gate) {
+                    if (membershipRequests[platform] == generation) {
+                        membershipRequests.remove(platform)
+                        coordinator.membership(platform, generation, value)
+                    }
+                }
+            }
+        }
+    }
 
     private fun begin(platform: Platform): Long? = synchronized(gate) {
         val state = states.value.getValue(platform)
@@ -280,6 +334,7 @@ class AccountRepository(context: Context) {
             coordinator.connected(platform, token, profile(platform, driver.identity(verified)))
             if (platform == Platform.NETEASE) runCatching { temporaryImage.clear(token) }
         }
+        refreshMembership(platform)
     }
 
     /** Audio and bounded playback searches bypass bulk reads; session and delivery fences retain account ownership. */
@@ -448,11 +503,107 @@ class AccountRepository(context: Context) {
     /** Only the account worker waits; cacheQueue never waits for the account worker or UI. */
     private fun clearLibraryCache(platform: Platform) {
         val store = libraryCaches[platform] ?: return
-        cacheQueue.submit { store.clear(); playbackJournals.getValue(platform).clear() }.get()
+        cacheQueue.submit {
+            store.clear()
+            playbackJournals.getValue(platform).clear()
+            lyricsCacheStore.clearPlatform(platform)
+            lyricsBindings.values.forEach { it.removePlatform(platform) }
+        }.get()
+    }
+
+    /** Explicit lyrics-cache erasure preserves the user's manually saved bindings. */
+    fun clearLyricsCache(result: (Result<Unit>) -> Unit = {}) {
+        cacheQueue.execute {
+            val response = runCatching { lyricsCacheStore.clear() }
+            main.post { result(response) }
+        }
+    }
+
+    /** Settings-page maintenance; deliberately separate from disconnect's destructive cleanup. */
+    fun cachedContentBytes(kind: tech.musxi.core.cache.CacheKind, result: (Result<Long>) -> Unit) {
+        cacheQueue.execute {
+            val response = runCatching { contentMetadataCache.sizeBytes(kind) }
+            main.post { result(response) }
+        }
+    }
+
+    /** Clears only the selected metadata cache; does not touch accounts, bindings or journals. */
+    fun clearCachedContent(kind: tech.musxi.core.cache.CacheKind, result: (Result<Unit>) -> Unit) {
+        cacheQueue.execute {
+            val response = runCatching { contentMetadataCache.clear(kind) }
+            main.post { result(response) }
+        }
+    }
+
+    fun lyricsCache(key: MediaKey, expected: LibraryCacheIdentity,
+        write: ParsedLyrics? = null, result: (Result<LyricsCacheHit?>) -> Unit) {
+        cacheQueue.execute {
+            val response = runCatching {
+                if (expected != playbackIdentity(key.platform) || (write != null && !expected.verified))
+                    throw LibraryPageFailure("account_changed")
+                val store = lyricsCacheStore
+                if (write != null) store.write(expected.owner, key, write)
+                store.read(expected.owner, key)
+            }
+            main.post {
+                result(if (expected == playbackIdentity(key.platform)) response
+                    else Result.failure(LibraryPageFailure("account_changed")))
+            }
+        }
+    }
+
+    fun lyricsBinding(key: MediaKey, expected: LibraryCacheIdentity,
+        change: ((LyricsBinding?) -> LyricsBinding?)? = null,
+        result: (Result<LyricsBinding?>) -> Unit) {
+        cacheQueue.execute {
+            val response = runCatching {
+                if (expected != playbackIdentity(key.platform) || (change != null && !expected.verified))
+                    throw LibraryPageFailure("account_changed")
+                val store = lyricsBindings.getValue(key.platform)
+                val next = change?.invoke(store.read(expected.owner, key)) ?: if (change == null)
+                    store.read(expected.owner, key) else null
+                if (next != null) {
+                    val candidate = playbackIdentity(next.candidateKey.platform)
+                    if (next.originalKey != key || candidate == null || candidate.owner != next.candidateOwner ||
+                        (change != null && !candidate.verified) ||
+                        (change != null && candidate.generation != next.candidateGeneration))
+                        throw LibraryPageFailure("account_changed")
+                }
+                if (expected != playbackIdentity(key.platform)) throw LibraryPageFailure("account_changed")
+                if (change != null) {
+                    if (next == null) store.remove(expected.owner, key) else store.write(expected.owner, next)
+                }
+                next
+            }
+            main.post {
+                result(if (expected == playbackIdentity(key.platform)) response
+                    else Result.failure(LibraryPageFailure("account_changed")))
+            }
+        }
     }
 
     /** Opaque account ownership for public playback metadata; never exposes session material. */
     fun playbackIdentity(platform: Platform): LibraryCacheIdentity? = libraryCacheIdentity(platform)
+
+    /** Search every retained metadata page, including pages after an eviction gap. No network request. */
+    fun searchCachedPlaylist(playlist: MediaKey, query: String,
+        result: (Result<CachedPlaylistSearchResult>) -> Unit) {
+        if (query.length > 256 || query.any(Char::isISOControl)) {
+            result(Result.failure(LibraryPageFailure("request"))); return
+        }
+        val expected = libraryCacheIdentity(playlist.platform)
+            ?: return result(Result.failure(LibraryPageFailure("account_unavailable")))
+        cacheQueue.execute {
+            val response = runCatching {
+                if (expected != libraryCacheIdentity(playlist.platform)) throw LibraryPageFailure("account_changed")
+                CachedPlaylistSearch.search(libraryCaches.getValue(playlist.platform).readTrackPages(expected.owner, playlist), query)
+            }.recoverCatching { throw LibraryPageFailure((it as? LibraryPageFailure)?.category ?: "storage") }
+            main.post {
+                result(if (expected == libraryCacheIdentity(playlist.platform)) response
+                    else Result.failure(LibraryPageFailure("account_changed")))
+            }
+        }
+    }
 
     /** Same disk queue as disconnect/identity cleanup: stale writes cannot resurrect erased data. */
     fun playbackJournal(platform: Platform, expected: LibraryCacheIdentity,
@@ -488,9 +639,33 @@ class AccountRepository(context: Context) {
         return LibraryCacheIdentity(owner, state.generation, state.phase == AccountPhase.CONNECTED)
     }
 
+    /** Refresh display metadata without a login transition or a new account generation. */
+    fun refreshProfile(platform: Platform, result: (Result<Unit>) -> Unit = {}) {
+        val expected = states.value.getValue(platform)
+        if (expected.phase != AccountPhase.CONNECTED) {
+            main.post { result(Result.failure(LibraryUnavailable())) }; return
+        }
+        queue.execute {
+            val response = runCatching {
+                val driver = drivers.getValue(platform)
+                val verified = driver.verify(sessionSnapshot(platform, expected.generation))
+                val updated = profile(platform, driver.identity(verified))
+                synchronized(gate) {
+                    val current = states.value.getValue(platform)
+                    if (current.phase != AccountPhase.CONNECTED || current.generation != expected.generation ||
+                        updated.id != expected.profile?.id) throw LibraryUnavailable()
+                    driver.save(verified)
+                    sessions[platform] = verified
+                    check(coordinator.refreshProfile(platform, expected.generation, updated))
+                }
+            }
+            main.post { result(response) }
+        }
+    }
+
     private class LibraryUnavailable : java.io.IOException()
     private fun profile(platform: Platform, identity: Identity) = AccountProfile(platform, identity.id,
-        identity.name.filterNot { it.isISOControl() }.take(80))
+        identity.name.filterNot { it.isISOControl() }.take(80), AvatarPolicy.sanitize(platform, identity.avatarUrl))
 
     private fun fail(platform: Platform, token: Long, error: AccountError) {
         synchronized(gate) { coordinator.fail(platform, token, error) }

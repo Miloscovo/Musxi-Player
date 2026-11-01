@@ -5,6 +5,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -34,6 +35,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -43,8 +45,10 @@ import tech.musxi.core.library.PlaylistSummary
 import tech.musxi.core.library.SongSummary
 import tech.musxi.player.ui.components.Cover
 import tech.musxi.player.ui.components.LoadMorePill
+import tech.musxi.player.ui.components.PlainRow
 import tech.musxi.player.ui.components.PlatformTag
-import tech.musxi.player.ui.components.pressableRow
+import tech.musxi.player.ui.components.RowSpec
+import tech.musxi.player.ui.components.listLines
 import tech.musxi.player.ui.components.songSubtitle
 import tech.musxi.player.ui.model.formatDuration
 import tech.musxi.player.ui.theme.Space
@@ -242,10 +246,12 @@ private fun Header(state: TrackListUiState, playlist: PlaylistSummary, dark: Boo
 private fun ActionRow(state: TrackListUiState, onPlayAll: () -> Unit) {
     val cs = MaterialTheme.colorScheme
     val total = state.playlist?.trackCount ?: state.items.size
-    Row(
+    // A flow, so at large font sizes the progress note wraps under the button instead of being cut.
+    FlowRow(
         Modifier.fillMaxWidth().padding(top = Space.section),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        horizontalArrangement = Arrangement.spacedBy(Space.sibling),
+        verticalArrangement = Arrangement.spacedBy(RowSpec.vertical),
+        itemVerticalAlignment = Alignment.CenterVertically,
     ) {
         Button(
             onClick = onPlayAll,
@@ -295,11 +301,13 @@ private fun TrackLine(
 ) {
     val cs = MaterialTheme.colorScheme
     val slot = numberStyle.slot(digits)
+    // The number grows with the font, so "10" is not cut to "1" at 200%; never below its dp width.
+    val slotWidth = slot.width * LocalDensity.current.fontScale.coerceAtLeast(1f)
+    val lines = listLines()
     val accent = nowPlayingAccent()
-    Row(
-        Modifier.fillMaxWidth().height(56.dp).pressableRow(onClick = onClick),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
+    // A PlainRow like every list row: the content plus the shared padding, 56dp at least, so the row
+    // grows with the font instead of clipping its two lines.
+    PlainRow(onClick = onClick) {
         if (style == TrackRowStyle.COVER) {
             Cover(
                 seed = song.album.ifBlank { song.key.stableId },
@@ -316,7 +324,7 @@ private fun TrackLine(
                         // Same slot, same left edge: the signal replaces the number instead of
                         // being added next to it.
                         Box(
-                            Modifier.width(slot.width).height(20.dp),
+                            Modifier.width(slotWidth).height(20.dp),
                             contentAlignment = Alignment.CenterStart,
                         ) {
                             PlayingBars(accent)
@@ -326,7 +334,7 @@ private fun TrackLine(
                             numberStyle.label(index, digits),
                             // Baseline, not vertical centre: the number reads as the start of the
                             // title's line instead of floating between the two lines.
-                            modifier = Modifier.width(slot.width).alignByBaseline(),
+                            modifier = Modifier.width(slotWidth).alignByBaseline(),
                             style = MaterialTheme.typography.labelMedium.tabular.copy(
                                 fontWeight = FontWeight.Normal,
                             ),
@@ -344,7 +352,7 @@ private fun TrackLine(
                     // A cover row has no index slot to replace, so the playing signal is the one
                     // change that adds no element: the title, already where the eye lands.
                     color = if (playing && style == TrackRowStyle.COVER) accent else cs.onSurface,
-                    maxLines = 1,
+                    maxLines = lines,
                     overflow = TextOverflow.Ellipsis,
                 )
             }
@@ -352,10 +360,10 @@ private fun TrackLine(
                 if (preparing) "正在准备…" else songSubtitle(song),
                 style = MaterialTheme.typography.bodySmall,
                 color = if (preparing) accent else cs.onSurfaceVariant,
-                maxLines = 1,
+                maxLines = lines,
                 overflow = TextOverflow.Ellipsis,
                 modifier = if (style == TrackRowStyle.NUMBERED) {
-                    Modifier.padding(start = slot.width + 12.dp)
+                    Modifier.padding(start = slotWidth + 12.dp)
                 } else {
                     Modifier
                 },

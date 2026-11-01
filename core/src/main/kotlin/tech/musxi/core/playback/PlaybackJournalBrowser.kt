@@ -5,6 +5,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import tech.musxi.core.account.Platform
 import tech.musxi.core.library.LibraryCacheIdentity
 import tech.musxi.core.library.LibraryPageFailure
+import tech.musxi.core.library.MediaKey
 
 data class PlaybackJournalState(
     val queue: SavedPlaybackQueue? = null,
@@ -80,16 +81,20 @@ class PlaybackJournalBrowser(
         }
     }
 
-    fun save(platform: Platform, generation: Long, queue: SavedPlaybackQueue?, recent: RecentPlay? = null) {
-        val expected = identity(platform)?.takeIf { it.verified && it.generation == generation } ?: return
+    fun save(platform: Platform, generation: Long, queue: SavedPlaybackQueue?, recent: RecentPlay? = null,
+        completed: (Result<Unit>) -> Unit = {}) {
+        val expected = identity(platform)?.takeIf { it.verified && it.generation == generation }
+            ?: return completed(Result.failure(LibraryPageFailure("account_changed")))
         val token = revisions.getValue(platform) + 1
         revisions[platform] = token
         owners[platform] = expected
         access(platform, expected, { previous ->
             val recents = if (recent == null) previous.recent else listOf(recent) +
-                previous.recent.filter { it.original.key != recent.original.key }.take(99)
+                previous.recent.filter { it.original.key != recent.original.key }.take(299)
             PlaybackJournal(queue, recents)
         }) { response ->
+            completed(if (expected == identity(platform)) response.map { Unit }
+                else Result.failure(LibraryPageFailure("account_changed")))
             if (!current(platform, token, expected)) return@access
             response.onSuccess { publish(platform, state.value.getValue(platform).copy(queue = it.queue,
                 recent = it.recent, accountVerified = true, loading = false,
@@ -99,6 +104,13 @@ class PlaybackJournalBrowser(
     }
 
     fun clearRecent(platform: Platform) = change(platform) { it.copy(recent = emptyList()) }
+
+    fun removeRecent(platform: Platform, key: MediaKey) {
+        if (state.value.getValue(platform).recent.none { it.original.key == key }) return
+        change(platform) { journal ->
+            journal.copy(recent = journal.recent.filterNot { it.original.key == key })
+        }
+    }
 
     private fun change(platform: Platform, transform: (PlaybackJournal) -> PlaybackJournal) {
         val expected = identity(platform) ?: return

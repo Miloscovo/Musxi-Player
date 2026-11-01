@@ -23,7 +23,11 @@ data class SourceCandidate(
     val song: SongSummary,
     val accountGeneration: Long,
     val audio: SourceAudioMetadata = SourceAudioMetadata(),
+    val relaxedMatch: Boolean = false,
+    val durationDifferenceMs: Long = 0,
 )
+
+data class SourceSwitchPreferences(val automatic: Boolean = true, val relaxDuration: Boolean = false)
 
 enum class SourceSelectionMode { AUTO, MANUAL }
 enum class SourceSearchStatus { SEARCHING, COMPLETE, FAILURE }
@@ -70,13 +74,20 @@ data class SourceSelectionState(
     val mode: SourceSelectionMode = SourceSelectionMode.AUTO,
     val platformProgress: List<SourceSearchProgress> = emptyList(),
     val playbackFailures: Map<Platform, PlaybackFailure> = emptyMap(),
+    val failureReasons: Map<Platform, FailureReason> = emptyMap(),
+    val preferences: SourceSwitchPreferences = SourceSwitchPreferences(),
+    val selectedPlatform: Platform? = null,
+    val selectedRelaxedMatch: Boolean = false,
+    val playbackConfirmed: Boolean = false,
 )
 
 /** Single owner thread. Tokens fence search, user actions and callbacks alike.
  * AUTO selects the first strictly matched candidate as soon as results are offered.
  * MANUAL waits for the caller's complete result and never invokes the choice callback automatically.
  */
-class SourceSelection(@Suppress("UNUSED_PARAMETER") now: () -> Long) {
+class SourceSelection(@Suppress("UNUSED_PARAMETER") now: () -> Long,
+    private val preferences: () -> SourceSwitchPreferences) {
+    constructor(now: () -> Long) : this(now, { SourceSwitchPreferences() })
     private var revision = 0L
     private var choose: ((SourceCandidate) -> Unit)? = null
     private var dismiss: (() -> Unit)? = null
@@ -96,6 +107,7 @@ class SourceSelection(@Suppress("UNUSED_PARAMETER") now: () -> Long) {
             phase = SourceSelectionPhase.SEARCHING,
             mode = mode,
             original = original,
+            preferences = preferences(),
         )
         return token
     }
@@ -113,24 +125,29 @@ class SourceSelection(@Suppress("UNUSED_PARAMETER") now: () -> Long) {
         mutable.value = current.copy(candidates = current.candidates.map { if (it.song.key == key) it.copy(audio = audio) else it })
         return true
     }
-    fun playbackFailure(token: Long, platform: Platform, failure: PlaybackFailure) {
+    fun playbackFailure(token: Long, platform: Platform, failure: PlaybackFailure,
+        reason: FailureReason = FailureReason.fromFailure(failure)) {
         if (token != revision) return
-        mutable.value = mutable.value.copy(playbackFailures = mutable.value.playbackFailures + (platform to failure))
+        mutable.value = mutable.value.copy(playbackFailures = mutable.value.playbackFailures + (platform to failure),
+            failureReasons = mutable.value.failureReasons + (platform to reason))
     }
-    fun offer(token: Long, result: AlternativeSources) {
+    fun offer(token: Long, result: AlternativeSources,
+        automaticCandidates: Set<tech.musxi.core.library.MediaKey>? = null) {
         if (token != revision || mutable.value.phase != SourceSelectionPhase.SEARCHING) return
         // The active original owns the search; a mismatched response cannot replace its identity.
         val activeOriginal = mutable.value.original ?: return
         if (result.original.key != activeOriginal.key) return
         // The repository may enrich an unavailable original's missing display metadata.
         val original = result.original
-        val items = result.candidates.filter { it.song.key.platform != result.original.key.platform }
-            .filter { mutable.value.mode != SourceSelectionMode.MANUAL || SourceMatchPolicy.assess(original, it.song) == SourceMatchReason.ELIGIBLE }
-            .distinctBy { it.song.key }.take(20)
-        val first = items.indexOfFirst { SourceMatchPolicy.assess(original, it.song) == SourceMatchReason.ELIGIBLE }
+        val prefs = preferences()
+        val items = SourceMatchPolicy.rank(original, result.candidates.filter { it.song.key.platform != result.original.key.platform }
+            .filter { mutable.value.mode != SourceSelectionMode.MANUAL || SourceMatchPolicy.eligible(original, it.song, prefs.relaxDuration) }
+            .distinctBy { it.song.key }, prefs.relaxDuration).take(20)
+        val first = items.indexOfFirst { SourceMatchPolicy.eligible(original, it.song, prefs.relaxDuration) &&
+            (automaticCandidates == null || it.song.key in automaticCandidates) }
             .takeIf { it >= 0 }
         val current = mutable.value
-        val automatic = first.takeIf { current.mode == SourceSelectionMode.AUTO }
+        val automatic = first.takeIf { current.mode == SourceSelectionMode.AUTO && prefs.automatic }
         mutable.value = current.copy(
             phase = if (items.isEmpty()) SourceSelectionPhase.FAILED else SourceSelectionPhase.CHOOSING,
             original = result.original,
@@ -140,6 +157,7 @@ class SourceSelection(@Suppress("UNUSED_PARAMETER") now: () -> Long) {
             automaticIndex = automatic,
             partial = result.partial,
             platformProgress = result.platformProgress.ifEmpty { current.platformProgress },
+            preferences = prefs,
             error = when {
                 items.isNotEmpty() -> null
                 result.completion == SourceSearchCompletion.FAILED -> "search_failed"
@@ -164,12 +182,16 @@ class SourceSelection(@Suppress("UNUSED_PARAMETER") now: () -> Long) {
         val candidate = current.candidates.getOrNull(index) ?: return false
         val callback = choose ?: return false
         choose = null; dismiss = null
-        mutable.value = current.copy(phase = SourceSelectionPhase.SELECTED, selected = candidate, deadlineElapsedMs = null)
+        mutable.value = current.copy(phase = SourceSelectionPhase.SELECTED, selected = candidate, deadlineElapsedMs = null,
+            selectedPlatform = candidate.song.key.platform, selectedRelaxedMatch = candidate.relaxedMatch)
         callback(candidate)
         return true
     }
     @Suppress("UNUSED_PARAMETER")
     fun tick(token: Long) = Unit
+    fun confirmPlayback(key: tech.musxi.core.library.MediaKey) {
+        if (mutable.value.selected?.song?.key == key) mutable.value = mutable.value.copy(playbackConfirmed = true)
+    }
     fun cancel(token: Long): Boolean {
         if (token != revision || mutable.value.phase !in setOf(SourceSelectionPhase.SEARCHING, SourceSelectionPhase.CHOOSING)) return false
         val callback = dismiss

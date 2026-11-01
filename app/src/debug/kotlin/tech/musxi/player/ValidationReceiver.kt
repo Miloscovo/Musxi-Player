@@ -33,6 +33,7 @@ class ValidationReceiver : BroadcastReceiver() {
         if (PlaybackToolsValidationRunner.run(app, step) || OutputTraceValidationRunner.run(app, step)) return
         if (IconRenderValidationRunner.run(app, step)) return
         if (step == "glass_preview") { context.startActivity(android.content.Intent(context, GlassPreviewActivity::class.java).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)); return }
+        if (step == "interaction_lab") { context.startActivity(android.content.Intent(context, tech.musxi.player.lab.InteractionLabActivity::class.java).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)); return }
         if (BackendSourceMatchValidationRunner.run(app, step) || BackendSystemValidationRunner.run(app, step)) return
         if (BackendFavoritesValidationRunner.run(app, step) || BackendBackgroundValidationRunner.run(app, step) || BackendPlaybackValidationRunner.run(app, step) || BackendCacheValidationRunner.run(app, step) || BackendEveningValidationRunner.run(app, step) || BackendMetricsValidationRunner.run(app, step) || KugouPlaybackValidationRunner.run(app, step)) return
         if (!LyricsTranslationValidationRunner.run(app, step) && !P2ValidationRunner.run(app, step) && !P1DataValidationRunner.run(app, step) && !P1ValidationRunner.run(app, step) && !P0ValidationRunner.run(app, step)) ValidationRunner.run(app, step)

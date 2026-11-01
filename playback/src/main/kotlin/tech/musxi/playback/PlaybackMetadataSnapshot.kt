@@ -13,11 +13,17 @@ internal data class PlaybackMetadataSnapshot(
     val queuePlatform: Platform?,
     val sourcePlatform: Platform?,
     val sourceId: String? = null,
+    val sourceArtists: List<String> = emptyList(),
+    val sourceArtistIds: List<String> = emptyList(),
+    val sourceAlbumId: String? = null,
 ) {
     companion object {
         const val EXTRA_QUEUE_PLATFORM = "musxi.queuePlatform"
         const val EXTRA_SOURCE_PLATFORM = "musxi.sourcePlatform"
         const val EXTRA_SOURCE_ID = "musxi.sourceId"
+        const val EXTRA_SOURCE_ARTISTS = "musxi.sourceArtists"
+        const val EXTRA_SOURCE_ARTIST_IDS = "musxi.sourceArtistIds"
+        const val EXTRA_SOURCE_ALBUM_ID = "musxi.sourceAlbumId"
 
         fun platform(value: String?): Platform? = Platform.entries.firstOrNull { it.name == value }
 
@@ -28,6 +34,7 @@ internal data class PlaybackMetadataSnapshot(
         fun fromSong(song: SongSummary, queuePlatform: Platform) = PlaybackMetadataSnapshot(
             song.title, song.artists.joinToString(" / "), song.album,
             ArtworkPolicy.sanitize(song.key.platform, song.coverUrl), queuePlatform, song.key.platform, song.key.id,
+            song.artists.toList(), song.artistIds.toList(), song.albumId,
         )
     }
 }

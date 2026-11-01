@@ -11,7 +11,7 @@ import tech.musxi.qqloginpoc.QqLibraryApi
 class QqLibraryRepository(private val accounts: AccountRepository) : LibraryPageFetch {
     private fun summary(song: QqLibraryApi.Song) = SongSummary(
         MediaKey(Platform.QQ, song.id), song.name, song.artists, song.album, song.durationMs,
-        ArtworkPolicy.sanitize(Platform.QQ, song.coverUrl))
+        ArtworkPolicy.sanitize(Platform.QQ, song.coverUrl), song.artistIds, song.albumId)
     private val queueRevision = java.util.concurrent.atomic.AtomicLong()
     fun cancelQueueLoading() { queueRevision.incrementAndGet() }
     class LibraryFailure(category: String, val diagnostic: String? = null) : LibraryPageFailure(category)
@@ -22,7 +22,7 @@ class QqLibraryRepository(private val accounts: AccountRepository) : LibraryPage
                 "vkey_denied_104003", "vkey_denied_104004", "vkey_denied_104013", "vkey_denied_other",
                 "filename_mismatch", "encrypted_audio", "preview_audio", "purl_path_mismatch") || fixed.matches(Regex("cgi_code_-?[0-9]{1,10}")) }
             Result.failure(LibraryFailure(if (code in setOf("expired", "network", "risk", "rate", "protocol", "identity", "limit", "cancelled",
-                    "incomplete", "permission", "unavailable", "endpoint", "platform", "http", "timeout", "source_expired",
+                    "incomplete", "permission", "membership", "copyright", "preview", "unavailable", "endpoint", "platform", "http", "timeout", "source_expired",
                     "signature", "request", "account_changed")) code!! else "unclassified", detail))
         }))
     }
@@ -30,8 +30,16 @@ class QqLibraryRepository(private val accounts: AccountRepository) : LibraryPage
         val generation = accounts.states.value.getValue(Platform.QQ).generation
         accounts.withQqSession({ api, session ->
             val page = QqLibraryApi(api) { accounts.isQqGenerationConnected(generation) }.playlists(session, offset, 30)
-            Page(page.items.map { PlaylistSummary(MediaKey(Platform.QQ, it.id), it.name,
-                ArtworkPolicy.sanitize(Platform.QQ, it.coverUrl), it.trackCount) },
+            Page(page.items.map {
+                val kind = when (it.kind) {
+                    QqLibraryApi.Playlist.Kind.LIKED -> PlaylistKind.LIKED
+                    QqLibraryApi.Playlist.Kind.CREATED -> PlaylistKind.CREATED
+                    QqLibraryApi.Playlist.Kind.COLLECTED -> PlaylistKind.COLLECTED
+                    QqLibraryApi.Playlist.Kind.OTHER -> PlaylistKind.OTHER
+                }
+                PlaylistSummary(MediaKey(Platform.QQ, it.id), it.name,
+                    ArtworkPolicy.sanitize(Platform.QQ, it.coverUrl), it.trackCount, kind)
+            },
                 page.nextOffset.takeIf { it >= 0 }, page.total.takeIf { it >= 0 })
         }, safe(result), RequestOperation.PLAYLISTS)
     }
@@ -40,6 +48,26 @@ class QqLibraryRepository(private val accounts: AccountRepository) : LibraryPage
         val generation = accounts.states.value.getValue(Platform.QQ).generation
         accounts.withQqSession({ api, session ->
             val page = QqLibraryApi(api) { accounts.isQqGenerationConnected(generation) }.tracks(session, playlist.id, offset, 30)
+            Page(page.items.map(::summary),
+                page.nextOffset.takeIf { it >= 0 }, page.total.takeIf { it >= 0 })
+        }, safe(result), RequestOperation.TRACKS)
+    }
+    fun artistTracks(key: MediaKey, offset: Int = 0, result: (Result<Page<SongSummary>>) -> Unit) {
+        require(key.platform == Platform.QQ)
+        val generation = accounts.states.value.getValue(Platform.QQ).generation
+        accounts.withQqSession({ api, session ->
+            val page = QqLibraryApi(api) { accounts.isQqGenerationConnected(generation) }
+                .artistTracks(session, key.id, offset, 30)
+            Page(page.items.map(::summary),
+                page.nextOffset.takeIf { it >= 0 }, page.total.takeIf { it >= 0 })
+        }, safe(result), RequestOperation.TRACKS)
+    }
+    fun albumTracks(key: MediaKey, offset: Int = 0, result: (Result<Page<SongSummary>>) -> Unit) {
+        require(key.platform == Platform.QQ)
+        val generation = accounts.states.value.getValue(Platform.QQ).generation
+        accounts.withQqSession({ api, session ->
+            val page = QqLibraryApi(api) { accounts.isQqGenerationConnected(generation) }
+                .albumTracks(session, key.id, offset, 30)
             Page(page.items.map(::summary),
                 page.nextOffset.takeIf { it >= 0 }, page.total.takeIf { it >= 0 })
         }, safe(result), RequestOperation.TRACKS)

@@ -8,6 +8,21 @@ import tech.musxi.core.library.*
 import tech.musxi.core.playback.*
 
 class AlternativeSourceFinderTest {
+    @Test fun closestResultAcrossParallelPagesWinsAndRelaxationCacheIsRechecked() = runBlocking {
+        var relax = true
+        val finder = AlternativeSourceFinder({ 1 }, { original }, { platform, _ ->
+            if (platform == Platform.NETEASE) listOf(netease.copy(durationMs = 192000))
+            else listOf(kugou.copy(durationMs = 181000))
+        }, ::clock, preferences = { SourceSwitchPreferences(relaxDuration = relax) })
+        val found = finder.find(original)
+        assertEquals(kugou.key, found.candidates.first().song.key)
+        assertTrue(found.candidates.last().relaxedMatch)
+        finder.remember(original, 1, found.candidates.last())
+        assertTrue(finder.find(original).candidates.single().relaxedMatch)
+        relax = false
+        assertTrue(finder.find(original).candidates.size > 1)
+        assertFalse(finder.lastCacheHit)
+    }
     private val original = song(Platform.QQ, "original")
     private val netease = song(Platform.NETEASE, "1")
     private val kugou = song(Platform.KUGOU, "2")
@@ -209,5 +224,40 @@ class AlternativeSourceFinderTest {
             assertEquals("stale_revision", expected.category)
         }
         assertEquals(0, calls)
+    }
+
+    @Test fun fastQingTianAliasCoverOrSpedResultCannotBypassStrictAUTOSelection() = runBlocking {
+        val qingTian = SongSummary(MediaKey(Platform.QQ, "QINGTIAN"), "晴天",
+            listOf("周杰伦"), "叶惠美", 269_000)
+        val fastReturned = CompletableDeferred<Unit>()
+        val slow = CompletableDeferred<List<SongSummary>>()
+        fun candidate(id: String) = qingTian.copy(key = MediaKey(Platform.NETEASE, id))
+        val jay = candidate("jay").copy(artists = listOf("Jay"))
+        val cover = candidate("cover").copy(album = "晴天（翻唱）")
+        val sped = candidate("sped").copy(album = "Sped Up")
+        val finder = AlternativeSourceFinder({ 1 }, { qingTian }, { platform, _ ->
+            if (platform == Platform.NETEASE) {
+                fastReturned.complete(Unit)
+                listOf(jay, cover, sped)
+            } else {
+                slow.await()
+            }
+        }, ::clock, priorityGraceMs = 1000)
+
+        val pending = async { finder.find(qingTian, mode = SourceSelectionMode.AUTO) }
+        fastReturned.await()
+        repeat(20) { yield() }
+        assertFalse(pending.isCompleted)
+
+        slow.complete(emptyList())
+        val found = pending.await()
+        assertEquals(listOf(jay, cover, sped), found.candidates.map { it.song })
+
+        val selection = SourceSelection { 0 }
+        val chosen = mutableListOf<SourceCandidate>()
+        val token = selection.begin(qingTian, chosen::add, {}, SourceSelectionMode.AUTO)
+        selection.offer(token, found)
+        assertNull(selection.state.value.automaticIndex)
+        assertTrue(chosen.isEmpty())
     }
 }

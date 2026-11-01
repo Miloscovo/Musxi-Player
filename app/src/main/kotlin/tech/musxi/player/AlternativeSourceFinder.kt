@@ -14,6 +14,7 @@ internal class AlternativeSourceFinder(
     private val now: () -> Long,
     private val priorityGraceMs: Long = 250,
     private val platformTimeoutMs: Long = 12_000,
+    private val preferences: () -> SourceSwitchPreferences = { SourceSwitchPreferences() },
 ) {
     private data class Remembered(val originalGeneration: Long, val candidate: SourceCandidate, val at: Long)
     private data class Target(val platform: Platform, val accountGeneration: Long?)
@@ -25,7 +26,7 @@ internal class AlternativeSourceFinder(
         if (generation(original.key.platform) != originalGeneration ||
             generation(candidate.song.key.platform) != candidate.accountGeneration ||
             original.key.platform == candidate.song.key.platform ||
-            SourceMatchPolicy.assess(original, candidate.song) != SourceMatchReason.ELIGIBLE) return
+            !SourceMatchPolicy.eligible(original, candidate.song, preferences().relaxDuration)) return
         successful.remove(original.key)
         successful[original.key] = Remembered(originalGeneration,
             candidate.copy(song = candidate.song.copy(artists = candidate.song.artists.toList())), now())
@@ -45,6 +46,7 @@ internal class AlternativeSourceFinder(
         onProgress: SourceSearchProgressListener? = null,
     ): AlternativeSources {
         lastCacheHit = false
+        val relaxDuration = preferences().relaxDuration
         fun revisionCurrent() = revision == null || currentRevision?.invoke() == revision
         fun accountCurrent(owner: Long) = generation(original.key.platform) == owner
         suspend fun ensureCurrent(owner: Long) {
@@ -64,10 +66,10 @@ internal class AlternativeSourceFinder(
                 if (saved.originalGeneration == owner && now() - saved.at in 0..900_000 &&
                     generation(saved.candidate.song.key.platform) == saved.candidate.accountGeneration &&
                     saved.candidate.song.key.stableId !in excluded &&
-                    SourceMatchPolicy.assess(metadata, saved.candidate.song) == SourceMatchReason.ELIGIBLE &&
+                    SourceMatchPolicy.eligible(metadata, saved.candidate.song, relaxDuration) &&
                     revisionCurrent()) {
                     lastCacheHit = true
-                    return AlternativeSources(metadata, listOf(saved.candidate))
+                    return AlternativeSources(metadata, SourceMatchPolicy.rank(metadata, listOf(saved.candidate), relaxDuration))
                 }
                 successful.remove(original.key)
             }
@@ -132,7 +134,7 @@ internal class AlternativeSourceFinder(
                             .filter {
                                 it.key.platform == target.platform &&
                                     it.key.stableId !in excluded &&
-                                    (mode != SourceSelectionMode.MANUAL || SourceMatchPolicy.assess(metadata, it) == SourceMatchReason.ELIGIBLE)
+                                    (mode != SourceSelectionMode.MANUAL || SourceMatchPolicy.eligible(metadata, it, relaxDuration))
                             }
                             .take(10)
                             .map { SourceCandidate(it, accountGeneration) }
@@ -153,11 +155,10 @@ internal class AlternativeSourceFinder(
                     val eligible = pages.indexOfFirst { page ->
                         page?.result?.getOrNull()?.takeIf { it.isNotEmpty() }?.any {
                             generation(it.song.key.platform) == it.accountGeneration &&
-                                SourceMatchPolicy.assess(metadata, it.song) == SourceMatchReason.ELIGIBLE
+                                SourceMatchPolicy.eligible(metadata, it.song, relaxDuration)
                         } == true
                     }
                     val wait = if (mode == SourceSelectionMode.AUTO && eligible >= 0) {
-                        if ((0 until eligible).all { pages[it] != null }) break
                         val since = firstEligibleAt ?: now().also { firstEligibleAt = it }
                         (priorityGraceMs - (now() - since)).coerceAtLeast(0)
                     } else null
@@ -204,7 +205,7 @@ internal class AlternativeSourceFinder(
                     targets.any { it.accountGeneration == null }
                 AlternativeSources(
                     original = metadata,
-                    candidates = candidates,
+                    candidates = SourceMatchPolicy.rank(metadata, candidates, relaxDuration),
                     partial = partial,
                     platformProgress = targets.mapNotNull { progress[it.platform] },
                 )

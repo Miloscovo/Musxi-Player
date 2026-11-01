@@ -64,9 +64,9 @@ class NeteasePlaybackProvider(private val accounts: AccountRepository, private v
         "network", "http" -> PlaybackFailure.NETWORK
         "timeout" -> PlaybackFailure.TIMEOUT
         "rate", "risk" -> PlaybackFailure.RATE_LIMIT
-        "permission" -> PlaybackFailure.PERMISSION
+        "permission", "membership", "copyright", "preview" -> PlaybackFailure.PERMISSION
         "unavailable" -> PlaybackFailure.UNAVAILABLE
         "protocol", "identity", "endpoint", "incomplete", "limit" -> PlaybackFailure.PROTOCOL
         else -> PlaybackFailure.UNKNOWN
-    })
+    }, tech.musxi.core.playback.FailureReason.fromCategory((error as? tech.musxi.core.library.LibraryPageFailure)?.category))
 }

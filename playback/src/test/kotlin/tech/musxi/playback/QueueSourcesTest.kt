@@ -13,6 +13,53 @@ import tech.musxi.core.library.*
 import tech.musxi.core.playback.PlaybackFailure
 
 class QueueSourcesTest {
+    @Test fun committingAnAlternativeClearsThePreviousSourcesQualityName() {
+        val provider = Provider()
+        val sources = QueueSources(provider)
+        val uri = sources.replace(listOf("netease:1"), 1).single()
+        provider.load = { _, _ -> StreamLease(null, "netease:exhigh", "极高音质") { fixtureUrl } }
+        sources.resolve(uri)
+        assertEquals("极高音质", sources.currentQualityName(uri))
+
+        val expected = SongSummary(MediaKey(Platform.NETEASE, "2"), "Track", listOf("Artist"), "Album", 120_000)
+        provider.load = { _, _ -> StreamLease(expected) { fixtureUrl } }
+        val prepared = sources.prepareSource(uri, "netease:2", 1, expected)
+        assertEquals("极高音质", sources.currentQualityName(uri))
+        sources.commitSource(prepared)
+        assertNull(sources.currentQualityName(uri))
+        assertNull(sources.currentQualityId(uri))
+        assertEquals(expected, sources.resolve(uri).metadata)
+    }
+
+    @Test fun preparingAnAlternativeIsAtomicAndCommitReusesItsCapability() {
+        val provider = Provider()
+        val expected = SongSummary(MediaKey(Platform.NETEASE, "2"), "Track", listOf("Artist"), "Album", 120_000)
+        provider.load = { _, _ -> StreamLease(expected) { fixtureUrl } }
+        val sources = QueueSources(provider)
+        val uri = sources.replace(listOf("netease:1"), 1).single()
+        val prepared = sources.prepareSource(uri, "netease:2", 1, expected)
+        assertEquals("netease:1" to 1L, sources.currentSource(uri))
+        sources.commitSource(prepared)
+        assertEquals(expected, sources.resolve(uri).metadata)
+        assertEquals(1, provider.calls.get())
+        val next = sources.prepareSource(uri, "netease:2", 1, expected)
+        sources.replace(listOf("netease:3"), 1)
+        assertEquals(PlaybackFailure.AUTH_REQUIRED, failure { sources.commitSource(next) })
+    }
+
+    @Test fun preparingRejectsWrongRecordingAndRevokedAccountBeforeCommit() {
+        val provider = Provider()
+        val expected = SongSummary(MediaKey(Platform.NETEASE, "2"), "Track", listOf("Artist"), "Album", 120_000)
+        val sources = QueueSources(provider)
+        val uri = sources.replace(listOf("netease:1"), 1).single()
+        provider.load = { _, _ -> StreamLease(expected.copy(artists = listOf("Cover singer"))) { fixtureUrl } }
+        assertEquals(PlaybackFailure.UNAVAILABLE, failure { sources.prepareSource(uri, "netease:2", 1, expected) })
+        assertEquals("netease:1" to 1L, sources.currentSource(uri))
+        provider.load = { _, _ -> StreamLease(expected) { fixtureUrl } }
+        val prepared = sources.prepareSource(uri, "netease:2", 1, expected)
+        provider.generation = 2
+        assertEquals(PlaybackFailure.AUTH_REQUIRED, failure { sources.commitSource(prepared) })
+    }
     @Test fun editsKeepSurvivingCapabilitiesAndRevokeRemovedDuplicateSlots() {
         val provider = Provider(); val sources = QueueSources(provider)
         val tickets = sources.replace(listOf("netease:1", "netease:1", "netease:2"), 1)
@@ -83,6 +130,43 @@ class QueueSourcesTest {
         assertEquals(PlaybackFailure.AUTH_REQUIRED, failure { sources.resolve(tickets[0]) })
         sources.clear()
         assertEquals(PlaybackFailure.AUTH_REQUIRED, failure { sources.selectSource(tickets[0], "qq:A0000000000001", 9) })
+    }
+
+    @Test fun actualLeaseMetadataRejectsArtistAndVersionChangesWithoutReplacingQueueIdentity() {
+        val provider = Provider()
+        val sources = QueueSources(provider)
+        val originalId = "netease:1"
+        val sourceId = "netease:2"
+        val uri = sources.replace(listOf(originalId), 1).single()
+        val expected = SongSummary(MediaKey(Platform.NETEASE, sourceId.substringAfter(':')), "晴天",
+            listOf("周杰伦"), "叶惠美", 269_000)
+
+        fun lease(actual: SongSummary) = StreamLease(actual) { fixtureUrl }
+
+        provider.load = { _, _ ->
+            lease(expected.copy(artists = listOf("Jay")))
+        }
+        sources.selectSource(uri, sourceId, 1, expected)
+        assertEquals(PlaybackFailure.UNAVAILABLE, failure { sources.resolve(uri) })
+
+        provider.load = { _, _ -> lease(expected) }
+        sources.selectSource(uri, sourceId, 1, expected)
+        val resolved = sources.resolve(uri)
+        assertEquals(expected, resolved.metadata)
+        assertEquals(fixtureUrl, resolved.url)
+
+        provider.load = { _, _ -> lease(expected.copy(title = "晴天 (Live)")) }
+        sources.selectSource(uri, sourceId, 1, expected)
+        assertEquals(PlaybackFailure.UNAVAILABLE, failure { sources.resolve(uri) })
+
+        provider.load = { _, _ ->
+            StreamLease(SongSummary(MediaKey(Platform.NETEASE, originalId.substringAfter(':')), "Original",
+                listOf("Original artist"), "Original album", 269_000)) { fixtureUrl }
+        }
+        sources.resetSource(uri)
+        assertEquals(originalId to 1L, sources.currentSource(uri))
+        val restored = sources.resolve(uri)
+        assertEquals(originalId, restored.metadata?.key?.stableId)
     }
 
     @Test fun sourceChangeWhileResolvingCannotReturnOrCacheOldSource() {

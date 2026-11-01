@@ -1,15 +1,24 @@
 package tech.musxi.accounts
 
 import android.os.SystemClock
+import tech.musxi.core.account.MembershipLevel
 import tech.musxi.core.account.Platform
 import tech.musxi.core.library.*
 import tech.musxi.core.diagnostics.RequestOperation
 import tech.musxi.loginpoc.KugouApi
 import tech.musxi.loginpoc.KugouLibraryApi
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
 
 /** Official account-bound requests. No session or raw platform response reaches a page. */
 class KugouLibraryRepository(private val accounts: AccountRepository) : LibraryPageFetch {
+    private val qualityMenus = QualityMenuCache(SystemClock::elapsedRealtime)
     private val queueRevision = java.util.concurrent.atomic.AtomicLong()
+    private val coverLookupExecutor: ExecutorService by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
+        Executors.newFixedThreadPool(3) { task ->
+            Thread(task, "kugou-playlist-cover").apply { isDaemon = true }
+        }
+    }
     private val metadata = linkedMapOf<MediaKey, SongSummary>()
     private var metadataGeneration = -1L
     private val playlistPages = java.util.TreeMap<Int, List<String>>()
@@ -17,7 +26,18 @@ class KugouLibraryRepository(private val accounts: AccountRepository) : LibraryP
     private var playlistGeneration = -1L
     private fun summary(song: KugouLibraryApi.Song) =
         SongSummary(MediaKey(Platform.KUGOU, song.id), song.name, song.artists, song.album, song.durationMs,
-            ArtworkPolicy.sanitize(Platform.KUGOU, song.coverUrl))
+            ArtworkPolicy.sanitize(Platform.KUGOU, song.coverUrl), song.artistIds, song.albumId)
+    fun artistTracks(key: MediaKey, offset: Int = 0, result: (Result<Page<SongSummary>>) -> Unit) = collectionTracks(key, offset, true, result)
+    fun albumTracks(key: MediaKey, offset: Int = 0, result: (Result<Page<SongSummary>>) -> Unit) = collectionTracks(key, offset, false, result)
+    private fun collectionTracks(key: MediaKey, offset: Int, artist: Boolean, result: (Result<Page<SongSummary>>) -> Unit) {
+        require(key.platform == Platform.KUGOU)
+        val generation = accounts.states.value.getValue(Platform.KUGOU).generation
+        accounts.withKugouSession({ api, session ->
+            val library = KugouLibraryApi(api)
+            val page = if (artist) library.artistTracks(session, key.id, offset, 30) else library.albumTracks(session, key.id, offset, 30)
+            Page(remember(page.items.map(::summary), generation), page.nextOffset.takeIf { it >= 0 }, page.total.takeIf { it >= 0 })
+        }, safe(result), RequestOperation.TRACKS)
+    }
     private fun remember(songs: List<SongSummary>, generation: Long): List<SongSummary> {
         if (!accounts.isKugouGenerationConnected(generation)) throw LibraryFailure("account_changed")
         synchronized(metadata) {
@@ -40,7 +60,7 @@ class KugouLibraryRepository(private val accounts: AccountRepository) : LibraryP
                     fixed.matches(Regex("cdn:(ssl_peer|ssl|dns|timeout|io)(,(ssl_peer|ssl|dns|timeout|io)){0,4}"))
             }
             Result.failure(LibraryFailure(if (code in setOf("expired", "network", "risk", "rate", "protocol", "identity", "limit", "cancelled",
-                    "incomplete", "permission", "unavailable", "endpoint", "platform", "http", "timeout", "source_expired", "account_changed")) code!! else "unclassified", detail))
+                    "incomplete", "permission", "membership", "copyright", "preview", "unavailable", "endpoint", "platform", "http", "timeout", "source_expired", "account_changed")) code!! else "unclassified", detail))
         }))
     }
     override fun playlists(offset: Int, result: (Result<Page<PlaylistSummary>>) -> Unit) {
@@ -63,25 +83,35 @@ class KugouLibraryRepository(private val accounts: AccountRepository) : LibraryP
                 current.filter { it.id !in prior }
             }
             // Kugou leaves the default and liked lists without artwork. Like the PC build, borrow the
-            // cover of the song the page shows first (newest first). Bounded and best-effort: a failed
-            // lookup keeps the placeholder and never fails the playlist page.
-            var lookups = 0
-            Page(items.map { item ->
+            // cover of the song the page shows first (newest first). Keep at most six lookups in
+            // flight through one fixed three-thread pool. Best-effort lookup failures keep the
+            // placeholder and never fail the playlist page.
+            val borrowedCovers = completePlaylistCovers(items, session, library)
+            Page(items.mapIndexed { index, item ->
                 val own = ArtworkPolicy.sanitize(Platform.KUGOU, item.coverUrl)
-                val cover = own ?: if (item.trackCount > 0 && lookups < 6) {
-                    lookups++
-                    val lookedUp = try {
-                        library.tracksNewestFirst(session, item, 0, 1).items.firstOrNull()?.coverUrl
-                    } catch (e: java.io.IOException) {
-                        null
-                    } catch (e: KugouApi.ApiException) {
-                        null
-                    }
-                    lookedUp?.let { ArtworkPolicy.sanitize(Platform.KUGOU, it) }
-                } else null
-                PlaylistSummary(MediaKey(Platform.KUGOU, item.id), item.name, cover, item.trackCount)
+                val cover = own ?: borrowedCovers[index]
+                PlaylistSummary(MediaKey(Platform.KUGOU, item.id), item.name, cover, item.trackCount,
+                    when (item.kind) {
+                        KugouLibraryApi.Playlist.Kind.LIKED -> PlaylistKind.LIKED
+                        KugouLibraryApi.Playlist.Kind.CREATED -> PlaylistKind.CREATED
+                        KugouLibraryApi.Playlist.Kind.COLLECTED -> PlaylistKind.COLLECTED
+                        KugouLibraryApi.Playlist.Kind.OTHER -> PlaylistKind.OTHER
+                    })
             }, page.nextOffset.takeIf { it >= 0 }, page.total.takeIf { it >= 0 })
         }, safe(result), RequestOperation.PLAYLISTS)
+    }
+    private fun completePlaylistCovers(items: List<KugouLibraryApi.Playlist>, session: KugouApi.Session,
+        library: KugouLibraryApi): Map<Int, String?> {
+        val missing = items.take(6).mapIndexedNotNull { index, item ->
+            if (item.trackCount > 0 && ArtworkPolicy.sanitize(Platform.KUGOU, item.coverUrl) == null) {
+                index to item
+            } else null
+        }.take(6)
+        val covers = lookupFirstSixInOrder(missing, coverLookupExecutor) { (_, item) ->
+            library.tracksNewestFirst(session, item, 0, 1).items.firstOrNull()?.coverUrl
+                ?.let { ArtworkPolicy.sanitize(Platform.KUGOU, it) }
+        }
+        return missing.mapIndexed { position, (index, _) -> index to covers[position] }.toMap()
     }
     override fun tracks(playlist: MediaKey, offset: Int, result: (Result<Page<SongSummary>>) -> Unit) {
         require(playlist.platform == Platform.KUGOU)
@@ -262,19 +292,27 @@ class KugouLibraryRepository(private val accounts: AccountRepository) : LibraryP
     }
     fun qualities(song: MediaKey, result: (Result<tech.musxi.core.playback.QualityOptions>) -> Unit) {
         require(song.platform == Platform.KUGOU)
+        val state = accounts.states.value.getValue(Platform.KUGOU)
+        val generation = state.generation
+        val allowAuthorized = state.membership.level != MembershipLevel.NO
         accounts.withKugouSession({ api, session ->
-            val options = KugouLibraryApi(api).qualities(session, song.id, SystemClock.elapsedRealtime())
-            tech.musxi.core.playback.QualityOptions(options.map { tech.musxi.core.playback.QualityOption(it.id, it.name) }, null)
+            qualityMenus.getOrLoad(generation, song, { accounts.isKugouGenerationConnected(generation) }, state.membership.level) {
+                val options = KugouLibraryApi(api)
+                    .qualities(session, song.id, SystemClock.elapsedRealtime(), allowAuthorized)
+                tech.musxi.core.playback.QualityOptions(options.map { tech.musxi.core.playback.QualityOption(it.id, it.name) }, null)
+            }
         }, safe(result), RequestOperation.OTHER)
     }
     fun resolveAudio(song: MediaKey, qualityId: String?, result: (Result<AudioCapability>) -> Unit) {
         require(song.platform == Platform.KUGOU)
-        val generation = accounts.states.value.getValue(Platform.KUGOU).generation
+        val state = accounts.states.value.getValue(Platform.KUGOU)
+        val generation = state.generation
+        val allowAuthorized = state.membership.level != MembershipLevel.NO
         accounts.withKugouSession({ api, session ->
             val library = KugouLibraryApi(api)
             val audio = resolvePreferredQuality("kugou", accounts.preferredQuality(Platform.KUGOU), qualityId,
                 { (it as? KugouApi.ApiException)?.code }) { id ->
-                library.audio(session, song.id, SystemClock.elapsedRealtime(), id)
+                library.audio(session, song.id, SystemClock.elapsedRealtime(), id, allowAuthorized)
             }
             if (qualityId != null && audio.qualityId != qualityId) throw LibraryFailure("unavailable")
             AudioCapability(audio.url, audio.expiresAtElapsedMs, audio.qualityId) { accounts.isKugouGenerationConnected(generation) }
@@ -288,5 +326,31 @@ class KugouLibraryRepository(private val accounts: AccountRepository) : LibraryP
             deliver(url)
         }
         override fun toString() = "AudioCapability(redacted)"
+    }
+
+    companion object {
+        /** At most six tasks through a reusable bounded worker count; output keeps input order. */
+        fun <T, R> lookupFirstSixInOrder(items: List<T>, executor: ExecutorService,
+            lookup: (T) -> R?): List<R?> {
+            val futures = items.take(6).map { item ->
+                executor.submit<R?> {
+                    try {
+                        lookup(item)
+                    } catch (_: Exception) {
+                        null
+                    }
+                }
+            }
+            return futures.map { future ->
+                try {
+                    future.get()
+                } catch (_: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                    null
+                } catch (_: Exception) {
+                    null
+                }
+            }
+        }
     }
 }

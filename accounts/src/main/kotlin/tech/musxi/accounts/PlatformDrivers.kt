@@ -7,9 +7,11 @@ import org.json.JSONObject
 import tech.musxi.loginpoc.KugouApi
 import tech.musxi.qqloginpoc.QqMusicApi
 import tech.musxi.neteaseloginpoc.NeteaseApi
+import tech.musxi.core.account.Membership
+import tech.musxi.core.account.MembershipLevel
 
 /** Internal types deliberately do not implement data-class toString (they contain credentials). */
-internal class Identity(val id: String, val name: String)
+internal class Identity(val id: String, val name: String, val avatarUrl: String? = null)
 internal class LoginRequest(val opaque: Any, val launch: Intent?)
 internal sealed interface PollResult {
     class Complete(val session: Any) : PollResult
@@ -24,6 +26,7 @@ internal interface PlatformDriver {
     fun save(session: Any)
     fun clear()
     fun identity(session: Any): Identity
+    fun membership(session: Any): Membership
     fun create(): LoginRequest
     fun poll(request: LoginRequest): PollResult
 }
@@ -35,7 +38,10 @@ internal class KugouDriver(context: Context) : PlatformDriver {
     override fun verify(session: Any): Any = api.verify(session as KugouApi.Session)
     override fun save(session: Any) = store.save(session as KugouApi.Session)
     override fun clear() = store.clear()
-    override fun identity(session: Any): Identity = (session as KugouApi.Session).let { Identity(it.userId, it.nickname) }
+    override fun identity(session: Any): Identity = (session as KugouApi.Session).let { Identity(it.userId, it.nickname, it.avatarUrl) }
+    override fun membership(session: Any): Membership = api.membership(session as KugouApi.Session).let {
+        membershipState(it.isVip, "酷狗会员", it.expiresAtEpochMs)
+    }
     override fun create(): LoginRequest {
         val key = api.createLogin()
         val page = JSONObject().put("url", KugouApi.authorizationUrl(key)).put("title", "扫码结果")
@@ -61,7 +67,10 @@ internal class QqDriver(context: Context) : PlatformDriver {
     override fun verify(session: Any): Any = api.verify(session as QqMusicApi.Session)
     override fun save(session: Any) = store.save(session as QqMusicApi.Session)
     override fun clear() = store.clear()
-    override fun identity(session: Any): Identity = (session as QqMusicApi.Session).let { Identity(it.musicId, it.nickname) }
+    override fun identity(session: Any): Identity = (session as QqMusicApi.Session).let { Identity(it.musicId, it.nickname, it.avatarUrl) }
+    override fun membership(session: Any): Membership = api.membership(session as QqMusicApi.Session).let {
+        membershipState(it.isVip, it.name, it.expiresAtEpochMs)
+    }
     override fun create(): LoginRequest {
         val attempt = api.createLogin()
         val uri = Uri.Builder().scheme("wtloginmqq").authority("ptlogin").path("/qlogin")
@@ -88,7 +97,10 @@ internal class NeteaseDriver(context: Context) : PlatformDriver {
     override fun verify(session: Any): Any = api.verify(session as NeteaseApi.Session)
     override fun save(session: Any) = store.save(session as NeteaseApi.Session)
     override fun clear() = store.clear()
-    override fun identity(session: Any): Identity = (session as NeteaseApi.Session).let { Identity(it.userId, it.nickname) }
+    override fun identity(session: Any): Identity = (session as NeteaseApi.Session).let { Identity(it.userId, it.nickname, it.avatarUrl) }
+    override fun membership(session: Any): Membership = api.membership(session as NeteaseApi.Session).let {
+        membershipState(it.isVip, "网易云会员", it.expiresAtEpochMs)
+    }
     override fun create(): LoginRequest = LoginRequest(api.createLogin(), null)
     override fun poll(request: LoginRequest): PollResult {
         val result = api.poll(request.opaque as NeteaseApi.Attempt)
@@ -99,6 +111,11 @@ internal class NeteaseDriver(context: Context) : PlatformDriver {
             else -> throw java.io.IOException("Unsupported login status")
         }
     }
+}
+
+private fun membershipState(isVip: Int, name: String?, expiresAtEpochMs: Long?): Membership {
+    val level = when (isVip) { 1 -> MembershipLevel.YES; 0 -> MembershipLevel.NO; else -> MembershipLevel.UNKNOWN }
+    return Membership(level, if (level == MembershipLevel.YES) name else null, expiresAtEpochMs)
 }
 
 internal fun safeErrorCode(error: Exception): String = when (error) {

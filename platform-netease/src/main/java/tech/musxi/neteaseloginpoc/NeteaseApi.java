@@ -53,6 +53,10 @@ public final class NeteaseApi {
     static final String SET_LIKE = "https://interfacepc.music.163.com/eapi/radio/like";
     static final String PLAYLIST_TRACKS =
             "https://interfacepc.music.163.com/eapi/playlist/manipulate/tracks";
+    static final String MEMBERSHIP = ORIGIN + "/weapi/music-vip-membership/front/vip/info";
+    static final String ARTIST_TRACKS =
+            "https://interfacepc.music.163.com/eapi/v1/artist/songs";
+    static final String ALBUM_TRACKS = ORIGIN + "/weapi/v1/album/";
     private final Transport transport;
     private final SecureRandom random = new SecureRandom();
     private final String deviceId = java.util.UUID.randomUUID().toString().replace("-", "");
@@ -66,18 +70,25 @@ public final class NeteaseApi {
         }
     }
     public static final class Session {
-        public final String userId, nickname;
+        public final String userId, nickname, avatarUrl;
         private final Map<String,String> cookies;
         private Session(Map<String,String> cookies, String userId, String nickname) throws IOException {
+            this(cookies, userId, nickname, null);
+        }
+        private Session(Map<String,String> cookies, String userId, String nickname, String avatarUrl) throws IOException {
             this.cookies = immutable(validateCookies(cookies));
             if (!userId.isEmpty() && !validId(userId)) throw error("identity", "网易云账号标识无效");
             this.userId = userId;
             this.nickname = cleanName(nickname);
+            this.avatarUrl = cleanAvatarUrl(avatarUrl);
         }
         /** Encrypted storage only: never render or log this object. */
         public JSONObject toJson() throws IOException {
             if (!validId(userId)) throw error("storage", "只能保存已验证的网易云会话");
-            return object("cookies", new JSONObject(cookies), "userId", userId, "nickname", nickname);
+            JSONObject saved = object("cookies", new JSONObject(cookies), "userId", userId, "nickname", nickname);
+            try { saved.put("avatarUrl", avatarUrl == null ? JSONObject.NULL : avatarUrl); }
+            catch (JSONException invalid) { throw error("storage", "本机网易云会话格式无效"); }
+            return saved;
         }
         public static Session fromJson(JSONObject json) throws IOException {
             if (json == null || !(json.opt("userId") instanceof String) || !validId(json.optString("userId"))
@@ -91,13 +102,25 @@ public final class NeteaseApi {
                 if (!(source.opt(name) instanceof String)) throw error("storage", "本机会话字段无效");
                 cookies.put(name, source.optString(name));
             }
-            return new Session(cookies, json.optString("userId"), json.optString("nickname"));
+            return new Session(cookies, json.optString("userId"), json.optString("nickname"),
+                avatarValue(json.opt("avatarUrl")));
         }
     }
     public static final class Poll {
         public final int status;
         public final Session session;
         private Poll(int status, Session session) { this.status = status; this.session = session; }
+    }
+    public static final class Membership {
+        /** 1 confirmed active, 0 confirmed inactive, -1 insufficient or invalid data. */
+        public final int isVip;
+        public final Long expiresAtEpochMs;
+        public Membership(int isVip, Long expiresAtEpochMs) {
+            if (isVip < -1 || isVip > 1)
+                throw new IllegalArgumentException("Unsupported membership state");
+            this.isVip = isVip;
+            this.expiresAtEpochMs = expiresAtEpochMs;
+        }
     }
     public enum ProbeResult { ACCEPTED, REJECTED }
     public static final class ApiException extends IOException {
@@ -165,7 +188,7 @@ public final class NeteaseApi {
         } while (fake.equals(original));
         Map<String,String> cookies = new LinkedHashMap<>(session.cookies);
         cookies.put("MUSIC_U", fake);
-        Session probe = new Session(cookies, session.userId, session.nickname);
+        Session probe = new Session(cookies, session.userId, session.nickname, session.avatarUrl);
         Response response = call(STATUS, new JSONObject(), probe.cookies);
         int code = responseCode(response.body);
         if (code == 301 || code == 302) return ProbeResult.REJECTED;
@@ -176,13 +199,56 @@ public final class NeteaseApi {
         parseIdentity(response.body, probe);
         return ProbeResult.ACCEPTED;
     }
+    /** Fixed read-only membership query. Failure is isolated from account-session validity. */
+    public Membership membership(Session session) throws IOException {
+        if (session == null || !validId(session.userId))
+            throw error("credentials", "Missing authenticated session");
+        JSONObject body = authenticatedCall(MEMBERSHIP,
+            object("userId", session.userId), session);
+        return membershipFromResponse(body);
+    }
+
+    static Membership membershipFromResponse(JSONObject body) throws IOException {
+        if (body == null) throw error("protocol", "Membership response is null");
+        JSONObject data = body.optJSONObject("data");
+        if (data == null) data = body;
+        String[] products = {"redplus", "associator", "musicPackage"};
+        Long best = null;
+        boolean allComplete = true, anyFuture = false;
+        long now = System.currentTimeMillis();
+        for (String product : products) {
+            JSONObject value = data.optJSONObject(product);
+            if (value == null && product.startsWith("music"))
+                value = data.optJSONObject("music_package");
+            Long expiry = value == null ? null : parseExpiry(value.opt("expireTime"));
+            if (expiry == null) allComplete = false;
+            else {
+                if (best == null || expiry > best) best = expiry;
+                if (expiry > now) anyFuture = true;
+            }
+        }
+        if (anyFuture) return new Membership(1, best);
+        if (allComplete) return new Membership(0, best);
+        return new Membership(-1, best);
+    }
+
+    private static Long parseExpiry(Object value) {
+        if (!(value instanceof Number) && !(value instanceof String)) return null;
+        String text = String.valueOf(value).trim();
+        if (!text.matches("[0-9]{1,13}")) return null;
+        try {
+            long raw = Long.parseLong(text);
+            if (raw == 0) return 0L;
+            return raw < 100_000_000_000L ? Math.multiplyExact(raw, 1000L) : raw;
+        } catch (ArithmeticException | NumberFormatException invalid) {
+            return null;
+        }
+    }
+
     /** Internal authenticated read-only API. Credential serialization never crosses the platform module. */
     JSONObject authenticatedCall(String endpoint, JSONObject input, Session session) throws IOException {
         if (session == null || !validId(session.userId)) throw error("credentials", "请先完成网易云登录");
-        if (!USER_PLAYLIST.equals(endpoint) && !PLAYLIST_DETAIL.equals(endpoint)
-                && !SONG_DETAIL.equals(endpoint) && !SONG_URL.equals(endpoint) && !SEARCH.equals(endpoint)
-                && !LYRIC.equals(endpoint) && !LIKED_IDS.equals(endpoint) && !SET_LIKE.equals(endpoint)
-                && !PLAYLIST_TRACKS.equals(endpoint))
+        if (!allowedLibraryEndpoint(endpoint))
             throw error("endpoint", "请求目标不在允许的网易云官方接口范围内");
         Response response = call(endpoint, input, session.cookies);
         if (!LYRIC.equals(endpoint)) requireSuccess(response.body);
@@ -241,7 +307,9 @@ public final class NeteaseApi {
         if (!validId(id) || !id.equals(accountId) || (!session.userId.isEmpty() && !id.equals(session.userId)))
             throw error("identity", "网易云返回的账号身份未匹配");
         if (!(profile.opt("nickname") instanceof String)) throw error("identity", "网易云未返回有效账号资料");
-        return new Session(session.cookies, id, profile.optString("nickname"));
+        String avatarUrl = avatarValue(profile.opt("avatarUrl"));
+        return new Session(session.cookies, id, profile.optString("nickname"),
+            avatarUrl == null ? session.avatarUrl : avatarUrl);
     }
     static Map<String,String> weapi(String text, String secret) throws IOException {
         if (!secret.matches("[A-Za-z0-9]{16}")) throw error("protocol", "请求密钥格式无效");
@@ -328,6 +396,15 @@ public final class NeteaseApi {
         String clean = value.replaceAll("[\\p{Cc}\\p{Cf}]", "").trim();
         return clean.isEmpty() ? "网易云用户" : clean.substring(0, Math.min(120, clean.length()));
     }
+    private static String avatarValue(Object raw) {
+        return raw instanceof String ? cleanAvatarUrl((String)raw) : null;
+    }
+    private static String cleanAvatarUrl(String value) {
+        if (value == null) return null;
+        String clean = value.trim();
+        if (clean.isEmpty() || clean.length() > 2048 || clean.matches("(?s).*[\\p{Cc}\\p{Cf}].*")) return null;
+        return clean;
+    }
     private static String scalar(JSONObject object, String key) {
         Object value = object.opt(key); return value instanceof String || value instanceof Number ? String.valueOf(value) : "";
     }
@@ -347,13 +424,20 @@ public final class NeteaseApi {
     static void requireEndpoint(URL url) throws IOException {
         String endpoint = url.getProtocol() + "://" + url.getHost() + url.getPath();
         if ((!KEY.equals(endpoint) && !POLL.equals(endpoint) && !STATUS.equals(endpoint)
-                && !USER_PLAYLIST.equals(endpoint) && !PLAYLIST_DETAIL.equals(endpoint)
-                && !SONG_DETAIL.equals(endpoint) && !SONG_URL.equals(endpoint) && !SEARCH.equals(endpoint)
-                && !LYRIC.equals(endpoint) && !LIKED_IDS.equals(endpoint) && !SET_LIKE.equals(endpoint)
-                && !PLAYLIST_TRACKS.equals(endpoint))
+                && !allowedLibraryEndpoint(endpoint))
                 || url.getUserInfo() != null
                 || url.getQuery() != null || url.getRef() != null || (url.getPort() != -1 && url.getPort() != 443))
             throw error("endpoint", "请求目标不在允许的网易云官方接口范围内");
+    }
+    private static boolean allowedLibraryEndpoint(String endpoint) {
+        if (USER_PLAYLIST.equals(endpoint) || PLAYLIST_DETAIL.equals(endpoint)
+                || SONG_DETAIL.equals(endpoint) || SONG_URL.equals(endpoint) || SEARCH.equals(endpoint)
+                || LYRIC.equals(endpoint) || LIKED_IDS.equals(endpoint) || SET_LIKE.equals(endpoint)
+                || PLAYLIST_TRACKS.equals(endpoint) || MEMBERSHIP.equals(endpoint)
+                || ARTIST_TRACKS.equals(endpoint)) return true;
+        return endpoint.startsWith(ALBUM_TRACKS)
+                && endpoint.length() > ALBUM_TRACKS.length()
+                && endpoint.substring(ALBUM_TRACKS.length()).matches("[1-9][0-9]{0,18}");
     }
     private static Response executeHttps(Request request) throws IOException {
         HttpsURLConnection connection = null;

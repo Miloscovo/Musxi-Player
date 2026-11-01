@@ -17,7 +17,8 @@
 | Kotlin 2.2.21、coroutines 1.10.2 | JetBrains，Apache-2.0 | app/src/main/assets/licenses/ |
 | AndroidX / Media3 1.8.0 | Android Open Source Project，Apache-2.0 | app/src/main/assets/licenses/AndroidX-Apache-2.0.txt |
 | Coil 3 3.3.0（io.coil-kt.coil3:coil-compose / coil-network-okhttp，封面图片加载；会引入 OkHttp 与 Okio，均为 Apache-2.0） | Coil Contributors，Apache-2.0 | 许可文本复用 app/src/main/assets/licenses/AndroidX-Apache-2.0.txt；OkHttp、Okio 同为 Apache-2.0，沿用同一文本 |
-| Haze 1.6.10（dev.chrisbanes.haze:haze，**仅 debug 构建**，用于 debug 专用的液态玻璃风格预览页；release 不包含） | Chris Banes，Apache-2.0 | 许可文本复用 app/src/main/assets/licenses/AndroidX-Apache-2.0.txt |
+| Haze 1.6.10（dev.chrisbanes.haze:haze，用于浮卡、菜单、Sheet 等控件层的液态玻璃材质，见 ui/components/Glass.kt；不支持实时模糊时退回实色） | Chris Banes，Apache-2.0 |
+| Backdrop 2.0.0-alpha03（io.github.kyant0:backdrop，Android 13 及以上为同一玻璃材质加折射，见 ui/components/Glass.kt） | Kyant，Apache-2.0 | 许可文本复用 app/src/main/assets/licenses/AndroidX-Apache-2.0.txt | 许可文本复用 app/src/main/assets/licenses/AndroidX-Apache-2.0.txt |
 | Guava 33.3.1-android / failureaccess 1.0.2 | Google / Guava Authors，Apache-2.0 | app/src/main/assets/licenses/Guava-LICENSE.txt、Guava-NOTICE.txt |
 | Gradle 8.13 wrapper | Gradle，Apache-2.0，构建工具 | wrapper 原文件头、app/src/main/assets/licenses/Gradle-Apache-2.0.txt |
 | JUnit 4.13.2 / Hamcrest 1.3 / JSON-java 20240303 | EPL-1.0 / BSD / Public Domain，仅宿主测试 | test-licenses/ |
@@ -28,10 +29,14 @@
 
 2026-10-20 P0 增量继续改编上述固定版本的三平台歌曲搜索分页和图片元数据，不新增协议来源或生产依赖；原模块声明、版权和完整许可保留。cc 工作区已加入的 AndroidX Compose / Material3 沿用 Apache-2.0，随包许可使用现有 AndroidX-Apache-2.0.txt；Roborazzi（Apache-2.0）和 Robolectric（MIT）仅宿主截图测试，不进入 APK。本轮后端不改前端依赖版本。
 
+2026-11-01 第三批更新功能沿用 Robolectric 4.17（MIT），增加 accounts 模块的宿主 JVM 状态、持久化和主线程回调测试；仍仅为 testImplementation，不进入 APK。
+
 同日 P1 标准歌词继续使用同一固定来源：酷狗 module/search_lyric.js、module/lyric.js；网易云 module/lyric.js；QQ qqmusic-api-python 0.8.1 的 modules/lyric.py、models/lyric.py（通过 PyPI 原版本 wheel 只读核对，未安装或打包 Python）。标准 LRC 解析、队列元数据持久化及最近播放使用现有 Kotlin/Java/Android API，无新增生产依赖；不含 QRC/KRC 逐字解密。模块 assets NOTICE 已同步。
 
 同日 P2 收藏同步继续改编上述固定来源：酷狗 module/playlist_tracks_add.js、module/playlist_tracks_del.js；网易云 module/likelist.js、like.js；QQ qqmusic-api-python 0.8.1 的 qqmusic_api/modules/songlist.py 中 add_songs、del_songs、like_song、unlike_song，用于单曲收藏同步（通过 PyPI 原版本 wheel 只读核对，未安装或打包 Python）。酷狗和网易云沿用现有 MIT 许可，QQ 沿用现有 GPL-3.0-or-later 来源及许可；无新增生产依赖或许可更改。模块 assets NOTICE 已同步。
 
 2026-11-01 后端菜单与歌单读取继续使用相同固定版本：酷狗 module/playlist_track_all.js、playlist_tracks_add.js；网易云 module/playlist_tracks.js；QQ songlist.py 的本人歌单及 AddSonglist 协议。新增局部收藏核实、排队和播放服务装配为本项目实现。沿用各模块既有来源与许可，无新增生产依赖。
+
+2026-11-01 第二批后端继续使用上述固定来源：QQ modules/user.py、models/user.py 的只读会员查询；酷狗 module/privilege_lite.js、user_verify.js、song_auth.js、song_url_auth.js 的账号授权取流与高级档位；网易云固定会员/hires 接口。保留各模块 GPL-3.0-or-later/MIT 声明，不引入自动领取会员或新增生产依赖。
 
 酷狗歌词后续兼容修复将搜索路径从固定vendor的 `/v1/search` 改为同一官方 HTTPS 主机实测可用的 `/search`，其余来源标识、签名及标准LRC下载解码沿用；未引入新第三方代码或依赖。
