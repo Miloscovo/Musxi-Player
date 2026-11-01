@@ -15,8 +15,11 @@ import tech.musxi.core.account.Platform
 import tech.musxi.core.library.MediaKey
 import tech.musxi.core.library.PlaylistSummary
 import tech.musxi.player.ui.library.LibraryContent
+import tech.musxi.player.ui.library.LibraryDensity
 import tech.musxi.player.ui.library.LibraryFilter
+import tech.musxi.player.ui.library.LibraryHomeUi
 import tech.musxi.player.ui.library.PlaylistUiState
+import tech.musxi.player.ui.library.ResumeUi
 import tech.musxi.player.ui.player.MiniPlayer
 import tech.musxi.player.ui.player.MiniPlayerUi
 import tech.musxi.player.ui.shell.BarShape
@@ -40,13 +43,20 @@ fun LibrarySheet(
     state: PlaylistUiState,
     mini: MiniPlayerUi = sampleMiniPlaying(),
     tab: ShellTab = ShellTab.LIBRARY,
+    /** Starting playlist layout. Null uses the saved choice, which defaults to the list. */
+    density: LibraryDensity? = null,
+    /** The modules above the playlists: continue playing, recent plays. Empty is a first launch. */
+    home: LibraryHomeUi = LibraryHomeUi(),
 ) {
     MusxiTheme(accent = accent, mode = mode) {
         val cs = MaterialTheme.colorScheme
         Surface(Modifier.fillMaxSize(), color = cs.background) {
             Column(Modifier.fillMaxSize()) {
                 Box(Modifier.weight(1f)) {
-                    LibraryContent(state = state, onSelectFilter = {})
+                    LibraryContent(
+                        state = state, onSelectFilter = {}, initialDensity = density,
+                        home = home, nowPlayingId = home.recent.firstOrNull()?.key?.stableId,
+                    )
                 }
                 // The same dock the app ships: two coexisting chrome layouts in one set of
                 // screenshots was itself flagged as an inconsistency.
@@ -72,6 +82,18 @@ fun libraryLoaded() = sampleLibraryLoaded().copy(
     ),
     accountVerified = true,
     fromCache = true,
+)
+
+/**
+ * All three home modules at once: a saved queue to continue, the liked list (it is in
+ * [libraryLoaded]) and a strip of recent plays. The first recent song is the one playing.
+ */
+fun libraryHomeSample() = LibraryHomeUi(
+    accountName = "云村用户 8842",
+    resume = ResumeUi(
+        song = sampleSongs()[0], index = 2, count = 24, positionMs = 83_000, restoring = false,
+    ),
+    recent = sampleSongs().take(6),
 )
 
 /** An empty library: the state that most often ships with no design at all. */

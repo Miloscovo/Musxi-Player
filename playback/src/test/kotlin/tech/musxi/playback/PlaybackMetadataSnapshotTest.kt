@@ -108,4 +108,34 @@ class PlaybackMetadataSnapshotTest {
         sources.replace(listOf(original.key.stableId), 1)
         assertFalse(restored.isCurrent())
     }
+
+    @Test fun actualSourceMetadataIsVerifiedWhileOriginalQueueIdentityStaysStable() {
+        val originalQingTian = SongSummary(MediaKey(Platform.NETEASE, "1"), "晴天",
+            listOf("周杰伦"), "叶惠美", 269_000)
+        val expectedQingTian = originalQingTian.copy(key = MediaKey(Platform.NETEASE, "2"))
+        val sources = QueueSources(object : PlaybackSourceProvider {
+            override val authorization = emptyFlow<Long?>()
+            override fun currentGeneration() = 1L
+            override fun resolve(mediaId: String, generation: Long) =
+                StreamLease(if (mediaId == expectedQingTian.key.stableId) expectedQingTian else originalQingTian) {
+                    "https://m.music.126.net/song.mp3"
+                }
+        })
+        val uri = sources.replace(listOf(originalQingTian.key.stableId), 1).single()
+        val initial = PlaybackMetadataSnapshot.fromSong(
+            sources.resolve(uri).metadata!!, originalQingTian.key.platform)
+
+        sources.selectSource(uri, expectedQingTian.key.stableId, 1, expectedQingTian)
+        val selected = sources.resolve(uri)
+        assertEquals(expectedQingTian, selected.metadata)
+        assertEquals(PlaybackMetadataSnapshot.fromSong(expectedQingTian, originalQingTian.key.platform),
+            PlaybackMetadataSnapshot.fromSong(selected.metadata!!, originalQingTian.key.platform))
+
+        sources.resetSource(uri)
+        assertEquals(originalQingTian.key.stableId to 1L, sources.currentSource(uri))
+        val restored = sources.resolve(uri)
+        assertTrue(restored.isCurrent())
+        assertEquals(initial, PlaybackMetadataSnapshot.fromSong(
+            restored.metadata!!, originalQingTian.key.platform))
+    }
 }

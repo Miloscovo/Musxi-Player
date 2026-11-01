@@ -35,7 +35,7 @@ class SourceSelectionTest {
         assertEquals(listOf(first), chosen)
         assertEquals(SourceSelectionPhase.SELECTED, selection.state.value.phase)
         assertEquals(first, selection.state.value.selected)
-        assertEquals(1, selection.state.value.automaticIndex)
+        assertEquals(0, selection.state.value.automaticIndex)
         assertNull(selection.state.value.deadlineElapsedMs)
         selection.tick(token); selection.tick(token)
         assertEquals(listOf(first), chosen)
@@ -101,7 +101,24 @@ class SourceSelectionTest {
         assertNull(selection.state.value.deadlineElapsedMs); assertNull(selection.state.value.automaticIndex)
         selection.tick(token); assertTrue(chosen.isEmpty())
         assertEquals(3, selection.state.value.candidates.size)
-        assertTrue(selection.select(token, 2)); assertEquals(listOf(version), chosen)
+        val versionIndex = selection.state.value.candidates.indexOfFirst { it.song.key == version.song.key }
+        assertTrue(selection.select(token, versionIndex)); assertEquals(listOf(version), chosen)
+    }
+    @Test fun qingTianJayCoverAndSpedCandidatesNeverAutoSelect() {
+        val selection = SourceSelection { 0 }; val chosen = mutableListOf<SourceCandidate>()
+        val qingTian = SongSummary(MediaKey(Platform.QQ, "QINGTIAN"), "晴天",
+            listOf("周杰伦"), "叶惠美", 269_000)
+        fun candidate(id: String) = SourceCandidate(qingTian.copy(key = MediaKey(Platform.NETEASE, id)), 7)
+        val jay = candidate("jay").copy(song = candidate("jay").song.copy(artists = listOf("Jay")))
+        val cover = candidate("cover").copy(song = candidate("cover").song.copy(album = "晴天（翻唱）"))
+        val sped = candidate("sped").copy(song = candidate("sped").song.copy(album = "Sped Up"))
+
+        val token = selection.begin(qingTian, chosen::add, {}, SourceSelectionMode.AUTO)
+        selection.offer(token, AlternativeSources(qingTian, listOf(jay, cover, sped)))
+
+        assertEquals(SourceSelectionPhase.CHOOSING, selection.state.value.phase)
+        assertNull(selection.state.value.automaticIndex)
+        assertTrue(chosen.isEmpty())
     }
     @Test fun manualModeNeverAutoSelectsAndExposesStrictCandidates() {
         val selection = SourceSelection { error("time must not be read") }; var chosen = 0
@@ -131,8 +148,8 @@ class SourceSelectionTest {
         val token = selection.begin(original, chosen::add, {})
         val wrong = first.copy(song = first.song.copy(artists = listOf("Other")))
         selection.offer(token, AlternativeSources(original, listOf(wrong, second)))
-        assertEquals(listOf(wrong, second), selection.state.value.candidates)
-        assertEquals(1, selection.state.value.automaticIndex)
+        assertEquals(listOf(second, wrong), selection.state.value.candidates)
+        assertEquals(0, selection.state.value.automaticIndex)
         assertEquals(listOf(second), chosen)
         assertEquals(SourceSelectionPhase.SELECTED, selection.state.value.phase)
     }

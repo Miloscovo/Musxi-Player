@@ -35,6 +35,14 @@ class FileLibraryPageStore(
         @Suppress("UNCHECKED_CAST")
         (read(file(owner, playlist), owner, playlist)?.pages?.get(offset) as? SavedLibraryPage<SongSummary>)
     }
+    @Synchronized override fun readTrackPages(owner: String, playlist: MediaKey): List<CachedTrackPage> = access {
+        key(playlist, song = false); prepare(owner)
+        val collection = read(file(owner, playlist), owner, playlist) ?: return@access emptyList()
+        @Suppress("UNCHECKED_CAST")
+        collection.pages.entries.mapNotNull { (offset, saved) ->
+            (saved as? SavedLibraryPage<SongSummary>)?.let { CachedTrackPage(offset, it) }
+        }.sortedBy { it.offset }
+    }
     @Synchronized override fun writePlaylists(owner: String, offset: Int, value: SavedLibraryPage<PlaylistSummary>) = access {
         write(owner, null, offset, SavedLibraryPage(value.page.copy(items = value.page.items.map {
             it.copy(coverUrl = ArtworkPolicy.sanitize(platform, it.coverUrl))
@@ -115,15 +123,25 @@ class FileLibraryPageStore(
                 val size = data.readInt(); if (size !in 0..if (playlist == null) 30 else pageLimit) throw Invalid()
                 val items: List<*> = if (playlist == null) List(size) {
                     val id = data.readUTF(); val title = data.readUTF(); val count = data.readInt()
-                    PlaylistSummary(MediaKey(platform, id), title,
-                        if (version >= 2) ArtworkPolicy.sanitize(platform, data.readUTF().ifEmpty { null }) else null, count)
+                    val cover = if (version >= 2)
+                        ArtworkPolicy.sanitize(platform, data.readUTF().ifEmpty { null }) else null
+                    val kind = if (version >= 3)
+                        PlaylistKind.entries.getOrNull(data.readInt()) ?: throw Invalid()
+                    else PlaylistKind.OTHER
+                    PlaylistSummary(MediaKey(platform, id), title, cover, count, kind)
                 } else List(size) {
                     val id = data.readUTF(); val title = data.readUTF()
                     val artists = data.readInt(); if (artists !in 0..100) throw Invalid()
                     val names = Collections.unmodifiableList(List(artists) { data.readUTF() })
                     val album = data.readUTF(); val duration = data.readLong()
-                    SongSummary(MediaKey(platform, id), title, names, album, duration,
-                        if (version >= 2) ArtworkPolicy.sanitize(platform, data.readUTF().ifEmpty { null }) else null)
+                    val cover = if (version >= 2)
+                        ArtworkPolicy.sanitize(platform, data.readUTF().ifEmpty { null }) else null
+                    val artistIds = if (version >= 4) {
+                        val count = data.readInt(); if (count !in 0..100) throw Invalid()
+                        Collections.unmodifiableList(List(count) { data.readUTF().also(::navigationId) })
+                    } else emptyList()
+                    val albumId = if (version >= 4) data.readUTF().ifEmpty { null }?.also(::navigationId) else null
+                    SongSummary(MediaKey(platform, id), title, names, album, duration, cover, artistIds, albumId)
                 }
                 val page = SavedLibraryPage(Page(Collections.unmodifiableList(items), next, total), time)
                 validatePage(playlist, offset, page)
@@ -157,11 +175,14 @@ class FileLibraryPageStore(
                     is PlaylistSummary -> {
                         data.writeUTF(item.key.id); data.writeUTF(item.title); data.writeInt(item.trackCount)
                         data.writeUTF(ArtworkPolicy.sanitize(platform, item.coverUrl).orEmpty())
+                        data.writeInt(item.kind.ordinal)
                     }
                     is SongSummary -> {
                         data.writeUTF(item.key.id); data.writeUTF(item.title); data.writeInt(item.artists.size)
                         item.artists.forEach(data::writeUTF); data.writeUTF(item.album); data.writeLong(item.durationMs)
                         data.writeUTF(ArtworkPolicy.sanitize(platform, item.coverUrl).orEmpty())
+                        data.writeInt(item.artistIds.size); item.artistIds.forEach(data::writeUTF)
+                        data.writeUTF(item.albumId.orEmpty())
                     }
                     else -> throw Invalid()
                 } }
@@ -212,6 +233,9 @@ class FileLibraryPageStore(
                 key(item.key, song = true); text(item.title, 2048); text(item.album, 2048)
                 if (item.artists.size > 100 || item.durationMs !in 0..604_800_000L) throw Invalid()
                 item.artists.forEach { text(it, 512) }
+                if (item.artistIds.size > 100) throw Invalid()
+                item.artistIds.forEach(::navigationId)
+                item.albumId?.let(::navigationId)
             }
             else -> throw Invalid()
         } }
@@ -240,6 +264,9 @@ class FileLibraryPageStore(
         value.matches(Regex(if (zero) "(?:0|[1-9][0-9]{0,15})" else "[1-9][0-9]{0,15}")) &&
             (value.toLongOrNull() ?: Long.MAX_VALUE) <= 9_007_199_254_740_991L
     private fun text(value: String, limit: Int) { if (value.length > limit || value.any { it.isISOControl() }) throw Invalid() }
+    private fun navigationId(value: String) {
+        if (value.isEmpty() || value.length > 128 || value.any { it.isISOControl() }) throw Invalid()
+    }
     private fun bounds(owner: String, offset: Int) { if (!owner.matches(Regex("[0-9a-f]{64}")) || (offset !in 0..20_000 || (platform == Platform.KUGOU && offset % 30 != 0))) throw Invalid() }
     private fun file(owner: String, playlist: MediaKey?): File {
         val hash = MessageDigest.getInstance("SHA-256").digest((owner + ":" + (playlist?.id ?: "playlists")).toByteArray(Charsets.UTF_8))
@@ -270,7 +297,7 @@ class FileLibraryPageStore(
         private const val MAGIC = 0x4d585043
         private const val KUGOU_MAGIC = 0x4d584b43
         private const val QQ_MAGIC = 0x4d585143
-        private const val VERSION = 2
+        private const val VERSION = 4
         private const val MAX_FILE_BYTES = 2 * 1024 * 1024
         private const val MAX_TOTAL_BYTES = 16L * 1024 * 1024
         private const val MAX_COLLECTIONS = 128

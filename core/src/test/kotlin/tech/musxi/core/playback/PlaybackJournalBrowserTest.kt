@@ -5,7 +5,9 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.TemporaryFolder
 import tech.musxi.core.account.Platform
 import tech.musxi.core.library.LibraryCacheIdentity
 import tech.musxi.core.library.LibraryPageFailure
@@ -13,6 +15,9 @@ import tech.musxi.core.library.MediaKey
 import tech.musxi.core.library.SongSummary
 
 class PlaybackJournalBrowserTest {
+    @get:Rule
+    val temporary = TemporaryFolder()
+
     @Test fun checkpointsDuringRestoreCannotHideItsAcknowledgementOrEndRestoringEarly() {
         val harness = Harness(identity())
         harness.browser.refresh(Platform.NETEASE)
@@ -202,10 +207,10 @@ class PlaybackJournalBrowserTest {
     }
 
     @Test
-    fun recentUsesOriginalKeyForDeduplicationCapsAtOneHundredAndKeepsSource() {
+    fun recentUsesOriginalKeyForDeduplicationCapsAtThreeHundredAndKeepsSource() {
         val harness = Harness(identity())
         harness.browser.refresh(Platform.NETEASE)
-        val initial = (0 until 100).map { index ->
+        val initial = (0 until 300).map { index ->
             recent(
                 original = song("original-$index", Platform.NETEASE),
                 source = song("old-source-$index", Platform.NETEASE),
@@ -221,12 +226,120 @@ class PlaybackJournalBrowserTest {
         harness.succeed(harness.lastAccess(), PlaybackJournal(queue = saved(), recent = initial))
 
         val result = harness.state().recent
-        assertEquals(100, result.size)
+        assertEquals(300, result.size)
         assertEquals(newest.original, result.first().original)
         assertEquals(Platform.QQ, result.first().source.key.platform)
         assertEquals("qq-source", result.first().source.title)
         assertEquals(result.size, result.map { it.original.key }.distinct().size)
         assertFalse(result.drop(1).any { it.original.key == newest.original.key })
+    }
+
+    @Test
+    fun removeRecentDeletesOnlyMatchingOriginalKeyAndPreservesQueueAndOtherEntries() {
+        val harness = Harness(identity())
+        val saved = saved(song("saved"))
+        val removed = recent(song("remove"), song("source"))
+        val kept = recent(song("keep"), song("source"))
+        val journal = PlaybackJournal(saved, listOf(removed, kept))
+        harness.browser.refresh(Platform.NETEASE)
+        harness.succeed(harness.lastAccess(), journal)
+
+        harness.browser.removeRecent(Platform.NETEASE, removed.original.key)
+        val removeCall = harness.lastAccess()
+        val transformed = removeCall.transform!!.invoke(journal)
+
+        assertEquals(saved, transformed.queue)
+        assertEquals(listOf(kept), transformed.recent)
+        harness.succeed(removeCall, journal)
+        assertEquals(saved, harness.state().queue)
+        assertEquals(listOf(kept), harness.state().recent)
+    }
+
+    @Test
+    fun removeRecentWithUnknownKeyDoesNotAccessStorage() {
+        val harness = Harness(identity())
+        val journal = PlaybackJournal(saved(), listOf(recent(song("keep"), song("source"))))
+        harness.browser.refresh(Platform.NETEASE)
+        harness.succeed(harness.lastAccess(), journal)
+        val accessesAfterRefresh = harness.accesses.size
+
+        harness.browser.removeRecent(Platform.NETEASE, MediaKey(Platform.NETEASE, "unknown"))
+
+        assertEquals(accessesAfterRefresh, harness.accesses.size)
+        assertEquals(journal, harness.state().let { PlaybackJournal(it.queue, it.recent) })
+    }
+
+    @Test
+    fun removeRecentIsPersistedInFileStore() {
+        val directory = temporary.newFolder("remove-persisted")
+        val store = FilePlaybackJournalStore(directory, Platform.NETEASE)
+        val owner = "c".repeat(64)
+        val removed = recent(song("1"), song("2"))
+        val kept = recent(song("3"), song("4"))
+        store.write(owner, PlaybackJournal(recent = listOf(removed, kept)))
+        val browser = PlaybackJournalBrowser(
+            { LibraryCacheIdentity(owner, 1, true) },
+            { _, expected, transform, callback ->
+                callback(runCatching {
+                    val previous = store.read(expected.owner)
+                    val next = transform?.invoke(previous) ?: previous
+                    if (transform != null) store.write(expected.owner, next)
+                    next
+                })
+            },
+            { _, callback -> callback(Result.failure(IllegalStateException("unused"))) },
+        )
+
+        browser.refresh(Platform.NETEASE)
+        browser.removeRecent(Platform.NETEASE, removed.original.key)
+
+        assertEquals(listOf(kept), FilePlaybackJournalStore(directory, Platform.NETEASE).read(owner).recent)
+        assertEquals(listOf(kept), browser.state.value.getValue(Platform.NETEASE).recent)
+    }
+
+    @Test
+    fun removeRecentLateCallbackCannotApplyAfterRefresh() {
+        val harness = Harness(identity())
+        val journal = PlaybackJournal(saved(), listOf(recent(song("keep"), song("source"))))
+        harness.browser.refresh(Platform.NETEASE)
+        harness.succeed(harness.lastAccess(), journal)
+
+        harness.browser.removeRecent(Platform.NETEASE, MediaKey(Platform.NETEASE, "keep"))
+        val staleRemove = harness.lastAccess()
+        harness.browser.refresh(Platform.NETEASE)
+        val currentRead = harness.lastAccess()
+
+        harness.succeed(staleRemove, journal.copy(recent = emptyList()))
+        assertTrue(harness.state().recent.isEmpty())
+        harness.succeed(currentRead, journal)
+        assertEquals(journal.recent, harness.state().recent)
+    }
+
+    @Test
+    fun removeRecentCallbackCannotCrossOwnerOrGeneration() {
+        listOf(
+            "owner" to { harness: Harness -> harness.identities[Platform.NETEASE] = identity(owner = "b") },
+            "generation" to { harness: Harness -> harness.identities[Platform.NETEASE] = identity(generation = 2) },
+        ).forEach { (label, changeIdentity) ->
+            val harness = Harness(identity())
+            val journal = PlaybackJournal(saved(), listOf(recent(song("keep"), song("source"))))
+            val current = PlaybackJournal(
+                saved(song("current-saved")),
+                listOf(recent(song("current-recent"), song("current-source"))),
+            )
+            harness.browser.refresh(Platform.NETEASE)
+            harness.succeed(harness.lastAccess(), journal)
+
+            harness.browser.removeRecent(Platform.NETEASE, MediaKey(Platform.NETEASE, "keep"))
+            val staleRemove = harness.lastAccess()
+            changeIdentity(harness)
+            harness.browser.accountChanged()
+            harness.succeed(harness.lastAccess(), current)
+            harness.succeed(staleRemove, journal.copy(recent = emptyList()))
+
+            assertEquals("$label change must reject stale remove", current.recent, harness.state().recent)
+            assertEquals("$label change must keep current owner data", current.queue, harness.state().queue)
+        }
     }
 
     @Test
@@ -267,6 +380,20 @@ class PlaybackJournalBrowserTest {
         harness.browser.refresh(Platform.NETEASE)
         harness.fail(harness.lastAccess(), LibraryPageFailure("account_changed"))
         assertEquals("account_changed", harness.state().error)
+    }
+
+    @Test fun installCheckpointWaitsForStorageAcknowledgementAndPropagatesFailure() {
+        val harness = Harness(identity())
+        var response: Result<Unit>? = null
+        harness.browser.save(Platform.NETEASE, 1, saved(), completed = { response = it })
+        assertNull(response)
+        harness.fail(harness.lastAccess(), LibraryPageFailure("storage"))
+        assertTrue(response!!.isFailure)
+        response = null
+        harness.browser.save(Platform.NETEASE, 1, saved(), completed = { response = it })
+        assertNull(response)
+        harness.succeed(harness.lastAccess(), PlaybackJournal(null, emptyList()))
+        assertTrue(response!!.isSuccess)
     }
 
     private fun identity(

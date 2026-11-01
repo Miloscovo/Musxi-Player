@@ -93,6 +93,7 @@ public class QqLibraryApiTest {
         f.data.add(json("{\"total\":2,\"hasmore\":0,\"hide\":0,\"v_list\":[{\"tid\":9,\"dirid\":0,\"title\":\"Duplicate\",\"songnum\":1}]}"));
         QqLibraryApi.Page<QqLibraryApi.Playlist> result=new QqLibraryApi(f.api).playlists(session(),0,1);
         assertEquals(2,result.total);assertEquals(1,result.nextOffset);assertEquals("9_0",result.items.get(0).id);
+        assertEquals(QqLibraryApi.Playlist.Kind.CREATED,result.items.get(0).kind);
         assertEquals(1,f.param(2).getInt("offset"));
         assertEquals("fixture-euin",f.param(1).getString("uin"));assertEquals(4*1024*1024,f.requests.get(0).limit);
         assertTrue(new JSONObject(f.requests.get(0).body).getJSONObject("comm").has("authst"));
@@ -124,7 +125,9 @@ public class QqLibraryApiTest {
         List<QqLibraryApi.Playlist> result=new QqLibraryApi(f.api).writablePlaylists(session());
         assertEquals(2,result.size());
         assertEquals("0_201",result.get(0).id);assertTrue(result.get(0).liked);assertTrue(result.get(0).writable);
+        assertEquals(QqLibraryApi.Playlist.Kind.LIKED,result.get(0).kind);
         assertEquals("9_0",result.get(1).id);assertFalse(result.get(1).liked);assertTrue(result.get(1).writable);
+        assertEquals(QqLibraryApi.Playlist.Kind.CREATED,result.get(1).kind);
         assertEquals(12345,f.param(0).getLong("uin"));
         try{result.clear();fail("Writable playlists must be read-only");}catch(UnsupportedOperationException expected){}
     }
@@ -212,7 +215,7 @@ public class QqLibraryApiTest {
         for(String field:new String[]{"filename","ekey","trybegin","purl"}){
             JSONObject data=vkey();JSONObject row=data.getJSONArray("midurlinfo").getJSONObject(0);
             row.put(field,field.equals("trybegin")?1:field.equals("purl")?"RS02other.mp3?vkey=fixture":"mismatch");
-            rejects("permission",()->QqLibraryApi.audioCandidates(data,dispatch(),MID,filename()));
+            rejects(field.equals("trybegin")?"preview":"permission",()->QqLibraryApi.audioCandidates(data,dispatch(),MID,filename()));
         }
         JSONObject denied=vkey();denied.getJSONArray("midurlinfo").getJSONObject(0).put("result",104003);
         rejects("permission",()->QqLibraryApi.audioCandidates(denied,dispatch(),MID,filename()));
@@ -231,7 +234,7 @@ public class QqLibraryApiTest {
         failed.data.add(json("{\"hide\":0,\"v_failTids\":[123],\"v_list\":[],\"total\":0,\"hasmore\":0}"));
         rejects("incomplete",()->new QqLibraryApi(failed.api).playlists(session(),0,30));
         JSONObject preview=vkey();preview.getJSONArray("midurlinfo").getJSONObject(0).put("is_preview",true);
-        rejects("permission",()->QqLibraryApi.audioCandidates(preview,dispatch(),MID,filename()));
+        rejects("preview",()->QqLibraryApi.audioCandidates(preview,dispatch(),MID,filename()));
         Fixture denied=new Fixture();denied.data.add(new JSONObject().put("track_info",song()));
         JSONObject deniedData=vkey();deniedData.getJSONArray("midurlinfo").getJSONObject(0).put("result",104003);denied.data.add(deniedData);
         rejects("permission",()->new QqLibraryApi(denied.api,()->true,url->{fail("Denied audio must not probe");}).audio(session(),MID,1000));
@@ -329,7 +332,35 @@ public class QqLibraryApiTest {
         LinkedHashMap<String,QqLibraryApi.Playlist> lists=new LinkedHashMap<>();
         QqLibraryApi.appendLists(new JSONArray().put(json("{tid:9,dirId:0,title:'List',songNum:1,cover_url_big:'http://qpic.y.qq.com/list.jpg'}")),lists,true);
         assertEquals("https://qpic.y.qq.com/list.jpg",lists.get("9_0").coverUrl);
+        assertEquals(QqLibraryApi.Playlist.Kind.CREATED,lists.get("9_0").kind);
+        QqLibraryApi.appendLists(new JSONArray().put(json("{tid:10,dirId:0,title:'Collected',songNum:1}")),lists,false);
+        assertEquals(QqLibraryApi.Playlist.Kind.COLLECTED,lists.get("10_0").kind);
         assertNull(new QqLibraryApi.Playlist("9_0","List",0).coverUrl);
+    }
+    @Test public void legacyOptionalEntityMidsBecomeMissingWithoutWeakeningSongMid() throws Exception {
+        JSONObject row=song();
+        JSONObject artist=row.getJSONArray("singer").getJSONObject(0);
+        for(Object invalid:new Object[]{null,"",0,JSONObject.NULL,"bad"}){
+            if(invalid==null)artist.remove("mid");else artist.put("mid",invalid);
+            JSONObject album=row.getJSONObject("album");
+            if(invalid==null)album.remove("mid");else album.put("mid",invalid);
+            QqLibraryApi.Song parsed=QqLibraryApi.song(row);
+            assertEquals(MID,parsed.id);
+            assertTrue(parsed.artistIds.isEmpty());
+            assertNull(parsed.albumId);
+        }
+        artist.put("mid",MID);
+        row.getJSONObject("album").put("mid",MID);
+        QqLibraryApi.Song valid=QqLibraryApi.song(row);
+        assertEquals(Collections.singletonList(MID),valid.artistIds);
+        assertEquals(MID,valid.albumId);
+
+        JSONObject invalidSong=song().put("mid",0);
+        rejects("identity",()->QqLibraryApi.song(invalidSong));
+        JSONObject wrongArtist=new JSONObject().put("singerMid","009abcDEF01234").put("totalNum",0);
+        rejects("identity",()->QqLibraryApi.parseArtistTracks(wrongArtist,MID,0,30));
+        JSONObject wrongAlbum=new JSONObject().put("albumMid","009abcDEF01234").put("totalNum",0);
+        rejects("identity",()->QqLibraryApi.parseAlbumTracks(wrongAlbum,MID,0,30));
     }
     @Test public void detailUsesFixedReadOnlyEndpointAndRejectsMidMismatch() throws Exception {
         Fixture f=new Fixture();f.data.add(new JSONObject().put("track_info",song()));

@@ -11,10 +11,14 @@ class CrossPlatformSourceSearch(private val app: MusxiApplication) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val finder = AlternativeSourceFinder({ platform ->
         app.accounts.states.value.getValue(platform).takeIf { it.phase == AccountPhase.CONNECTED }?.generation
-    }, ::awaitSong, ::search, SystemClock::elapsedRealtime)
+    }, ::awaitSong, ::search, SystemClock::elapsedRealtime, preferences = app::sourceSwitchPreferences)
+    private val rejectedMappings = mutableSetOf<Pair<MediaKey, MediaKey>>()
 
     fun remember(original: SongSummary, generation: Long, source: SourceCandidate) = finder.remember(original, generation, source)
-    fun forget(original: MediaKey, source: MediaKey) = finder.forget(original, source)
+    fun forget(original: MediaKey, source: MediaKey) {
+        finder.forget(original, source)
+        rejectedMappings += original to source
+    }
     fun find(
         original: SongSummary,
         result: (Result<AlternativeSources>) -> Unit,
@@ -29,8 +33,12 @@ class CrossPlatformSourceSearch(private val app: MusxiApplication) {
         val started = SystemClock.elapsedRealtime()
         val response = runCatching {
             withTimeout(20_000) {
+                val metadata = if (original.title.isBlank() || original.title == "待加载歌曲" ||
+                    original.artists.isEmpty() || original.durationMs <= 0) awaitSong(original.key) else original
+                if (metadata.key != original.key) throw LibraryPageFailure("identity")
+                if (mode == SourceSelectionMode.AUTO) restoreSuccessfulMapping(metadata, excluded)
                 finder.find(
-                    original = original,
+                    original = metadata,
                     excluded = excluded,
                     mode = mode,
                     revision = revision,
@@ -46,6 +54,24 @@ class CrossPlatformSourceSearch(private val app: MusxiApplication) {
         }
         result(response.fold({ Result.success(it) }, { Result.failure(LibraryPageFailure(
             if (it is TimeoutCancellationException) "timeout" else (it as? LibraryPageFailure)?.category ?: "unavailable")) }))
+    }
+    /** The journal persists only metadata from streams that actually played, scoped to the original account. */
+    private suspend fun restoreSuccessfulMapping(original: SongSummary, excluded: Set<String>) {
+        val identity = app.accounts.playbackIdentity(original.key.platform)?.takeIf { it.verified } ?: return
+        val journal = suspendCancellableCoroutine<PlaybackJournal?> { continuation ->
+            app.accounts.playbackJournal(original.key.platform, identity) {
+                if (continuation.isActive) continuation.resumeWith(Result.success(it.getOrNull()))
+            }
+        } ?: return
+        val recent = journal.recent.firstOrNull {
+            it.original.key == original.key && it.source.key.platform != original.key.platform &&
+                it.source.key.stableId !in excluded && (original.key to it.source.key) !in rejectedMappings &&
+                System.currentTimeMillis() - it.playedAtEpochMs in 0..604_800_000 &&
+                SourceMatchPolicy.eligible(original, it.source, app.sourceSwitchPreferences().relaxDuration)
+        } ?: return
+        val sourceAccount = app.accounts.states.value.getValue(recent.source.key.platform)
+        if (identity != app.accounts.playbackIdentity(original.key.platform) || sourceAccount.phase != AccountPhase.CONNECTED) return
+        finder.remember(original, identity.generation, SourceCandidate(recent.source, sourceAccount.generation))
     }
     private suspend fun awaitSong(key: MediaKey): SongSummary = suspendCancellableCoroutine { continuation ->
         val callback: (Result<SongSummary>) -> Unit = { if (continuation.isActive) continuation.resumeWith(it) }

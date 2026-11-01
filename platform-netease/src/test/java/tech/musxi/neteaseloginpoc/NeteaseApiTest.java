@@ -103,15 +103,30 @@ public final class NeteaseApiTest {
                 "ignored=do-not-forward; MUSIC_U=fixture-private-token; __csrf=csrf-fixture");
         check(browser.userId.isEmpty() && browser.nickname.equals("网易云用户"));
         fails("storage", () -> browser.toJson());
-        Queue verified = new Queue().add("{code:200,account:{id:12345},profile:{userId:12345,nickname:'浏览器样例'}}");
+        String avatar = "https://p1.music.126.net/fixture/avatar.jpg";
+        Queue verified = new Queue().add("{code:200,account:{id:12345},profile:{userId:12345,nickname:'浏览器样例',avatarUrl:'" + avatar + "'}}");
         NeteaseApi.Session identity = new NeteaseApi(verified).verify(browser);
         check(identity.userId.equals("12345") && identity.nickname.equals("浏览器样例"));
+        check(identity.avatarUrl.equals(avatar));
+        check(NeteaseApi.Session.fromJson(identity.toJson()).avatarUrl.equals(avatar));
+        check(!identity.toString().contains(avatar));
         check(identity.toJson().getJSONObject("cookies").getString("MUSIC_U").equals("fixture-private-token"));
         check(verified.requests.size() == 1 && verified.responses.isEmpty());
         check(verified.requests.get(0).endpoint.equals(NeteaseApi.STATUS));
         check(verified.requests.get(0).headers.get("Cookie").equals(
                 "os=pc; __remember_me=true; MUSIC_U=fixture-private-token; __csrf=csrf-fixture"));
         fails("storage", () -> browser.toJson());
+        check(stored().avatarUrl == null);
+        JSONObject wrongAvatarType = identity.toJson();
+        wrongAvatarType.put("avatarUrl", 123);
+        check(NeteaseApi.Session.fromJson(wrongAvatarType).avatarUrl == null);
+        Queue malformedAvatar = new Queue().add(
+            "{code:200,account:{id:12345},profile:{userId:12345,nickname:'仍有效',avatarUrl:123}}");
+        NeteaseApi.Session preserved = new NeteaseApi(malformedAvatar).verify(identity);
+        check(preserved.nickname.equals("仍有效") && preserved.avatarUrl.equals(avatar));
+        Queue missingAvatar = new Queue().add(
+            "{code:200,account:{id:12345},profile:{userId:12345,nickname:'仍有效'}}");
+        check(new NeteaseApi(missingAvatar).verify(identity).avatarUrl.equals(avatar));
         for (String[] fixture : new String[][]{
                 {"expired", "{code:301}"}, {"expired", "{code:200,account:null,profile:null}"},
                 {"identity", "{code:200,account:{id:7},profile:{userId:8,nickname:'x'}}"},
@@ -136,7 +151,7 @@ public final class NeteaseApiTest {
             .add("{code:801}").add("{code:802}").addCookie("{code:803}",
                 "MUSIC_U=fixture-private-token; Domain=.music.163.com; Path=/; HttpOnly; Secure",
                 "__csrf=csrf-fixture; Domain=.music.163.com; Path=/")
-            .add("{code:200,account:{id:12345},profile:{userId:12345,nickname:'样例'}}")
+            .add("{code:200,account:{id:12345},profile:{userId:12345,nickname:'样例',avatarUrl:'https://p1.music.126.net/fixture/avatar.jpg'}}")
             .add("{code:200,account:null,profile:null}");
         NeteaseApi api = new NeteaseApi(q);
         NeteaseApi.Attempt attempt = api.createLogin();
@@ -145,7 +160,9 @@ public final class NeteaseApiTest {
         NeteaseApi.Poll done = api.poll(attempt); check(done.status == 803 && done.session != null);
         fails("storage", () -> done.session.toJson());
         NeteaseApi.Session saved = api.verify(done.session); check(saved.userId.equals("12345"));
-        check(NeteaseApi.Session.fromJson(saved.toJson()).nickname.equals("样例"));
+        NeteaseApi.Session savedCopy = NeteaseApi.Session.fromJson(saved.toJson());
+        check(savedCopy.nickname.equals("样例"));
+        check(savedCopy.avatarUrl.equals("https://p1.music.126.net/fixture/avatar.jpg"));
         check(api.probeInvalidToken(saved) == NeteaseApi.ProbeResult.REJECTED);
         check(q.requests.size() == 6 && q.responses.isEmpty());
         check(q.requests.get(0).endpoint.equals(NeteaseApi.KEY));

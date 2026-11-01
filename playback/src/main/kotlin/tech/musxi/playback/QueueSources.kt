@@ -15,6 +15,9 @@ import tech.musxi.core.playback.QualityOptions
 interface PlaybackHost {
     val playbackSources: PlaybackSourceProvider
     val sourceSelection: SourceSelection
+    val sourcePreferences: kotlinx.coroutines.flow.Flow<tech.musxi.core.playback.SourceSwitchPreferences>
+        get() = kotlinx.coroutines.flow.flowOf(tech.musxi.core.playback.SourceSwitchPreferences())
+    fun currentSourcePreferences() = tech.musxi.core.playback.SourceSwitchPreferences()
     fun findAlternativeSources(original: SongSummary, result: (Result<AlternativeSources>) -> Unit): Job
     fun findAlternativeSources(original: SongSummary, excluded: Set<String>, result: (Result<AlternativeSources>) -> Unit): Job =
         findAlternativeSources(original) { response -> result(response.map { found ->
@@ -29,6 +32,11 @@ interface PlaybackHost {
     /** Original account-owned metadata only; capabilities and candidate tickets never persist. */
     fun onPlaybackCheckpoint(generation: Long, snapshot: tech.musxi.core.playback.SavedPlaybackQueue,
         recent: tech.musxi.core.playback.RecentPlay?) = Unit
+    fun onPlaybackCheckpointSaved(generation: Long, snapshot: tech.musxi.core.playback.SavedPlaybackQueue,
+        recent: tech.musxi.core.playback.RecentPlay?, completed: (Result<Unit>) -> Unit) {
+        onPlaybackCheckpoint(generation, snapshot, recent)
+        completed(Result.success(Unit))
+    }
     fun onPlaybackQueueCleared(platform: tech.musxi.core.account.Platform, generation: Long) = Unit
     fun onPlaybackQualityChanged(platform: tech.musxi.core.account.Platform, qualityId: String) = Unit
     /** Called only after a selected alternative actually reaches playback. Metadata only. */
@@ -47,7 +55,9 @@ interface PlaybackSourceProvider {
     fun qualityOptions(mediaId: String, generation: Long): QualityOptions = QualityOptions(emptyList(), null)
 }
 
-class PlaybackSourceException(val failure: PlaybackFailure) : IOException("Playback source unavailable")
+class PlaybackSourceException(val failure: PlaybackFailure,
+    val reason: tech.musxi.core.playback.FailureReason = tech.musxi.core.playback.FailureReason.fromFailure(failure)
+) : IOException("Playback source unavailable")
 
 /** In-memory capability. Its reader must check both expiry and account generation on every use. */
 class StreamLease(val metadata: SongSummary?, val qualityId: String? = null, val qualityName: String? = null,
@@ -59,7 +69,8 @@ class StreamLease(val metadata: SongSummary?, val qualityId: String? = null, val
 /** Opaque queue URIs are never sent to the network. Only the loader receives signed URLs. */
 class QueueSources(private val provider: PlaybackSourceProvider) {
     private class Ticket(val mediaId: String, val generation: Long,
-        val sourceId: String = mediaId, val sourceGeneration: Long = generation, val qualityId: String? = null)
+        val sourceId: String = mediaId, val sourceGeneration: Long = generation, val qualityId: String? = null,
+        val expectedSource: SongSummary? = null)
     class Resolved internal constructor(val url: String, val metadata: SongSummary?, private val current: () -> Boolean) {
         /** Metadata posted to the owner thread must still belong to this source ticket. */
         fun isCurrent() = current()
@@ -110,14 +121,45 @@ class QueueSources(private val provider: PlaybackSourceProvider) {
         added.map { it.first }
     }
     fun invalidate(uri: String) { synchronized(gate) { leases.remove(uri) } }
-    fun selectSource(uri: String, mediaId: String, generation: Long) = synchronized(gate) {
+    fun selectSource(uri: String, mediaId: String, generation: Long, expectedSource: SongSummary? = null) = synchronized(gate) {
         require(PlaybackSourcePolicy.acceptsMediaId(mediaId))
         val original = tickets[uri] ?: throw PlaybackSourceException(PlaybackFailure.AUTH_REQUIRED)
         checkCurrent(uri, original)
         if (provider.generationFor(mediaId) != generation) throw PlaybackSourceException(PlaybackFailure.AUTH_REQUIRED)
-        tickets = tickets + (uri to Ticket(original.mediaId, original.generation, mediaId, generation))
+        require(expectedSource == null || expectedSource.key.stableId == mediaId)
+        tickets = tickets + (uri to Ticket(original.mediaId, original.generation, mediaId, generation,
+            expectedSource = expectedSource))
         leases.remove(uri)
         qualityNames.remove(uri)
+    }
+    /** Resolve a candidate without changing the active ticket. Only commit publishes its capability. */
+    class PreparedSource internal constructor(internal val uri: String, internal val original: Any,
+        internal val candidate: Any, internal val lease: StreamLease)
+
+    fun prepareSource(uri: String, mediaId: String, generation: Long, expectedSource: SongSummary): PreparedSource {
+        require(PlaybackSourcePolicy.acceptsMediaId(mediaId) && expectedSource.key.stableId == mediaId)
+        val original = synchronized(gate) { tickets[uri] } ?: throw PlaybackSourceException(PlaybackFailure.AUTH_REQUIRED)
+        checkCurrent(uri, original)
+        if (provider.generationFor(mediaId) != generation) throw PlaybackSourceException(PlaybackFailure.AUTH_REQUIRED)
+        val candidate = Ticket(original.mediaId, original.generation, mediaId, generation, expectedSource = expectedSource)
+        val lease = provider.resolve(mediaId, generation)
+        validateResolved(candidate, lease, lease.readUrl())
+        checkCurrent(uri, original)
+        if (provider.generationFor(mediaId) != generation) throw PlaybackSourceException(PlaybackFailure.AUTH_REQUIRED)
+        return PreparedSource(uri, original, candidate, lease)
+    }
+
+    fun commitSource(change: PreparedSource) = synchronized(gate) {
+        val original = change.original as Ticket
+        val candidate = change.candidate as Ticket
+        checkCurrent(change.uri, original)
+        if (provider.generationFor(candidate.sourceId) != candidate.sourceGeneration)
+            throw PlaybackSourceException(PlaybackFailure.AUTH_REQUIRED)
+        tickets = tickets + (change.uri to candidate)
+        leases[change.uri] = change.lease
+        qualityNames.remove(change.uri)
+        change.lease.qualityName?.let { qualityNames[change.uri] = it }
+        while (leases.size > 3) leases.remove(leases.keys.first())
     }
     fun sourceAuthorized(uri: String): Boolean = synchronized(gate) {
         tickets[uri]?.let { provider.generationFor(it.sourceId) == it.sourceGeneration } == true
@@ -161,7 +203,8 @@ class QueueSources(private val provider: PlaybackSourceProvider) {
         checkCurrent(uri, ticket)
         val lease = change.lease
         validateLease(uri, ticket, lease)
-        tickets = tickets + (uri to Ticket(ticket.mediaId, ticket.generation, ticket.sourceId, ticket.sourceGeneration, lease.qualityId))
+        tickets = tickets + (uri to Ticket(ticket.mediaId, ticket.generation, ticket.sourceId, ticket.sourceGeneration, lease.qualityId,
+            ticket.expectedSource))
         leases[uri] = lease
         qualityNames[uri] = requireNotNull(lease.qualityName)
     }
@@ -224,6 +267,12 @@ class QueueSources(private val provider: PlaybackSourceProvider) {
         if (!PlaybackSourcePolicy.accepts(ticket.sourceId, url)) throw PlaybackSourceException(PlaybackFailure.PROTOCOL)
         if (lease.metadata?.key?.stableId?.let { it != ticket.sourceId } == true)
             throw PlaybackSourceException(PlaybackFailure.PROTOCOL)
+        ticket.expectedSource?.let { expected -> lease.metadata?.let { resolved ->
+            // Search metadata is not authoritative for the later stream lookup. Reject a
+            // different singer/recording before opening its audio, even if the ID is unchanged.
+            if (!tech.musxi.core.playback.SourceMatchPolicy.confirmsSelected(expected, resolved))
+                throw PlaybackSourceException(PlaybackFailure.UNAVAILABLE)
+        } }
     }
 
     private fun checkCurrent(uri: String, ticket: Ticket) {

@@ -1,11 +1,7 @@
 package tech.musxi.player.ui.components
 
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
@@ -16,10 +12,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import tech.musxi.core.library.SongSummary
 import tech.musxi.player.ui.model.formatDuration
@@ -33,8 +27,10 @@ import tech.musxi.player.ui.theme.nowPlayingAccent
  * needs the same row, and the cheap way out — a second copy — is exactly how the design sheets
  * drifted away from the real pages in earlier rounds. So it is one component used by both.
  *
- * Kept identical to the playlist row in the library on purpose: 64dp high, 48dp cover as the lead,
- * title over subtitle, duration on the trailing edge.
+ * Kept identical to the playlist row in the library on purpose: both are a [PlainRow] (a 48dp cover
+ * plus the shared row padding, 64dp, growing with the font), title over subtitle, duration on the
+ * trailing edge. The divider between two of them is the caller's, drawn with [RowDivider] from the
+ * text start.
  */
 @Composable
 fun SongRow(
@@ -58,31 +54,20 @@ fun SongRow(
     val title = remember(song.title, highlight) { highlighted(song.title, highlight, Color.Unspecified) }
     val subtitleText = songSubtitle(song)
     val subtitle = remember(subtitleText, highlight) { highlighted(subtitleText, highlight, Color.Unspecified) }
-    Row(
-        modifier.fillMaxWidth().height(64.dp).pressableRow(onClick = onClick),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
+    PlainRow(onClick = onClick, modifier = modifier) {
         // 48dp, the same lead as every other list row in the app.
         Cover(
             seed = song.album.ifBlank { song.key.stableId },
-            modifier = Modifier.size(48.dp),
+            modifier = Modifier.size(RowSpec.cover),
             shape = MaterialTheme.shapes.small,
             url = song.coverUrl,
         )
-        Spacer(Modifier.width(12.dp))
-        Column(Modifier.weight(1f)) {
-            Text(
-                title, style = MaterialTheme.typography.titleSmall,
-                color = if (playing) accent else cs.onSurface,
-                maxLines = 1, overflow = TextOverflow.Ellipsis,
-            )
-            Text(
-                subtitle, style = MaterialTheme.typography.bodySmall,
-                color = cs.onSurfaceVariant,
-                maxLines = 1, overflow = TextOverflow.Ellipsis,
-            )
-        }
-        Spacer(Modifier.width(8.dp))
+        Spacer(Modifier.width(RowSpec.leadGap))
+        RowText(
+            title, subtitle = subtitle,
+            titleColor = if (playing) accent else cs.onSurface,
+        )
+        Spacer(Modifier.width(RowSpec.chevronGap))
         if (playing) {
             PlayingBars(accent)
         } else {

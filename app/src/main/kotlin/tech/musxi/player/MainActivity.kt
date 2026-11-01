@@ -4,6 +4,8 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.collectAsState
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.ProcessLifecycleOwner
@@ -18,7 +20,6 @@ import tech.musxi.player.ui.theme.ThemeMode
  */
 class MainActivity : ComponentActivity() {
 
-    private var mode by mutableStateOf(ThemeMode.LIGHT)
     private var accent by mutableStateOf(Accent.MIST)
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -32,8 +33,15 @@ class MainActivity : ComponentActivity() {
             },
         )
         setContent {
+            val settings by app.settings.collectAsState()
+            val dark = when (settings.themeMode) {
+                tech.musxi.core.settings.ThemeMode.SYSTEM -> isSystemInDarkTheme()
+                tech.musxi.core.settings.ThemeMode.LIGHT -> false
+                tech.musxi.core.settings.ThemeMode.DARK -> true
+            }
+            val mode = if (dark) ThemeMode.DARK else ThemeMode.LIGHT
             MusxiTheme(accent = accent, mode = mode) {
-                MainShell(app, dark = mode != ThemeMode.LIGHT)
+                MainShell(app, dark = dark)
             }
         }
     }

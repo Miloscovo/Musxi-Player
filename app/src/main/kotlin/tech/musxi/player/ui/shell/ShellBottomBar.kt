@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
@@ -88,6 +89,8 @@ fun ShellBottomBar(
     /** True when a dock already draws the container. */
     embedded: Boolean = false,
     mark: SelectionMark = SelectionMark.NONE,
+    /** Tabs that carry a small attention dot, such as an update nobody has looked at yet. */
+    badges: Set<ShellTab> = emptySet(),
 ) {
     val cs = MaterialTheme.colorScheme
     val pill = shape != BarShape.FULL_WIDTH
@@ -100,7 +103,8 @@ fun ShellBottomBar(
     Row(
         modifier
             .then(if (embedded) Modifier.fillMaxWidth() else widthModifier)
-            .height(HEIGHT)
+            // A minimum, not a fixed height: at large font sizes the row grows instead of clipping the label.
+            .heightIn(min = ShellTabRowHeight)
             .then(
                 if (embedded) Modifier else Modifier
                     .clip(if (pill) CircleShape else MaterialTheme.shapes.extraLarge)
@@ -118,6 +122,7 @@ fun ShellBottomBar(
         ShellTab.entries.forEach { tab ->
             TabItem(
                 tab = tab, selected = tab == selected, compact = pill, mark = mark,
+                badge = tab in badges,
                 onSelect = { onSelect(tab) },
             )
         }
@@ -129,7 +134,7 @@ fun ShellBottomBar(
  * bottom of the screen — the earlier 64/68 pairing inverted that and made the card look cramped
  * against a bar that felt half empty.
  */
-private val HEIGHT = 64.dp
+internal val ShellTabRowHeight = 64.dp
 
 @Composable
 private fun TabItem(
@@ -137,6 +142,7 @@ private fun TabItem(
     selected: Boolean,
     compact: Boolean,
     mark: SelectionMark,
+    badge: Boolean,
     onSelect: () -> Unit,
 ) {
     val cs = MaterialTheme.colorScheme
@@ -170,6 +176,13 @@ private fun TabItem(
                 if (selected) tab.selectedIcon else tab.unselectedIcon,
                 null, tint = tint, modifier = Modifier.size(24.dp),
             )
+            if (badge) {
+                // Corner of the 24dp icon, kept inside the 56x32 capsule so its clip does not cut the dot.
+                Box(
+                    Modifier.align(Alignment.TopEnd).padding(top = 3.dp, end = 12.dp)
+                        .size(8.dp).clip(CircleShape).background(cs.error),
+                )
+            }
         }
         Spacer(Modifier.height(3.dp))
         // labelMedium + Medium instead of labelSmall + Normal: at 11sp Normal the three labels read

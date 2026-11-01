@@ -17,16 +17,23 @@ import java.util.function.BooleanSupplier;
  * Credentials and signed URLs never become library DTOs. */
 public final class QqLibraryApi {
     public static final class Playlist {
+        public enum Kind { LIKED, CREATED, COLLECTED, OTHER }
         public final String id, name, coverUrl; public final int trackCount;
         public final boolean liked, writable;
-        Playlist(String id,String name,int count){this(id,name,count,null,false,false);}
-        Playlist(String id,String name,int count,String coverUrl){this(id,name,count,coverUrl,false,false);}
+        public final Kind kind;
+        Playlist(String id,String name,int count){this(id,name,count,null,false,false,Kind.OTHER);}
+        Playlist(String id,String name,int count,String coverUrl){this(id,name,count,coverUrl,false,false,Kind.OTHER);}
         Playlist(String id,String name,int count,String coverUrl,boolean liked,boolean writable){
+            this(id,name,count,coverUrl,liked,writable,
+                liked ? Kind.LIKED : writable ? Kind.CREATED : Kind.OTHER);
+        }
+        Playlist(String id,String name,int count,String coverUrl,boolean liked,boolean writable,Kind kind){
             this.id=id;this.name=name;trackCount=count;this.coverUrl=coverUrl;this.liked=liked;this.writable=writable;
+            this.kind=kind;
         }
     }
     public static final class Song {
-        public final String id,name,album,coverUrl; public final List<String> artists; public final long durationMs;
+        public final String id,name,album,coverUrl,albumId; public final List<String> artists,artistIds; public final long durationMs;
         final String mediaMid; final int type; final long numericId;
         Song(String id,String name,List<String> artists,String album,long duration,String mediaMid,int type){
             this(id,name,artists,album,duration,mediaMid,type,null);
@@ -35,8 +42,14 @@ public final class QqLibraryApi {
             this(id,0,name,artists,album,duration,mediaMid,type,coverUrl);
         }
         Song(String id,long numericId,String name,List<String> artists,String album,long duration,String mediaMid,int type,String coverUrl){
+            this(id,numericId,name,artists,album,duration,mediaMid,type,coverUrl,
+                Collections.emptyList(),null);
+        }
+        Song(String id,long numericId,String name,List<String> artists,String album,long duration,String mediaMid,int type,
+            String coverUrl,List<String> artistIds,String albumId){
             this.id=id;this.name=name;this.artists=Collections.unmodifiableList(new ArrayList<>(artists));this.album=album;
             durationMs=duration;this.mediaMid=mediaMid;this.type=type;this.numericId=numericId;this.coverUrl=coverUrl;
+            this.artistIds=Collections.unmodifiableList(new ArrayList<>(artistIds));this.albumId=albumId;
         }
     }
     public static final class Page<T> {
@@ -62,6 +75,10 @@ public final class QqLibraryApi {
         @Override public String toString(){return "LyricsDocument{redacted}";}
     }
     interface AudioProbe { void check(String url) throws IOException; }
+    static final String ARTIST_TRACKS_MODULE="musichall.song_list_server";
+    static final String ARTIST_TRACKS_METHOD="GetSingerSongList";
+    static final String ALBUM_TRACKS_MODULE="music.musichallAlbum.AlbumSongList";
+    static final String ALBUM_TRACKS_METHOD="GetAlbumSongList";
     private final QqMusicApi api; private final BooleanSupplier valid; private final AudioProbe probe;
     private final long deadline=System.nanoTime()+60_000_000_000L;
     public QqLibraryApi(QqMusicApi api){this(api,()->true);}
@@ -116,7 +133,7 @@ public final class QqLibraryApi {
             String id=tid+"_"+dir;playlistParts(id);
             Playlist list=new Playlist(id,clean(first(row,"title","dirName","dissname","name"),"未命名歌单"),number(first(row,"songNum","songnum","song_cnt"),1_000_000),
                 image(first(row,"cover_url_big","cover_url_medium","cover_url_small","picurl","picUrl","logo","cover","coverUrl")),
-                false,created);
+                false,created,created ? Playlist.Kind.CREATED : Playlist.Kind.COLLECTED);
             lists.putIfAbsent(id,list);
         }
     }
@@ -170,6 +187,55 @@ public final class QqLibraryApi {
         if(parts[0].equals("0"))put(param,"enc_host_uin",api.encryptedUin(session));
         return parseTracks(call(session,"music.srfDissInfo.DissInfo","CgiGetDiss",param),playlist,offset,limit);
     }
+    /** SDK 0.8.1 singer.get_songs_list, whose response wraps each row in songList[].songInfo. */
+    public Page<Song> artistTracks(QqMusicApi.Session session,String artist,int offset,int limit) throws IOException {
+        if(session==null)throw error("identity");
+        JSONObject param=artistTracksParam(artist,offset,limit);
+        return parseArtistTracks(call(session,ARTIST_TRACKS_MODULE,ARTIST_TRACKS_METHOD,param),artist,offset,limit);
+    }
+    /** SDK 0.8.1 album.get_song, whose response wraps each row in songList[].songInfo. */
+    public Page<Song> albumTracks(QqMusicApi.Session session,String album,int offset,int limit) throws IOException {
+        if(session==null)throw error("identity");
+        JSONObject param=albumTracksParam(album,offset,limit);
+        return parseAlbumTracks(call(session,ALBUM_TRACKS_MODULE,ALBUM_TRACKS_METHOD,param),album,offset,limit);
+    }
+    static JSONObject artistTracksParam(String artist,int offset,int limit) throws IOException {
+        requireMid(artist);
+        bounds(offset,limit);
+        return obj("singerMid",artist,"order",1,"number",limit,"begin",offset);
+    }
+    static JSONObject albumTracksParam(String album,int offset,int limit) throws IOException {
+        requireMid(album);
+        bounds(offset,limit);
+        return obj("albumMid",album,"begin",offset,"num",limit);
+    }
+    static Page<Song> parseArtistTracks(JSONObject data,String artist,int offset,int limit) throws IOException {
+        return parseCollectionTracks(data,artist,"singerMid",offset,limit);
+    }
+    static Page<Song> parseAlbumTracks(JSONObject data,String album,int offset,int limit) throws IOException {
+        return parseCollectionTracks(data,album,"albumMid",offset,limit);
+    }
+    private static Page<Song> parseCollectionTracks(JSONObject data,String expected,String identityField,
+        int offset,int limit) throws IOException {
+        bounds(offset,limit);requireMid(expected);
+        if(data==null)throw error("protocol");
+        if(data.has("subcode") && number(data.opt("subcode"),Integer.MAX_VALUE)!=0)throw error("permission");
+        String echoed=text(data.opt(identityField));if(!expected.equals(echoed))throw error("identity");
+        int total=number(data.opt("totalNum"),20_000);
+        JSONArray wrappers=data.optJSONArray("songList");
+        if(wrappers==null){if(total==0)wrappers=new JSONArray();else throw error("protocol");}
+        if(wrappers.length()>limit)throw error("protocol");
+        int end=offset+wrappers.length();boolean more=end<total;
+        if(end>total || (more && (wrappers.length()==0 || wrappers.length()<limit)) || (!more && end!=total))
+            throw error("incomplete");
+        List<Song> songs=new ArrayList<>();Set<String> ids=new HashSet<>();
+        for(int i=0;i<wrappers.length();i++){
+            JSONObject wrapper=wrappers.optJSONObject(i),row=wrapper==null?null:wrapper.optJSONObject("songInfo");
+            if(row==null)throw error("protocol");
+            Song item=song(row);if(!ids.add(item.id))throw error("identity");songs.add(item);
+        }
+        return new Page<>(songs,more?end:-1,total);
+    }
     static Page<Song> parseTracks(JSONObject data,String playlist,int offset,int limit) throws IOException {
         bounds(offset,limit);String[] expected=playlistParts(playlist);
         if(data.has("subcode") && number(data.opt("subcode"),Integer.MAX_VALUE)!=0)throw error("permission");
@@ -193,12 +259,19 @@ public final class QqLibraryApi {
         JSONObject album=row.optJSONObject("album"),file=row.optJSONObject("file");
         String media=file==null?"":text(file.opt("media_mid"));
         if(!media.isEmpty() && !media.matches("[A-Za-z0-9]{14,64}"))throw error("identity");
-        List<String> artists=new ArrayList<>();JSONArray singer=row.optJSONArray("singer");
+        List<String> artists=new ArrayList<>(),artistIds=new ArrayList<>();boolean allArtistIds=true;JSONArray singer=row.optJSONArray("singer");
         if(singer!=null){if(singer.length()>100)throw error("limit");for(int i=0;i<singer.length();i++){
-            JSONObject artist=singer.optJSONObject(i);if(artist==null)throw error("protocol");artists.add(clean(artist.opt("name"),"未知歌手"));}}
+            JSONObject artist=singer.optJSONObject(i);if(artist==null)throw error("protocol");
+            artists.add(clean(artist.opt("name"),"未知歌手"));
+            String artistId=optionalEntityMid(artist.opt("mid"));
+            if(artistId==null)allArtistIds=false;else if(allArtistIds)artistIds.add(artistId);
+        }}
+        if(!allArtistIds)artistIds.clear();
         long numericId=row.has("id")?Long.parseLong(numeric(row.opt("id"),false)):0;
+        String albumId=album==null?null:optionalEntityMid(album.opt("mid"));
         return new Song(mid,numericId,clean(first(row,"name","title"),"暂不可用歌曲"),artists,album==null?"":clean(album.opt("name"),""),
-            (long)number(row.opt("interval"),604_800)*1000,media,row.has("type")?number(row.opt("type"),100):0,albumCover(row,album));
+            (long)number(row.opt("interval"),604_800)*1000,media,row.has("type")?number(row.opt("type"),100):0,albumCover(row,album),
+            artistIds,albumId);
     }
     public List<Song> search(QqMusicApi.Session session,String keywords) throws IOException {
         return parseSearch(searchResponse(session,keywords,0,10));
@@ -459,7 +532,7 @@ public final class QqLibraryApi {
                 requestAudio(session,mid,song,now,id,true);
                 out.add(new AudioQuality(id,qualityName(id)));
             } catch(QqMusicApi.ApiException unavailable) {
-                if(!Arrays.asList("permission","unavailable","network","source_expired").contains(unavailable.code))throw unavailable;
+                if(!Arrays.asList("permission","membership","copyright","preview","unavailable","network","source_expired").contains(unavailable.code))throw unavailable;
             }
         }
         return Collections.unmodifiableList(out);
@@ -515,7 +588,7 @@ public final class QqLibraryApi {
         if(!filename.equals(text(row.opt("filename"))))throw diagnostic("permission","filename_mismatch");
         if(!text(row.opt("ekey")).isEmpty())throw diagnostic("permission","encrypted_audio");
         for(String key:new String[]{"trybegin","try_begin","tryend","try_end","is_preview"}){
-            Object value=row.opt(key);if(value!=null && value!=JSONObject.NULL && !Boolean.FALSE.equals(value) && (Boolean.TRUE.equals(value) || (!text(value).isEmpty() && !text(value).equals("0"))))throw diagnostic("permission","preview_audio");
+            Object value=row.opt(key);if(value!=null && value!=JSONObject.NULL && !Boolean.FALSE.equals(value) && (Boolean.TRUE.equals(value) || (!text(value).isEmpty() && !text(value).equals("0"))))throw diagnostic("preview","preview_audio");
         }
         String purl=text(row.opt("purl"));
         try {URI relative=new URI(purl);if(relative.isAbsolute() || relative.getRawAuthority()!=null || relative.getRawFragment()!=null ||
@@ -557,6 +630,9 @@ public final class QqLibraryApi {
         if(parts[0].equals("0") && dir!=201)throw error("identity");return parts;
     }
     static void requireMid(String mid) throws IOException {if(mid==null || !mid.matches("[A-Za-z0-9]{14}"))throw error("identity");}
+    private static String optionalEntityMid(Object value) throws IOException {
+        String mid=text(value).trim();return mid.matches("[A-Za-z0-9]{14}")?mid:null;
+    }
     private static void bounds(int offset,int limit) throws IOException {if(offset<0 || offset>20_000 || limit<1 || limit>100)throw error("limit");}
     private static JSONArray array(JSONObject value,String name) throws IOException {JSONArray rows=value.optJSONArray(name);if(rows==null)throw error("protocol");return rows;}
     private static boolean flag(JSONObject value,String name,boolean required) throws IOException {

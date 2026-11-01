@@ -4,7 +4,12 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.junit.Assert.assertNull
 import tech.musxi.core.account.Platform
+import tech.musxi.core.library.MediaKey
+import tech.musxi.core.library.SongSummary
+import tech.musxi.core.playback.FailureReason
+import tech.musxi.core.playback.PlaybackFailureReason
 import tech.musxi.playback.PlaybackRepeatMode
 import tech.musxi.playback.PlaybackState
 import tech.musxi.playback.PlaybackSuppression
@@ -24,10 +29,16 @@ class FullPlayerUiTest {
         hasNext: Boolean = true,
         queuePlatform: Platform? = Platform.NETEASE,
         sourcePlatform: Platform? = null,
+        failureReason: FailureReason? = null,
+        original: SongSummary? = null,
+        actualSource: SongSummary? = null,
+        title: String = "晴天",
+        artist: String = "周杰伦",
+        album: String = "叶惠美",
     ) = PlaybackState(
-        title = "晴天",
-        artist = "周杰伦",
-        album = "叶惠美",
+        title = title,
+        artist = artist,
+        album = album,
         suppression = suppression,
         failure = failure,
         error = error,
@@ -38,7 +49,13 @@ class FullPlayerUiTest {
         sourcePlatform = sourcePlatform,
         durationMs = 200_000,
         positionMs = 50_000,
+        failureReason = failureReason?.let { PlaybackFailureReason(it) },
+        original = original,
+        actualSource = actualSource,
     )
+
+    private val queued = SongSummary(MediaKey(Platform.KUGOU, "k1"), "晴天", listOf("周杰伦"), "叶惠美", 269_000)
+    private val replacement = SongSummary(MediaKey(Platform.NETEASE, "n1"), "晴天", listOf("Jay"), "晴天", 270_000)
 
     @Test fun noOutputOutranksEverything() {
         val ui = playerUiOf(
@@ -65,6 +82,72 @@ class FullPlayerUiTest {
         assertEquals("当前音源不可用 · 正在换源", thirdLineOf(ui))
         // The app is already handling it: red would say "you must do something".
         assertFalse(isProblemLine(ui))
+    }
+
+    @Test fun aSettledFailureNamesItsReason() {
+        val ui = playerUiOf(state(error = "boom", failureReason = FailureReason.COPYRIGHT_RESTRICTED))
+        assertEquals(FailureReason.COPYRIGHT_RESTRICTED, ui.failureReason)
+        assertEquals("暂无可用音源 · 暂无版权", thirdLineOf(ui))
+        assertTrue(isProblemLine(ui))
+    }
+
+    @Test fun aSwapInProgressKeepsItsNeutralWordingEvenWithAReason() {
+        val ui = playerUiOf(state(error = "boom", failureReason = FailureReason.MEMBERSHIP_REQUIRED), swapSearching = true)
+        assertEquals("当前音源不可用 · 正在换源", thirdLineOf(ui))
+    }
+
+    @Test fun aReasonWithoutAFailureStaysOutOfTheLine() {
+        val ui = playerUiOf(state(failureReason = FailureReason.NETWORK))
+        assertEquals("网易云音乐", thirdLineOf(ui))
+    }
+
+    @Test fun aSwappedRecordingGetsItsOwnLineAndTheTitleStaysTheOriginal() {
+        // The service reports the substitute's artist and album as the playing metadata.
+        val ui = playerUiOf(
+            state(
+                queuePlatform = Platform.KUGOU, sourcePlatform = Platform.NETEASE,
+                title = "晴天", artist = "Jay", album = "晴天",
+                original = queued, actualSource = replacement,
+            ),
+        )
+        assertEquals("晴天", ui.title)
+        assertEquals("周杰伦", ui.artist)
+        assertEquals("叶惠美", ui.album)
+        assertEquals("实际播放：《晴天》· Jay · 网易云", ui.actualSourceLine)
+    }
+
+    @Test fun theSameRecordingNeedsNoActualLine() {
+        val ui = playerUiOf(state(original = queued, actualSource = queued.copy(title = "晴天 (Live)")))
+        assertNull(ui.actualSourceLine)
+        // Same key means same recording; the state's own metadata is shown untouched.
+        assertEquals("周杰伦", ui.artist)
+    }
+
+    @Test fun anUnknownSideMeansNothingToCompare() {
+        assertNull(playerUiOf(state(original = queued)).actualSourceLine)
+        assertNull(playerUiOf(state(actualSource = replacement)).actualSourceLine)
+        assertNull(playerUiOf(state()).actualSourceLine)
+        // Without a known original the state's own title and artist are all there is.
+        assertEquals("周杰伦", playerUiOf(state(actualSource = replacement)).artist)
+    }
+
+    @Test fun theActualLineLeavesOutBlankParts() {
+        val bare = replacement.copy(title = "", artists = emptyList())
+        assertEquals("实际播放：网易云", actualSourceLineOf(bare))
+        assertEquals("实际播放：《晴天》· 网易云", actualSourceLineOf(replacement.copy(artists = emptyList())))
+        assertEquals(
+            "实际播放：《晴天》· A / B · 网易云",
+            actualSourceLineOf(replacement.copy(artists = listOf("A", "B"))),
+        )
+    }
+
+    @Test fun aBlankOriginalFieldFallsBackToTheState() {
+        val sparse = queued.copy(album = "")
+        val ui = playerUiOf(
+            state(title = "晴天", artist = "Jay", album = "晴天", original = sparse, actualSource = replacement),
+        )
+        assertEquals("周杰伦", ui.artist)
+        assertEquals("晴天", ui.album)
     }
 
     @Test fun interruptionIsNotAFailure() {

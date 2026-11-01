@@ -13,6 +13,8 @@ import tech.musxi.core.lyrics.TranslationReason
 import tech.musxi.core.lyrics.LyricsTranslation
 import tech.musxi.core.lyrics.TranslationLookup
 import tech.musxi.core.lyrics.TranslationLookupStatus
+import tech.musxi.core.lyrics.LyricsOrigin
+import tech.musxi.core.lyrics.LyricsCacheHit
 import tech.musxi.neteaseloginpoc.NeteaseApi
 import tech.musxi.neteaseloginpoc.NeteaseLibraryApi
 import tech.musxi.qqloginpoc.QqMusicApi
@@ -31,8 +33,24 @@ class LyricsRepository(private val accounts: AccountRepository) {
     // Main-thread bounded contexts; private platform documents/handles never enter UI or disk.
     private val stages = java.util.IdentityHashMap<ParsedLyrics, Stage>()
     private val order = java.util.ArrayDeque<ParsedLyrics>()
+    private data class Display(val originalKey: MediaKey, val key: MediaKey, val source: ParsedLyrics,
+        val originalOwner: LibraryCacheIdentity, val sourceOwner: LibraryCacheIdentity)
+    private val displays = java.util.IdentityHashMap<ParsedLyrics, Display>()
+    private var cacheRevision = 0L
+
+    /** Main-thread cache maintenance; never removes manually saved bindings. */
+    fun clearCache() {
+        ++cacheRevision
+        displays.clear()
+        stages.clear()
+        order.clear()
+    }
 
     fun accountChanged() {
+        displays.entries.removeAll { (_, display) ->
+            !display.originalOwner.sameAttempt(accounts.playbackIdentity(display.originalKey.platform)) ||
+                !display.sourceOwner.sameAttempt(accounts.playbackIdentity(display.key.platform))
+        }
         order.removeAll { parsed -> stages[parsed]?.let { cached ->
             val identity = accounts.playbackIdentity(cached.key.platform)
             (!cached.owner.sameAttempt(identity) || identity?.verified != true).also { if (it) stages.remove(parsed) }
@@ -40,13 +58,79 @@ class LyricsRepository(private val accounts: AccountRepository) {
     }
 
     fun releaseOriginal(parsed: ParsedLyrics) {
+        displays.remove(parsed)?.let { releaseOriginal(it.source) }
         stages.remove(parsed)
         order.removeAll { it === parsed }
     }
 
     fun fetchOriginal(key: MediaKey, result: (Result<ParsedLyrics>) -> Unit) = fetchOriginal(key, { true }, result)
 
-    fun fetchOriginal(key: MediaKey, isCurrent: () -> Boolean, result: (Result<ParsedLyrics>) -> Unit) {
+    fun fetchOriginal(key: MediaKey, isCurrent: () -> Boolean, result: (Result<ParsedLyrics>) -> Unit) =
+        fetchForOriginal(key, key, isCurrent, result)
+
+    /** Bindings belong to the original queue item; automatic lyrics still follow the actual source. */
+    fun fetchForOriginal(original: MediaKey, automatic: MediaKey, isCurrent: () -> Boolean,
+        result: (Result<ParsedLyrics>) -> Unit) {
+        val expectedCacheRevision = cacheRevision
+        val owner = accounts.playbackIdentity(original.platform)
+            ?: return result(Result.failure(LyricsFailure("account_changed", "NONE")))
+        accounts.lyricsBinding(original, owner) binding@{ response ->
+            if (expectedCacheRevision != cacheRevision || !isCurrent() || owner != accounts.playbackIdentity(original.platform)) return@binding
+            val saved = response.getOrNull()
+            if (response.isFailure) return@binding result(Result.failure(response.exceptionOrNull()!!))
+            val key = saved?.candidateKey ?: automatic
+            val sourceOwner = accounts.playbackIdentity(key.platform)
+                ?: return@binding result(Result.failure(LyricsFailure("account_changed", "NONE")))
+            fun valid() = expectedCacheRevision == cacheRevision && isCurrent() && owner == accounts.playbackIdentity(original.platform) &&
+                sourceOwner == accounts.playbackIdentity(key.platform)
+            fetchCached(key, ::valid) fetched@{ fetched ->
+                if (!valid()) return@fetched
+                result(fetched.map { parsed ->
+                    val displayed = parsed.copy(origin = if (saved == null) LyricsOrigin.AUTO else LyricsOrigin.MATCHED,
+                        offsetMs = saved?.offsetMs ?: 0)
+                    displays[displayed] = Display(original, key, parsed, owner, sourceOwner)
+                    while (displays.size > 16) displays.remove(displays.keys.first())
+                    displayed
+                })
+            }
+        }
+    }
+
+    /** Search previews never pass through the disk-cache or binding APIs. */
+    fun preview(key: MediaKey, isCurrent: () -> Boolean, result: (Result<ParsedLyrics>) -> Unit) {
+        val owner = accounts.playbackIdentity(key.platform)
+        fetch(key) { response ->
+            if (isCurrent() && owner?.verified == true && owner == accounts.playbackIdentity(key.platform)) result(response)
+        }
+    }
+
+    private fun fetchCached(key: MediaKey, isCurrent: () -> Boolean, result: (Result<ParsedLyrics>) -> Unit) {
+        val owner = accounts.playbackIdentity(key.platform)
+            ?: return result(Result.failure(LyricsFailure("account_changed", "NONE")))
+        accounts.lyricsCache(key, owner) cached@{ response ->
+            if (!isCurrent()) return@cached
+            val cached = response.getOrNull()
+            if (!owner.verified) {
+                result(if (cached != null) Result.success(cached.lyrics)
+                    else Result.failure(LyricsFailure("account_changed", "NONE")))
+                return@cached
+            }
+            if (cached != null && !cached.stale) return@cached result(Result.success(cached.lyrics))
+            fetchNetworkOriginal(key, isCurrent) network@{ fresh ->
+                if (!isCurrent()) return@network
+                val parsed = fresh.getOrNull()
+                if (parsed == null) {
+                    result(if (cached != null) Result.success(cached.lyrics) else fresh)
+                } else {
+                    accounts.lyricsCache(key, owner, parsed) { }
+                    result(Result.success(parsed))
+                }
+            }
+        }
+    }
+
+    private fun fetchNetworkOriginal(key: MediaKey, isCurrent: () -> Boolean, result: (Result<ParsedLyrics>) -> Unit) {
+        val expectedCacheRevision = cacheRevision
         val owner = accounts.playbackIdentity(key.platform)?.takeIf { it.verified }
             ?: return result(Result.failure(LyricsFailure("account_changed", "NONE")))
         fun stage(raw: String, document: Any): Stage {
@@ -58,7 +142,7 @@ class LyricsRepository(private val accounts: AccountRepository) {
             return Stage(key, owner, raw, original, document)
         }
         val callback: (Result<Stage>) -> Unit = callback@{ response ->
-            if (!isCurrent()) return@callback
+            if (expectedCacheRevision != cacheRevision || !isCurrent()) return@callback
             val current = accounts.playbackIdentity(key.platform)
             if (!owner.sameAttempt(current) || current?.verified != true)
                 result(Result.failure(LyricsFailure("account_changed", "NONE")))
@@ -92,8 +176,36 @@ class LyricsRepository(private val accounts: AccountRepository) {
     /** Initial lookup consumes the same response; explicit refresh never replaces the original. */
     fun fetchTranslation(key: MediaKey, original: ParsedLyrics, refresh: Boolean,
         result: (Result<ParsedLyrics>) -> Unit) {
+        val expectedCacheRevision = cacheRevision
+        val display = displays[original]
+        if (display != null) {
+            if (display.originalOwner != accounts.playbackIdentity(display.originalKey.platform) ||
+                display.sourceOwner != accounts.playbackIdentity(display.key.platform)) {
+                result(Result.failure(LyricsFailure("account_changed", "NONE"))); return
+            }
+            fetchTranslation(display.key, display.source, refresh) { response ->
+                if (expectedCacheRevision == cacheRevision && display.originalOwner == accounts.playbackIdentity(display.originalKey.platform) &&
+                    display.sourceOwner == accounts.playbackIdentity(display.key.platform))
+                    result(response.map { it.copy(origin = original.origin, offsetMs = original.offsetMs) })
+            }
+            return
+        }
         val stage = stages[original]
         val owner = accounts.playbackIdentity(key.platform)
+        if (owner != null && !owner.verified && stage == null) {
+            result(Result.success(original)); return
+        }
+        if (stage == null && owner?.verified == true) {
+            if (!refresh && original.translation.lookup.status != TranslationLookupStatus.IDLE) {
+                result(Result.success(original)); return
+            }
+            fetch(key) { response ->
+                if (expectedCacheRevision != cacheRevision || owner != accounts.playbackIdentity(key.platform)) return@fetch
+                response.getOrNull()?.let { accounts.lyricsCache(key, owner, it) { } }
+                result(response)
+            }
+            return
+        }
         if (stage == null || stage.key != key || !stage.owner.sameAttempt(owner) || owner?.verified != true) {
             result(Result.failure(LyricsFailure(if (owner?.verified == true) "unavailable" else "account_changed", "NONE")))
             return
@@ -103,7 +215,11 @@ class LyricsRepository(private val accounts: AccountRepository) {
         fun align(raw: String, translated: () -> ParsedLyrics): ParsedLyrics =
             if (raw == stage.raw) translated() else
                 LyricsTranslationAligner.failed(original, TranslationReason.VERSION_MISMATCH)
-        val callback = normalized(result)
+        val callback = normalized<ParsedLyrics> { response ->
+            if (expectedCacheRevision != cacheRevision || !stage.owner.sameAttempt(accounts.playbackIdentity(key.platform))) return@normalized
+            response.getOrNull()?.let { accounts.lyricsCache(key, stage.owner, it) { } }
+            result(response)
+        }
         when (key.platform) {
             Platform.NETEASE -> accounts.withNeteaseSession({ api, session ->
                 val doc = if (useInitial) stage.document as NeteaseLibraryApi.LyricsDocument

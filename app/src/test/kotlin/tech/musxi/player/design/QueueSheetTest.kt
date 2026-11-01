@@ -8,6 +8,7 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
+import tech.musxi.player.ui.design.LargeFontBatch
 import tech.musxi.player.ui.design.QueueSheet
 import tech.musxi.player.ui.design.queueEditing
 import tech.musxi.player.ui.design.queueEmpty
@@ -44,14 +45,27 @@ class QueueSheetTest {
         "queue_nocover_mist_dark", ThemeMode.DARK, queueSample(), showCover = false,
     )
 
+    /** Font scale 2.0: the rows are as tall as their two lines need, so the text is not clipped. */
+    @Test @Config(qualifiers = "w360dp-h1600dp-xhdpi")
+    fun normalLargeFont() = capture(
+        "queue_normal_largefont_light", ThemeMode.LIGHT, queueSample(), largeFont = true,
+    )
+
     private fun capture(
         name: String,
         mode: ThemeMode,
         ui: QueueUi,
         showCover: Boolean = true,
+        largeFont: Boolean = false,
     ) {
         val out = File("build/design/$name.png")
-        captureRoboImage(out.path) { QueueSheet(Accent.MIST, mode, ui, showCover = showCover) }
+        captureRoboImage(out.path) {
+            if (largeFont) {
+                LargeFontBatch { QueueSheet(Accent.MIST, mode, ui, showCover = showCover) }
+            } else {
+                QueueSheet(Accent.MIST, mode, ui, showCover = showCover)
+            }
+        }
         if (!out.exists()) return
         val bitmap = BitmapFactory.decodeFile(out.path)
         assertTrue("$name failed to decode", bitmap != null)

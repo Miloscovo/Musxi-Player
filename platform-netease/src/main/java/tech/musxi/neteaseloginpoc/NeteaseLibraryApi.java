@@ -32,29 +32,44 @@ public final class NeteaseLibraryApi {
         }
     }
     public static final class Playlist {
+        public enum Kind { LIKED, CREATED, COLLECTED, OTHER }
         public final String id, name, coverUrl;
         public final int trackCount;
         public final boolean liked, writable;
+        public final Kind kind;
         Playlist(String id, String name, String coverUrl, int trackCount) {
-            this(id, name, coverUrl, trackCount, false, false);
+            this(id, name, coverUrl, trackCount, false, false, Kind.OTHER);
         }
         Playlist(String id, String name, String coverUrl, int trackCount, boolean liked, boolean writable) {
+            this(id, name, coverUrl, trackCount, liked, writable,
+                    liked ? Kind.LIKED : writable ? Kind.CREATED : Kind.OTHER);
+        }
+        Playlist(String id, String name, String coverUrl, int trackCount, boolean liked, boolean writable, Kind kind) {
             this.id = id; this.name = name; this.coverUrl = coverUrl; this.trackCount = trackCount;
             this.liked = liked; this.writable = writable;
+            this.kind = kind;
         }
     }
     public static final class Track {
         public final String id, name, album, coverUrl;
         public final List<String> artists;
+        public final List<String> artistIds;
+        public final String albumId;
         public final long durationMs;
         public final boolean available;
         Track(String id, String name, String album, List<String> artists, long durationMs, boolean available) {
-            this(id, name, album, artists, durationMs, available, null);
+            this(id, name, album, artists, durationMs, available, null, Collections.emptyList(), null);
         }
         Track(String id, String name, String album, List<String> artists, long durationMs, boolean available, String coverUrl) {
+            this(id, name, album, artists, durationMs, available, coverUrl, Collections.emptyList(), null);
+        }
+        Track(String id, String name, String album, List<String> artists, long durationMs, boolean available,
+              String coverUrl, List<String> artistIds, String albumId) {
             this.id = id; this.name = name; this.album = album;
             this.coverUrl = coverUrl;
             this.artists = Collections.unmodifiableList(new ArrayList<>(artists));
+            this.artistIds = Collections.unmodifiableList(new ArrayList<>(artistIds));
+            this.albumId = albumId;
             this.durationMs = durationMs; this.available = available;
         }
     }
@@ -88,7 +103,7 @@ public final class NeteaseLibraryApi {
         pageBounds(offset, limit);
         JSONObject body = api.authenticatedCall(NeteaseApi.USER_PLAYLIST,
                 json("uid", session.userId, "limit", limit, "offset", offset, "includeVideo", true), session);
-        return parsePlaylists(body, offset, limit);
+        return parsePlaylists(body, offset, limit, session.userId);
     }
 
     /** Current-account playlists whose server creator.userId matches this session.
@@ -169,6 +184,24 @@ public final class NeteaseLibraryApi {
         return track;
     }
 
+    /** Pinned module/artist_songs.js: /api/v1/artist/songs, preserving server pagination. */
+    public Page<Track> artistTracks(NeteaseApi.Session session, String artistId, int offset, int limit)
+            throws IOException {
+        pageBounds(offset, limit); id(artistId);
+        JSONObject body = api.authenticatedCall(NeteaseApi.ARTIST_TRACKS,
+                json("id", artistId, "private_cloud", "true", "work_type", 1,
+                        "order", "hot", "offset", offset, "limit", limit), session);
+        return parseArtistTracks(body, artistId, offset, limit);
+    }
+
+    /** Pinned module/album.js: /api/v1/album/{id}; the endpoint returns the complete album. */
+    public Page<Track> albumTracks(NeteaseApi.Session session, String albumId, int offset, int limit)
+            throws IOException {
+        pageBounds(offset, limit); id(albumId);
+        JSONObject body = api.authenticatedCall(NeteaseApi.ALBUM_TRACKS + albumId, new JSONObject(), session);
+        return parseAlbumTracks(body, albumId, offset, limit);
+    }
+
     /** First song-search page only; metadata never resolves a stream or enters a persistent cache.
      * Pinned module/cloudsearch.js: /api/cloudsearch/pc, using the existing EAPI transport.
      */
@@ -203,12 +236,12 @@ public final class NeteaseLibraryApi {
 
     public List<AudioQuality> qualities(NeteaseApi.Session session,String trackId,long nowElapsedMs) throws IOException {
         java.util.LinkedHashMap<String,AudioQuality> options=new java.util.LinkedHashMap<>();
-        for(String id:new String[]{"netease:standard","netease:higher","netease:exhigh","netease:lossless"}) {
+        for(String id:new String[]{"netease:standard","netease:higher","netease:exhigh","netease:lossless","netease:hires"}) {
             try {
                 Audio audio=audio(session,trackId,nowElapsedMs,id);
                 options.putIfAbsent(audio.qualityId,new AudioQuality(audio.qualityId,qualityName(audio.qualityId)));
             } catch(NeteaseApi.ApiException unavailable) {
-                if(!java.util.Arrays.asList("permission","unavailable","network").contains(unavailable.code))throw unavailable;
+                if(!java.util.Arrays.asList("permission","membership","copyright","preview","unavailable").contains(unavailable.code))throw unavailable;
             }
         }
         return Collections.unmodifiableList(new ArrayList<>(options.values()));
@@ -220,6 +253,7 @@ public final class NeteaseLibraryApi {
             case "netease:higher": return "higher";
             case "netease:exhigh": return "exhigh";
             case "netease:lossless": return "lossless";
+            case "netease:hires": return "hires";
             default: throw error("request");
         }
     }
@@ -231,12 +265,63 @@ public final class NeteaseLibraryApi {
         return "netease:lossless";
     }
 
+    private static String qualityIdForResponse(JSONObject row, int bitrate) throws IOException {
+        Object value=row.opt("level");
+        if(value==null || value==JSONObject.NULL) {
+            String legacy=qualityIdForBitrate(bitrate);
+            if(legacy.equals("netease:lossless") && !isFlac(row)) throw error("unavailable");
+            return legacy;
+        }
+        if(!(value instanceof String))throw error("protocol");
+        String level=((String)value).trim().toLowerCase(java.util.Locale.ROOT);
+        switch(level) {
+            case "standard": return "netease:standard";
+            case "higher": return "netease:higher";
+            case "exhigh": return "netease:exhigh";
+            case "lossless":
+                if(!isFlac(row))throw error("unavailable");
+                return "netease:lossless";
+            case "hires":
+                if(!isFlac(row))throw error("unavailable");
+                // The v1 endpoint's level is authoritative. When sampling data is
+                // present, require one Hi-Res indicator so ordinary 16-bit/44.1 kHz
+                // FLAC cannot be relabelled as Hi-Res.
+                return hasConfirmedHiResSampling(row) ? "netease:hires" : "netease:lossless";
+            default: throw error("unavailable");
+        }
+    }
+
+    private static boolean isFlac(JSONObject row) {
+        return "flac".equalsIgnoreCase(row.optString("type",""));
+    }
+
+    private static boolean hasConfirmedHiResSampling(JSONObject row) throws IOException {
+        Long sampleRate=optionalPositiveLong(row,"sampleRate","samplingRate","sample_rate","sr");
+        Long bitDepth=optionalPositiveLong(row,"bitDepth","bit_depth","bitsPerSample");
+        if(sampleRate==null && bitDepth==null)return true;
+        return (sampleRate!=null && sampleRate>48_000) || (bitDepth!=null && bitDepth>16);
+    }
+
+    private static Long optionalPositiveLong(JSONObject row, String... keys) throws IOException {
+        for(String key:keys) {
+            Object value=row.opt(key);
+            if(value==null || value==JSONObject.NULL)continue;
+            if(!(value instanceof Number))throw error("protocol");
+            double asDouble=((Number)value).doubleValue();
+            long asLong=((Number)value).longValue();
+            if(asDouble!=asLong || asLong<=0)throw error("protocol");
+            return asLong;
+        }
+        return null;
+    }
+
     private static String qualityName(String id) {
         switch(id) {
             case "netease:standard": return "标准音质";
             case "netease:higher": return "较高音质";
             case "netease:exhigh": return "极高音质";
             case "netease:lossless": return "无损音质";
+            case "netease:hires": return "Hi-Res 音质";
             default: return "";
         }
     }
@@ -269,6 +354,10 @@ public final class NeteaseLibraryApi {
     }
 
     static Page<Playlist> parsePlaylists(JSONObject body, int offset, int limit) throws IOException {
+        return parsePlaylists(body, offset, limit, null);
+    }
+
+    static Page<Playlist> parsePlaylists(JSONObject body, int offset, int limit, String ownerId) throws IOException {
         pageBounds(offset, limit);
         JSONArray rows = body.optJSONArray("playlist");
         if (rows == null || rows.length() > limit || !(body.opt("more") instanceof Boolean)) throw error("protocol");
@@ -279,12 +368,31 @@ public final class NeteaseLibraryApi {
             if (p == null) throw error("protocol");
             String key = id(p.opt("id"));
             if (!seen.add(key)) throw error("protocol");
+            Playlist.Kind kind = playlistKind(p, ownerId);
             out.add(new Playlist(key, name(p.opt("name"), "未命名歌单"), image(p.opt("coverImgUrl")),
-                    (int) nonNegative(p.opt("trackCount"), 1_000_000)));
+                    (int) nonNegative(p.opt("trackCount"), 1_000_000),
+                    kind == Playlist.Kind.LIKED, kind == Playlist.Kind.CREATED, kind));
         }
         boolean more = body.optBoolean("more");
         if (more && rows.length() == 0) throw error("protocol");
         return new Page<>(out, more ? offset + rows.length() : -1, -1);
+    }
+
+    private static Playlist.Kind playlistKind(JSONObject row, String ownerId) {
+        Object special = row.opt("specialType");
+        if (special instanceof Integer || special instanceof Long) {
+            long value = ((Number) special).longValue();
+            if (value == 5) return Playlist.Kind.LIKED;
+        }
+        if (ownerId == null) return Playlist.Kind.OTHER;
+        JSONObject creator = row.optJSONObject("creator");
+        if (creator == null) return Playlist.Kind.OTHER;
+        try {
+            String creatorId = id(creator.opt("userId"));
+            return ownerId.equals(creatorId) ? Playlist.Kind.CREATED : Playlist.Kind.COLLECTED;
+        } catch (IOException unknown) {
+            return Playlist.Kind.OTHER;
+        }
     }
 
     static List<Playlist> parseWritablePlaylistPage(JSONObject body, String ownerId) throws IOException {
@@ -349,22 +457,87 @@ public final class NeteaseLibraryApi {
             String key = id(row.opt("id"));
             if (!selected.contains(key) || out.containsKey(key)) throw error("identity");
             List<String> artists = new ArrayList<>();
+            List<String> artistIds = new ArrayList<>();
+            boolean completeArtistIds = true;
             JSONArray ar = row.optJSONArray("ar");
             if (ar == null || ar.length() > 100) throw error("protocol");
             for (int j = 0; j < ar.length(); j++) {
                 JSONObject artist = ar.optJSONObject(j);
                 if (artist == null) throw error("protocol");
                 artists.add(name(artist.opt("name"), "未知歌手"));
+                String artistId = optionalNavigationId(artist.opt("id"));
+                if (artistId == null) {
+                    completeArtistIds = false;
+                } else {
+                    artistIds.add(artistId);
+                }
             }
+            if (!completeArtistIds) artistIds.clear();
             JSONObject album = row.optJSONObject("al");
             if (album == null) throw error("protocol");
+            String albumId = optionalNavigationId(album.opt("id"));
             out.put(key, new Track(key, name(row.opt("name"), "未命名歌曲"), name(album.opt("name"), "未知专辑"),
-                    artists, nonNegative(row.opt("dt"), 86_400_000), true, image(album.opt("picUrl"))));
+                    artists, nonNegative(row.opt("dt"), 86_400_000), true, image(album.opt("picUrl")),
+                    artistIds, albumId));
         }
         List<Track> ordered = new ArrayList<>();
         for (String key : selected) ordered.add(out.containsKey(key) ? out.get(key)
                 : new Track(key, "暂不可用歌曲", "", Collections.emptyList(), 0, false));
         return ordered;
+    }
+
+    static Page<Track> parseArtistTracks(JSONObject body, String artistId, int offset, int limit)
+            throws IOException {
+        id(artistId); pageBounds(offset, limit);
+        JSONArray rows = body.optJSONArray("songs");
+        if (rows == null || rows.length() > limit || !(body.opt("more") instanceof Boolean))
+            throw error("protocol");
+        int total = (int) nonNegative(body.opt("total"), Integer.MAX_VALUE);
+        int end = offset + rows.length();
+        boolean more = body.optBoolean("more");
+        if (end > total || more != (end < total) || (rows.length() == 0 && offset < total))
+            throw error("incomplete");
+        List<String> selected = new ArrayList<>();
+        java.util.HashSet<String> seen = new java.util.HashSet<>();
+        for (int i = 0; i < rows.length(); i++) {
+            JSONObject row = rows.optJSONObject(i);
+            if (row == null) throw error("protocol");
+            String key = id(row.opt("id"));
+            if (!seen.add(key)) throw error("identity");
+            selected.add(key);
+        }
+        List<Track> items = parseTracks(body, selected);
+        for (Track track : items) {
+            if (track.artistIds.isEmpty()) throw error("incomplete");
+            if (!track.artistIds.contains(artistId)) throw error("identity");
+        }
+        return new Page<>(items, more ? end : -1, total);
+    }
+
+    static Page<Track> parseAlbumTracks(JSONObject body, String albumId, int offset, int limit)
+            throws IOException {
+        id(albumId); pageBounds(offset, limit);
+        JSONObject album = body.optJSONObject("album");
+        if (album == null || !id(album.opt("id")).equals(albumId)) throw error("identity");
+        JSONArray rows = body.optJSONArray("songs");
+        if (rows == null || rows.length() > 100_000) throw error("limit");
+        List<String> selected = new ArrayList<>();
+        java.util.HashSet<String> seen = new java.util.HashSet<>();
+        for (int i = 0; i < rows.length(); i++) {
+            JSONObject row = rows.optJSONObject(i);
+            if (row == null) throw error("protocol");
+            String key = id(row.opt("id"));
+            if (!seen.add(key)) throw error("identity");
+            selected.add(key);
+        }
+        List<Track> all = parseTracks(body, selected);
+        for (Track track : all)
+            if (track.albumId != null && !track.albumId.equals(albumId))
+                throw error("identity");
+        if (offset > all.size()) throw error("incomplete");
+        int end = Math.min(all.size(), offset + limit);
+        List<Track> items = new ArrayList<>(all.subList(offset, end));
+        return new Page<>(items, end < all.size() ? end : -1, all.size());
     }
 
     static List<Track> parseSearch(JSONObject body) throws IOException {
@@ -425,16 +598,18 @@ public final class NeteaseLibraryApi {
         if (rows == null || rows.length() != 1) throw error("protocol");
         JSONObject row = rows.optJSONObject(0);
         if (row == null || !id(row.opt("id")).equals(trackId)) throw error("identity");
-        if (row.has("freeTrialInfo") && !row.isNull("freeTrialInfo")) throw error("permission");
-        if (row.optInt("code", -1) != 200 || row.isNull("url")) throw error("unavailable");
+        if (row.has("freeTrialInfo") && !row.isNull("freeTrialInfo")) throw error("preview");
+        if (row.optInt("code", -1) != 200 || row.isNull("url")) {
+            // fee is only evidence of a membership restriction when no full stream was granted.
+            if (row.optInt("fee", 0) == 1 || row.optInt("fee", 0) == 8) throw error("membership");
+            throw error("unavailable");
+        }
         String url = mediaUrl(row.opt("url"));
         int bitrate = (int) nonNegative(row.opt("br"), 10_000_000);
         if (bitrate == 0) throw error("unavailable");
-        String actualQualityId=qualityIdForBitrate(bitrate);
-        List<String> levels=java.util.Arrays.asList("netease:standard","netease:higher","netease:exhigh","netease:lossless");
+        String actualQualityId=qualityIdForResponse(row,bitrate);
+        List<String> levels=java.util.Arrays.asList("netease:standard","netease:higher","netease:exhigh","netease:lossless","netease:hires");
         if(levels.indexOf(actualQualityId)>levels.indexOf(requestedQualityId))throw error("unavailable");
-        if(actualQualityId.equals("netease:lossless") && !"flac".equalsIgnoreCase(row.optString("type","")))
-            throw error("unavailable");
         long expires = nonNegative(row.opt("expi"), 86_400);
         if (expires == 0 || nowElapsedMs < 0 || nowElapsedMs > Long.MAX_VALUE - expires * 1000L) throw error("protocol");
         return new Audio(trackId, url, bitrate, nowElapsedMs + expires * 1000L, actualQualityId);
@@ -561,6 +736,14 @@ public final class NeteaseLibraryApi {
         if (!s.matches("[1-9][0-9]{0,18}")) throw error("protocol");
         try { if (Long.parseLong(s) <= 0) throw error("protocol"); } catch (NumberFormatException invalid) { throw error("protocol"); }
         return s;
+    }
+    private static String optionalNavigationId(Object value) throws IOException {
+        if (value == null || value == JSONObject.NULL) return null;
+        try {
+            return id(value);
+        } catch (IOException invalidNavigation) {
+            return null;
+        }
     }
     private static long nonNegative(Object value, long max) throws IOException {
         if (!(value instanceof Integer || value instanceof Long)) throw error("protocol");

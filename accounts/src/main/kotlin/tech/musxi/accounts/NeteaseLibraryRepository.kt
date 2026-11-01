@@ -12,21 +12,29 @@ class NeteaseLibraryRepository(private val accounts: AccountRepository) : Librar
     private val queueRevision = java.util.concurrent.atomic.AtomicLong()
     private fun summary(song: NeteaseLibraryApi.Track) = SongSummary(
         MediaKey(Platform.NETEASE, song.id), song.name, song.artists, song.album, song.durationMs,
-        ArtworkPolicy.sanitize(Platform.NETEASE, song.coverUrl))
+        ArtworkPolicy.sanitize(Platform.NETEASE, song.coverUrl), song.artistIds, song.albumId)
     class LibraryFailure(category: String) : LibraryPageFailure(category)
     private fun <T> safeCallback(result: (Result<T>) -> Unit): (Result<T>) -> Unit = { response ->
         result(response.fold({ Result.success(it) }, { error ->
             val code = (error as? LibraryFailure)?.category ?: (error as? NeteaseApi.ApiException)?.code
             val safe = if (code in setOf("expired", "network", "risk", "rate", "protocol", "identity", "limit", "cancelled",
-                    "incomplete", "permission", "unavailable", "endpoint", "platform", "http", "timeout", "request", "account_changed")) code!! else "unclassified"
+                    "incomplete", "permission", "membership", "copyright", "preview", "unavailable", "endpoint", "platform", "http", "timeout", "request", "account_changed")) code!! else "unclassified"
             Result.failure(LibraryFailure(safe))
         }))
     }
     override fun playlists(offset: Int, result: (Result<Page<PlaylistSummary>>) -> Unit) {
         accounts.withNeteaseSession({ api, session ->
             val page = NeteaseLibraryApi(api).playlists(session, offset, 30)
-            Page(page.items.map { PlaylistSummary(MediaKey(Platform.NETEASE, it.id), it.name,
-                ArtworkPolicy.sanitize(Platform.NETEASE, it.coverUrl), it.trackCount) },
+            Page(page.items.map {
+                val kind = when (it.kind) {
+                    NeteaseLibraryApi.Playlist.Kind.LIKED -> PlaylistKind.LIKED
+                    NeteaseLibraryApi.Playlist.Kind.CREATED -> PlaylistKind.CREATED
+                    NeteaseLibraryApi.Playlist.Kind.COLLECTED -> PlaylistKind.COLLECTED
+                    NeteaseLibraryApi.Playlist.Kind.OTHER -> PlaylistKind.OTHER
+                }
+                PlaylistSummary(MediaKey(Platform.NETEASE, it.id), it.name,
+                    ArtworkPolicy.sanitize(Platform.NETEASE, it.coverUrl), it.trackCount, kind)
+            },
                 page.nextOffset.takeIf { it >= 0 }, page.total.takeIf { it >= 0 })
         }, safeCallback(result), RequestOperation.PLAYLISTS)
     }
@@ -35,6 +43,26 @@ class NeteaseLibraryRepository(private val accounts: AccountRepository) : Librar
         require(playlist.platform == Platform.NETEASE)
         accounts.withNeteaseSession({ api, session ->
             val page = NeteaseLibraryApi(api).tracks(session, playlist.id, offset, 50)
+            Page(page.items.map(::summary),
+                page.nextOffset.takeIf { it >= 0 }, page.total.takeIf { it >= 0 })
+        }, safeCallback(result), RequestOperation.TRACKS)
+    }
+
+    fun artistTracks(key: MediaKey, offset: Int = 0,
+        result: (Result<Page<SongSummary>>) -> Unit) {
+        require(key.platform == Platform.NETEASE)
+        accounts.withNeteaseSession({ api, session ->
+            val page = NeteaseLibraryApi(api).artistTracks(session, key.id, offset, 30)
+            Page(page.items.map(::summary),
+                page.nextOffset.takeIf { it >= 0 }, page.total.takeIf { it >= 0 })
+        }, safeCallback(result), RequestOperation.TRACKS)
+    }
+
+    fun albumTracks(key: MediaKey, offset: Int = 0,
+        result: (Result<Page<SongSummary>>) -> Unit) {
+        require(key.platform == Platform.NETEASE)
+        accounts.withNeteaseSession({ api, session ->
+            val page = NeteaseLibraryApi(api).albumTracks(session, key.id, offset, 30)
             Page(page.items.map(::summary),
                 page.nextOffset.takeIf { it >= 0 }, page.total.takeIf { it >= 0 })
         }, safeCallback(result), RequestOperation.TRACKS)
@@ -127,7 +155,7 @@ class NeteaseLibraryRepository(private val accounts: AccountRepository) : Librar
             if (queueRevision.get() == revision) result(response.fold({ Result.success(it) }, { error ->
                 val code = (error as? LibraryFailure)?.category ?: (error as? NeteaseApi.ApiException)?.code
                 Result.failure(LibraryFailure(code?.takeIf { it in setOf("expired", "network", "risk", "rate", "protocol",
-                    "identity", "limit", "cancelled", "incomplete", "permission", "unavailable", "endpoint", "platform",
+                    "identity", "limit", "cancelled", "incomplete", "permission", "membership", "copyright", "preview", "unavailable", "endpoint", "platform",
                     "http", "timeout", "request", "account_changed") } ?: "unclassified"))
             }))
         }, RequestOperation.QUEUE)

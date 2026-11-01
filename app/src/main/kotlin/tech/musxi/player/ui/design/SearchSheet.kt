@@ -63,6 +63,12 @@ fun SearchSheet(accent: Accent, mode: ThemeMode, state: SearchUiState) {
 /** Idle: nothing typed yet. The page must read as ready, not as if something failed to load. */
 fun idleState() = SearchUiState(phase = SearchPhase.IDLE)
 
+/** Idle with a history: the "最近搜索" heading and its chips, the one group heading with an action. */
+fun idleHistoryState() = SearchUiState(
+    phase = SearchPhase.IDLE,
+    recent = listOf("夜に駆ける", "周杰伦", "YOASOBI", "七里香", "Wherever You Are", "群青"),
+)
+
 /** Results: a normal first page on the default platform. */
 fun resultsState() = SearchUiState(
     keywords = "夜に駆ける",

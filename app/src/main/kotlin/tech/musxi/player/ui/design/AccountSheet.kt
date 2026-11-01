@@ -7,7 +7,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -20,24 +19,26 @@ import tech.musxi.core.account.AccountProfile
 import tech.musxi.core.account.AccountState
 import tech.musxi.core.account.Platform
 import tech.musxi.player.ui.account.AccountRowCard
-import tech.musxi.player.ui.account.solidActionPlatform
-import tech.musxi.player.ui.account.AccountRowUi
 import tech.musxi.player.ui.account.toRowUi
+import tech.musxi.player.ui.me.meAccountRowOf
+import tech.musxi.player.ui.components.RowDivider
+import tech.musxi.player.ui.components.RowSpec
+import tech.musxi.player.ui.components.SectionGroup
 import tech.musxi.player.ui.theme.Accent
 import tech.musxi.player.ui.theme.MusxiTheme
 import tech.musxi.player.ui.theme.Space
 import tech.musxi.player.ui.theme.ThemeMode
 
 /**
- * Account sheet: the three platform cards across every [AccountPhase]. The rows are built through
- * the same `toRowUi` mapper the live screen uses and rendered by the same [AccountRowCard], so the
- * sheet cannot promise an action the real screen does not offer.
+ * Account sheet: the platform card of the account page across every [AccountPhase]. Each card is
+ * built the way the live page builds it, `meAccountRowOf` for avatar, name and grey line and
+ * `toRowUi` for the action, and rendered by the same [AccountRowCard], so the sheet cannot promise
+ * a line or an action the real page does not show.
  */
 @Composable
 fun AccountSheet(accent: Accent, mode: ThemeMode) {
     MusxiTheme(accent = accent, mode = mode) {
         val cs = MaterialTheme.colorScheme
-        val dark = mode != ThemeMode.LIGHT
         Surface(Modifier.fillMaxSize(), color = cs.background) {
             Column(
                 Modifier.fillMaxSize().verticalScroll(rememberScrollState())
@@ -52,16 +53,13 @@ fun AccountSheet(accent: Accent, mode: ThemeMode) {
                 )
                 Spacer(Modifier.height(Space.section))
 
-                val rows = sampleRows(dark)
-                val solidPlatform = solidActionPlatform(rows)
-                rows.forEach { row ->
-                    AccountRowCard(
-                        row = row,
-                        dark = dark,
-                        solidAction = row.platform == solidPlatform,
-                        onAction = {},
-                    )
-                    HorizontalDivider(color = cs.outlineVariant.copy(alpha = 0.45f))
+                SampleAvatars {
+                    SectionGroup(title = null) {
+                        sampleStates().forEachIndexed { index, state ->
+                            if (index > 0) RowDivider(start = RowSpec.textStart(RowSpec.avatar))
+                            AccountRowCard(identity = meAccountRowOf(state), row = state.toRowUi(), onAction = {})
+                        }
+                    }
                 }
                 Spacer(Modifier.height(Space.section * 2))
                 // Two explicit lines; a single wrapping sentence orphaned "平台。" on its own row.
@@ -83,14 +81,14 @@ fun AccountSheet(accent: Accent, mode: ThemeMode) {
  * Every branch of the mapper, one platform each: the three states a real user meets first, then
  * the failure states that are easiest to get wrong.
  */
-private fun sampleRows(dark: Boolean): List<AccountRowUi> = listOf(
-    state(Platform.NETEASE, AccountPhase.CONNECTED, "云村用户 8842").toRowUi(),
-    state(Platform.QQ, AccountPhase.REVALIDATING, "阿青").toRowUi(),
-    state(Platform.KUGOU, AccountPhase.WAITING_CONFIRMATION).toRowUi(),
-    state(Platform.NETEASE, AccountPhase.RETRYABLE_ERROR, "云村用户 8842", AccountError.NETWORK).toRowUi(),
-    state(Platform.QQ, AccountPhase.REAUTH_REQUIRED).toRowUi(),
-    state(Platform.KUGOU, AccountPhase.VERIFYING).toRowUi(),
-    state(Platform.NETEASE, AccountPhase.DISCONNECTED).toRowUi(),
+private fun sampleStates(): List<AccountState> = listOf(
+    state(Platform.NETEASE, AccountPhase.CONNECTED, "云村用户 8842"),
+    state(Platform.QQ, AccountPhase.REVALIDATING, "阿青"),
+    state(Platform.KUGOU, AccountPhase.WAITING_CONFIRMATION),
+    state(Platform.NETEASE, AccountPhase.RETRYABLE_ERROR, "云村用户 8842", AccountError.NETWORK),
+    state(Platform.QQ, AccountPhase.REAUTH_REQUIRED),
+    state(Platform.KUGOU, AccountPhase.VERIFYING),
+    state(Platform.NETEASE, AccountPhase.DISCONNECTED),
 )
 
 private fun state(
@@ -101,6 +99,6 @@ private fun state(
 ) = AccountState(
     platform = platform,
     phase = phase,
-    profile = name?.let { AccountProfile(platform, "sample-$it", it) },
+    profile = name?.let { AccountProfile(platform, "sample-$it", it, avatarUrl = sampleAvatarUrl(it)) },
     error = error,
 )

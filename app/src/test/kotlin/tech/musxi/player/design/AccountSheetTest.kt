@@ -22,10 +22,10 @@ import java.io.File
 @Config(sdk = [35], qualifiers = "w360dp-h800dp-xhdpi", application = DesignTestApplication::class)
 class AccountSheetTest {
 
-    @Test fun mistLight() = capture(Accent.MIST, ThemeMode.LIGHT, "#F7F7F5", "#4A6A9A")
+    @Test fun mistLight() = capture(Accent.MIST, ThemeMode.LIGHT, "#FAFAFA", "#4A6A9A")
     @Test fun mistDark() = capture(Accent.MIST, ThemeMode.DARK, "#121212", "#A9BEE0")
-    @Test fun tealLight() = capture(Accent.TEAL, ThemeMode.LIGHT, "#F7F7F5", "#2B7A71")
-    @Test fun amberLight() = capture(Accent.AMBER, ThemeMode.LIGHT, "#F7F7F5", "#9C6229")
+    @Test fun tealLight() = capture(Accent.TEAL, ThemeMode.LIGHT, "#FAFAFA", "#2B7A71")
+    @Test fun amberLight() = capture(Accent.AMBER, ThemeMode.LIGHT, "#FAFAFA", "#9C6229")
 
     private fun capture(accent: Accent, mode: ThemeMode, background: String, accentRgb: String) {
         val name = "account_${accent.name.lowercase()}_${mode.name.lowercase()}.png"

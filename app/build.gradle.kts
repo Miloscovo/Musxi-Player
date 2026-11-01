@@ -3,6 +3,14 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
     id("io.github.takahirom.roborazzi")
 }
+val releaseStorePath = providers.gradleProperty("musxi.release.storeFile").orNull
+    ?.trim()
+    ?.takeIf { it.isNotEmpty() }
+val releaseKeyAliasValue = providers.gradleProperty("musxi.release.keyAlias").orNull
+    ?.trim()
+    ?.takeIf { it.isNotEmpty() }
+val releasePasswordValue = providers.environmentVariable("MUSXI_RELEASE_STORE_PASSWORD").orNull
+    ?.takeIf { it.isNotEmpty() }
 android {
     namespace = "tech.musxi.player"
     compileSdk = 36
@@ -10,18 +18,62 @@ android {
         applicationId = "tech.musxi.player"
         minSdk = 26
         targetSdk = 36
-        versionCode = 3
-        versionName = "0.1.0-alpha03"
+        versionCode = 5
+        versionName = "0.2.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+    signingConfigs {
+        create("release") {
+            if (releaseStorePath != null && releaseKeyAliasValue != null && releasePasswordValue != null) {
+                storeFile = file(releaseStorePath)
+                storePassword = releasePasswordValue
+                keyAlias = releaseKeyAliasValue
+                keyPassword = releasePasswordValue
+            }
+        }
     }
     buildTypes {
         debug { applicationIdSuffix = ".dev" }
-        release { isMinifyEnabled = false }
+        release {
+            if (releaseStorePath != null && releaseKeyAliasValue != null && releasePasswordValue != null) {
+                signingConfig = signingConfigs.getByName("release")
+            }
+            isMinifyEnabled = false
+        }
     }
-    buildFeatures { compose = true }
+    buildFeatures {
+        buildConfig = true
+        compose = true
+    }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
     // Robolectric screenshot tests render Compose layouts on the JVM; they need merged resources.
     testOptions { unitTests.isIncludeAndroidResources = true }
+}
+val verifyMusxiReleaseSigningConfiguration by tasks.registering {
+    group = "verification"
+    description = "Requires the external Musxi release keystore configuration without affecting debug builds."
+    notCompatibleWithConfigurationCache("Release signing credentials must stay in process memory.")
+    doLast {
+        val missing = mutableListOf<String>()
+        if (releaseStorePath == null) missing += "musxi.release.storeFile"
+        if (releaseKeyAliasValue == null) missing += "musxi.release.keyAlias"
+        if (releasePasswordValue == null) missing += "MUSXI_RELEASE_STORE_PASSWORD"
+        if (missing.isNotEmpty()) {
+            throw GradleException(
+                "Release signing is not configured. Set ${missing.joinToString()} outside the repository; " +
+                    "release builds cannot use debug or unsigned signing.",
+            )
+        }
+        if (!file(requireNotNull(releaseStorePath)).isFile) {
+            throw GradleException("musxi.release.storeFile does not point to a readable keystore file.")
+        }
+        if (file(requireNotNull(releaseStorePath)).canonicalFile.toPath().startsWith(rootProject.projectDir.canonicalFile.toPath())) {
+            throw GradleException("The release keystore must be stored outside the repository.")
+        }
+    }
+}
+tasks.matching { it.name == "preReleaseBuild" }.configureEach {
+    dependsOn(verifyMusxiReleaseSigningConfiguration)
 }
 kotlin { jvmToolchain(17) }
 // Design screenshots go to app/build/design/ and are never part of the APK.
@@ -48,7 +100,10 @@ dependencies {
     debugImplementation(project(":platform-qq")) // Isolated official web-login acceptance only.
     debugImplementation(project(":platform-kugou")) // Isolated official web-login acceptance only.
     debugImplementation("androidx.compose.ui:ui-test-manifest")
-    debugImplementation("dev.chrisbanes.haze:haze:1.6.10") // Debug-only liquid-glass style preview (Apache-2.0).
+    implementation("dev.chrisbanes.haze:haze:1.6.10") // Liquid-glass chrome (ui/components/Glass.kt), Apache-2.0.
+    // Refraction for that glass on Android 13+ (AGSL), Apache-2.0. 2.0.0 and later declare minCompileSdk 37,
+    // which AGP 8.13.2 rejects; alpha03 is the newest release that builds with compileSdk 36.
+    implementation("io.github.kyant0:backdrop:2.0.0-alpha03")
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.robolectric:robolectric:4.17")
@@ -60,4 +115,7 @@ dependencies {
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")
     androidTestImplementation("androidx.test.ext:junit:1.1.5")
     androidTestImplementation("androidx.test:runner:1.5.2")
+    androidTestImplementation(project(":platform-kugou"))
+    androidTestImplementation(project(":platform-qq"))
+    androidTestImplementation(project(":platform-netease"))
 }

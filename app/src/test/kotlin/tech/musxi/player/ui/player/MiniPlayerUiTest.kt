@@ -6,6 +6,9 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import tech.musxi.core.account.Platform
+import tech.musxi.core.playback.FailureReason
+import tech.musxi.core.playback.PlaybackFailure
+import tech.musxi.core.playback.PlaybackFailureReason
 import tech.musxi.playback.PlaybackState
 import tech.musxi.playback.PlaybackSuppression
 
@@ -26,6 +29,7 @@ class MiniPlayerUiTest {
         error: String? = null,
         queuePlatform: Platform? = null,
         sourcePlatform: Platform? = null,
+        failureReason: FailureReason? = null,
     ) = PlaybackState(
         artist = artist,
         suppression = suppression,
@@ -35,6 +39,7 @@ class MiniPlayerUiTest {
         error = error,
         queuePlatform = queuePlatform,
         sourcePlatform = sourcePlatform,
+        failureReason = failureReason?.let { PlaybackFailureReason(it) },
     )
 
     @Test fun aReasonReplacesTheArtistEntirely() {
@@ -48,6 +53,24 @@ class MiniPlayerUiTest {
         assertEquals("缓冲中", subtitleOf(state(buffering = true)))
         assertEquals("播放失败", subtitleOf(state(error = "boom")))
         assertEquals("已播完", subtitleOf(state(ended = true)))
+    }
+
+    @Test fun aFailureNamesItsReasonWhenTheServiceGaveOne() {
+        assertEquals(
+            "播放失败 · 需要会员",
+            subtitleOf(state(failure = PlaybackFailure.PERMISSION, failureReason = FailureReason.MEMBERSHIP_REQUIRED)),
+        )
+        assertEquals(
+            "播放失败 · 网络连接失败",
+            subtitleOf(state(failure = PlaybackFailure.NETWORK, failureReason = FailureReason.NETWORK)),
+        )
+        // A bare player error carries no reason, and must not borrow one from "check the network".
+        assertEquals("播放失败", subtitleOf(state(error = "boom")))
+        assertEquals("播放失败", subtitleOf(state(failure = PlaybackFailure.UNKNOWN)))
+    }
+
+    @Test fun aStaleReasonDoesNotShowWithoutAFailure() {
+        assertEquals("周杰伦", subtitleOf(state(failureReason = FailureReason.MEMBERSHIP_REQUIRED)))
     }
 
     @Test fun aLongArtistCannotPushTheReasonOut() {

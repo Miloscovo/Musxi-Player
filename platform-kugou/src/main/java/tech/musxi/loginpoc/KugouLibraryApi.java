@@ -2,7 +2,9 @@ package tech.musxi.loginpoc;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.net.URI;
 import java.util.*;
 
@@ -13,13 +15,32 @@ import java.util.*;
 public final class KugouLibraryApi {
     private final KugouApi api;
     private final AudioProbe audioProbe;
+    private final KugouAuthorizedAudio authorizedAudio;
+    private final AudioInspector audioInspector;
     private KugouApi.Session favoriteSession;
     private FavoriteList cachedFavorite;
     private FavoriteMutation pendingFavorite;
     private long favoriteSnapshotAtNanos;
     private static final Set<String> HTTP_AUDIO_HOSTS = new HashSet<>(Arrays.asList("fs.youthandroid2.kugou.com", "fs.youthandroid.kugou.com"));
-    public KugouLibraryApi(KugouApi api) { this(api, KugouLibraryApi::probeAudio); }
-    KugouLibraryApi(KugouApi api, AudioProbe audioProbe) { this.api=Objects.requireNonNull(api); this.audioProbe=Objects.requireNonNull(audioProbe); }
+    public KugouLibraryApi(KugouApi api) {
+        this(api,KugouLibraryApi::probeAudio,api.authorizedAudio(),KugouLibraryApi::inspectFlacAudio);
+    }
+    public KugouLibraryApi(KugouApi api,KugouAuthorizedAudio authorizedAudio) {
+        this(api,KugouLibraryApi::probeAudio,authorizedAudio,KugouLibraryApi::inspectFlacAudio);
+    }
+    KugouLibraryApi(KugouApi api, AudioProbe audioProbe) {
+        this(api,audioProbe,null,KugouLibraryApi::inspectFlacAudio);
+    }
+    KugouLibraryApi(KugouApi api,AudioProbe audioProbe,KugouAuthorizedAudio authorizedAudio) {
+        this(api,audioProbe,authorizedAudio,KugouLibraryApi::inspectFlacAudio);
+    }
+    KugouLibraryApi(KugouApi api,AudioProbe audioProbe,KugouAuthorizedAudio authorizedAudio,
+            AudioInspector audioInspector) {
+        this.api=Objects.requireNonNull(api);
+        this.audioProbe=Objects.requireNonNull(audioProbe);
+        this.authorizedAudio=authorizedAudio;
+        this.audioInspector=Objects.requireNonNull(audioInspector);
+    }
     public static final class Page<T> {
         public final List<T> items; public final int nextOffset, total;
         Page(List<T> items, int nextOffset, int total) {
@@ -27,9 +48,11 @@ public final class KugouLibraryApi {
         }
     }
     public static final class Playlist {
+        public enum Kind { LIKED, CREATED, COLLECTED, OTHER }
         public final String id, name, coverUrl; public final int trackCount;
         public final String sourceGlobalId;
         public final boolean favorite, editable, readOnly;
+        public final Kind kind;
         Playlist(String id, String name, String coverUrl, int count) { this(id,name,coverUrl,count,false); }
         Playlist(String id, String name, String coverUrl, int count, boolean favorite) {
             this(id,name,coverUrl,count,favorite,true,null);
@@ -38,28 +61,134 @@ public final class KugouLibraryApi {
             String sourceGlobalId) {
             this.id=id; this.name=name; this.coverUrl=coverUrl; trackCount=count; this.favorite=favorite;
             this.sourceGlobalId=sourceGlobalId; this.editable=editable; this.readOnly=!editable;
+            this.kind=favorite ? Kind.LIKED : editable ? Kind.CREATED :
+                sourceGlobalId != null ? Kind.COLLECTED : Kind.OTHER;
         }
     }
     public static class Song {
         public final String id, name, album, coverUrl; public final List<String> artists; public final long durationMs;
+        public final List<String> artistIds;
+        public final String albumId;
         Song(String id,String name,String album,List<String> artists,long durationMs) {
             this(id,name,album,artists,durationMs,null);
         }
         Song(String id,String name,String album,List<String> artists,long durationMs,String coverUrl) {
+            this(id,name,album,artists,durationMs,coverUrl,Collections.emptyList());
+        }
+        Song(String id,String name,String album,List<String> artists,long durationMs,String coverUrl,List<String> artistIds) {
             this.id=id; this.name=name; this.album=album; this.artists=Collections.unmodifiableList(new ArrayList<>(artists)); this.durationMs=durationMs;
             this.coverUrl=coverUrl;
+            this.artistIds=Collections.unmodifiableList(new ArrayList<>(artistIds));
+            String[] parts=id.split("_");this.albumId=parts.length==3 && !"0".equals(parts[1])?parts[1]:null;
         }
+    }
+    public Page<Track> artistTracks(KugouApi.Session session,String id,int offset,int limit) throws IOException {
+        return collectionTracks(session,id,offset,limit,true);
+    }
+    public Page<Track> albumTracks(KugouApi.Session session,String id,int offset,int limit) throws IOException {
+        return collectionTracks(session,id,offset,limit,false);
+    }
+    private Page<Track> collectionTracks(KugouApi.Session session,String id,int offset,int limit,boolean artist) throws IOException {
+        if(offset<0 || offset>19_980 || limit<1 || limit>30 || offset%limit!=0)throw error("request");
+        return parseCollectionTracks(api.collectionCall(session,artist,id,offset/limit+1,limit),id,offset,limit,artist);
+    }
+    static Page<Track> parseCollectionTracks(JSONObject root,String id,int offset,int limit,boolean artist) throws IOException {
+        if(root==null || !id.matches("[1-9][0-9]{0,18}"))throw error("identity");
+        successAudio(root);
+        if(!"1".equals(text(root.opt("status"))))throw error("protocol");
+        JSONObject data=root.optJSONObject("data");
+        JSONArray list=artist?root.optJSONArray("data"):data==null?null:data.optJSONArray("songs");
+        if(list==null)throw error("protocol");
+        if(list.length()>limit)throw error("limit");
+        int count=total(artist?root:data);
+        if(count<0)throw error("protocol");
+        List<Track> tracks=new ArrayList<>();
+        Set<String> seen=new HashSet<>();
+            for(int i=0;i<list.length();i++) {
+                JSONObject row=list.optJSONObject(i);if(row==null)throw error("protocol");
+                JSONObject base=artist?row:row.optJSONObject("base");
+                JSONObject audio=artist?row:row.optJSONObject("audio_info");
+                if(base==null || audio==null)throw error("protocol");
+                String hash=text(audio.opt("hash")).toLowerCase(Locale.ROOT);
+                if(!hash.matches("[a-f0-9]{32}"))throw error("identity");
+                String album=numeric(base.opt("album_id"),true);
+                String audioId=numeric(base.opt("album_audio_id"),false);
+                if(!artist && !id.equals(album))throw error("identity");
+                String songId=hash+"_"+album+"_"+audioId;
+                if(!seen.add(songId))throw error("identity");
+                String name=clean(base.opt("audio_name"),"");if(name.isEmpty())throw error("protocol");
+                List<String> names=new ArrayList<>(), ids=new ArrayList<>();
+                JSONArray authors=row.optJSONArray("authors");
+                if(authors!=null && authors.length()>0) {
+                    if(authors.length()>100)throw error("limit");
+                    for(int n=0;n<authors.length();n++) {
+                        JSONObject author=authors.optJSONObject(n);if(author==null)throw error("protocol");
+                        String authorName=clean(author.opt("author_name"),"");if(authorName.isEmpty())throw error("protocol");
+                        names.add(authorName);ids.add(optionalArtistId(author.opt("author_id")));
+                    }
+                    if(ids.contains(null))ids.clear();
+                } else {
+                    String authorName=clean(base.opt("author_name"),"");
+                    if(!authorName.isEmpty())names.add(authorName);
+                }
+                JSONObject albumInfo=row.optJSONObject("album_info");
+                String albumName=clean(artist?row.opt("album_name"):albumInfo==null?null:albumInfo.opt("album_name"),"");
+                long duration=nonnegative(audio.opt(artist?"timelength":"duration"),86_400_000);
+                tracks.add(new Track(songId,name,albumName,names,duration,cover(row),ids));
+            }
+        return new Page<>(tracks,next(offset,tracks.size(),count,limit),count);
+    }
+    private static String optionalArtistId(Object raw) {
+        try{return raw==null || raw==JSONObject.NULL?null:numeric(raw,false);}catch(IOException invalid){return null;}
+    }
+    private static final class Artists {
+        final List<String> names, ids;
+        Artists(List<String> names,List<String> ids){this.names=names;this.ids=ids;}
+    }
+    /** Only use an explicit ordered author array; never split or guess joined display names. */
+    private static Artists artists(JSONObject row,String fallback) {
+        JSONArray list=row.optJSONArray("Singers");boolean search=list!=null;
+        if(list==null)list=row.optJSONArray("authors");
+        if(list!=null && list.length()>0 && list.length()<=100) {
+            List<String> names=new ArrayList<>(), ids=new ArrayList<>();
+            boolean valid=true;
+            for(int i=0;i<list.length();i++) {
+                JSONObject item=list.optJSONObject(i);if(item==null){valid=false;break;}
+                String name=searchText(item.opt(search?"name":"author_name"));
+                if(name.isEmpty()){valid=false;break;}
+                names.add(name);ids.add(optionalArtistId(item.opt(search?"id":"author_id")));
+            }
+            if(valid){if(ids.contains(null))ids.clear();return new Artists(names,ids);}
+        }
+        return new Artists(fallback.isEmpty()?Collections.emptyList():Collections.singletonList(fallback),Collections.emptyList());
     }
     public static final class Track extends Song {
         String fileId;
         Track(String id,String name,String album,List<String> artists,long durationMs) { super(id,name,album,artists,durationMs); }
         Track(String id,String name,String album,List<String> artists,long durationMs,String coverUrl) { super(id,name,album,artists,durationMs,coverUrl); }
+        Track(String id,String name,String album,List<String> artists,long durationMs,String coverUrl,List<String> artistIds) { super(id,name,album,artists,durationMs,coverUrl,artistIds); }
     }
     public static final class Audio {
         public final String url, qualityId; public final long expiresAtElapsedMs;
         final List<String> candidates;
-        Audio(String url,String qualityId,long expiresAtElapsedMs,List<String> candidates) { this.url=url; this.qualityId=qualityId; this.expiresAtElapsedMs=expiresAtElapsedMs; this.candidates=Collections.unmodifiableList(new ArrayList<>(candidates)); }
+        final long expectedDurationMs;
+        Audio(String url,String qualityId,long expiresAtElapsedMs,List<String> candidates) {
+            this(url,qualityId,expiresAtElapsedMs,candidates,0);
+        }
+        Audio(String url,String qualityId,long expiresAtElapsedMs,List<String> candidates,long expectedDurationMs) {
+            this.url=url; this.qualityId=qualityId; this.expiresAtElapsedMs=expiresAtElapsedMs;
+            this.candidates=Collections.unmodifiableList(new ArrayList<>(candidates));
+            this.expectedDurationMs=expectedDurationMs;
+        }
         @Override public String toString() { return "Audio(redacted)"; }
+    }
+    static final class FlacInfo {
+        final int sampleRate,bitsPerSample,channels;
+        final long totalSamples,durationMs;
+        FlacInfo(int sampleRate,int bitsPerSample,int channels,long totalSamples) {
+            this.sampleRate=sampleRate;this.bitsPerSample=bitsPerSample;this.channels=channels;
+            this.totalSamples=totalSamples;this.durationMs=sampleRate==0?0:totalSamples*1000L/sampleRate;
+        }
     }
     public static final class AudioQuality {
         public final String id, name;
@@ -483,8 +612,9 @@ public final class KugouLibraryApi {
             Object seconds=first(row,"Duration","duration");
             Object millis=first(row,"timelen");
             long duration=seconds!=null?nonnegative(seconds,86_400)*1000:nonnegative(millis==null?0:millis,86_400_000);
+            Artists authors=artists(row,artist);
             out.add(new Song(id,clean(name,""),searchText(first(row,"AlbumName","album_name","albumname","album")),
-                artist.isEmpty()?Collections.emptyList():Collections.singletonList(artist),duration,cover(row)));
+                authors.names,duration,cover(row),authors.ids));
         }
         return Collections.unmodifiableList(out);
     }
@@ -495,21 +625,69 @@ public final class KugouLibraryApi {
         return value.toLowerCase(Locale.ROOT).replaceAll("[\\s,、/&，]+","");
     }
     public Audio audio(KugouApi.Session session,String songId,long nowElapsedMs) throws IOException {
-        return audio(session,songId,nowElapsedMs,"kugou:128");
+        return audio(session,songId,nowElapsedMs,"kugou:128",true);
     }
     public Audio audio(KugouApi.Session session,String songId,long nowElapsedMs,String qualityId) throws IOException {
-        return selectAudio(requestAudio(session,songId,nowElapsedMs,qualityId),audioProbe);
+        return audio(session,songId,nowElapsedMs,qualityId,true);
     }
-    public List<AudioQuality> qualities(KugouApi.Session session,String songId,long nowElapsedMs) throws IOException {
-        List<AudioQuality> out=new ArrayList<>();
-        for(String id:Arrays.asList("kugou:128","kugou:320","kugou:flac")) {
+    public Audio audio(KugouApi.Session session,String songId,long nowElapsedMs,String qualityId,
+            boolean allowAuthorized) throws IOException {
+        if("kugou:high".equals(qualityId)) {
+            if(!allowAuthorized)throw error("permission");
+            return authorizedAudio(session,songId,nowElapsedMs,qualityId);
+        }
+        try {
+            return selectAudio(requestAudio(session,songId,nowElapsedMs,qualityId),audioProbe);
+        } catch(KugouApi.ApiException denied) {
+            if(!"permission".equals(denied.code))throw denied;
+            if(!allowAuthorized)throw denied;
             try {
-                selectAudio(requestAudio(session,songId,nowElapsedMs,id),audioProbe);
-                out.add(new AudioQuality(id,qualityName(id)));
-            } catch(KugouApi.ApiException unavailable) {
-                if(!Arrays.asList("permission","unavailable","network","source_expired").contains(unavailable.code))throw unavailable;
+                return authorizedAudio(session,songId,nowElapsedMs,qualityId);
+            } catch(IOException authorizationFailure) {
+                // The unauthenticated endpoint already established the decisive denial.
+                // Do not replace it with a later authorization-chain transport/schema failure.
+                if(authorizationFailure!=denied)denied.addSuppressed(sanitizedAudioFailure(authorizationFailure));
+                throw denied;
             }
         }
+    }
+    private static KugouApi.ApiException sanitizedAudioFailure(IOException failure) {
+        String code=failure instanceof KugouApi.ApiException
+            ? ((KugouApi.ApiException)failure).code
+            : failure instanceof java.net.SocketTimeoutException ? "timeout" : "network";
+        return new KugouApi.ApiException(code,"Kugou authorized audio unavailable");
+    }
+    public List<AudioQuality> qualities(KugouApi.Session session,String songId,long nowElapsedMs) throws IOException {
+        return qualities(session,songId,nowElapsedMs,true);
+    }
+    public List<AudioQuality> qualities(KugouApi.Session session,String songId,long nowElapsedMs,
+            boolean allowAuthorized) throws IOException {
+        List<AudioQuality> out=new ArrayList<>();
+        IOException firstFailure=null;
+        for(String id:Arrays.asList("kugou:128","kugou:320","kugou:flac","kugou:high")) {
+            try {
+                audio(session,songId,nowElapsedMs,id,allowAuthorized);
+                out.add(new AudioQuality(id,qualityName(id)));
+            } catch(IOException unavailable) {
+                // Optional authorized Hi-Res discovery must never take down the usable menu.
+                // Explicit playback still reports the original error from audio().
+                if("kugou:high".equals(id))continue;
+                if(unavailable instanceof KugouApi.ApiException &&
+                        Arrays.asList("risk","rate","expired").contains(((KugouApi.ApiException)unavailable).code)) {
+                    // Do not issue more account-signed requests after a blocking account response.
+                    if(out.isEmpty())throw unavailable;
+                    break;
+                }
+                if(!(unavailable instanceof KugouApi.ApiException) ||
+                        !Arrays.asList("permission","preview","unavailable","network","source_expired")
+                            .contains(((KugouApi.ApiException)unavailable).code)) {
+                    // A rejected variant cannot invalidate independently verified choices.
+                    // Keep the original failure if no usable variant can be established.
+                    if(firstFailure==null)firstFailure=unavailable;
+                }
+            }
+        }
+        if(out.isEmpty() && firstFailure!=null)throw firstFailure;
         return Collections.unmodifiableList(out);
     }
     private Audio requestAudio(KugouApi.Session session,String songId,long nowElapsedMs,String qualityId) throws IOException {
@@ -528,6 +706,7 @@ public final class KugouLibraryApi {
             case "kugou:128": return "128";
             case "kugou:320": return "320";
             case "kugou:flac": return "flac";
+            case "kugou:high": return "high";
             default: throw error("request");
         }
     }
@@ -536,11 +715,26 @@ public final class KugouLibraryApi {
             case "kugou:128": return "标准音质";
             case "kugou:320": return "高品音质";
             case "kugou:flac": return "无损音质";
+            case "kugou:high": return "Hi-Res无损音质";
             default: return "";
         }
     }
+    private Audio authorizedAudio(KugouApi.Session session,String songId,long nowElapsedMs,String qualityId) throws IOException {
+        if(authorizedAudio==null)throw error("permission");
+        KugouAuthorizedAudio.Resolved resolved=authorizedAudio.resolve(session,songId,qualityId);
+        Audio audio=parseAuthorizedAudio(resolved.body,resolved.hash,nowElapsedMs,qualityId);
+        return "kugou:high".equals(qualityId)
+            ? selectHiResAudio(audio,audioInspector)
+            : selectAudio(audio,audioProbe);
+    }
     static Page<Playlist> parsePlaylists(JSONObject root,int offset,int limit) throws IOException {
-        JSONObject data=success(root); JSONArray rows=rows(data,"info","lists");
+        JSONObject data=success(root);
+        // A null page with no explicit zero count is not proof of an empty account library.
+        if(offset==0 && !(data.opt("info") instanceof JSONArray) &&
+            !(data.opt("lists") instanceof JSONArray) &&
+            ((data.has("info") && data.isNull("info")) || (data.has("lists") && data.isNull("lists"))) &&
+            total(data)!=0)throw error("incomplete");
+        JSONArray rows=rows(data,"info","lists");
         if(rows.length()>limit) throw error("limit");
         List<Playlist> out=new ArrayList<>(); Set<String> ids=new HashSet<>();
         for(int i=0;i<rows.length();i++) {
@@ -583,8 +777,9 @@ public final class KugouLibraryApi {
             Object time=first(row,"timelen"); if(time==null)time=first(audio,"timelen");
             Object seconds=first(row,"duration");
             long duration=time!=null?nonnegative(time,86_400_000):nonnegative(seconds==null?0:seconds,86_400)*1000;
+            Artists authors=artists(row,artist);
             Track track=new Track(id,name,clean(first(row,"AlbumName","album_name","albumname","album"),""),
-                artist.isEmpty()?Collections.emptyList():Collections.singletonList(artist),duration,cover(row));
+                authors.names,duration,cover(row),authors.ids);
             Object fileId=first(row,"fileid","file_id");
             track.fileId=fileId==null?null:numeric(fileId,true);
             out.add(track);
@@ -595,19 +790,33 @@ public final class KugouLibraryApi {
         return parseAudio(root,hash,now,"kugou:128");
     }
     static Audio parseAudio(JSONObject root,String hash,long now,String qualityId) throws IOException {
+        if("kugou:high".equals(qualityId))throw error("unavailable");
         if(root==null)throw error("protocol");
         qualityParameter(qualityId);
         JSONObject data=root.optJSONObject("data"); if(data==null)data=root;
         if(Arrays.asList("2","3").contains(text(data.opt("status"))))throw error("permission");
         successAudio(root);
         String echoed=text(data.opt("hash"));
-        // A playlist hash may name a higher-quality file; v5 then answers with the 128k standard
-        // file of the same track and echoes that hash as both `hash` and `std_hash`.
+        // The basic endpoint may echo the standard hash for a higher-quality playlist row.
         boolean standardVariant=echoed.matches("(?i)[a-f0-9]{32}") && echoed.equalsIgnoreCase(text(data.opt("std_hash")));
         if(!echoed.isEmpty() && !hash.equalsIgnoreCase(echoed) && !standardVariant)throw error("identity");
-        if(present(data,"freeTrialInfo") || present(data,"free_trial_info") || trialFlag(data,"is_free_part") || trialFlag(data,"IsFreePart") || trialFlag(data,"free_part"))throw error("permission");
+        return parseAudioPayload(data,hash,now,qualityId,true);
+    }
+    static Audio parseAuthorizedAudio(JSONObject root,String hash,long now,String qualityId) throws IOException {
+        if(root==null)throw error("protocol");
+        qualityParameter(qualityId);
+        if(!"1".equals(text(root.opt("status"))))throw error("protocol");
+        Object envelope=root.opt("data");
+        JSONObject data=envelope instanceof JSONObject ? (JSONObject)envelope : root;
+        successAudio(root);
+        String echoed=text(data.opt("hash"));
+        if(!hash.equalsIgnoreCase(echoed))throw error("identity");
+        return parseAudioPayload(data,hash,now,qualityId,false);
+    }
+    private static Audio parseAudioPayload(JSONObject data,String hash,long now,String qualityId,boolean allowHttpFallback) throws IOException {
+        if(present(data,"freeTrialInfo") || present(data,"free_trial_info") || trialFlag(data,"is_free_part") || trialFlag(data,"IsFreePart") || trialFlag(data,"free_part"))throw error("preview");
         JSONObject range=data.optJSONObject("hash_offset");
-        if(range!=null && (positive(range,"end_ms") || positive(range,"start_ms")))throw error("permission");
+        if(range!=null && (positive(range,"end_ms") || positive(range,"start_ms")))throw error("preview");
         Object rate=first(data,"bitRate","bitrate","bit_rate");
         long bitrate=nonnegative(rate==null?0:rate,100_000_000);
         String extension=text(first(data,"extName","extname","ext_name"));
@@ -615,7 +824,7 @@ public final class KugouLibraryApi {
                 ? (bitrate==128 || Math.round(bitrate/1000.0)==128) && !"flac".equalsIgnoreCase(extension)
                 : qualityId.equals("kugou:320")
                 ? (bitrate==320 || Math.round(bitrate/1000.0)==320) && !"flac".equalsIgnoreCase(extension)
-                : "flac".equalsIgnoreCase(extension) && bitrate>320_000;
+                : "flac".equalsIgnoreCase(extension) && ("kugou:flac".equals(qualityId) ? bitrate>320_000 : bitrate>0);
         if(!matches)throw error("unavailable");
         LinkedHashSet<String> candidates=new LinkedHashSet<>();
         Set<String> candidateHosts=new HashSet<>();
@@ -633,29 +842,44 @@ public final class KugouLibraryApi {
                         String candidate=officialUrl((String)value);
                         String host=URI.create(candidate).getHost().toLowerCase(Locale.ROOT);
                         if(candidateHosts.add(host))candidates.add(candidate);
-                        URI original=URI.create((String)value);
-                        if("http".equals(original.getScheme()) && HTTP_AUDIO_HOSTS.contains(original.getHost()) &&
-                            original.getRawUserInfo()==null && original.getRawFragment()==null && original.getPort()==-1 &&
-                            original.getRawAuthority().equals(original.getHost()) && httpHosts.add(original.getHost()))originalHttp.add((String)value);
                     } catch(KugouApi.ApiException invalid) { /* Reject that candidate; never fetch it. */ }
                 }
             }
         }
         if(candidates.isEmpty())throw error("unavailable");
-        candidates.addAll(originalHttp);
+        if(allowHttpFallback && ("kugou:128".equals(qualityId) || "kugou:320".equals(qualityId))) {
+            for(String key:Arrays.asList("url","backupUrl")) {
+                Object values=data.opt(key);
+                if(values instanceof String)values=new JSONArray().put(values);
+                if(!(values instanceof JSONArray))continue;
+                for(int i=0;i<Math.min(((JSONArray)values).length(),8);i++) {
+                    Object value=((JSONArray)values).opt(i);
+                    if(!(value instanceof String))continue;
+                    try {
+                        URI original=URI.create((String)value);
+                        if("http".equals(original.getScheme()) && HTTP_AUDIO_HOSTS.contains(original.getHost()) &&
+                            original.getRawUserInfo()==null && original.getRawFragment()==null && original.getPort()==-1 &&
+                            original.getRawAuthority().equals(original.getHost()) && httpHosts.add(original.getHost()))originalHttp.add((String)value);
+                    } catch(Exception invalid) { /* Never synthesize a fallback from malformed input. */ }
+                }
+            }
+            candidates.addAll(originalHttp);
+        }
         // No documented lifetime field is assumed. A conservative 60s in-memory lease
         // limits reuse; CDN expiry still uses the player's single refresh budget.
         if(now<0 || now>Long.MAX_VALUE-60_000)throw error("protocol");
-        return new Audio(candidates.iterator().next(),qualityId,now+60_000,new ArrayList<>(candidates));
+        return new Audio(candidates.iterator().next(),qualityId,now+60_000,new ArrayList<>(candidates),
+            expectedDuration(data));
     }
     interface AudioProbe { void check(String url) throws IOException; }
+    interface AudioInspector { void check(String url,long expectedDurationMs) throws IOException; }
     static Audio selectAudio(Audio audio,AudioProbe probe) throws IOException {
         long deadline=System.nanoTime()+12_000_000_000L;
         IOException failure=null;
         List<String> diagnostics=new ArrayList<>();
         for(String candidate:audio.candidates) {
             if(System.nanoTime()>=deadline)break;
-            try {probe.check(candidate);return new Audio(candidate,audio.qualityId,audio.expiresAtElapsedMs,Collections.singletonList(candidate));}
+            try {probe.check(candidate);return new Audio(candidate,audio.qualityId,audio.expiresAtElapsedMs,Collections.singletonList(candidate),audio.expectedDurationMs);}
             catch(IOException rejected) {
                 failure=rejected;
                 String kind=rejected instanceof javax.net.ssl.SSLPeerUnverifiedException?"ssl_peer":rejected instanceof javax.net.ssl.SSLException?"ssl":
@@ -665,6 +889,85 @@ public final class KugouLibraryApi {
         }
         if(failure instanceof KugouApi.ApiException)throw failure;
         throw new KugouApi.ApiException("network","Kugou audio source unavailable","cdn:"+String.join(",",diagnostics));
+    }
+    static Audio selectHiResAudio(Audio audio,AudioInspector inspect) throws IOException {
+        long deadline=System.nanoTime()+12_000_000_000L;
+        IOException failure=null;
+        List<String> diagnostics=new ArrayList<>();
+        for(String candidate:audio.candidates) {
+            if(System.nanoTime()>=deadline)break;
+            try {
+                inspect.check(candidate,audio.expectedDurationMs);
+                return new Audio(candidate,audio.qualityId,audio.expiresAtElapsedMs,
+                    Collections.singletonList(candidate),audio.expectedDurationMs);
+            } catch(IOException rejected) {
+                failure=rejected;
+                diagnostics.add(rejected instanceof KugouApi.ApiException
+                    ? ((KugouApi.ApiException) rejected).code : "io");
+            }
+        }
+        if(failure instanceof KugouApi.ApiException)throw failure;
+        throw new KugouApi.ApiException("network","Kugou Hi-Res audio unavailable",
+            "cdn:"+String.join(",",diagnostics));
+    }
+    static FlacInfo parseFlacInfo(byte[] header,long expectedDurationMs) throws IOException {
+        if(header==null || header.length<42 || header[0]!='f' || header[1]!='L' ||
+            header[2]!='a' || header[3]!='C')throw error("unavailable");
+        int type=header[4]&0x7f;
+        int length=((header[5]&0xff)<<16)|((header[6]&0xff)<<8)|(header[7]&0xff);
+        if(type!=0 || length!=34)throw error("unavailable");
+        long packed=0;
+        for(int i=18;i<26;i++)packed=(packed<<8)|(header[i]&0xffL);
+        int sampleRate=(int)((packed>>>44)&0xfffff);
+        int channels=(int)((packed>>>41)&7)+1;
+        int bits=(int)((packed>>>36)&0x1f)+1;
+        long totalSamples=packed&0xfffffffffL;
+        if(sampleRate<=0 || channels<=0 || bits<=0)throw error("unavailable");
+        if(bits<=16 && sampleRate<=48_000)throw error("unavailable");
+        if(expectedDurationMs>0) {
+            if(totalSamples<=0)throw error("unavailable");
+            long actualDurationMs=totalSamples*1000L/sampleRate;
+            long tolerance=Math.max(5_000L,(long)Math.ceil(expectedDurationMs*0.05));
+            if(Math.abs(actualDurationMs-expectedDurationMs)>tolerance)throw error("unavailable");
+        }
+        return new FlacInfo(sampleRate,bits,channels,totalSamples);
+    }
+    private static long expectedDuration(JSONObject data) throws IOException {
+        Object value=first(data,"duration_ms","durationMs","timelen","duration");
+        if(value==null)return 0;
+        long duration=nonnegative(value,86_400_000L);
+        if(data.has("duration") && !data.has("duration_ms") && !data.has("durationMs")
+            && !data.has("timelen") && duration<=86_400L)duration*=1000L;
+        return duration;
+    }
+    private static void inspectFlacAudio(String url,long expectedDurationMs) throws IOException {
+        java.net.HttpURLConnection connection=null;
+        try {
+            officialUrl(url);
+            connection=(java.net.HttpURLConnection)new java.net.URL(url).openConnection();
+            connection.setInstanceFollowRedirects(false);connection.setConnectTimeout(3000);connection.setReadTimeout(3000);
+            connection.setUseCaches(false);connection.setRequestProperty("Range","bytes=0-41");
+            connection.setRequestProperty("Accept-Encoding","identity");
+            int status=connection.getResponseCode();
+            if(status!=200 && status!=206)throw error(status==401 || status==403 || status==404 ||
+                status==410 || status==416 ? "source_expired" : status==429 ? "rate" : "network");
+            officialUrl(connection.getURL().toString());
+            byte[] header=new byte[42];
+            int offset=0;
+            try(InputStream in=connection.getInputStream()) {
+                while(offset<header.length) {
+                    int count=in.read(header,offset,header.length-offset);
+                    if(count<0)break;
+                    offset+=count;
+                }
+            }
+            if(offset<header.length)throw error("unavailable");
+            parseFlacInfo(header,expectedDurationMs);
+        } catch(IOException rejected) {
+            throw rejected;
+        } finally {
+            if(connection!=null)connection.disconnect();
+        }
     }
     private static void probeAudio(String url) throws IOException {
         java.net.HttpURLConnection connection=null;

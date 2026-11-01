@@ -2,6 +2,8 @@ package tech.musxi.player.ui.player
 
 import androidx.compose.ui.graphics.Color
 import tech.musxi.core.account.Platform
+import tech.musxi.core.library.SongSummary
+import tech.musxi.core.playback.FailureReason
 import tech.musxi.playback.PlaybackRepeatMode
 import tech.musxi.playback.PlaybackState
 import tech.musxi.playback.PlaybackSuppression
@@ -37,7 +39,7 @@ data class PlayerUi(
     val title: String = "",
     val artist: String = "",
     val album: String = "",
-    /** Drives both the placeholder cover and the backdrop tint. */
+    /** Drives the placeholder cover, and the backdrop tint until the real cover's colour is known. */
     val coverSeed: String = "",
     val coverUrl: String? = null,
     /** Platform that owns the queue item. */
@@ -58,6 +60,13 @@ data class PlayerUi(
     val hasPrevious: Boolean = false,
     val hasNext: Boolean = false,
     val qualityName: String? = null,
+    /** Why the track did not play, when the service said; shown beside [PlayerStatus.FAILED]. */
+    val failureReason: FailureReason? = null,
+    /**
+     * `实际播放：《标题》· 歌手 · 平台` under the artist line. Non-null only when the recording
+     * supplying the audio is not the queue's own song; the title and artist above stay the original.
+     */
+    val actualSourceLine: String? = null,
 ) {
     /** 0..1, clamped; the thumb and the filled part both read this. */
     val progress: Float get() = if (durationMs > 0) {
@@ -78,10 +87,14 @@ fun playerUiOf(state: PlaybackState, swapSearching: Boolean = false): PlayerUi {
         state.ended -> PlayerStatus.ENDED
         else -> PlayerStatus.NORMAL
     }
+    // After a swap the queue's own song is still the one the user chose: it keeps the title block,
+    // and the recording that is really playing gets its own line.
+    val actual = swappedRecordingOf(state)
+    val original = state.original.takeIf { actual != null }
     return PlayerUi(
-        title = state.title,
-        artist = state.artist,
-        album = state.album,
+        title = original?.title?.takeIf { it.isNotBlank() } ?: state.title,
+        artist = original?.artists?.joinToString(" / ")?.takeIf { it.isNotBlank() } ?: state.artist,
+        album = original?.album?.takeIf { it.isNotBlank() } ?: state.album,
         coverSeed = state.title,
         coverUrl = state.coverUrl,
         queuePlatform = state.queuePlatform,
@@ -99,7 +112,30 @@ fun playerUiOf(state: PlaybackState, swapSearching: Boolean = false): PlayerUi {
         hasPrevious = state.hasPrevious,
         hasNext = state.hasNext,
         qualityName = state.qualityName,
+        failureReason = state.failureReason?.reason,
+        actualSourceLine = actual?.let(::actualSourceLineOf),
     )
+}
+
+/**
+ * The recording supplying the audio, when it is a different song from the queue's own. Null when
+ * either side is unknown: with nothing to compare there is nothing to tell the user.
+ */
+internal fun swappedRecordingOf(state: PlaybackState): SongSummary? {
+    val original = state.original ?: return null
+    val actual = state.actualSource ?: return null
+    return actual.takeIf { it.key != original.key }
+}
+
+/** `实际播放：《晴天》· Jay · 网易云`. A blank title or artist is left out instead of printed as a gap. */
+internal fun actualSourceLineOf(actual: SongSummary): String {
+    val title = actual.title.takeIf { it.isNotBlank() }?.let { "《$it》" }
+    val rest = listOfNotNull(
+        actual.artists.joinToString(" / ").takeIf { it.isNotBlank() },
+        actual.key.platform.displayName,
+    ).joinToString(" · ")
+    // No space before the first dot, matching the source panel's "《标题》· 歌手" form.
+    return "实际播放：" + if (title == null) rest else "$title· $rest"
 }
 
 /**
@@ -113,7 +149,10 @@ fun thirdLineOf(ui: PlayerUi): String = when (ui.status) {
     PlayerStatus.NO_OUTPUT -> "没有可用的音频输出 · 点按重试"
     // While a swap is searching, the app is already handling it: stating it as an error and leaving
     // a live play button sends two opposite signals, so this wording stays neutral.
-    PlayerStatus.FAILED -> if (ui.swapSearching) "当前音源不可用 · 正在换源" else "暂无可用音源"
+    // The settled failure names its reason when the service reported one; the searching line does
+    // not, because the swap under way is the news and the reason is for the panel to explain.
+    PlayerStatus.FAILED ->
+        if (ui.swapSearching) "当前音源不可用 · 正在换源" else withFailureReason("暂无可用音源", ui.failureReason)
     PlayerStatus.INTERRUPTED -> "已被其他应用暂停"
     PlayerStatus.ENDED -> if (ui.repeat == PlaybackRepeatMode.OFF && !ui.hasNext) "队列已播完" else "已播完"
     PlayerStatus.NORMAL -> listOfNotNull(platformLine(ui).takeIf(String::isNotBlank), ui.qualityName).joinToString(" · ")
@@ -169,7 +208,11 @@ data class PlayerPalette(
 )
 
 /**
- * Derives the page palette from the cover seed, **relative to the cover's own saturation**.
+ * Derives the page palette from the cover, **relative to the cover's own saturation**.
+ *
+ * [cover] is the cover's average colour (see [rememberCoverColor]). With a real hue in it, that hue
+ * and chroma drive the page. Without one (null while it loads or after a failure, or a grey cover
+ * whose hue is just noise) the palette comes from [seed] exactly as it did before covers were read.
  *
  * The first attempt clamped HSL saturation to small absolute numbers, which did nothing visible:
  * at lightness 0.94 an HSL saturation of 0.08 is a chroma of 0.0096 — indistinguishable from grey.
@@ -180,10 +223,11 @@ data class PlayerPalette(
  * Text is deliberately NOT derived. It stays the theme's `onSurface`, so an unlucky seed cannot make
  * the title or the timings unreadable — the accent and backdrop are the only borrowed colour.
  */
-fun playerPalette(seed: String, dark: Boolean): PlayerPalette {
-    val hue = ((seed.hashCode() and 0x7fffffff) % 360).toFloat()
+fun playerPalette(seed: String, dark: Boolean, cover: Int? = null): PlayerPalette {
+    val tint = cover?.let(::coverTintOf)
+    val hue = tint?.hue ?: ((seed.hashCode() and 0x7fffffff) % 360).toFloat()
     val second = (hue + 38f) % 360f
-    val coverChroma = coverColors(seed).let { (a, b) -> maxOf(a.chroma(), b.chroma()) }
+    val coverChroma = tint?.chroma ?: coverColors(seed).let { (a, b) -> maxOf(a.chroma(), b.chroma()) }
     // ~22% of the cover's colour on the background: enough to read as a tinted room, not a poster.
     val backdropChroma = coverChroma * 0.22f
     // 85% of it on the controls: they carry the colour, but never out-saturate the artwork.
@@ -203,6 +247,31 @@ fun playerPalette(seed: String, dark: Boolean): PlayerPalette {
             onAccent = hslWithChroma(hue, 0.98f, accentChroma * 0.18f),
         )
     }
+}
+
+/** Hue in degrees (0 until 360) and chroma (0..1) of a cover's average colour. */
+internal data class CoverTint(val hue: Float, val chroma: Float)
+
+/**
+ * Below this chroma (about 8 of 255 between the strongest and weakest channel) a cover is grey for
+ * our purposes: its hue is compression noise, so borrowing it would tint the room with an accident.
+ */
+internal const val GREY_COVER_CHROMA = 0.03f
+
+/** The hue and chroma of an opaque ARGB [argb], or null for a grey colour that has no hue to lend. */
+internal fun coverTintOf(argb: Int): CoverTint? {
+    val r = ((argb shr 16) and 0xFF) / 255f
+    val g = ((argb shr 8) and 0xFF) / 255f
+    val b = (argb and 0xFF) / 255f
+    val high = maxOf(r, g, b)
+    val chroma = high - minOf(r, g, b)
+    if (chroma < GREY_COVER_CHROMA) return null
+    val sector = when (high) {
+        r -> ((g - b) / chroma + 6f) % 6f
+        g -> (b - r) / chroma + 2f
+        else -> (r - g) / chroma + 4f
+    }
+    return CoverTint(hue = (sector * 60f).coerceIn(0f, 359.99f), chroma = chroma)
 }
 
 /** HSL with a chroma target: converts the desired colourfulness into the saturation that this

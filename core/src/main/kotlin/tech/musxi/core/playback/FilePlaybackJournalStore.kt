@@ -117,6 +117,9 @@ class FilePlaybackJournalStore(
         text(song.album, MAX_ALBUM)
         if (song.artists.size > MAX_ARTISTS) throw Invalid()
         song.artists.forEach { text(it, MAX_ARTIST) }
+        if (song.artistIds.size > MAX_ARTISTS) throw Invalid()
+        song.artistIds.forEach(::validateEntityId)
+        song.albumId?.let(::validateEntityId)
         if (song.durationMs !in 0..MAX_PLAYBACK_MS) throw Invalid()
         return SongSummary(
             MediaKey(song.key.platform, song.key.id),
@@ -125,6 +128,7 @@ class FilePlaybackJournalStore(
             song.album,
             song.durationMs,
             ArtworkPolicy.sanitize(song.key.platform, song.coverUrl),
+            immutableList(song.artistIds.toList()), song.albumId,
         )
     }
 
@@ -184,13 +188,18 @@ class FilePlaybackJournalStore(
         data.writeUTF(song.album)
         data.writeLong(song.durationMs)
         data.writeUTF(song.coverUrl.orEmpty())
+        data.writeInt(song.artistIds.size)
+        song.artistIds.forEach(data::writeUTF)
+        data.writeUTF(song.albumId.orEmpty())
     }
 
     private fun decode(expectedOwner: String, bytes: ByteArray): PlaybackJournal? {
         return try {
             if (bytes.size !in HEADER_BYTES..MAX_FILE_BYTES) throw Invalid()
             val envelope = DataInputStream(ByteArrayInputStream(bytes))
-            if (envelope.readInt() != MAGIC || envelope.readInt() != VERSION) throw Invalid()
+            if (envelope.readInt() != MAGIC) throw Invalid()
+            val version = envelope.readInt()
+            if (version !in 1..VERSION) throw Invalid()
             val payloadSize = envelope.readInt()
             if (payloadSize < 0 || payloadSize != bytes.size - HEADER_BYTES) throw Invalid()
             val expectedCrc = envelope.readLong()
@@ -205,7 +214,7 @@ class FilePlaybackJournalStore(
             val queue = if (data.readBoolean()) {
                 val count = data.readInt()
                 if (count !in 1..MAX_QUEUE) throw Invalid()
-                val songs = immutableList(List(count) { readSong(data) })
+                val songs = immutableList(List(count) { readSong(data, version) })
                 val index = data.readInt()
                 if (index !in songs.indices) throw Invalid()
                 SavedPlaybackQueue(
@@ -222,7 +231,7 @@ class FilePlaybackJournalStore(
             val recentCount = data.readInt()
             if (recentCount !in 0..MAX_RECENT) throw Invalid()
             val recent = immutableList(List(recentCount) {
-                RecentPlay(readSong(data), readSong(data), data.readLong())
+                RecentPlay(readSong(data, version), readSong(data, version), data.readLong())
             })
             if (data.available() != 0) throw Invalid()
             validatedSnapshot(PlaybackJournal(queue, recent))
@@ -241,7 +250,7 @@ class FilePlaybackJournalStore(
         }
     }
 
-    private fun readSong(data: DataInputStream): SongSummary {
+    private fun readSong(data: DataInputStream, version: Int): SongSummary {
         val ordinal = data.readUnsignedByte()
         val songPlatform = Platform.entries.getOrNull(ordinal) ?: throw Invalid()
         val id = data.readUTF()
@@ -252,7 +261,17 @@ class FilePlaybackJournalStore(
         val album = data.readUTF()
         val duration = data.readLong()
         val cover = ArtworkPolicy.sanitize(songPlatform, data.readUTF().ifEmpty { null })
-        return SongSummary(MediaKey(songPlatform, id), title, artists, album, duration, cover)
+        val artistIds = if (version >= 2) {
+            val count = data.readInt()
+            if (count !in 0..MAX_ARTISTS) throw Invalid()
+            immutableList(List(count) { data.readUTF().also(::validateEntityId) })
+        } else emptyList()
+        val albumId = if (version >= 2) data.readUTF().ifEmpty { null }?.also(::validateEntityId) else null
+        return SongSummary(MediaKey(songPlatform, id), title, artists, album, duration, cover, artistIds, albumId)
+    }
+
+    private fun validateEntityId(value: String) {
+        if (value.isBlank() || value.length > 128 || value.any(Char::isISOControl)) throw Invalid()
     }
 
     private fun validateKey(key: MediaKey) {
@@ -335,12 +354,12 @@ class FilePlaybackJournalStore(
 
     companion object {
         private const val MAGIC = 0x4d584a31
-        private const val VERSION = 1
+        private const val VERSION = 2
         private const val HEADER_BYTES = 20
         private const val MAX_FILE_BYTES = 8 * 1024 * 1024
         private const val MAX_PAYLOAD_BYTES = MAX_FILE_BYTES - HEADER_BYTES
         private const val MAX_QUEUE = 20_000
-        private const val MAX_RECENT = 100
+        private const val MAX_RECENT = 300
         private const val MAX_ARTISTS = 100
         private const val MAX_TITLE = 2_048
         private const val MAX_ALBUM = 2_048

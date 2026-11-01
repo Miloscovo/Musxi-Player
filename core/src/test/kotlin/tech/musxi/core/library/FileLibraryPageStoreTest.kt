@@ -15,8 +15,9 @@ class FileLibraryPageStoreTest {
     private val ownerA = "a".repeat(64)
     private val ownerB = "b".repeat(64)
     private val playlist = MediaKey(Platform.NETEASE, "9")
-    private fun playlists(title: String = "List", next: Int? = null, total: Int? = 1, cover: String? = null) =
-        SavedLibraryPage(Page(listOf(PlaylistSummary(playlist, title, cover, 5)), next, total), 1234L)
+    private fun playlists(title: String = "List", next: Int? = null, total: Int? = 1, cover: String? = null,
+        kind: PlaylistKind = PlaylistKind.OTHER) =
+        SavedLibraryPage(Page(listOf(PlaylistSummary(playlist, title, cover, 5, kind)), next, total), 1234L)
     private fun tracks(id: String = "1", next: Int? = null, total: Int? = 1) =
         SavedLibraryPage(Page(listOf(SongSummary(MediaKey(Platform.NETEASE, id), "Song", listOf("Artist"), "Album", 12345)), next, total), 5678L)
     private fun directory() = temporary.newFolder()
@@ -34,6 +35,7 @@ class FileLibraryPageStoreTest {
         val restored = FileLibraryPageStore(dir)
         val list = restored.readPlaylists(ownerA, 0)!!
         assertEquals("List", list.page.items.single().title); assertNull(list.page.items.single().coverUrl)
+        assertEquals(PlaylistKind.OTHER, list.page.items.single().kind)
         assertEquals(1234L, list.fetchedAtEpochMs)
         assertEquals(tracks(), restored.readTracks(ownerA, playlist, 0))
         assertFalse(dir.listFiles()!!.any { it.readBytes().toString(Charsets.ISO_8859_1).contains("private-fixture") })
@@ -58,23 +60,36 @@ class FileLibraryPageStoreTest {
         assertFalse(dir.listFiles()!!.any { it.readBytes().toString(Charsets.ISO_8859_1).contains("private-fixture") })
     }
 
-    @Test fun legacyVersionOneCollectionsRemainReadableAndUpgradeOnWrite() {
+    @Test fun playlistKindPersistsAndLegacyCollectionsReadAsOtherThenUpgradeOnWrite() {
         val dir = directory(); val store = FileLibraryPageStore(dir)
-        store.writePlaylists(ownerA, 0, playlists())
+        store.writePlaylists(ownerA, 0, playlists(kind = PlaylistKind.CREATED))
+        assertEquals(PlaylistKind.CREATED, FileLibraryPageStore(dir).readPlaylists(ownerA, 0)!!.page.items.single().kind)
         val file = collection(dir)
-        val payload = java.io.ByteArrayOutputStream().also { bytes -> java.io.DataOutputStream(bytes).use { data ->
+        val payloadV1 = java.io.ByteArrayOutputStream().also { bytes -> java.io.DataOutputStream(bytes).use { data ->
             data.writeUTF(ownerA); data.writeUTF(""); data.writeInt(1)
             data.writeInt(0); data.writeLong(1234); data.writeInt(-1); data.writeInt(1); data.writeInt(1)
             data.writeUTF(playlist.id); data.writeUTF("Legacy"); data.writeInt(5)
         } }.toByteArray()
         val oldMagic = ByteBuffer.wrap(file.readBytes()).int
         java.io.DataOutputStream(file.outputStream()).use { data ->
-            data.writeInt(oldMagic); data.writeInt(1); data.writeInt(payload.size)
-            data.writeLong(CRC32().apply { update(payload) }.value); data.write(payload)
+            data.writeInt(oldMagic); data.writeInt(1); data.writeInt(payloadV1.size)
+            data.writeLong(CRC32().apply { update(payloadV1) }.value); data.write(payloadV1)
         }
-        assertEquals("Legacy", FileLibraryPageStore(dir).readPlaylists(ownerA, 0)!!.page.items.single().title)
+        val legacyV1 = FileLibraryPageStore(dir).readPlaylists(ownerA, 0)!!.page.items.single()
+        assertEquals("Legacy", legacyV1.title); assertEquals(PlaylistKind.OTHER, legacyV1.kind)
+        val payloadV2 = java.io.ByteArrayOutputStream().also { bytes -> java.io.DataOutputStream(bytes).use { data ->
+            data.writeUTF(ownerA); data.writeUTF(""); data.writeInt(1)
+            data.writeInt(0); data.writeLong(1234); data.writeInt(-1); data.writeInt(1); data.writeInt(1)
+            data.writeUTF(playlist.id); data.writeUTF("Legacy v2"); data.writeInt(5); data.writeUTF("")
+        } }.toByteArray()
+        java.io.DataOutputStream(file.outputStream()).use { data ->
+            data.writeInt(oldMagic); data.writeInt(2); data.writeInt(payloadV2.size)
+            data.writeLong(CRC32().apply { update(payloadV2) }.value); data.write(payloadV2)
+        }
+        val legacyV2 = FileLibraryPageStore(dir).readPlaylists(ownerA, 0)!!.page.items.single()
+        assertEquals("Legacy v2", legacyV2.title); assertEquals(PlaylistKind.OTHER, legacyV2.kind)
         store.writePlaylists(ownerA, 0, playlists(cover = "https://p1.music.126.net/image.jpg"))
-        assertEquals(2, ByteBuffer.wrap(file.readBytes()).getInt(4))
+        assertEquals(4, ByteBuffer.wrap(file.readBytes()).getInt(4))
         assertNotNull(FileLibraryPageStore(dir).readPlaylists(ownerA, 0)!!.page.items.single().coverUrl)
     }
 
@@ -94,6 +109,54 @@ class FileLibraryPageStoreTest {
             data.writeLong(CRC32().apply { update(payload) }.value); data.write(payload)
         }
         assertEquals(tracks(), FileLibraryPageStore(dir).readTracks(ownerA, playlist, 0))
+    }
+
+    @Test fun legacySongVersionsTwoAndThreeReadWithoutNavigationIds() {
+        val dir = directory(); val store = FileLibraryPageStore(dir)
+        store.writeTracks(ownerA, playlist, 0, tracks())
+        val file = collection(dir)
+        val magic = ByteBuffer.wrap(file.readBytes()).int
+        for (version in 2..3) {
+            val payload = java.io.ByteArrayOutputStream().also { bytes ->
+                java.io.DataOutputStream(bytes).use { data ->
+                    data.writeUTF(ownerA); data.writeUTF(playlist.id); data.writeInt(1)
+                    data.writeInt(0); data.writeLong(5678); data.writeInt(-1); data.writeInt(1); data.writeInt(1)
+                    data.writeUTF("1"); data.writeUTF("Song"); data.writeInt(1); data.writeUTF("Artist")
+                    data.writeUTF("Album"); data.writeLong(12345); data.writeUTF("")
+                }
+            }.toByteArray()
+            java.io.DataOutputStream(file.outputStream()).use { data ->
+                data.writeInt(magic); data.writeInt(version); data.writeInt(payload.size)
+                data.writeLong(CRC32().apply { update(payload) }.value); data.write(payload)
+            }
+            val restored = FileLibraryPageStore(dir).readTracks(ownerA, playlist, 0)!!.page.items.single()
+            assertTrue(restored.artistIds.isEmpty()); assertNull(restored.albumId)
+        }
+    }
+
+    @Test fun versionFourPersistsNavigationIdsAcrossInstances() {
+        val dir = directory(); val store = FileLibraryPageStore(dir)
+        val song = SongSummary(MediaKey(Platform.NETEASE, "1"), "Song", listOf("Artist"), "Album", 12345,
+            artistIds = listOf("artist-1", "artist-2"), albumId = "album-1")
+        store.writeTracks(ownerA, playlist, 0, SavedLibraryPage(Page(listOf(song), null, 1), 5678L))
+        assertEquals(4, ByteBuffer.wrap(collection(dir).readBytes()).getInt(4))
+        assertEquals(song, FileLibraryPageStore(dir).readTracks(ownerA, playlist, 0)!!.page.items.single())
+    }
+
+    @Test fun versionFourRejectsOversizedNavigationalIds() {
+        val store = FileLibraryPageStore(directory())
+        rejected { store.writeTracks(ownerA, playlist, 0, SavedLibraryPage(Page(listOf(
+            SongSummary(MediaKey(Platform.NETEASE, "1"), "Song", emptyList(), "Album", 1,
+                artistIds = listOf("a".repeat(129)))), null, 1), 1L)) }
+        rejected { store.writeTracks(ownerA, playlist, 0, SavedLibraryPage(Page(listOf(
+            SongSummary(MediaKey(Platform.NETEASE, "1"), "Song", emptyList(), "Album", 1,
+                albumId = "a".repeat(129))), null, 1), 1L)) }
+        rejected { store.writeTracks(ownerA, playlist, 0, SavedLibraryPage(Page(listOf(
+            SongSummary(MediaKey(Platform.NETEASE, "1"), "Song", emptyList(), "Album", 1,
+                artistIds = List(101) { "artist-$it" })), null, 1), 1L)) }
+        rejected { store.writeTracks(ownerA, playlist, 0, SavedLibraryPage(Page(listOf(
+            SongSummary(MediaKey(Platform.NETEASE, "1"), "Song", emptyList(), "Album", 1,
+                albumId = "album\u0001")), null, 1), 1L)) }
     }
 
     @Test fun switchingOwnerErasesPreviousOwnerAndClearOnlyRemovesOwnedFiles() {

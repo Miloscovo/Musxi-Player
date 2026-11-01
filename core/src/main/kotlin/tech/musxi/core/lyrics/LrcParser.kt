@@ -9,10 +9,14 @@ data class LyricLine(
     val translation: String? = null,
 )
 
+enum class LyricsOrigin { AUTO, MATCHED }
+
 data class ParsedLyrics(
     val lines: List<LyricLine>,
     val plainText: String,
     val translation: LyricsTranslation = LyricsTranslation(),
+    val origin: LyricsOrigin = LyricsOrigin.AUTO,
+    val offsetMs: Long = 0,
 )
 
 object LrcParser {

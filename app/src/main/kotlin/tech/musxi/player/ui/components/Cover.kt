@@ -24,10 +24,14 @@ import coil3.compose.AsyncImage
 /**
  * Seeds the two colours of a placeholder cover. Kept separate because the player page derives its
  * whole palette from these, so the cover and the room it sits in always agree.
+ *
+ * Saturation is low on purpose (about two thirds of the first version): a screen of placeholders is
+ * the most colourful thing on a page whose colour is meant to come from real artwork. The hue still
+ * spans the whole wheel, so neighbouring covers stay apart.
  */
 fun coverColors(seed: String): Pair<Color, Color> {
     val h = ((seed.hashCode() and 0x7fffffff) % 360).toFloat()
-    return Color.hsl(h, 0.30f, 0.64f) to Color.hsl((h + 38f) % 360f, 0.34f, 0.36f)
+    return Color.hsl(h, 0.20f, 0.64f) to Color.hsl((h + 38f) % 360f, 0.22f, 0.38f)
 }
 
 /** Soft cover-derived tint for the now-playing backdrop; heavily blended toward the base. */

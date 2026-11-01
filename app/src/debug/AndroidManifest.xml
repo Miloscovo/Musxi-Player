@@ -8,6 +8,8 @@
         <activity android:name="tech.musxi.player.KugouWebLoginValidationActivity" android:exported="false" />
         <activity android:name="tech.musxi.player.GlassPreviewActivity" android:exported="false"
             android:theme="@android:style/Theme.Material.Light.NoActionBar" />
+        <activity android:name="tech.musxi.player.lab.InteractionLabActivity" android:exported="false"
+            android:theme="@android:style/Theme.Material.Light.NoActionBar" />
         <receiver android:name="tech.musxi.player.ValidationReceiver" android:exported="true"
             android:permission="android.permission.DUMP" />
     </application>

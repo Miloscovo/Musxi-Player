@@ -14,6 +14,41 @@ enum class SourceMatchReason {
 
 object SourceMatchPolicy {
     const val MAX_DURATION_DIFFERENCE_MS = 3_000L
+    const val MAX_RELAXED_DURATION_DIFFERENCE_MS = 15_000L
+
+    fun eligible(original: SongSummary, candidate: SongSummary, relaxDuration: Boolean = false): Boolean {
+        val reason = assess(original, candidate)
+        if (reason == SourceMatchReason.ELIGIBLE) return true
+        if (!relaxDuration || reason != SourceMatchReason.DURATION_MISMATCH) return false
+        val shorter = minOf(original.durationMs, candidate.durationMs)
+        return durationDifference(original, candidate) <= minOf(MAX_RELAXED_DURATION_DIFFERENCE_MS, shorter * 8 / 100)
+    }
+
+    fun durationDifference(original: SongSummary, candidate: SongSummary): Long =
+        kotlin.math.abs(original.durationMs - candidate.durationMs)
+
+    /** Rank verified metadata first, then closest duration; album breaks duration ties. */
+    fun rank(original: SongSummary, candidates: List<SourceCandidate>, relaxDuration: Boolean = false): List<SourceCandidate> =
+        candidates.map { candidate -> candidate.copy(
+            relaxedMatch = assess(original, candidate.song) == SourceMatchReason.DURATION_MISMATCH && eligible(original, candidate.song, true),
+            durationDifferenceMs = durationDifference(original, candidate.song))
+        }.sortedWith(compareBy<SourceCandidate> { !eligible(original, it.song, relaxDuration) }
+            .thenBy { it.durationDifferenceMs }
+            .thenBy { compact(original.album).isBlank() || compact(original.album) != compact(it.song.album) })
+
+    /** Recheck an explicitly selected recording against metadata returned by the resolver. */
+    fun confirmsSelected(expected: SongSummary, resolved: SongSummary): Boolean {
+        if (expected.key != resolved.key) return false
+        if (expected == resolved) return true
+        return when (assess(expected, resolved)) {
+            SourceMatchReason.ELIGIBLE -> true
+            SourceMatchReason.VERSION_REQUIRES_CONFIRMATION ->
+                SourceSelection.sameTitle(expected.title, resolved.title) && compact(expected.album) == compact(resolved.album) &&
+                    assess(expected.copy(title = "recording", album = ""),
+                        resolved.copy(title = "recording", album = "")) == SourceMatchReason.ELIGIBLE
+            else -> false
+        }
+    }
 
     fun assess(original: SongSummary, candidate: SongSummary): SourceMatchReason {
         if (!SourceSelection.sameTitle(original.title, candidate.title)) return SourceMatchReason.TITLE_MISMATCH
@@ -51,7 +86,7 @@ object SourceMatchPolicy {
     private val unknownArtists = setOf("unknown", "unknownartist", "variousartist", "variousartists", "n/a", "null", "-",
         "未知", "未知歌手", "未知艺术家", "未知藝術家", "未知艺人", "未知藝人", "未知演唱者", "群星", "佚名")
     private val chineseMarkers = listOf("现场", "演唱会", "翻唱", "伴奏", "纯音乐", "重录", "重製", "重制",
-        "重新录制", "混音", "加速", "减速", "降速", "剪辑", "演奏版", "消音", "卡拉ok", "tv版", "dj版",
+        "重新录制", "混音", "加速", "提速", "减速", "降速", "剪辑", "演奏版", "消音", "卡拉ok", "tv版", "dj版",
         "钢琴版", "鋼琴版", "ライブ", "ライヴ", "カバー", "カラオケ", "弾き語り", "オフボーカル")
     private val englishMarkers = Regex(
         "(?<![a-z0-9])(live|concert|cover|inst(?:rumental)?|karaoke|remix|remaster(?:ed)?|re[- ]?record(?:ed|ing)?|" +

@@ -84,12 +84,18 @@ data class PlaybackState(
     val shuffleEnabled: Boolean = false,
     val canSetPlaybackModes: Boolean = false,
     val sourceKey: tech.musxi.core.library.MediaKey? = null,
+    val sourceArtistIds: List<String> = emptyList(),
+    val sourceAlbumId: String? = null,
     val connectionPhase: PlaybackConnectionPhase = PlaybackConnectionPhase.CONNECTING,
     val connectionAttempt: Int = 0,
     val canRetryConnection: Boolean = false,
     val qualityName: String? = null,
     val outputDevice: OutputDevice? = null,
     val outputInferred: Boolean = false,
+    val failureReason: tech.musxi.core.playback.PlaybackFailureReason? = null,
+    /** Queue recording and the recording supplying audio are independent public metadata. */
+    val original: tech.musxi.core.library.SongSummary? = null,
+    val actualSource: tech.musxi.core.library.SongSummary? = null,
 )
 
 /** Main-thread facade. Signed stream URLs stay in memory; diagnostics never include them. */
@@ -230,6 +236,25 @@ class PlaybackConnection(context: Context) {
                 result.extras
             }
             callback(response)
+        }, Executor { main.post(it) })
+    }
+
+    /** Wait for the service's current position/queue to reach the existing journal store. */
+    fun checkpointBeforeInstall(callback: (Result<Unit>) -> Unit) {
+        val player = controller
+        if (player == null) {
+            callback(if (state.value.queueSize == 0) Result.success(Unit)
+                else Result.failure(IllegalStateException("player_unavailable")))
+            return
+        }
+        val future = player.sendCustomCommand(SessionCommand(MusxiPlaybackService.COMMAND_CHECKPOINT, Bundle.EMPTY), Bundle.EMPTY)
+        var delivered = false
+        fun deliver(result: Result<Unit>) { if (!delivered) { delivered = true; callback(result) } }
+        val timeout = Runnable { deliver(Result.failure(IllegalStateException("checkpoint_timeout"))) }
+        main.postDelayed(timeout, 10_000)
+        future.addListener({
+            main.removeCallbacks(timeout)
+            deliver(runCatching { check(future.get().resultCode == SessionResult.RESULT_SUCCESS) })
         }, Executor { main.post(it) })
     }
 
@@ -520,6 +545,8 @@ class PlaybackConnection(context: Context) {
             coverUrl = sourcePlatform?.let { ArtworkPolicy.sanitize(it, metadata?.artworkUri?.toString()) },
             queuePlatform = queuePlatform,
             sourcePlatform = sourcePlatform,
+            sourceArtistIds = metadata?.extras?.getStringArrayList(PlaybackMetadataSnapshot.EXTRA_SOURCE_ARTIST_IDS)?.toList().orEmpty(),
+            sourceAlbumId = metadata?.extras?.getString(PlaybackMetadataSnapshot.EXTRA_SOURCE_ALBUM_ID),
             repeatMode = when (player.repeatMode) {
                 Player.REPEAT_MODE_ONE -> PlaybackRepeatMode.ONE
                 Player.REPEAT_MODE_ALL -> PlaybackRepeatMode.ALL
@@ -532,6 +559,23 @@ class PlaybackConnection(context: Context) {
                 }
             },
             qualityName = extras.getString(MusxiPlaybackService.EXTRA_QUALITY_NAME),
+            failureReason = failure?.let { coarse -> tech.musxi.core.playback.PlaybackFailureReason(
+                tech.musxi.core.playback.FailureReason.entries.firstOrNull {
+                    it.name == extras.getString(MusxiPlaybackService.EXTRA_FAILURE_REASON)
+                } ?: tech.musxi.core.playback.FailureReason.fromFailure(coarse),
+                PlaybackMetadataSnapshot.platform(extras.getString(MusxiPlaybackService.EXTRA_FAILURE_PLATFORM))) },
+            original = queueSnapshot.value.songs.getOrNull(player.currentMediaItemIndex)
+                ?.takeIf { it.key.stableId == player.currentMediaItem?.mediaId },
+            actualSource = sourcePlatform?.let { platform ->
+                metadata?.extras?.getString(PlaybackMetadataSnapshot.EXTRA_SOURCE_ID)?.let { id ->
+                    runCatching { tech.musxi.core.library.SongSummary(tech.musxi.core.library.MediaKey(platform, id),
+                        metadata.title?.toString().orEmpty(),
+                        metadata.extras?.getStringArrayList(PlaybackMetadataSnapshot.EXTRA_SOURCE_ARTISTS)?.toList()
+                            ?: listOfNotNull(metadata.artist?.toString()),
+                        metadata.albumTitle?.toString().orEmpty(), player.duration.coerceAtLeast(0),
+                        ArtworkPolicy.sanitize(platform, metadata.artworkUri?.toString())) }.getOrNull()
+                }
+            },
             outputDevice = outputs.value.devices.firstOrNull { it.selected },
             outputInferred = outputs.value.inferred,
             connectionPhase = PlaybackConnectionPhase.CONNECTED,

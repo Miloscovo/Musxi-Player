@@ -15,9 +15,29 @@ import tech.musxi.playback.PlaybackSourceProvider
 import tech.musxi.playback.PlatformPlaybackSources
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.map
 
 open class MusxiApplication : Application(), PlaybackHost {
-    override val sourceSelection by lazy { tech.musxi.core.playback.SourceSelection(android.os.SystemClock::elapsedRealtime) }
+    val settingsRepository get() = accounts.settingsRepository
+    val settings get() = settingsRepository.settings
+    val cache by lazy { AppCacheRepository(this) { kind ->
+        when (kind) {
+            tech.musxi.core.cache.CacheKind.LYRICS -> { lyrics.clearCache(); lyricsRepository.clearCache() }
+            tech.musxi.core.cache.CacheKind.LIBRARY_PAGES -> {
+                listOf(libraryBrowserCache, kugouLibraryBrowserCache, qqLibraryBrowserCache)
+                    .filter { it.isInitialized() }.forEach { it.value.clearCachedPages() }
+            }
+            tech.musxi.core.cache.CacheKind.COVERS -> Unit
+        }
+    } }
+    fun sourceSwitchPreferences() = settings.value.let {
+        tech.musxi.core.playback.SourceSwitchPreferences(it.autoSwitchSource, it.relaxSourceDuration)
+    }
+    override val sourcePreferences get() = settings.map {
+        tech.musxi.core.playback.SourceSwitchPreferences(it.autoSwitchSource, it.relaxSourceDuration)
+    }
+    override fun currentSourcePreferences() = sourceSwitchPreferences()
+    override val sourceSelection by lazy { tech.musxi.core.playback.SourceSelection(android.os.SystemClock::elapsedRealtime, ::sourceSwitchPreferences) }
     private val alternativeSearch by lazy { CrossPlatformSourceSearch(this) }
     override fun findAlternativeSources(original: tech.musxi.core.library.SongSummary,
         result: (Result<tech.musxi.core.playback.AlternativeSources>) -> Unit): kotlinx.coroutines.Job =
@@ -52,13 +72,13 @@ open class MusxiApplication : Application(), PlaybackHost {
             if (!current()) { result(Result.failure(tech.musxi.core.library.LibraryPageFailure("account_changed"))); return@callback }
             val options = response.getOrNull()?.options.orEmpty()
             val level = when {
-                options.any { it.id.endsWith(":lossless") || it.id.endsWith(":flac") } -> tech.musxi.core.playback.SourceAudioQuality.LOSSLESS
+                options.any { it.id.endsWith(":lossless") || it.id.endsWith(":flac") || it.id == "kugou:high" || it.id == "netease:hires" } -> tech.musxi.core.playback.SourceAudioQuality.LOSSLESS
                 options.any { it.id.endsWith(":high") || it.id.endsWith(":higher") || it.id.endsWith(":exhigh") || it.id.endsWith(":320") } -> tech.musxi.core.playback.SourceAudioQuality.HIGH
                 options.isNotEmpty() -> tech.musxi.core.playback.SourceAudioQuality.STANDARD
                 else -> tech.musxi.core.playback.SourceAudioQuality.UNKNOWN
             }
             val category = (response.exceptionOrNull() as? tech.musxi.core.library.LibraryPageFailure)?.category
-                ?.takeIf { it in setOf("network", "timeout", "permission", "expired", "http", "unavailable") }
+                ?.takeIf { it in setOf("network", "timeout", "permission", "membership", "copyright", "preview", "expired", "http", "unavailable") }
                 ?: if (options.isEmpty()) "unavailable" else null
             sourceSelection.candidateAudio(revision, key, tech.musxi.core.playback.SourceAudioMetadata(
                 quality = level, qualities = options,
@@ -76,8 +96,21 @@ open class MusxiApplication : Application(), PlaybackHost {
         private set
     val playback by lazy { PlaybackConnection(this) }
     val library by lazy { NeteaseLibraryRepository(accounts) }
+    val updates by lazy { tech.musxi.accounts.AppUpdateRepository(this,
+        packageManager.getPackageInfo(packageName, 0).versionName ?: "0.0.0",
+        releaseBuild = BuildConfig.BUILD_TYPE == "release", beforeInstall = playback::checkpointBeforeInstall) }
     val kugouLibrary by lazy { KugouLibraryRepository(accounts) }
     val qqLibrary by lazy { QqLibraryRepository(accounts) }
+    /** Metadata only: artist/album reads use the same account lanes and page bounds as library reads. */
+    val catalog = tech.musxi.core.library.CatalogTrackFetch { key, offset, result ->
+        val entity = tech.musxi.core.library.MediaKey(key.platform, key.id)
+        val artist = key.kind == tech.musxi.core.library.CatalogKind.ARTIST
+        when (key.platform) {
+            Platform.NETEASE -> if (artist) library.artistTracks(entity, offset, result) else library.albumTracks(entity, offset, result)
+            Platform.QQ -> if (artist) qqLibrary.artistTracks(entity, offset, result) else qqLibrary.albumTracks(entity, offset, result)
+            Platform.KUGOU -> if (artist) kugouLibrary.artistTracks(entity, offset, result) else kugouLibrary.albumTracks(entity, offset, result)
+        }
+    }
     private val favoritesRepository by lazy { tech.musxi.accounts.FavoritesRepository(accounts, ::onFavoriteDiagnostic) }
     val playlists by lazy { tech.musxi.accounts.PlaylistRepository(accounts,
         favoriteWrite = { song, result -> favorites.enqueueLiked(song, true, result) },
@@ -104,7 +137,17 @@ open class MusxiApplication : Application(), PlaybackHost {
     private val lyricsRepository by lazy { tech.musxi.accounts.LyricsRepository(accounts) }
     val lyrics by lazy { tech.musxi.core.lyrics.LyricsBrowser(accounts::playbackIdentity,
         lyricsRepository::fetchOriginal, ::fetchLyricsTranslation,
-        lyricsRepository::fetchOriginal, lyricsRepository::releaseOriginal) }
+        lyricsRepository::fetchOriginal, lyricsRepository::releaseOriginal,
+        lyricsRepository::fetchForOriginal, allowCachedUnverified = true) }
+    val lyricsMatch by lazy { tech.musxi.core.lyrics.LyricsMatchBrowser(accounts::playbackIdentity,
+        search = { platform, keywords, page, result ->
+            when (platform) {
+                Platform.NETEASE -> library.searchPage(keywords, (page - 1) * 30, result)
+                Platform.QQ -> qqLibrary.searchPage(keywords, (page - 1) * 30, result)
+                Platform.KUGOU -> kugouLibrary.searchPage(keywords, (page - 1) * 30, result)
+            }
+        }, previewFetch = lyricsRepository::preview, bindingAccess = accounts::lyricsBinding,
+        onBindingChanged = { _, _ -> lyrics.refresh() }) }
     protected open fun fetchLyricsTranslation(key: tech.musxi.core.library.MediaKey,
         original: tech.musxi.core.lyrics.ParsedLyrics, refresh: Boolean,
         result: (Result<tech.musxi.core.lyrics.ParsedLyrics>) -> Unit) =
@@ -117,11 +160,14 @@ open class MusxiApplication : Application(), PlaybackHost {
             Platform.KUGOU -> kugouLibrary.searchPage(query.keywords, query.offset, result, current)
         }
     }) }
-    val libraryBrowser by lazy { accounts.createLibraryBrowser(createLibraryFetch()) }
+    private val libraryBrowserCache = lazy { accounts.createLibraryBrowser(createLibraryFetch()) }
+    val libraryBrowser by libraryBrowserCache
     protected open fun createLibraryFetch(): LibraryPageFetch = library
-    val kugouLibraryBrowser by lazy { accounts.createLibraryBrowser(createKugouLibraryFetch(), Platform.KUGOU) }
+    private val kugouLibraryBrowserCache = lazy { accounts.createLibraryBrowser(createKugouLibraryFetch(), Platform.KUGOU) }
+    val kugouLibraryBrowser by kugouLibraryBrowserCache
     protected open fun createKugouLibraryFetch(): LibraryPageFetch = kugouLibrary
-    val qqLibraryBrowser by lazy { accounts.createLibraryBrowser(createQqLibraryFetch(), Platform.QQ) }
+    private val qqLibraryBrowserCache = lazy { accounts.createLibraryBrowser(createQqLibraryFetch(), Platform.QQ) }
+    val qqLibraryBrowser by qqLibraryBrowserCache
     protected open fun createQqLibraryFetch(): LibraryPageFetch = qqLibrary
     override val playbackSources: PlaybackSourceProvider by lazy { createPlaybackSources() }
     protected open fun createPlaybackSources(): PlaybackSourceProvider = PlatformPlaybackSources(mapOf(
@@ -164,6 +210,10 @@ open class MusxiApplication : Application(), PlaybackHost {
     override fun onPlaybackQueueCleared(platform: Platform, generation: Long) {
         playbackJournal.save(platform, generation, null)
     }
+    override fun onPlaybackCheckpointSaved(generation: Long, snapshot: tech.musxi.core.playback.SavedPlaybackQueue,
+        recent: tech.musxi.core.playback.RecentPlay?, completed: (Result<Unit>) -> Unit) {
+        playbackJournal.save(snapshot.songs.first().key.platform, generation, snapshot, recent, completed)
+    }
 
     override fun onPlaybackQualityChanged(platform: Platform, qualityId: String) {
         accounts.rememberPreferredQuality(platform, qualityId)
@@ -174,7 +224,9 @@ open class MusxiApplication : Application(), PlaybackHost {
         // Dedicated app-owned WebView jar. No other platform uses this browser profile.
         if (Build.VERSION.SDK_INT >= 28) WebView.setDataDirectorySuffix("netease_login")
         accounts = AccountRepository(this)
+        updates.start()
         appScope.launch { accounts.states.collect { lyricsRepository.accountChanged() } }
+        appScope.launch { accounts.states.collect { lyricsMatch.accountChanged() } }
         appScope.launch { accounts.states.collect { playbackJournal.accountChanged() } }
         appScope.launch { accounts.states.collect { favorites.accountChanged() } }
         appScope.launch {
@@ -185,6 +237,7 @@ open class MusxiApplication : Application(), PlaybackHost {
                 val waiting = selection.phase in setOf(tech.musxi.core.playback.SourceSelectionPhase.SEARCHING,
                     tech.musxi.core.playback.SourceSelectionPhase.CHOOSING, tech.musxi.core.playback.SourceSelectionPhase.FAILED)
                 lyrics.follow(queue, state.sourceKey.takeUnless { waiting }, state.positionMs)
+                if (queue == null) lyricsMatch.cancel() else lyricsMatch.follow(queue)
             }.collect { }
         }
     }

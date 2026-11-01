@@ -64,6 +64,31 @@ public final class KugouApiTest {
         equal("测试用户", connected.session.nickname);
 
         KugouApi.Session session = connected.session;
+        KugouApi.Request membershipRequest = KugouApi.membershipRequest(DEVICE, session, TIME);
+        equal("https://kugouvip.kugou.com/v1/get_union_vip", membershipRequest.endpoint);
+        equal("concept", membershipRequest.params.get("busi_type"));
+        equal(session.userId, membershipRequest.params.get("userid"));
+        equal(null, membershipRequest.body);
+        KugouApi.Membership active = KugouApi.membershipFromResponse(new JSONObject(
+            "{\"is_vip\":0,\"busi_vip\":[{\"busi_type\":\"concept\",\"is_vip\":1,\"vip_end_time\":1800000000}]}"));
+        equal(1, active.isVip);
+        equal(1799971200000L, active.expiresAtEpochMs);
+        equal(1, KugouApi.membershipFromResponse(new JSONObject(
+            "{\"is_vip\":1,\"busi_vip\":[]}")).isVip);
+        KugouApi.Membership inactive = KugouApi.membershipFromResponse(new JSONObject(
+            "{\"is_vip\":0,\"busi_vip\":[{\"busi_type\":\"concept\",\"is_vip\":0,\"vip_end_time\":1800000000}]}"));
+        equal(0, inactive.isVip);
+        for (String unknown : new String[] {
+            "{}",
+            "{\"is_vip\":0,\"busi_vip\":[{\"busi_type\":\"concept\",\"is_vip\":0}]}",
+            "{\"is_vip\":0,\"busi_vip\":[{\"busi_type\":\"concept\",\"is_vip\":0,\"vip_end_time\":\"bad\"}]}",
+            "{\"is_vip\":0,\"busi_vip\":[{\"busi_type\":\"concept\",\"is_vip\":true,\"vip_end_time\":1800000000}]}",
+            "{\"is_vip\":0,\"busi_vip\":[{\"busi_type\":\"concept\",\"is_vip\":0,\"vip_end_time\":1800000000},"
+                + "{\"busi_type\":\"concept\",\"is_vip\":1,\"vip_end_time\":1800000000}]}"
+        }) {
+            JSONObject response = new JSONObject(unknown);
+            equal(-1, KugouApi.membershipFromResponse(response).isVip);
+        }
         KugouApi.Request verify = KugouApi.verifyRequest(DEVICE, session, TIME);
         equal("https://gateway.kugou.com/v3/get_my_info", verify.endpoint);
         equal("usercenter.kugou.com", verify.headers.get("x-router"));

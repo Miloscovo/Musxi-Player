@@ -3,6 +3,7 @@ package tech.musxi.player.ui.player
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -10,9 +11,12 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Pause
@@ -32,16 +36,29 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import tech.musxi.core.account.Platform
 import tech.musxi.player.ui.components.Cover
 import tech.musxi.player.ui.components.ProgressArc
 import tech.musxi.player.ui.theme.displayName
 import tech.musxi.player.ui.theme.nowPlayingAccent
+
+/**
+ * Heights of the mini row's two text lines (sp, so they grow with the font size). Each Text is
+ * centred in a box of exactly this height, so the pair reads as one tight block whatever the
+ * font's own line metrics are. `lineHeight` cannot do this: a single line ignores it.
+ */
+private val MiniTitleBox = 17.sp
+private val MiniSubtitleBox = 14.sp
+
+/** CJK ink sits low in its line box; measured on the sheet, this lifts the block back to the cover's centre. */
+private val MiniTextLift = 1.dp
 
 /**
  * Everything the bar shows. `subtitle` is one line with a strict priority order, because the bar
@@ -103,7 +120,8 @@ internal fun subtitleOf(state: tech.musxi.playback.PlaybackState): String {
         state.suppression == tech.musxi.playback.PlaybackSuppression.OUTPUT -> "没有可用的音频输出"
         state.suppression == tech.musxi.playback.PlaybackSuppression.OTHER -> "播放暂时被暂停"
         state.buffering -> "缓冲中"
-        state.failure != null || state.error != null -> "播放失败"
+        // Names the reason when the service reported one; "check the network" was wrong for most.
+        state.failure != null || state.error != null -> playbackFailedText(state.failureReason?.reason)
         state.ended -> "已播完"
         else -> null
     }
@@ -160,12 +178,17 @@ fun MiniPlayer(
     tonalButton: Boolean = true,
     /** True when a dock already provides the container: no clip, no background, no radius. */
     embedded: Boolean = false,
+    /**
+     * Leaves the cover's place empty. The continuous player draws one cover for the mini row and the
+     * full page, so it must not be drawn twice (see PlayerSurface).
+     */
+    hideCover: Boolean = false,
 ) {
     if (!ui.visible) return
     val cs = MaterialTheme.colorScheme
     val band = style == ProgressStyle.BAND
     Box(
-        Modifier.fillMaxWidth().height(if (band) 72.dp else 64.dp)
+        Modifier.fillMaxWidth().height(if (band) 72.dp else MiniRowHeight)
             .then(if (embedded) Modifier else Modifier.clip(shape).background(cs.surfaceContainerHigh))
             .clickable(onClick = onExpand),
     ) {
@@ -173,28 +196,43 @@ fun MiniPlayer(
             // The band style reserves its own strip; without that the cover used to end exactly on
             // the rule (measured: cover bottom y≈1411.5, rule 1412–1415).
             Modifier.fillMaxSize().padding(
-                start = 8.dp, end = 8.dp,
+                start = MiniCoverStart, end = 8.dp,
                 bottom = if (band) 12.dp else 0.dp,
             ),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             // 48dp in a 64dp card: the cover is the protagonist, so it gets the room, and the play
             // control gives some of its own up.
-            Cover(
-                seed = ui.title,
-                modifier = Modifier.size(48.dp),
-                shape = MaterialTheme.shapes.medium,
-                url = ui.coverUrl,
-            )
+            if (hideCover) {
+                Spacer(Modifier.size(MiniCoverSize))
+            } else {
+                Cover(
+                    seed = ui.title,
+                    modifier = Modifier.size(MiniCoverSize),
+                    shape = MaterialTheme.shapes.medium,
+                    url = ui.coverUrl,
+                )
+            }
             Spacer(Modifier.width(12.dp))
-            Column(Modifier.weight(1f)) {
+            // Title and artist are one block, centred on the cover's height: the distance from the
+            // title's top to the cover's top edge equals the one from the artist's bottom to the
+            // cover's bottom edge (MiniPlayerAlignmentTest measures the ink). The lines are packed
+            // with no spacer between them; the theme's 20sp/16sp line boxes left a 7dp gap of ink.
+            Column(
+                Modifier.weight(1f).heightIn(min = MiniCoverSize).offset(y = -MiniTextLift),
+                verticalArrangement = Arrangement.Center,
+            ) {
+                val titleBox = with(LocalDensity.current) { MiniTitleBox.toDp() }
+                val subtitleBox = with(LocalDensity.current) { MiniSubtitleBox.toDp() }
                 Text(
                     ui.title, style = MaterialTheme.typography.titleSmall, color = cs.onSurface,
                     maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.height(titleBox).wrapContentHeight(Alignment.CenterVertically, unbounded = true),
                 )
                 Text(
-                    ui.subtitle, style = MaterialTheme.typography.bodySmall,
-                    color = cs.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    ui.subtitle, style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.height(subtitleBox).wrapContentHeight(Alignment.CenterVertically, unbounded = true),
                 )
             }
             Spacer(Modifier.width(4.dp))

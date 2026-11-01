@@ -8,10 +8,12 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
+import tech.musxi.player.ui.design.LargeFontBatch
 import tech.musxi.player.ui.design.SearchSheet
 import tech.musxi.player.ui.design.allLoadedState
 import tech.musxi.player.ui.design.emptyState
 import tech.musxi.player.ui.design.errorState
+import tech.musxi.player.ui.design.idleHistoryState
 import tech.musxi.player.ui.design.idleState
 import tech.musxi.player.ui.design.loadingMoreState
 import tech.musxi.player.ui.design.loadingState
@@ -40,22 +42,39 @@ class SearchSheetTest {
     @Test fun longText() = capture("search_long_text_mist_light", Accent.MIST, ThemeMode.LIGHT, longTextState())
     @Test fun resultsDark() = capture("search_results_mist_dark", Accent.MIST, ThemeMode.DARK, resultsState())
 
+    /** Font scale 2.0: the best match and every row grow with the text; nothing is cut. */
+    @Test @Config(qualifiers = "w360dp-h1800dp-xhdpi")
+    fun resultsLargeFont() =
+        capture("search_results_largefont_light", Accent.MIST, ThemeMode.LIGHT, resultsState(), largeFont = true)
+
+    /** Font scale 2.0 with a history: the heading keeps its actions on its line or wraps whole. */
+    @Test @Config(qualifiers = "w360dp-h1400dp-xhdpi")
+    fun idleWithHistoryLargeFont() = capture(
+        "search_idle_history_largefont_light", Accent.MIST, ThemeMode.LIGHT, idleHistoryState(), largeFont = true,
+    )
+
+    @Test fun idleWithHistory() =
+        capture("search_idle_history_mist_light", Accent.MIST, ThemeMode.LIGHT, idleHistoryState())
+
     private fun capture(
         name: String,
         accent: Accent,
         mode: ThemeMode,
         state: tech.musxi.player.ui.search.SearchUiState,
+        largeFont: Boolean = false,
     ) {
         val out = File("build/design/$name.png")
-        captureRoboImage(out.path) { SearchSheet(accent, mode, state) }
+        captureRoboImage(out.path) {
+            if (largeFont) LargeFontBatch { SearchSheet(accent, mode, state) } else SearchSheet(accent, mode, state)
+        }
         if (!out.exists()) return
         val bitmap = BitmapFactory.decodeFile(out.path)
         assertTrue("$name failed to decode", bitmap != null)
-        val background = parse(if (mode == ThemeMode.LIGHT) "#F7F7F5" else "#121212")
+        val background = parse(if (mode == ThemeMode.LIGHT) "#FAFAFA" else "#121212")
         val samples = IntArray(bitmap.width * bitmap.height)
         bitmap.getPixels(samples, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height)
         val bgShare = samples.count { it == background } / samples.size.toFloat()
-        assertTrue("$name: background only ${(bgShare * 100).toInt()}%", bgShare > 0.30f)
+        assertTrue("$name: background only ${(bgShare * 100).toInt()}%", bgShare > if (largeFont) 0.15f else 0.30f)
         // Something must actually be drawn on top of the background.
         val ink = samples.count { it != background }
         assertTrue("$name: nothing rendered", ink > bitmap.width)

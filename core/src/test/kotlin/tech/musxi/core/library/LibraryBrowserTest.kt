@@ -29,6 +29,7 @@ class LibraryBrowserTest {
 
     private class Fixture(val platform: Platform = Platform.NETEASE) {
         var identity: LibraryCacheIdentity? = LibraryCacheIdentity("a".repeat(64), 1, true)
+        var now = 200L
         val store = Store()
         val io = ArrayDeque<() -> Unit>()
         val delivery = ArrayDeque<() -> Unit>()
@@ -41,11 +42,44 @@ class LibraryBrowserTest {
         }, object : LibraryPageFetch {
             override fun playlists(offset: Int, result: (Result<Page<PlaylistSummary>>) -> Unit) { playlistCalls.add(result) }
             override fun tracks(playlist: MediaKey, offset: Int, result: (Result<Page<SongSummary>>) -> Unit) { trackCalls.add(result) }
-        }, { io.add(it) }, { delivery.add(it) }, { 200L }, platform)
+        }, { io.add(it) }, { delivery.add(it) }, platform = platform, now = { now })
         fun flush() { while (io.isNotEmpty() || delivery.isNotEmpty()) {
             while (io.isNotEmpty()) io.removeFirst().invoke()
             while (delivery.isNotEmpty()) delivery.removeFirst().invoke()
         } }
+    }
+
+    private fun kugouPlaylistPage(title: String) = Page(
+        listOf(PlaylistSummary(MediaKey(Platform.KUGOU, "9"), title, null, 2)), null, 1)
+
+    private fun emptyPlaylistPage() = Page<PlaylistSummary>(emptyList(), null, 0)
+
+    private fun assertKugouPageRetained(
+        f: Fixture,
+        title: String,
+        fetchedAt: Long,
+    ) {
+        val state = f.browser.state.value
+        assertEquals(title, (state.content as LibraryContent.Playlists).page.items.single().title)
+        assertEquals(fetchedAt, state.fetchedAtEpochMs)
+        assertTrue(state.stale)
+        assertEquals("incomplete", state.error)
+        assertFalse(state.refreshing)
+    }
+
+    @Test fun clearingCachedPagesDropsVisibleContentAndRejectsPendingNetworkWrite() {
+        val f = Fixture(); f.store.playlists = saved
+        f.browser.playlists(); f.flush()
+        assertNotNull(f.browser.state.value.content)
+        f.browser.clearCachedPages()
+        f.store.clear()
+        f.playlistCalls.single()(Result.success(fresh)); f.flush()
+        assertNull(f.browser.state.value.content)
+        assertEquals(0, f.store.writes)
+        assertFalse(f.browser.state.value.refreshing)
+        assertEquals(1, f.playlistCalls.size)
+        f.browser.playlists(); f.flush()
+        assertEquals(2, f.playlistCalls.size)
     }
 
     @Test fun cachedPageAppearsBeforeRefreshAndErrorKeepsItVisible() {
@@ -148,6 +182,103 @@ class LibraryBrowserTest {
         assertFalse(f.browser.state.value.refreshing)
     }
 
+    @Test fun repeatedOpenWithinThirtySecondsShowsDiskThenSkipsNetwork() {
+        val f = Fixture(); f.store.playlists = saved
+        f.browser.playlists(); f.flush()
+        f.playlistCalls.single()(Result.success(fresh)); f.flush()
+        f.now = 10_000L
+
+        f.browser.playlists(); f.flush()
+
+        assertEquals(1, f.playlistCalls.size)
+        assertEquals(LibrarySource.CACHE, f.browser.state.value.source)
+        assertEquals("Fresh", (f.browser.state.value.content as LibraryContent.Playlists).page.items.single().title)
+        assertFalse(f.browser.state.value.refreshing)
+    }
+
+    @Test fun networkSuccessExpiresAtThirtySeconds() {
+        val f = Fixture()
+        f.browser.playlists(); f.flush()
+        f.playlistCalls.single()(Result.success(fresh)); f.flush()
+
+        f.now = 30_200L
+        f.browser.playlists(); f.flush()
+
+        assertEquals(2, f.playlistCalls.size)
+        assertTrue(f.browser.state.value.refreshing)
+    }
+
+    @Test fun failedNetworkDoesNotThrottleNextOpen() {
+        val f = Fixture()
+        f.browser.playlists(); f.flush()
+        f.playlistCalls.single()(Result.failure(LibraryPageFailure("network")))
+
+        f.browser.playlists(); f.flush()
+
+        assertEquals(2, f.playlistCalls.size)
+        assertTrue(f.browser.state.value.refreshing)
+    }
+
+    @Test fun refreshAndRetryBypassRecentNetworkSuccess() {
+        val f = Fixture()
+        f.browser.playlists(); f.flush()
+        f.playlistCalls.single()(Result.success(fresh)); f.flush()
+
+        f.browser.refresh(); f.flush()
+        assertEquals(2, f.playlistCalls.size)
+        f.playlistCalls.last()(Result.success(fresh)); f.flush()
+
+        f.browser.retry(); f.flush()
+        assertEquals(3, f.playlistCalls.size)
+    }
+
+    @Test fun accountGenerationChangeBypassesRecentNetworkSuccess() {
+        val f = Fixture()
+        f.browser.playlists(); f.flush()
+        f.playlistCalls.single()(Result.success(fresh)); f.flush()
+
+        f.identity = f.identity!!.copy(generation = 2)
+        f.browser.accountChanged(); f.flush()
+
+        assertEquals(2, f.playlistCalls.size)
+        assertTrue(f.browser.state.value.refreshing)
+    }
+
+    @Test fun invalidationBypassesRecentNetworkSuccess() {
+        val f = Fixture()
+        f.browser.playlists(); f.flush()
+        f.playlistCalls.single()(Result.success(fresh)); f.flush()
+
+        f.browser.invalidate(f.identity!!); f.flush()
+
+        assertEquals(2, f.playlistCalls.size)
+        assertTrue(f.browser.state.value.refreshing)
+    }
+
+    @Test fun diskCacheHitIsNotNetworkSuccess() {
+        val f = Fixture(); f.store.playlists = saved
+        f.browser.playlists(refresh = false); f.flush()
+        assertTrue(f.playlistCalls.isEmpty())
+
+        f.browser.playlists(); f.flush()
+
+        assertEquals(1, f.playlistCalls.size)
+        assertTrue(f.browser.state.value.refreshing)
+    }
+
+    @Test fun rejectedOldQueryResponseCannotThrottleNewQuery() {
+        val f = Fixture()
+        f.browser.playlists(); f.flush()
+        val old = f.playlistCalls.single()
+        f.browser.tracks(playlist); f.flush()
+
+        old(Result.success(fresh)); f.flush()
+        f.browser.playlists(); f.flush()
+
+        assertEquals(2, f.playlistCalls.size)
+        assertTrue(f.browser.state.value.refreshing)
+    }
+
     @Test fun blockedDiskReadCannotBlockCancelOrAccountChangeAndCannotDeliverOldData() {
         val f = Fixture(); f.store.playlists = saved
         val entered = java.util.concurrent.CountDownLatch(1)
@@ -212,6 +343,220 @@ class LibraryBrowserTest {
         f.flush()
         assertEquals(LibrarySource.NETWORK, f.browser.state.value.source)
         assertEquals(key, f.browser.state.value.query.playlist)
+    }
+
+    @Test fun kugouInitialEmptyHomeRetainsSavedDiskPageWithoutWriting() {
+        val f = Fixture(Platform.KUGOU)
+        val savedHome = SavedLibraryPage(kugouPlaylistPage("Saved"), 100L)
+        f.store.playlists = savedHome
+
+        f.browser.playlists(); f.flush()
+        f.playlistCalls.single()(Result.success(emptyPlaylistPage())); f.flush()
+
+        assertKugouPageRetained(f, "Saved", 100L)
+        assertEquals(savedHome, f.store.playlists)
+        assertEquals(0, f.store.writes)
+        assertEquals(LibrarySource.CACHE, f.browser.state.value.source)
+    }
+
+    @Test fun kugouEmptyHomeRetainsVisiblePageWhenDiskCacheIsMissing() {
+        val f = Fixture(Platform.KUGOU)
+        f.browser.playlists(); f.flush()
+        f.playlistCalls.single()(Result.success(kugouPlaylistPage("Fresh"))); f.flush()
+        assertEquals(1, f.store.writes)
+
+        f.store.playlists = null
+        f.now = 201L
+        f.browser.refresh(); f.flush()
+        f.playlistCalls.last()(Result.success(emptyPlaylistPage())); f.flush()
+
+        assertKugouPageRetained(f, "Fresh", 200L)
+        assertNull(f.store.playlists)
+        assertEquals(1, f.store.writes)
+        assertEquals(LibrarySource.NETWORK, f.browser.state.value.source)
+    }
+
+    @Test fun kugouManualRetryWithinMinuteAcceptsRepeatedEmpty() {
+        val immediate = Fixture(Platform.KUGOU)
+        immediate.store.playlists = SavedLibraryPage(kugouPlaylistPage("Saved"), 100L)
+        immediate.browser.playlists(); immediate.flush()
+        immediate.playlistCalls.single()(Result.success(emptyPlaylistPage())); immediate.flush()
+        assertKugouPageRetained(immediate, "Saved", 100L)
+
+        immediate.browser.retry(); immediate.flush()
+        immediate.playlistCalls.last()(Result.success(emptyPlaylistPage())); immediate.flush()
+        assertKugouEmptyHomeAccepted(immediate, 200L)
+
+        val atBoundary = Fixture(Platform.KUGOU)
+        atBoundary.store.playlists = SavedLibraryPage(kugouPlaylistPage("Saved"), 100L)
+        atBoundary.browser.playlists(); atBoundary.flush()
+        atBoundary.playlistCalls.single()(Result.success(emptyPlaylistPage())); atBoundary.flush()
+        atBoundary.now = 60_200L
+        atBoundary.browser.refresh(); atBoundary.flush()
+        atBoundary.playlistCalls.last()(Result.success(emptyPlaylistPage())); atBoundary.flush()
+        assertKugouEmptyHomeAccepted(atBoundary, 60_200L)
+    }
+
+    @Test fun kugouOrdinaryOpenAndOverdueRetryDoNotConfirmEmpty() {
+        val ordinary = Fixture(Platform.KUGOU)
+        ordinary.store.playlists = SavedLibraryPage(kugouPlaylistPage("Saved"), 100L)
+        ordinary.browser.playlists(); ordinary.flush()
+        ordinary.playlistCalls.single()(Result.success(emptyPlaylistPage())); ordinary.flush()
+
+        ordinary.now = 201L
+        ordinary.browser.playlists(); ordinary.flush()
+        assertEquals(2, ordinary.playlistCalls.size)
+        ordinary.playlistCalls.last()(Result.success(emptyPlaylistPage())); ordinary.flush()
+        assertKugouPageRetained(ordinary, "Saved", 100L)
+        assertEquals(0, ordinary.store.writes)
+
+        val overdue = Fixture(Platform.KUGOU)
+        overdue.store.playlists = SavedLibraryPage(kugouPlaylistPage("Saved"), 100L)
+        overdue.browser.playlists(); overdue.flush()
+        overdue.playlistCalls.single()(Result.success(emptyPlaylistPage())); overdue.flush()
+
+        overdue.now = 60_202L
+        overdue.browser.retry(); overdue.flush()
+        overdue.playlistCalls.last()(Result.success(emptyPlaylistPage())); overdue.flush()
+        assertKugouPageRetained(overdue, "Saved", 100L)
+        assertEquals(0, overdue.store.writes)
+    }
+
+    @Test fun kugouInvalidationRestartsEmptyConfirmation() {
+        val f = Fixture(Platform.KUGOU)
+        f.store.playlists = SavedLibraryPage(kugouPlaylistPage("Saved"), 100L)
+        f.browser.playlists(); f.flush()
+        f.playlistCalls.single()(Result.success(emptyPlaylistPage())); f.flush()
+
+        f.now = 201L
+        f.browser.invalidate(f.identity!!)
+        f.browser.retry(); f.flush()
+        assertEquals(3, f.playlistCalls.size)
+        f.playlistCalls.last()(Result.success(emptyPlaylistPage())); f.flush()
+
+        assertKugouPageRetained(f, "Saved", 100L)
+        assertEquals(0, f.store.writes)
+    }
+
+    @Test fun kugouNetworkAndNonEmptySuccessRestartEmptyConfirmation() {
+        val failed = Fixture(Platform.KUGOU)
+        val savedHome = SavedLibraryPage(kugouPlaylistPage("Saved"), 100L)
+        failed.store.playlists = savedHome
+        failed.browser.playlists(); failed.flush()
+        failed.playlistCalls.single()(Result.success(emptyPlaylistPage())); failed.flush()
+
+        failed.now = 201L
+        failed.browser.retry(); failed.flush()
+        failed.playlistCalls.last()(Result.failure(LibraryPageFailure("network"))); failed.flush()
+        assertEquals("network", failed.browser.state.value.error)
+
+        failed.now = 202L
+        failed.browser.retry(); failed.flush()
+        failed.playlistCalls.last()(Result.success(emptyPlaylistPage())); failed.flush()
+        assertKugouPageRetained(failed, "Saved", 100L)
+        assertEquals(savedHome, failed.store.playlists)
+        assertEquals(0, failed.store.writes)
+
+        val nonEmpty = Fixture(Platform.KUGOU)
+        nonEmpty.store.playlists = savedHome
+        nonEmpty.browser.playlists(); nonEmpty.flush()
+        nonEmpty.playlistCalls.single()(Result.success(emptyPlaylistPage())); nonEmpty.flush()
+
+        nonEmpty.now = 201L
+        nonEmpty.browser.retry(); nonEmpty.flush()
+        nonEmpty.playlistCalls.last()(Result.success(kugouPlaylistPage("Fresh"))); nonEmpty.flush()
+        assertEquals("Fresh", (nonEmpty.browser.state.value.content as LibraryContent.Playlists).page.items.single().title)
+        assertEquals(1, nonEmpty.store.writes)
+
+        nonEmpty.now = 202L
+        nonEmpty.browser.retry(); nonEmpty.flush()
+        nonEmpty.playlistCalls.last()(Result.success(emptyPlaylistPage())); nonEmpty.flush()
+        assertKugouPageRetained(nonEmpty, "Fresh", 201L)
+        assertEquals("Fresh", nonEmpty.store.playlists!!.page.items.single().title)
+        assertEquals(1, nonEmpty.store.writes)
+    }
+
+    @Test fun kugouGenerationChangeAndCacheClearRestartEmptyConfirmation() {
+        val generation = Fixture(Platform.KUGOU)
+        generation.store.playlists = SavedLibraryPage(kugouPlaylistPage("Saved"), 100L)
+        generation.browser.playlists(); generation.flush()
+        generation.playlistCalls.single()(Result.success(emptyPlaylistPage())); generation.flush()
+
+        generation.now = 201L
+        generation.identity = generation.identity!!.copy(generation = 2)
+        generation.browser.accountChanged(); generation.flush()
+        generation.browser.retry(); generation.flush()
+        generation.playlistCalls.last()(Result.success(emptyPlaylistPage())); generation.flush()
+        assertKugouPageRetained(generation, "Saved", 100L)
+        assertEquals(0, generation.store.writes)
+
+        val cleared = Fixture(Platform.KUGOU)
+        cleared.store.playlists = SavedLibraryPage(kugouPlaylistPage("Saved"), 100L)
+        cleared.browser.playlists(); cleared.flush()
+        cleared.playlistCalls.single()(Result.success(emptyPlaylistPage())); cleared.flush()
+
+        cleared.now = 201L
+        cleared.browser.clearCachedPages()
+        cleared.browser.refresh(); cleared.flush()
+        cleared.playlistCalls.last()(Result.success(emptyPlaylistPage())); cleared.flush()
+        assertKugouPageRetained(cleared, "Saved", 100L)
+        assertEquals(0, cleared.store.writes)
+    }
+
+    @Test fun emptyResultsOutsideProtectedInitialHomeAreAcceptedImmediately() {
+        val noCache = Fixture(Platform.KUGOU)
+        noCache.browser.playlists(); noCache.flush()
+        noCache.playlistCalls.single()(Result.success(emptyPlaylistPage())); noCache.flush()
+        assertTrue((noCache.browser.state.value.content as LibraryContent.Playlists).page.items.isEmpty())
+        assertEquals(LibrarySource.NETWORK, noCache.browser.state.value.source)
+        assertFalse(noCache.browser.state.value.stale)
+        assertEquals(1, noCache.store.writes)
+
+        val emptyDisk = Fixture(Platform.KUGOU)
+        emptyDisk.store.playlists = SavedLibraryPage(emptyPlaylistPage(), 100L)
+        emptyDisk.browser.playlists(); emptyDisk.flush()
+        emptyDisk.playlistCalls.single()(Result.success(emptyPlaylistPage())); emptyDisk.flush()
+        assertTrue((emptyDisk.browser.state.value.content as LibraryContent.Playlists).page.items.isEmpty())
+        assertFalse(emptyDisk.browser.state.value.stale)
+        assertEquals(1, emptyDisk.store.writes)
+
+        val otherPlatform = Fixture(Platform.NETEASE)
+        otherPlatform.store.playlists = saved
+        otherPlatform.browser.playlists(); otherPlatform.flush()
+        otherPlatform.playlistCalls.single()(Result.success(emptyPlaylistPage())); otherPlatform.flush()
+        assertTrue((otherPlatform.browser.state.value.content as LibraryContent.Playlists).page.items.isEmpty())
+        assertFalse(otherPlatform.browser.state.value.stale)
+        assertEquals(1, otherPlatform.store.writes)
+
+        val laterPage = Fixture(Platform.KUGOU)
+        laterPage.store.playlists = SavedLibraryPage(kugouPlaylistPage("Saved"), 100L)
+        laterPage.browser.playlists(offset = 30); laterPage.flush()
+        laterPage.playlistCalls.single()(Result.success(emptyPlaylistPage())); laterPage.flush()
+        assertTrue((laterPage.browser.state.value.content as LibraryContent.Playlists).page.items.isEmpty())
+        assertEquals(30, laterPage.browser.state.value.query.offset)
+        assertFalse(laterPage.browser.state.value.stale)
+        assertEquals(1, laterPage.store.writes)
+
+        val trackPage = Fixture(Platform.KUGOU)
+        val playlist = MediaKey(Platform.KUGOU, "9")
+        trackPage.trackCalls.clear()
+        trackPage.browser.tracks(playlist); trackPage.flush()
+        trackPage.trackCalls.single()(Result.success(Page(emptyList(), null, 0))); trackPage.flush()
+        assertTrue((trackPage.browser.state.value.content as LibraryContent.Tracks).page.items.isEmpty())
+        assertEquals(playlist, trackPage.browser.state.value.query.playlist)
+        assertFalse(trackPage.browser.state.value.stale)
+    }
+
+    private fun assertKugouEmptyHomeAccepted(f: Fixture, fetchedAt: Long) {
+        val state = f.browser.state.value
+        assertTrue((state.content as LibraryContent.Playlists).page.items.isEmpty())
+        assertEquals(LibrarySource.NETWORK, state.source)
+        assertEquals(fetchedAt, state.fetchedAtEpochMs)
+        assertFalse(state.stale)
+        assertNull(state.error)
+        assertTrue(f.store.playlists!!.page.items.isEmpty())
+        assertEquals(fetchedAt, f.store.playlists!!.fetchedAtEpochMs)
+        assertEquals(1, f.store.writes)
     }
 
     @Test fun switchingOwnerWhileViewingTracksReturnsToOwnPlaylistsAndRejectsOldTrackResponse() {

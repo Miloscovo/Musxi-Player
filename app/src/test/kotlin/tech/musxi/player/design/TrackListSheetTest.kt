@@ -8,6 +8,7 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
+import tech.musxi.player.ui.design.LargeFontBatch
 import tech.musxi.player.ui.design.TrackListSheet
 import tech.musxi.player.ui.library.NumberStyle
 import tech.musxi.player.ui.library.TrackRowStyle
@@ -43,20 +44,24 @@ class TrackListSheetTest {
         "library_detail_cover_mist_light", ThemeMode.LIGHT, rowStyle = TrackRowStyle.COVER,
     )
 
+    /** Font scale 2.0: rows grow with the text instead of clipping the second line. */
+    @Test @Config(qualifiers = "w360dp-h1600dp-xhdpi")
+    fun tracksLargeFont() = capture("library_detail_tracks_largefont_light", ThemeMode.LIGHT, largeFont = true)
+
     private fun capture(
         name: String,
         mode: ThemeMode,
         rowStyle: TrackRowStyle = TrackRowStyle.NUMBERED,
         numberStyle: NumberStyle = NumberStyle.FLUSH_SMALL,
+        largeFont: Boolean = false,
     ) {
         val out = File("build/design/$name.png")
         captureRoboImage(out.path) {
-            TrackListSheet(
-                accent = Accent.MIST,
-                mode = mode,
-                rowStyle = rowStyle,
-                numberStyle = numberStyle,
-            )
+            if (largeFont) {
+                LargeFontBatch { TrackListSheet(Accent.MIST, mode, rowStyle, numberStyle) }
+            } else {
+                TrackListSheet(Accent.MIST, mode, rowStyle, numberStyle)
+            }
         }
         if (!out.exists()) return
         val bitmap = BitmapFactory.decodeFile(out.path)
@@ -74,6 +79,9 @@ class TrackListSheetTest {
         }
         // A page that failed to draw is one flat colour; a real one has text everywhere.
         assertTrue("$name looks blank ($distinct transitions)", distinct > w)
+
+        // At 200% the band moves with the taller rows; the picture is the evidence there.
+        if (largeFont) return
 
         // The measured rule this round was about: the page margin must be the same on both sides.
         // Only the row band is measured, because the header and the dock already sit at 20dp.

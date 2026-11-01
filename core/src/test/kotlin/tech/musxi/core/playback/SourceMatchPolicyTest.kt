@@ -10,7 +10,10 @@ class SourceMatchPolicyTest {
     private val original = SongSummary(MediaKey(Platform.QQ, "A0000000000001"), "AIZO",
         listOf("Artist", "Guest"), "Album", 180_000)
     private val candidate = original.copy(key = MediaKey(Platform.NETEASE, "1"))
+    private val qingTian = SongSummary(MediaKey(Platform.QQ, "QINGTIAN"), "晴天",
+        listOf("周杰伦"), "叶惠美", 269_000)
     private fun reason(song: SongSummary) = SourceMatchPolicy.assess(original, song)
+    private fun qingTianCandidate(id: String) = qingTian.copy(key = MediaKey(Platform.NETEASE, id))
 
     @Test fun completeMatchingMetadataWithUnicodeWhitespaceAndReorderedArtistsIsEligible() {
         assertEquals(SourceMatchReason.ELIGIBLE,
@@ -61,5 +64,26 @@ class SourceMatchPolicyTest {
     @Test fun embeddedEnglishSyllablesAreNotVersionLabelsAndTitlePunctuationIsPreserved() {
         assertEquals(SourceMatchReason.ELIGIBLE, reason(candidate.copy(album = "Olive Discover")))
         assertEquals(SourceMatchReason.TITLE_MISMATCH, reason(candidate.copy(title = "A-I-Z-O")))
+    }
+    @Test fun qingTianUploaderNicknameJayIsNotZhouJieLunAlias() {
+        assertEquals(SourceMatchReason.ARTIST_MISMATCH,
+            SourceMatchPolicy.assess(qingTian, qingTianCandidate("jay").copy(artists = listOf("Jay"))))
+    }
+    @Test fun qingTianSameTitleCoverRequiresConfirmation() {
+        assertEquals(SourceMatchReason.VERSION_REQUIRES_CONFIRMATION,
+            SourceMatchPolicy.assess(qingTian, qingTianCandidate("cover").copy(album = "晴天（翻唱）")))
+    }
+    @Test fun qingTianSpedVersionMarkerNeverBecomesEligible() {
+        assertEquals(SourceMatchReason.VERSION_REQUIRES_CONFIRMATION,
+            SourceMatchPolicy.assess(qingTian, qingTianCandidate("sped").copy(album = "Sped Up")))
+        assertEquals(SourceMatchReason.VERSION_REQUIRES_CONFIRMATION,
+            SourceMatchPolicy.assess(qingTian, qingTianCandidate("sped").copy(album = "叶惠美（提速版）")))
+    }
+
+    @Test fun selectedVersionCanRefreshArtworkButCannotChangeSinger() {
+        val selected = candidate.copy(title = "AIZO (Live)", album = "Live")
+        assertTrue(SourceMatchPolicy.confirmsSelected(selected, selected.copy(coverUrl = "https://example.com/cover")))
+        assertFalse(SourceMatchPolicy.confirmsSelected(selected, selected.copy(artists = listOf("Jay"))))
+        assertFalse(SourceMatchPolicy.confirmsSelected(selected, selected.copy(album = "Remix")))
     }
 }

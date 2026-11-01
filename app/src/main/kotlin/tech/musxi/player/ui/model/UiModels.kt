@@ -2,6 +2,8 @@ package tech.musxi.player.ui.model
 
 import tech.musxi.core.account.Platform
 import tech.musxi.core.library.SongSummary
+import tech.musxi.core.playback.FailureReason
+import tech.musxi.player.ui.player.withFailureReason
 
 /**
  * Presentation state for the player chrome. It is derived from PlaybackConnection.state and
@@ -25,9 +27,14 @@ data class NowPlayingUi(
 enum class PlayerStatus(val text: String) {
     INTERRUPTED("播放被其他音频暂时打断"),
     ENDED("已播放完"),
-    FAILED("播放失败，请检查网络"),
+    // No cause is assumed here: "check the network" was wrong for every failure that was not one.
+    FAILED("播放失败"),
     SEARCHING("原曲暂不可播，正在寻找其他音源"),
-    CHOOSING("已找到其他音源，即将自动尝试"),
+    CHOOSING("已找到其他音源，即将自动尝试");
+
+    /** The line to show: a failure names its reason when the service reported one. */
+    fun textFor(reason: FailureReason?): String =
+        if (this == FAILED) withFailureReason(text, reason) else text
 }
 
 data class CandidateUi(val song: SongSummary, val sameName: Boolean, val tried: Boolean = false)
