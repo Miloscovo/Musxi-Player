@@ -88,9 +88,10 @@ std::uint64_t recentRecordedGeneration=0;
 std::string recentLastPlayedId;
 std::size_t cloudFavoritesCount=0;
 struct CoverImage {std::string data;ULONGLONG retryAt=0;};
-std::map<std::string,std::unique_ptr<CoverImage>> coverCache;
-std::vector<std::string> wantedCovers;
-std::map<std::string,ULONGLONG> webWantedCovers;
+using CoverKey=std::pair<std::string,int>;
+std::map<CoverKey,std::unique_ptr<CoverImage>> coverCache;
+std::vector<CoverKey> wantedCovers;
+std::map<CoverKey,ULONGLONG> webWantedCovers;
 cloud::Bridge coverBridge,cloudBridge;
 std::future<Json> coverFuture,cloudFuture;
 bool cloudBusy(){return cloudFuture.valid();}
@@ -100,6 +101,8 @@ std::string utf8(const std::wstring& str){
     std::string out(n,'\0');WideCharToMultiByte(CP_UTF8,0,str.data(),(int)str.size(),out.data(),n,nullptr,nullptr);return out;
 }
 void cloudPlay(int index,bool useQueue=false,bool search=false);
+void cloudRequest(Json request);
+void cancelGapless();
 #include "playback_settings.inc"
 void enqueuePlayedTrack(const Json& track) {
     const auto id=track.value("id","");
@@ -146,6 +149,7 @@ musxi::PlayerResult setVolumeNative(int value) {
     return {};
 }
 bool closeAudio() {
+    cancelGapless();
     const auto result=audioBackend().unload();syncAudioView();
     if(!result) {notice(L"无法释放音频，请重试");return false;}
     audioTrackId.clear();
@@ -153,6 +157,7 @@ bool closeAudio() {
     return true;
 }
 musxi::AudioResult loadAndPlayAudio(const std::wstring& path,const std::string& trackId) {
+    cancelGapless();
     auto result=audioBackend().load(path);
     if(result && !(libraryOperationStatus=="pending" && libraryOperationKind=="audio" && libraryPlayPaused))result=audioBackend().play();
     if(result)audioTrackId=trackId;
@@ -228,6 +233,7 @@ void skip(int delta) {
     if(result.code!=0 && !cloudQueue.empty())notice(cloud::toWide(result.message));
 }
 void schedulePlayback(Json next,bool resetFailures=true) {
+    cancelGapless();
     if(libraryOperationStatus=="pending" && libraryOperationKind=="audio" &&
        audioTrackId==libraryPlayTrackId && audioBackend().snapshot().pending)closeAudio();
     ++cloudGeneration;++libraryOperationId;libraryOperationKind="audio";
@@ -249,6 +255,7 @@ bool scheduleFailedTrackSkip(const std::string& id,ULONGLONG delay) {
     return true;
 }
 musxi::PlayerResult seekMilliseconds(std::uint32_t milliseconds) {
+    cancelGapless();
     cancelUnplayableSkip();
     auto result=audioBackend().seek(milliseconds);syncAudioView();
     if(!result && result.error!=musxi::AudioError::NotReady)notice(L"此音频暂不支持跳转到该位置");
@@ -280,7 +287,9 @@ musxi::PlayerService& playerService() {
 #include "playback_history.inc"
 #include "lyrics.inc"
 #include "lyrics_match.inc"
+#include "gapless.inc"
 void advancePlayback() {
+    if(gaplessFallback())return;
     if(playbackOrder=="repeat-one" && opened && !cloudQueue.empty()) {
         auto result=audioBackend().seek(0);
         if(result)result=audioBackend().resume();
@@ -290,6 +299,7 @@ void advancePlayback() {
 }
 void pollAudio() {
     audioBackend().poll();syncAudioView();
+    gaplessTick();
     collectAudioCaches();
     const auto audio=audioBackend().snapshot();
     if(audio.opened && audio.playing && !audio.pending && audio.phase!="failed" && libraryPlayGeneration==cloudGeneration &&
@@ -357,39 +367,45 @@ void coverTick() {
             if(result.value("ok",false)) for(const auto& item:result.at("data").at("images")) {
                 auto entry=std::make_unique<CoverImage>();entry->retryAt=GetTickCount64()+60000;
                 auto image=item.value("image","");if(imageDataUri(image))entry->data=std::move(image);
-                coverCache[item.value("url","")]=std::move(entry);
+                coverCache[{item.value("url",""),result.at("data").value("size",1200)}]=std::move(entry);
             }
         } catch(...) {}
         while(coverCache.size()>256) {
             auto old=std::find_if(coverCache.begin(),coverCache.end(),[](const auto& pair) {
-                return pair.first!=cloudNowCover && std::find(wantedCovers.begin(),wantedCovers.end(),pair.first)==wantedCovers.end();
+                return pair.first.first!=cloudNowCover && std::find(wantedCovers.begin(),wantedCovers.end(),pair.first)==wantedCovers.end();
             });
             if(old==coverCache.end()) break;
             coverCache.erase(old);
         }
     }
-    Json urls=Json::array();
+    Json urls=Json::array();int size=0;
     for(const auto& url:wantedCovers) {
+        if(size && url.second!=size)continue;
         auto found=coverCache.find(url);
         if(found==coverCache.end() || (found->second->data.empty() && GetTickCount64()>=found->second->retryAt)) {
             auto& entry=coverCache[url];if(!entry) entry=std::make_unique<CoverImage>();entry->retryAt=GetTickCount64()+60000;
-            urls.push_back(url);if(urls.size()==8) break;
+            size=url.second;urls.push_back(url.first);if(urls.size()==8) break;
         }
     }
     if(urls.empty()) return;
     std::wstring error;if(!coverBridge.start(error)) return;
-    coverFuture=std::async(std::launch::async,[urls=std::move(urls)] {return coverBridge.call({{"op","covers"},{"urls",urls}});});
+    coverFuture=std::async(std::launch::async,[urls=std::move(urls),size] {return coverBridge.call({{"op","covers"},{"urls",urls},{"size",size}});});
 }
 // Tests replace the service process; production leaves this empty.
 std::function<Json(const Json&)> cloudRequestOverride;
 void cloudRequest(Json request) {
     if(cloudBusy()) return;
+    if(request.value("op","")=="audio" || request.value("op","")=="init" || request.value("op","")=="logout")cancelGapless();
     if(cloudRequestOverride) {
         cloudOperation=request.value("op","");requestGeneration=cloudGeneration;
         std::promise<Json> reply;cloudFuture=reply.get_future();reply.set_value(cloudRequestOverride(request));return;
     }
     std::wstring error;
-    if(!cloudBridge.start(error)) {cloudStatus=error;notice(error);return;}
+    if(!cloudBridge.start(error)) {
+        const auto op=request.value("op","");
+        if(op=="audio_prepare" || op=="audio_prepared" || op=="audio_cancel") {gapless.failed=true;return;}
+        cloudStatus=error;notice(error);return;
+    }
     cloudOperation=request.value("op","");requestGeneration=cloudGeneration;
     cloudFuture=std::async(std::launch::async,[request=std::move(request)] {return cloudBridge.call(request);});
 }
@@ -403,6 +419,7 @@ void cloudConnect() {
     cloudRequest({{"op","init"},{"profileDir",cloud::dataDir().u8string()},{"session",cloud::readSession()},{"tracks",tracks}});
 }
 void cloudStop() {
+    cancelGapless();
     discardPlatformRollback();
     libraryNextPlay=nullptr;
     if(libraryOperationStatus=="pending") libraryOperationStatus="cancelled";
@@ -413,10 +430,13 @@ void cloudStop() {
             auto result=cloudFuture.get();
             if(cloudOperation=="audio" && result.value("ok",false)) {
                 auto path=cloudText(result.at("data"),"path");if(!path.empty()) DeleteFileW(path.c_str());
+            } else if(cloudOperation=="audio_prepared" && result.value("ok",false) && result.at("data").value("status","")=="ready") {
+                const auto path=cloudText(result.at("data").at("data"),"path");if(!path.empty())retiredAudioCaches.push_back(path);
             }
         } catch(...) {}
     }
-    cloudBridge.stop();clearQr();libraryAvatar.clear();
+    cloudBridge.stop();collectStoppedPreparations();clearQr();libraryAvatar.clear();
+    gaplessCancelled.clear();
 }
 void cloudSaveSnapshot(const Json& data) {
     try {
@@ -455,6 +475,8 @@ void cloudTick() {
     if(cloudFuture.valid() && cloudFuture.wait_for(std::chrono::milliseconds(0))==std::future_status::ready) {
         auto op=cloudOperation;Json result;bool applied=false;
         try {result=cloudFuture.get();} catch(...) {result={{"ok",false},{"error","本机接口请求失败"}};}
+        if(op=="audio_prepare" || op=="audio_prepared" || op=="audio_cancel")gaplessCloudReply(op,result);
+        else {
         if(!result.value("ok",false)) {
             const bool platformChange=libraryPlatformChange;
             if(op=="audio")libraryPlatformChange=false;
@@ -596,6 +618,7 @@ void cloudTick() {
             libraryOperationError=(success || audioPending)?"":utf8(cloudStatus);
         }
         if(op=="song_menu") libraryMenuRequested=false;
+        }
     }
     if(cloudPolling && !cloudBusy() && GetTickCount64()>=cloudNextPoll) {
         if(GetTickCount64()>cloudPollDeadline) {cloudPolling=false;clearQr();cloudStatus=L"二维码已过期，请重新生成。";}
@@ -625,6 +648,7 @@ void cloudTick() {
             schedulePlayback({{"source","queue"},{"id",cloudQueue[index].value("id","")}},false);
         } else cancelUnplayableSkip();
     }
+    gaplessCloudTick();
 }
 void accountLogout() {
     cancelUnplayableSkip();

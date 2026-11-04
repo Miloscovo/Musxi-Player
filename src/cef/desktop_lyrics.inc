@@ -60,14 +60,14 @@ void loadDesktopSettings(const std::filesystem::path& profile) {
         desktopX=desktopY=INT_MIN;desktopWidth=680;desktopHeight=180;
     }
 }
-void placeDesktop(HWND hwnd,RECT rect) {
+void placeDesktop(HWND hwnd,RECT rect,UINT flags=0) {
     MONITORINFO monitor{sizeof(monitor)};
     GetMonitorInfoW(MonitorFromRect(&rect,MONITOR_DEFAULTTONEAREST),&monitor);
     const int width=std::min(rect.right-rect.left,monitor.rcWork.right-monitor.rcWork.left);
     const int height=std::min(rect.bottom-rect.top,monitor.rcWork.bottom-monitor.rcWork.top);
     const int x=std::clamp(rect.left,monitor.rcWork.left,monitor.rcWork.right-width);
     const int y=std::clamp(rect.top,monitor.rcWork.top,monitor.rcWork.bottom-height);
-    SetWindowPos(hwnd,HWND_TOPMOST,x,y,width,height,SWP_NOACTIVATE);
+    SetWindowPos(hwnd,HWND_TOPMOST,x,y,width,height,SWP_NOACTIVATE|flags);
 }
 void setDesktopClickThrough(bool through) {
     const auto style=GetWindowLongPtrW(desktopWindow,GWL_EXSTYLE);

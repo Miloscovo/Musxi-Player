@@ -1,6 +1,7 @@
 #include "wasapi_player.hpp"
 #include "pcm_output.hpp"
 #include "output_drain.hpp"
+#include "decoded_source.hpp"
 #include "../cxx17_guard.hpp"
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
@@ -59,18 +60,16 @@ std::vector<AudioOutputDevice> audioOutputDevices() {
 }
 struct WasapiPlayer::Impl {
     Handle wake,audioReady;
-    std::thread output,decode;
-    std::mutex commandMutex,callMutex,pcmMutex;
+    std::thread output;
+    std::mutex commandMutex,callMutex,sourceMutex;
     std::function<void()> command;
-    std::condition_variable space;
-    std::atomic_bool cancelled{false};
-    bool quitting=false,wanted=false,running=false,ready=false,eof=false;
-    std::string decodeError;
-    std::int64_t decodeErrorCode=0,decodedDuration=-1;
-    std::vector<float> pcm;
-    std::size_t head=0,count=0;
-    int exactIntegerBits=0;
+    bool quitting=false,wanted=false,running=false;
+    std::shared_ptr<DecodedSource> source,next;
+    std::uint64_t nextToken=0,boundaryToken=0,boundaryFrame=0,trackStart=0;
+    std::wstring boundaryPath;
+    std::int64_t boundaryDuration=-1;
     PcmWriter pcmWriter;
+    std::function<void(const float*,std::size_t)> probe;
     OutputSnapshot state;
     std::vector<OutputEvent> events;
     std::wstring path,deviceId,preferredDevice;
@@ -89,7 +88,7 @@ struct WasapiPlayer::Impl {
     OutputDrain drain;
     std::chrono::steady_clock::duration drainGrace{};
 
-    Impl() {
+    explicit Impl(std::function<void(const float*,std::size_t)> observer):probe(std::move(observer)) {
         std::promise<void> initialized;auto result=initialized.get_future();
         output=std::thread([this,&initialized]{
             const auto hr=CoInitializeEx(nullptr,COINIT_MULTITHREADED);
@@ -120,14 +119,14 @@ struct WasapiPlayer::Impl {
         SetEvent(wake.value);result.get();
     }
     void cancelDecode() {
-        cancelled=true;space.notify_all();
-        if(decode.joinable())decode.join();
+        std::lock_guard<std::mutex> lock(sourceMutex);
+        source.reset();next.reset();nextToken=boundaryToken=0;boundaryPath.clear();
     }
     void release() {
         drain.reset();
         if(client && running)client->Stop();
         running=false;cancelDecode();
-        head=count=0;state.bufferedFrames=0;
+        state.bufferedFrames=0;
         volume.Reset();clock.Reset();render.Reset();client.Reset();device.Reset();enumerator.Reset();
     }
     void failed(const std::string& message,std::int64_t code) {
@@ -209,50 +208,34 @@ struct WasapiPlayer::Impl {
         if(!frequency)throw OutputError("Invalid audio clock frequency",E_FAIL);
         applyVolume();deviceCheck=std::chrono::steady_clock::now();
         state.capacityFrames=f->nSamplesPerSec/2; // 500 ms maximum decoded PCM.
-        pcm.resize(static_cast<std::size_t>(state.capacityFrames)*f->nChannels);
     }
     void applyVolume() {
         if(volume){std::vector<float> levels(state.format.channels,state.volumePercent/100.f);
             check(volume->SetAllVolumes(static_cast<UINT32>(levels.size()),levels.data()),"Set stream volume");}
     }
     void startDecode(std::int64_t ms) {
-        drain.reset();
-        cancelDecode();
-        state.metadataReady=false;
-        {std::lock_guard<std::mutex> lock(pcmMutex);head=count=0;exactIntegerBits=0;pcmWriter={};ready=eof=false;decodeError.clear();decodeErrorCode=0;decodedDuration=state.durationMs;}
-        cancelled=false;
-        const auto file=path;const auto format=state.format;
-        decode=std::thread([this,file,format,ms]{
-            try {
-                FfmpegDecoder decoder(&cancelled);decoder.open(file,format);
-                const auto duration=decoder.info().durationMs;
-                if(ms)decoder.seek(ms);
-                {std::lock_guard<std::mutex> lock(pcmMutex);decodedDuration=duration;ready=true;}
-                SetEvent(wake.value);
-                while(!cancelled) {
-                    auto block=decoder.read(4096);
-                    if(block.endOfStream){std::lock_guard<std::mutex> lock(pcmMutex);eof=true;SetEvent(wake.value);break;}
-                    std::size_t at=0;
-                    while(at<block.samples.size()) {
-                        std::unique_lock<std::mutex> lock(pcmMutex);
-                        space.wait(lock,[this]{return cancelled || count<pcm.size();});
-                        if(cancelled)return;
-                        exactIntegerBits=decoder.info().exactIntegerBits;
-                        const auto tail=(head+count)%pcm.size();
-                        const auto size=std::min({block.samples.size()-at,pcm.size()-count,pcm.size()-tail});
-                        std::copy_n(block.samples.data()+at,size,pcm.data()+tail);count+=size;at+=size;
-                        lock.unlock();SetEvent(wake.value);
-                    }
-                }
-            } catch(const std::exception& e) {
-                if(!cancelled){std::lock_guard<std::mutex> lock(pcmMutex);decodeError=e.what();
-                    if(const auto d=dynamic_cast<const DecodeError*>(&e))decodeErrorCode=d->nativeCode;
-                    SetEvent(wake.value);}
-            }
-        });
+        drain.reset();cancelDecode();state.metadataReady=false;pcmWriter={};
+        std::lock_guard<std::mutex> lock(sourceMutex);
+        source=std::make_shared<DecodedSource>(path,state.format,ms);
+    }
+    bool connectNext() {
+        if(!next || boundaryToken)return false;
+        std::unique_lock<std::mutex> lock(next->mutex,std::try_to_lock);
+        if(!lock.owns_lock() || !next->ready || !next->error.empty() ||
+           (!next->eof && next->count/static_cast<std::size_t>(state.format.channels)<std::max<UINT32>(endpointFrames,state.format.sampleRate/20)))return false;
+        boundaryFrame=submitted;boundaryToken=nextToken;boundaryPath=next->path;boundaryDuration=next->duration;
+        lock.unlock();
+        {std::lock_guard<std::mutex> owner(sourceMutex);source=std::move(next);nextToken=0;}
+        drain.reset();return true;
+    }
+    void cancelPrepared() {
+        position();
+        {std::lock_guard<std::mutex> lock(sourceMutex);next.reset();nextToken=0;}
+        // Already submitted next-track frames must be flushed when the queue changes.
+        if(boundaryToken)resetTo(state.positionMs);
     }
     void loadFile(const std::wstring& file) {
-        release();path=file;wanted=false;submitted=baseFrame=0;
+        release();path=file;wanted=false;submitted=baseFrame=trackStart=0;
         const auto generation=state.generation+1;const auto gain=state.volumePercent;
         state={};state.generation=generation;state.volumePercent=gain;events.clear();
         openDevice();state.phase=OutputPhase::Ready;startDecode(0);
@@ -261,13 +244,17 @@ struct WasapiPlayer::Impl {
         if(!clock)return;
         UINT64 ticks=0;check(clock->GetPosition(&ticks,nullptr),"Read output clock");
         const auto frames=std::min(submitted,static_cast<UINT64>(static_cast<long double>(ticks)*state.format.sampleRate/frequency));
-        state.positionMs=static_cast<std::int64_t>((baseFrame+frames)*1000/state.format.sampleRate);
+        if(boundaryToken && frames>=boundaryFrame) {
+            trackStart=boundaryFrame;baseFrame=0;path=boundaryPath;state.durationMs=boundaryDuration;
+            state.transitionToken=boundaryToken;boundaryToken=0;boundaryPath.clear();
+        }
+        state.positionMs=static_cast<std::int64_t>((baseFrame+frames-trackStart)*1000/state.format.sampleRate);
     }
     void resetTo(std::int64_t ms) {
         if(running)check(client->Stop(),"Stop output for seek");running=false;
         check(client->Reset(),"Reset output buffer");
         ++state.generation;events.clear();
-        submitted=0;baseFrame=static_cast<UINT64>(ms)*state.format.sampleRate/1000;state.positionMs=ms;
+        submitted=trackStart=0;baseFrame=static_cast<UINT64>(ms)*state.format.sampleRate/1000;state.positionMs=ms;
         startDecode(ms);state.phase=wanted?OutputPhase::Buffering:OutputPhase::Paused;
         starvedSince=std::chrono::steady_clock::now();
     }
@@ -278,49 +265,73 @@ struct WasapiPlayer::Impl {
             deviceCheck=now;
             if(usingDefault && currentDevice()!=deviceId)throw OutputError("Default output changed; replay to use the new device",AUDCLNT_E_DEVICE_INVALIDATED);
         }
-        std::unique_lock<std::mutex> lock(pcmMutex,std::try_to_lock);
-        if(!lock.owns_lock())return; // Output never waits for decoding.
-        if(!decodeError.empty()){auto error=decodeError;const auto code=decodeErrorCode;lock.unlock();failed(error,code);return;}
-        state.metadataReady=ready;state.durationMs=decodedDuration;state.bufferedFrames=static_cast<UINT32>(count/state.format.channels);
-        if(!wanted || !ready)return;
+        if(!source)return;
         position();
         UINT32 padding=0;check(client->GetCurrentPadding(&padding),"Read output padding");
         if(padding>endpointFrames)throw OutputError("Invalid endpoint padding",E_FAIL);
-        if(eof && !count && !padding) {
-            UINT64 ticks=0;check(clock->GetPosition(&ticks,nullptr),"Read final output clock");
-            // A drained endpoint may stop its clock short of the final frame; allow its tail latency, then finish.
-            if(!drain.complete(true,static_cast<long double>(ticks)*state.format.sampleRate/frequency,submitted,now,drainGrace))return;
-            if(running)check(client->Stop(),"Stop completed stream");running=false;wanted=false;
-            state.positionMs=static_cast<std::int64_t>((baseFrame+submitted)*1000/state.format.sampleRate);
-            state.phase=OutputPhase::Ended;events.push_back({true,state.generation,{},0});return;
-        }
-        drain.reset();
-        if(running && !count && !padding && !eof) {
-            check(client->Stop(),"Stop starved output");running=false;
-            check(client->Reset(),"Reset starved output");baseFrame+=submitted;submitted=0;
-            ++state.underruns;state.phase=OutputPhase::Buffering;starvedSince=now;
-        }
-        if(!running && !eof && count/static_cast<std::size_t>(state.format.channels)<std::max<UINT32>(endpointFrames,state.format.sampleRate/20)) {
-            if(now-starvedSince>std::chrono::seconds(5))throw OutputError("Decode buffer did not refill",HRESULT_FROM_WIN32(ERROR_TIMEOUT));
-            return;
-        }
-        const auto frames=std::min<UINT32>(endpointFrames-padding,static_cast<UINT32>(count/state.format.channels));
-        if(frames) {
+        for(;;) {
+            auto current=source;
+            std::unique_lock<std::mutex> lock(current->mutex,std::try_to_lock);
+            if(!lock.owns_lock())return;
+            if(!current->error.empty()){auto error=current->error;const auto code=current->errorCode;lock.unlock();failed(error,code);return;}
+            if(!boundaryToken){state.metadataReady=current->ready;state.durationMs=current->duration;}
+            state.bufferedFrames=static_cast<UINT32>(current->count/state.format.channels);
+            if(!wanted || !current->ready)return;
+            if(current->eof && !current->count) {
+                lock.unlock();
+                if(connectNext())continue;
+                if(!running && padding){check(client->Start(),"Resume buffered tail");running=true;state.phase=OutputPhase::Playing;}
+                if(!padding) {
+                    UINT64 ticks=0;check(clock->GetPosition(&ticks,nullptr),"Read final output clock");
+                    if(!drain.complete(true,static_cast<long double>(ticks)*state.format.sampleRate/frequency,submitted,now,drainGrace))return;
+                    // The endpoint can drain with its reported clock slightly behind the boundary.
+                    if(boundaryToken){trackStart=boundaryFrame;baseFrame=0;path=boundaryPath;state.durationMs=boundaryDuration;
+                        state.transitionToken=boundaryToken;boundaryToken=0;boundaryPath.clear();}
+                    if(running)check(client->Stop(),"Stop completed stream");running=false;wanted=false;
+                    state.positionMs=static_cast<std::int64_t>((baseFrame+submitted-trackStart)*1000/state.format.sampleRate);
+                    state.phase=OutputPhase::Ended;events.push_back({true,state.generation,{},0});
+                }
+                return;
+            }
+            if(running && !current->count && !padding && !current->eof) {
+                if(boundaryToken) {
+                    UINT64 ticks=0;check(clock->GetPosition(&ticks,nullptr),"Read starved boundary clock");
+                    if(!drain.complete(true,static_cast<long double>(ticks)*state.format.sampleRate/frequency,submitted,now,drainGrace))return;
+                    trackStart=boundaryFrame;baseFrame=0;path=boundaryPath;state.durationMs=boundaryDuration;
+                    state.transitionToken=boundaryToken;boundaryToken=0;boundaryPath.clear();
+                }
+                check(client->Stop(),"Stop starved output");running=false;
+                check(client->Reset(),"Reset starved output");baseFrame+=submitted-trackStart;submitted=trackStart=0;
+                ++state.underruns;state.phase=OutputPhase::Buffering;starvedSince=now;
+            }
+            drain.reset();
+            if(!running && !padding && !current->eof && current->count/static_cast<std::size_t>(state.format.channels)<std::max<UINT32>(endpointFrames,state.format.sampleRate/20)) {
+                if(now-starvedSince>std::chrono::seconds(5))throw OutputError("Decode buffer did not refill",HRESULT_FROM_WIN32(ERROR_TIMEOUT));
+                return;
+            }
+            const auto frames=std::min<UINT32>(endpointFrames-padding,static_cast<UINT32>(current->count/state.format.channels));
+            if(!frames){if(!running && padding){check(client->Start(),"Resume buffered output");running=true;state.phase=OutputPhase::Playing;}return;}
             BYTE* data=nullptr;check(render->GetBuffer(frames,&data),"Acquire output buffer");
             const auto samples=static_cast<std::size_t>(frames)*state.format.channels;
-            const bool dither=!exactIntegerBits || exactIntegerBits>validBits;
-            const auto first=std::min(samples,pcm.size()-head);
-            pcmWriter.write(data,pcm.data()+head,first,floatDevice,bits,validBits,dither);
-            if(first<samples)pcmWriter.write(data+first*(bits/8),pcm.data(),samples-first,floatDevice,bits,validBits,dither);
+            const bool dither=!current->exactIntegerBits || current->exactIntegerBits>validBits;
+            const auto first=std::min(samples,current->pcm.size()-current->head);
+            if(probe){probe(current->pcm.data()+current->head,first);if(first<samples)probe(current->pcm.data(),samples-first);}
+            pcmWriter.write(data,current->pcm.data()+current->head,first,floatDevice,bits,validBits,dither);
+            if(first<samples)pcmWriter.write(data+first*(bits/8),current->pcm.data(),samples-first,floatDevice,bits,validBits,dither);
             check(render->ReleaseBuffer(frames,0),"Submit output buffer");
-            head=(head+samples)%pcm.size();count-=samples;submitted+=frames;space.notify_one();
+            current->head=(current->head+samples)%current->pcm.size();current->count-=samples;submitted+=frames;padding+=frames;current->space.notify_one();
+            lock.unlock();
+            if(!running){check(client->Start(),"Start output");running=true;state.phase=OutputPhase::Playing;}
+            if(padding>=endpointFrames)return;
         }
-        if(!running && (frames || padding)){check(client->Start(),"Start output");running=true;state.phase=OutputPhase::Playing;}
     }
 };
-WasapiPlayer::WasapiPlayer():impl_(std::make_unique<Impl>()){}
+WasapiPlayer::WasapiPlayer(std::function<void(const float*,std::size_t)> probe):impl_(std::make_unique<Impl>(std::move(probe))){}
 WasapiPlayer::~WasapiPlayer()=default;
-void WasapiPlayer::requestDecodeCancel() noexcept {impl_->cancelled=true;impl_->space.notify_all();}
+void WasapiPlayer::requestDecodeCancel() noexcept {
+    std::lock_guard<std::mutex> lock(impl_->sourceMutex);
+    if(impl_->source)impl_->source->cancel();if(impl_->next)impl_->next->cancel();
+}
 void WasapiPlayer::load(const std::wstring& path,const std::wstring& outputDevice){impl_->guarded([&]{impl_->preferredDevice=outputDevice;impl_->loadFile(path);});}
 void WasapiPlayer::play(){impl_->guarded([&]{auto& s=*impl_;
     if(s.path.empty())throw std::logic_error("No loaded track");
@@ -336,18 +347,27 @@ void WasapiPlayer::pause(){impl_->guarded([&]{auto& s=*impl_;if(!s.client)return
 void WasapiPlayer::stop(){impl_->guarded([&]{auto& s=*impl_;if(!s.client)return;s.wanted=false;s.resetTo(0);s.state.phase=OutputPhase::Ready;});}
 void WasapiPlayer::seek(std::int64_t ms){if(ms<0 || ms>INT64_MAX/192000)throw std::invalid_argument("Seek outside supported range");impl_->guarded([&]{auto& s=*impl_;
     if(!s.client)throw std::logic_error("No output stream");
-    {std::lock_guard<std::mutex> lock(s.pcmMutex);
-        if(!s.ready)throw std::logic_error("Wait for source metadata before seek");
-        if(s.decodedDuration>=0)ms=std::min(ms,s.decodedDuration);}
+    s.position();
+    {std::lock_guard<std::mutex> lock(s.source->mutex);
+        if(!s.source->ready)throw std::logic_error("Wait for source metadata before seek");
+        if(s.state.durationMs>=0)ms=std::min(ms,s.state.durationMs);}
     s.resetTo(ms);
 });}
+void WasapiPlayer::prepareNext(const std::wstring& path,std::uint64_t token) {
+    if(path.empty() || !token)throw std::invalid_argument("Invalid next track");
+    impl_->call([&]{auto& s=*impl_;if(!s.client || s.boundaryToken)return;
+        std::lock_guard<std::mutex> lock(s.sourceMutex);
+        s.next=std::make_shared<DecodedSource>(path,s.state.format);s.nextToken=token;
+    });
+}
+void WasapiPlayer::cancelNext(){impl_->guarded([&]{impl_->cancelPrepared();});}
 void WasapiPlayer::setVolume(int percent){if(percent<0 || percent>100)throw std::invalid_argument("Volume outside 0..100");
     impl_->guarded([&]{impl_->state.volumePercent=percent;impl_->applyVolume();});}
 void WasapiPlayer::unload(){impl_->guarded([&]{auto& s=*impl_;s.release();s.path.clear();s.wanted=false;
     const auto gain=s.state.volumePercent;const auto generation=s.state.generation+1;s.state={};s.state.volumePercent=gain;s.state.generation=generation;s.events.clear();});}
 OutputSnapshot WasapiPlayer::snapshot(){OutputSnapshot value;impl_->call([&]{
     try{impl_->position();}catch(const OutputError& e){impl_->failed(e.what(),e.code);}
-    value=impl_->state;
+    value=impl_->state;value.sourcePath=impl_->path;
 });return value;}
 std::vector<OutputEvent> WasapiPlayer::takeEvents(){std::vector<OutputEvent> value;impl_->call([&]{value.swap(impl_->events);});return value;}
 }

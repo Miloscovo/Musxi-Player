@@ -7,10 +7,35 @@ const event = (key: string, code: string, modifiers = {}) => ({ key, code, ctrlK
 test('all shortcuts start unbound and global shortcuts start disabled', () => {
   const defaults = emptyShortcuts();
   assert.equal(defaults.global, false);
-  assert.equal(Object.keys(defaults.bindings).length, 10);
+  assert.equal(Object.keys(defaults.bindings).length, 13);
   assert.ok(shortcutActions.every(([id]) => defaults.bindings[id] === null));
   assert.deepEqual(parseShortcuts(defaults), defaults);
   assert.equal(bindingLabel(null), '未绑定');
+});
+
+test('thirteen-action settings retain game bindings and reject removed actions', () => {
+  const state = emptyShortcuts();
+  state.bindings.overlayPlayer = { key: 74, modifiers: 0 };
+  const old = { ...state, bindings: Object.fromEntries(shortcutActions.slice(0,13).map(([id]) => [id, state.bindings[id]])) };
+  const migrated = parseShortcuts(old);
+  assert.deepEqual(migrated.bindings.overlayPlayer, state.bindings.overlayPlayer);
+  assert.equal(Object.hasOwn(migrated.bindings,'overlayScreenshot'), false);
+  assert.equal(Object.keys(old.bindings).length, 13);
+  const invalid = { ...old.bindings }; delete invalid.overlayPlayer; invalid.overlayScreenshot = null;
+  assert.throws(() => parseShortcuts({ ...old, bindings: invalid }));
+});
+
+test('older ten-action settings retain every binding when game shortcuts are added', () => {
+  const state = emptyShortcuts();
+  state.bindings.playPause = { key: 32, modifiers: 0 };
+  const old = { ...state, bindings: Object.fromEntries(shortcutActions.slice(0,10).map(([id]) => [id, state.bindings[id]])) };
+  const migrated = parseShortcuts(old);
+  assert.deepEqual(migrated.bindings.playPause, { key: 32, modifiers: 0 });
+  assert.equal(migrated.bindings.overlayPlayer, null);
+  assert.equal(Object.keys(old.bindings).length, 10);
+  assert.throws(() => parseShortcuts({ ...old, bindings: { ...old.bindings, unknown: null } }));
+  const missing = { ...old.bindings };delete missing.playPause;
+  assert.throws(() => parseShortcuts({ ...old, bindings: { ...missing, overlayPlayer: null } }));
 });
 test('record and display canonical key combinations without accepting modifiers or composition', () => {
   const combination = recordedKey(event('K', 'KeyK', { ctrlKey: true, altKey: true, shiftKey: true }));

@@ -402,14 +402,22 @@ class Adapter {
         return {id:t.id,playlist:target,tracks:after,playlists:lists,message:kind==='favorite'?(adding?'已收藏到“我喜欢”':'已取消收藏'):(submitted?'已添加到歌单':'这首歌曲已在该歌单中')};
       }
       case 'covers': {
+        const size = request.size === undefined ? 1200 : request.size;
+        if (size !== 300 && size !== 1200) throw Error('无效封面尺寸');
         const urls = [...new Set((Array.isArray(request.urls) ? request.urls : []).filter(url => typeof url === 'string' && coverUrl(url)))].slice(0, 8);
         const images = await Promise.all(urls.map(async url => {
-          const original = coverUrl(url); const candidate = new URL(original);
-          if (/^(?:[^.]+\.)*(?:kugou\.com|kgimg\.com)$/.test(candidate.hostname))
-            candidate.pathname = candidate.pathname.replace(/^\/200\//, '/400/');
-          if (candidate.hostname === 'y.gtimg.cn')
-            candidate.pathname = candidate.pathname.replace(/^(\/music\/photo_new\/T002)R300x300(M000[^/]+\.jpg)$/i, '$1R800x800$2');
-          for (const source of new Set([candidate.href, original])) {
+          const original = coverUrl(url); const parsed = new URL(original);
+          const kugou = /^(?:[^.]+\.)*(?:kugou\.com|kgimg\.com)$/.test(parsed.hostname);
+          const sizes = size === 300 ? (parsed.hostname === 'y.gtimg.cn' ? [300,150] : [300,200]) :
+            parsed.hostname === 'y.gtimg.cn' ? [1200,800] : kugou ? [1200,1024,800,400] : [1200,1024,800];
+          const candidates = sizes.map(size => {
+            const candidate = new URL(original);
+            if (/(^|\.)music\.(?:126\.net|163\.com)$/.test(candidate.hostname)) candidate.searchParams.set('param', `${size}y${size}`);
+            if (kugou) candidate.pathname = candidate.pathname.replace(/^(\/(?:stdmusic\/|custom\/|soft\/collection\/)?)(?:\d+)\//, (_,prefix) => `${prefix}${size}/`);
+            if (candidate.hostname === 'y.gtimg.cn') candidate.pathname = candidate.pathname.replace(/^(\/music\/photo_new\/T002)R\d+x\d+(M000[^/]+\.jpg)$/i, (_,prefix,suffix) => `${prefix}R${size}x${size}${suffix}`);
+            return candidate.href;
+          });
+          for (const source of new Set(size === 300 ? candidates : [...candidates, original])) {
             try {
               const r = await fetch(source, { signal: AbortSignal.timeout(8000), redirect: 'error' });
               if (!r.ok) throw Error('image');
@@ -417,7 +425,7 @@ class Adapter {
               if (contentType && !/^(image\/(jpe?g|png|webp)|application\/octet-stream)(;|$)/i.test(contentType)) throw Error('image type');
               const chunks = [];let size = 0;
               for await (const chunk of r.body) {
-                size += chunk.length;if (size > 1024 * 1024) throw Error('size');chunks.push(Buffer.from(chunk));
+                size += chunk.length;if (size > 2 * 1024 * 1024) throw Error('size');chunks.push(Buffer.from(chunk));
               }
               if (!size) throw Error('empty image');
               return { url, image: 'data:image/jpeg;base64,' + Buffer.concat(chunks).toString('base64') };
@@ -425,7 +433,7 @@ class Adapter {
           }
           return { url, image: '' };
         }));
-        return { images };
+        return { images, size };
       }
       case 'membership': {
         this.auth();const data=(await this.api('user_vip_detail')).data;
@@ -613,7 +621,7 @@ async function main() {
       const result = await adapter.run(JSON.parse(line));
       send(JSON.stringify({ ok: true, data: result }) + '\n');
     } catch (error) { send(JSON.stringify({ ok: false, error: error.message || '同步失败' }) + '\n'); }
-  } } finally { adapter.close(); }
+  } } finally { await adapter.close(); }
 }
 if (require.main === module) main().catch(() => { process.exitCode = 1; });
 module.exports = { Adapter, playlist, track, liveCaller };

@@ -1,5 +1,5 @@
 std::string defaultAudioQuality="128",preferredOutputDevice;
-bool validAudioQuality(const std::string& quality) {return quality=="128" || quality=="320" || quality=="flac" || quality=="netease:hires" || quality=="kugou:high";}
+bool validAudioQuality(const std::string& quality) {return quality=="128" || quality=="320" || quality=="flac" || quality=="netease:hires" || quality=="netease:jyeffect" || quality=="kugou:high";}
 bool validDefaultQuality(const std::string& quality) {return quality=="128" || quality=="320" || quality=="flac" || quality=="best";}
 void loadPlaybackSettings(const fs::path& file) {
     try {

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import { AnimatePresence, motion } from 'motion/react';
 import { useWindow } from './composables/useWindow';
 import CoverImage from './components/CoverImage';
+import { useCoverImage } from './composables/useCoverImage';
 import { usePlayerState } from './composables/usePlayerState';
 import LibraryView from './views/LibraryView';
 import { useLibrary } from './composables/useLibrary';
@@ -15,6 +16,7 @@ import PlaybackPlatform from './components/PlaybackPlatform';
 import LyricsView from './views/LyricsView';
 import { playbackTimes, formatPlaybackTime } from './composables/playbackTime';
 import { useDesktopLyrics } from './composables/useDesktopLyrics';
+import { useGameOverlay } from './composables/useGameOverlay';
 import { bindWheelRange } from './composables/wheelRange';
 import { useAppUpdates } from './composables/useAppUpdates';
 import UpdateNotice from './components/UpdateNotice';
@@ -25,9 +27,14 @@ export default function App() {
   const shell = useWindow(); const library = useLibrary();
   const wallpaper = useWallpaper(shell);
   const desktop = useDesktopLyrics(); const updates = useAppUpdates();
-  const shortcuts = useShortcuts();
+  const overlay = useGameOverlay();
+  useEffect(() => { if (overlay.state.panelVisible) void shell.refresh(); }, [overlay.state.panelVisible, shell.refresh]);
+  const shortcuts = useShortcuts(overlay.state.enabled);
   const [showUpdates, setShowUpdates] = useState(0);
   const currentTrack = library.state?.now;
+  // Decode the current cover before the lyrics page mounts.
+  useCoverImage(currentTrack?.cover || '');
+  const { image: smallCover } = useCoverImage(currentTrack?.cover || '', 300);
   const { state, error, loading, busy, connected, pause, resume, seek, setVolume } = usePlayerState();
   const [seekDraft, setSeekDraft] = useState<number | null>(null);
   const [volumeDraft, setVolumeDraft] = useState<number | null>(null);
@@ -104,11 +111,11 @@ export default function App() {
     action: actionNotice,
     player: { text: error, error: true },
     playback: { text: playbackMessage, error: state?.phase === 'failed' },
-    window: { text: shell.error || desktop.error || shortcuts.error, error: true },
+    window: { text: shell.error || desktop.error || overlay.error || shortcuts.error, error: true },
     wallpaper: { text:wallpaper.error,error:true },
     connection: { text: connected ? '' : '正在连接…' },
     updates: updates.message,
-  }), [updates.message, library.error, operation?.status, operation?.error, operation?.id, notice, error, playbackMessage, state?.phase, shell.error, desktop.error, shortcuts.error, wallpaper.error, connected, actionNotice]);
+  }), [updates.message, library.error, operation?.status, operation?.error, operation?.id, notice, error, playbackMessage, state?.phase, shell.error, desktop.error, overlay.error, shortcuts.error, wallpaper.error, connected, actionNotice]);
   useEffect(() => {
     const seekElement = seekInput.current; const volumeElement = volumeInput.current;
     async function seekChanged() {
@@ -132,7 +139,8 @@ export default function App() {
     if ((event.target as Element).closest('button')) event.preventDefault();
   }}>
     {showWallpaper && <div className="app-wallpaper-layer" aria-hidden="true"><img src={wallpaper.image!.url} alt="" onError={wallpaper.imageFailed}/></div>}
-    {shell.state.enabled && !compact && <div className="window-bar"><div className="window-buttons">
+    {shell.state.enabled && !compact && <div className="window-bar">
+      <div className="window-buttons">
       <Button variant="unstyled" aria-label="最小化" onClick={shell.minimize}>─</Button>
       <Button variant="unstyled" className="window-maximize" aria-label={shell.state.maximized ? '还原' : '最大化'} onClick={shell.maximize}>
         <svg width="12" height="12" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round">
@@ -154,10 +162,10 @@ export default function App() {
     <div className="app-body" hidden={compact}>
       <motion.div className="library-layer" inert={lyricsOpen || lyricsCovered} data-covered={lyricsCovered && (transparentLyrics || lyricsOpen) || undefined} initial={false}
         animate={{ opacity: transparentLyrics && (lyricsOpen || lyricsCovered) ? 0 : 1 }} transition={{ duration: reducedMotion ? 0 : 0.08 }}
-        onAnimationComplete={() => { if (transparentLyrics && lyricsOpen) setLyricsCovered(true); }}><LibraryView library={library} playback={state} onResume={() => void resume()} theme={shell.theme} appearance={shell.appearance} onAppearance={shell.setAppearance} transparency={shell.transparency} onTransparency={shell.setTransparency} updates={updates} showUpdates={showUpdates} shortcuts={shortcuts}
+        onAnimationComplete={() => { if (transparentLyrics && lyricsOpen) setLyricsCovered(true); }}><LibraryView library={library} playback={state} onResume={() => void resume()} theme={shell.theme} appearance={shell.appearance} onAppearance={shell.setAppearance} transparency={shell.transparency} onTransparency={shell.setTransparency} updates={updates} showUpdates={showUpdates} shortcuts={shortcuts} overlay={overlay}
         wallpaper={wallpaper} wallpaperEnabled={shell.wallpaperEnabled} onWallpaperEnabled={shell.setWallpaperEnabled} playerTransparent={shell.playerTransparent} onPlayerTransparent={shell.setPlayerTransparent}/></motion.div>
       <AnimatePresence onExitComplete={() => { if (!lyricsOpen) setLyricsCovered(false); }}>
-        {lyricsOpen && (!transparentLyrics || lyricsCovered) && <LyricsView key="lyrics" trackId={state?.opened ? state.trackId : ''} now={currentTrack} positionMs={state?.positionMs ?? 0}
+        {lyricsOpen && (!transparentLyrics || lyricsCovered) && <LyricsView key="lyrics" trackId={state?.opened ? state.trackId : ''} now={currentTrack} fallbackCover={smallCover} positionMs={state?.positionMs ?? 0}
           playing={!!state?.playing} canSeek={connected && !!state?.opened && !!state.durationMs} onSeek={positionMs => void seek(positionMs)} onClose={closeLyrics} onEntered={lyricsEntered}
           bottomOffset={playerCollapsed ? playerHeight : 0} onExpandPlayer={expandLyricsPlayer} onPlayerCover={clipLyricsPlayer} />}
       </AnimatePresence>
@@ -195,7 +203,7 @@ export default function App() {
       </div>
       <div className="player-track" inert={lyricsOpen && !compact}><Button variant="unstyled" className="lyrics-toggle" aria-expanded={lyricsOpen}
           aria-label={lyricsOpen ? '收起歌词页' : '展开歌词页'} title={lyricsOpen ? '收起歌词' : '查看歌词'} onClick={() => { if (!transparentLyrics) setLyricsCovered(false); setLyricsOpen(open => !open); }}>
-          <CoverImage url={currentTrack?.cover || ''} animateLoading />
+          <CoverImage url={currentTrack?.cover || ''} size={300} animateLoading />
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d={lyricsOpen ? 'm6 9 6 6 6-6' : 'm6 15 6-6 6 6'}/></svg>
         </Button>
         <div className="track"><div className="playback-title"><h2 id="playback" title={currentTrack?.name}>{currentTrack?.name || '尚未选择歌曲'}</h2>
@@ -228,9 +236,14 @@ export default function App() {
       </div>
       {!compact && !lyricsOpen && <UpdateNotice updates={updates} onDetails={() => setShowUpdates(n => n + 1)} />}
       <MessageAlerts messages={messages} />
+      {((overlay.state.panelVisible && !compact) || shell.preview) && <div className="player-floating-actions">
+      {overlay.state.panelVisible && !compact && <div className="game-panel-actions">
+        <Button className="game-panel-return" disabled={overlay.busy} onClick={() => void overlay.setPanelVisible(false)}>返回游戏</Button>
+      </div>}
       {shell.preview && <div className="wallpaper-preview-bar" role="status"><span>正在预览壁纸</span>
         <Button variant="secondary" disabled={wallpaper.busy} onClick={wallpaper.cancel}>取消预览</Button>
         <Button disabled={wallpaper.busy} onClick={()=>void wallpaper.apply()}>应用壁纸</Button>
+      </div>}
       </div>}
       </div>
     </section>

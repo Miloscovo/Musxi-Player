@@ -24,6 +24,14 @@ run(-i "${OUT}/source.wav" -af "aresample=32000:filter_size=128:tsf=dblp:osf=flt
 run(-i "${OUT}/source.wav" -af "aresample=96000:filter_size=128:tsf=dblp:osf=flt:ochl=5.1"
     -c:a pcm_f32le -f f32le "${OUT}/surround.f32")
 run(-f lavfi -i "anullsrc=r=44100:cl=stereo" -t 180 -c:a wmav2 "${OUT}/long.wma")
+run(-f lavfi -i "aevalsrc=0.2*sin(2*PI*997*t)|0.15*sin(2*PI*733*t):s=48000:d=0.25" -c:a pcm_s24le "${OUT}/gapless.wav")
+run(-f lavfi -i "sine=frequency=431:sample_rate=96000:duration=0.25" -c:a pcm_s24le "${OUT}/gapless-mono.wav")
+foreach(pair "mp3|libmp3lame" "flac|flac" "m4a|aac" "opus|libopus")
+  string(REPLACE "|" ";" fields "${pair}")
+  list(GET fields 0 extension)
+  list(GET fields 1 encoder)
+  run(-i "${OUT}/gapless.wav" -c:a "${encoder}" "${OUT}/gapless.${extension}")
+endforeach()
 # Embedded lyrics: Vorbis comment, ID3v2 USLT (lyrics-eng) and MP4 ©lyr.
 run(-i "${OUT}/source.wav" -t 1 -c:a flac -metadata "LYRICS=[00:00.50]Tagged line" -metadata "title=Tagged Song Live" -metadata "artist=Tagged Artist" -metadata "album=Tagged Album" "${OUT}/lyrics.flac")
 run(-i "${OUT}/source.wav" -t 1 -c:a libmp3lame -id3v2_version 3 -metadata "lyrics-eng=[00:00.50]Tagged line" "${OUT}/lyrics.mp3")

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { native } from '../native/client';
 import type { PlayerState } from '../native/types';
 import { verifyWebPage } from '../native/smoke';
-export function usePlayerState() {
+export function usePlayerState(enabled = true) {
   const [state, setState] = useState<PlayerState | null>(null);
   const [error, setError] = useState(''); const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false); const [connected, setConnected] = useState(false);
@@ -36,8 +36,10 @@ export function usePlayerState() {
       setVolume: (volumePercent: number) => execute(options => native.player.setVolume(volumePercent, options)) };
   }, []);
   useEffect(() => {
+    if (!enabled) return;
     const r = runtime.current; r.active = true; r.loading = false; r.connected = false; ++r.epoch;
-    setLoading(false); setBusy(false); setConnected(false);
+    // Keep the rendered view while reconnecting so hiding preserves manual scroll position.
+    setLoading(false); setBusy(false);
     let retry: ReturnType<typeof setTimeout> | undefined; let unsubscribe: (() => void) | undefined;
     function connect() {
       if (!r.active) return;
@@ -55,7 +57,7 @@ export function usePlayerState() {
     }
     void actions.refresh(); connect(); window.addEventListener('pagehide', stop);
     return () => { stop(); window.removeEventListener('pagehide', stop); };
-  }, [actions]);
+  }, [actions, enabled]);
   useEffect(() => {
     if (connected && state && !smokeStarted.current && new URLSearchParams(location.search).has('smoke')) {
       smokeStarted.current = true; void verifyWebPage().catch(e => {

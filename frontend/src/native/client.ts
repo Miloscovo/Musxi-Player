@@ -10,13 +10,14 @@ import { createDesktopLyricsClient } from './desktopLyrics.ts';
 import { createUpdatesClient } from './updates.ts';
 import { createShortcutsClient } from './shortcuts.ts';
 import { createWallpaperClient } from './wallpaper.ts';
+import { createGameOverlayClient } from './gameOverlay.ts';
 
 export function createNativeClient(host: CefTransport) {
   if (isDemoMode(host)) host = createDemoTransport();
   async function command<K extends keyof NativeCommands>(name: K, params: NativeCommands[K]['params'], options?: RequestOptions) {
     return parsePlayerState(await request(host, name, params, options));
   }
-  return Object.freeze({ wallpaper:createWallpaperClient(host), shortcuts: createShortcutsClient(host), desktopLyrics: createDesktopLyricsClient(host), lyricsMatch: createLyricsMatchClient(host), window: createWindowClient(host), library: createLibraryClient(host), updates: createUpdatesClient(host), player: Object.freeze({
+  return Object.freeze({ gameOverlay: createGameOverlayClient(host), wallpaper:createWallpaperClient(host), shortcuts: createShortcutsClient(host), desktopLyrics: createDesktopLyricsClient(host), lyricsMatch: createLyricsMatchClient(host), window: createWindowClient(host), library: createLibraryClient(host), updates: createUpdatesClient(host), player: Object.freeze({
     pause: (options?: RequestOptions) => command('player.pause', {}, options),
     resume: (options?: RequestOptions) => command('player.resume', {}, options),
     seek: (positionMs: number, options?: RequestOptions) => command('player.seek', { positionMs }, options),

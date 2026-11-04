@@ -1,4 +1,6 @@
 'use strict';
+const fs=require('node:fs/promises');
+const {cacheAudio}=require('./netease.cjs');
 const PLATFORMS = ['kugou', 'netease', 'qq'];
 const NAMES = {kugou:'酷狗概念版',netease:'网易云音乐',qq:'QQ 音乐'};
 const platformOf = id => String(id).startsWith('netease:') ? 'netease' : String(id).startsWith('qq:') ? 'qq' : 'kugou';
@@ -16,7 +18,32 @@ function mergeTracks(tracks,groups=new Map()) {
 }
 class MultiPlatform {
   constructor(adapters) { this.adapters=adapters; this.active='kugou'; this.sessions={}; this.accounts={}; this.playlists={}; this.favoriteKeys={}; this.searchKeywords=''; this.searchGroups=new Map(); this.readCache=new Map(); }
-  close() { this.readCache.clear(); for(const adapter of Object.values(this.adapters))adapter.stop?.('接口已关闭'); }
+  async close() { const pending=this.cancelPreparation();this.readCache.clear();for(const adapter of Object.values(this.adapters))adapter.stop?.('接口已关闭');await pending?.promise; }
+  cancelPreparation(token) {
+    const job=this.preparing;
+    if(!job || token!==undefined && job.token!==token)return;
+    this.preparing=null;job.controller.abort();
+    if(job.data?.path)job.promise=job.promise.then(()=>fs.unlink(job.data.path).catch(()=>{}));
+    return job;
+  }
+  prepareAudio(request) {
+    this.cancelPreparation();const controller=new AbortController();
+    const job={token:request.token,controller,status:'pending'};this.preparing=job;
+    job.promise=(async()=>{
+      try {
+        // The QQ child has one response slot; let an already sent authorization finish before reusing it.
+        if(this.adapters.qq?.pending)await this.audioResolution?.catch(()=>{});
+        controller.signal.throwIfAborted();
+        job.resolving=this.run({...request,op:'audio',cacheDir:undefined,signal:controller.signal},true);
+        this.audioResolution=job.resolving;
+        const audio=await job.resolving;controller.signal.throwIfAborted();
+        const cached=await cacheAudio(audio.url,audio.track,audio.quality,request.cacheDir,controller.signal);
+        if(controller.signal.aborted){await fs.unlink(cached.path).catch(()=>{});return;}
+        job.data={...cached,...(audio.requestedId?{requestedId:audio.requestedId}:{}),platform:audio.platform};job.status='ready';
+      } catch {if(!controller.signal.aborted){job.status='failed';job.error='下一首预加载失败，将按正常流程播放';}}
+    })();
+    return {token:job.token,status:'pending'};
+  }
   accountState() { return PLATFORMS.map(platform=>({platform,name:NAMES[platform],connected:!!this.accounts[platform]?.connected,user:this.accounts[platform]?.profile?.name || '',error:this.accounts[platform]?.error || '',avatar:this.accounts[platform]?.connected ? this.accounts[platform]?.avatar || '' : '',...(this.accounts[platform]?.connected && this.accounts[platform]?.membership ? {membership:this.accounts[platform].membership}: {})})); }
   allPlaylists() { return PLATFORMS.flatMap(platform=>(this.playlists[platform] || []).map(row=>({...row,platform}))); }
   decorate(result) {
@@ -24,6 +51,7 @@ class MultiPlatform {
     return {favoritesCount,...result,accounts:this.accountState(),session:{platform:'multi',accounts:this.sessions},connected:this.accountState().some(a=>a.connected),profile:{name:this.accountState().filter(a=>a.connected).map(a=>a.user || a.name).join(' / ')}};
   }
   async call(platform,request,useCache=true) {
+    request.signal?.throwIfAborted();
     if(['init','poll','logout','sync','song_update'].includes(request.op))this.readCache.clear();
     const key=useCache?(request.op==='tracks'?JSON.stringify([platform,'tracks',request.id]):request.op==='search'?JSON.stringify([platform,'search',request.keywords,request.page]):null):null;
     const cached=key && this.readCache.get(key);
@@ -54,11 +82,12 @@ class MultiPlatform {
   }
   async audioWithDefault(platform,request) {
     if(request.defaultQuality===undefined || request.quality!==undefined)return this.call(platform,request);
-    const qualities=request.defaultQuality==='best'?([...({netease:['netease:hires'],qq:[],kugou:['kugou:high']}[platform]),'flac','320','128']):['flac','320','128'];
+    const qualities=request.defaultQuality==='best'?([...({netease:['netease:jyeffect','netease:hires'],qq:[],kugou:['kugou:high']}[platform]),'flac','320','128']):['flac','320','128'];
     const start=request.defaultQuality==='best'?0:qualities.indexOf(request.defaultQuality);
     if(start<0)throw Error('无效默认音质');
     let rights=true;
     for(const quality of qualities.slice(start)) {
+      request.signal?.throwIfAborted();
       try {return await this.call(platform,{...request,defaultQuality:undefined,quality});}
       catch(error) {rights=rights && error?.rights===true; /* Try a lower quality without exposing private service errors. */}
     }
@@ -96,8 +125,26 @@ class MultiPlatform {
     }
     return result;
   }
-  async run(request) {
+  async run(request,background=false) {
     const op=request.op;
+    if(['audio_prepare','audio_prepared','audio_cancel'].includes(op)) {
+      if(typeof request.token!=='string' || !/^[A-Za-z0-9_-]{1,64}$/.test(request.token))throw Error('无效预加载标识');
+      if(op==='audio_prepare') {
+        if(typeof request.id!=='string' || !request.id || typeof request.cacheDir!=='string' || !request.cacheDir)throw Error('无效预加载请求');
+        return this.prepareAudio(request);
+      }
+      if(op==='audio_cancel'){this.cancelPreparation(request.token);return {token:request.token,status:'cancelled'};}
+      const job=this.preparing;
+      if(!job || job.token!==request.token)return {token:request.token,status:'failed',error:'预加载已失效'};
+      const reply={token:job.token,status:job.status,...(job.data?{data:job.data}:{}),...(job.error?{error:job.error}:{})};
+      if(job.status!=='pending')this.preparing=null;
+      return reply;
+    }
+    if(!background) {
+      if(['audio','init','logout'].includes(op))this.cancelPreparation();
+      if(this.adapters.qq?.pending)await this.audioResolution?.catch(()=>{});
+    }
+    request.signal?.throwIfAborted();
     if(op==='tracks' && request.id===FAVORITES)return this.decorate(await this.favorites());
     if(op==='init') {
       const saved=request.session?.platform==='multi'?request.session.accounts:{kugou:request.session};

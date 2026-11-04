@@ -2,18 +2,19 @@
 const crypto=require('node:crypto');
 const fs=require('node:fs/promises');
 const path=require('node:path');
-const QUALITIES=[{id:'128',name:'标准 · 128 kbps',level:'standard'},{id:'320',name:'高品质 · 320 kbps',level:'exhigh'},{id:'flac',name:'无损 · FLAC',level:'lossless'},{id:'netease:hires',name:'Hi-Res',level:'hires'}];
-async function cacheAudio(url,track,quality,cacheDir) {
+const QUALITIES=[{id:'128',name:'标准 · 128 kbps',level:'standard'},{id:'320',name:'高品质 · 320 kbps',level:'exhigh'},{id:'flac',name:'无损 · FLAC',level:'lossless'},{id:'netease:hires',name:'Hi-Res',level:'hires'},{id:'netease:jyeffect',name:'高清臻音',level:'jyeffect'}];
+async function cacheAudio(url,track,quality,cacheDir,signal) {
+  signal?.throwIfAborted();
   const parsed=new URL(url);if(!['http:','https:'].includes(parsed.protocol))throw Error('音频地址无效');
   if(!cacheDir)return {url:parsed.href,track,quality};
   const dir=path.resolve(cacheDir);await fs.mkdir(dir,{recursive:true});
   const file=path.join(dir,crypto.randomBytes(16).toString('hex')+(quality==='flac' || quality.includes(':')?'.flac':'.mp3'));
   let handle;
   try {
-    const response=await fetch(parsed,{signal:AbortSignal.timeout(75000)});if(!response.ok)throw Error();
+    const response=await fetch(parsed,{signal:signal?AbortSignal.any([signal,AbortSignal.timeout(75000)]):AbortSignal.timeout(75000)});if(!response.ok)throw Error();
     handle=await fs.open(file,'wx');let size=0;
-    for await(const chunk of response.body){size+=chunk.length;if(size>512*1024*1024)throw Error();await handle.write(chunk);}
-    if(size<128)throw Error();await handle.close();handle=null;return {path:file,track,quality};
+    for await(const chunk of response.body){signal?.throwIfAborted();size+=chunk.length;if(size>512*1024*1024)throw Error();await handle.write(chunk);}
+    signal?.throwIfAborted();if(size<128)throw Error();await handle.close();handle=null;return {path:file,track,quality};
   }catch{if(handle)await handle.close();await fs.unlink(file).catch(()=>{});throw Error('音频缓存失败，请检查网络或尝试其他歌曲');}
 }
 class NeteaseAdapter {

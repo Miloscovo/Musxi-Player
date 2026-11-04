@@ -12,6 +12,14 @@ const snapshot = {
   operation: { id: '0', status: 'idle', kind: '', error: '' }
 };
 
+test('cover size is optional and thumbnails request their own native variant',async()=>{
+ const calls:unknown[]=[];
+ const client=createNativeClient({cefQuery(query){const call=JSON.parse(query.request);calls.push(call.params);query.onSuccess(JSON.stringify({version:1,result:''}));return 1;},cefQueryCancel(){}});
+ await client.library.image('https://p1.music.126.net/cover.jpg');
+ await client.library.image('https://p1.music.126.net/cover.jpg',undefined,300);
+ assert.deepEqual(calls,[{url:'https://p1.music.126.net/cover.jpg'},{url:'https://p1.music.126.net/cover.jpg',size:300}]);
+});
+
 test('confirmed playlist edits replace all loaded pages, including shifted and emptied pages', async () => {
   for (const removed of [0, 60, 100]) {
     const cache = new PlaylistPages();
@@ -155,10 +163,10 @@ test('account membership accepts legacy snapshots and validates expiry before re
 });
 
 test('advanced quality IDs survive native snapshots without accepting unknown tiers',()=>{
- const options=['netease:hires','kugou:high'].map(id=>({id,name:id}));
+ const options=['netease:hires','netease:jyeffect','kugou:high'].map(id=>({id,name:id}));
  const state={...snapshot,qualities:{id:'song',current:'netease:hires',options}};
  assert.deepEqual(parseLibraryState(state).qualities,state.qualities);
  assert.throws(()=>parseLibraryState({...state,qualities:{...state.qualities,options:[{id:'qq:nac',name:'Unsupported'}]}}));
- for(const id of ['netease:jymaster','netease:jyeffect','qq:master','qq:atmos2','kugou:viper_clear','kugou:viper_tape'])
+ for(const id of ['netease:jymaster','qq:master','qq:atmos2','kugou:viper_clear','kugou:viper_tape'])
   assert.throws(()=>parseLibraryState({...state,qualities:{...state.qualities,options:[{id,name:'Removed'}]}}));
 });

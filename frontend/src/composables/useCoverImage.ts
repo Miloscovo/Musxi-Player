@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { native } from '../native/client';
+import type { CoverSize } from '../native/library';
 
 interface CoverEntry {
   image: string; retryAt: number; users: number;
@@ -18,14 +19,14 @@ function trimCovers() {
   }
 }
 
-function loadCover(url: string, entry: CoverEntry): Promise<string> {
+function loadCover(url: string, entry: CoverEntry, size: CoverSize): Promise<string> {
   if (entry.image || entry.retryAt > Date.now()) return Promise.resolve(entry.image);
   if (entry.promise) return entry.promise;
   const controller = new AbortController(); entry.controller = controller;
   entry.promise = (async () => {
     for (let attempt = 0; attempt < 8 && !controller.signal.aborted; attempt++) {
       try {
-        const image = await native.library.image(url, controller.signal);
+        const image = await native.library.image(url, controller.signal, size);
         if (image && !controller.signal.aborted) {
           const decoded = new Image(); decoded.src = image; await decoded.decode();
           if (controller.signal.aborted) return '';
@@ -49,17 +50,18 @@ function loadCover(url: string, entry: CoverEntry): Promise<string> {
   return entry.promise;
 }
 
-export function useCoverImage(url: string) {
-  const [result, setResult] = useState({ url: '', image: '', loading: false });
+export function useCoverImage(url: string, size: CoverSize = 1200) {
+  const key = JSON.stringify([url, size]);
+  const [result, setResult] = useState({ key: '', image: '', loading: false });
   useEffect(() => {
     if (!url) return;
-    const cached = covers.get(url);
+    const cached = covers.get(key);
     const loading = !cached || (!!cached.promise && !cached.retryAt);
-    const entry = covers.get(url) || { image: '', retryAt: 0, users: 0 };
-    covers.delete(url); covers.set(url, entry); entry.users++;
+    const entry = covers.get(key) || { image: '', retryAt: 0, users: 0 };
+    covers.delete(key); covers.set(key, entry); entry.users++;
     let active = true;
-    setResult({ url, image: entry.image, loading });
-    void loadCover(url, entry).then(image => { if (active) setResult({ url, image, loading: false }); });
+    setResult({ key, image: entry.image, loading });
+    void loadCover(url, entry, size).then(image => { if (active) setResult({ key, image, loading: false }); });
     trimCovers();
     return () => {
       active = false; entry.users--;
@@ -68,9 +70,9 @@ export function useCoverImage(url: string) {
       }
       trimCovers();
     };
-  }, [url]);
+  }, [url, key, size]);
   return {
-    image: result.url === url ? result.image : covers.get(url)?.image || '',
-    loading: !!url && (result.url === url ? result.loading : !covers.has(url) || (!!covers.get(url)?.promise && !covers.get(url)?.retryAt)),
+    image: result.key === key ? result.image : covers.get(key)?.image || '',
+    loading: !!url && (result.key === key ? result.loading : !covers.has(key) || (!!covers.get(key)?.promise && !covers.get(key)?.retryAt)),
   };
 }

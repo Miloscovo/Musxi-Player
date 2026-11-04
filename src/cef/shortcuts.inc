@@ -3,15 +3,76 @@ musxi::shortcuts::Registry shortcutRegistry;
 std::filesystem::path shortcutPath;
 bool shortcutRecording=false,shortcutEditing=false;
 int shortcutLastVolume=50;
+HHOOK shortcutHook=nullptr;
+std::array<bool,musxi::shortcuts::actions.size()> shortcutHooked{};
+musxi::shortcuts::PressedKeys shortcutPressed;
+std::array<musxi::shortcuts::Binding,2> shortcutFocusPending{},shortcutFocusReleased{};
+std::array<ULONGLONG,2> shortcutFocusReleaseAt{};
+LRESULT CALLBACK observeShortcut(int code,WPARAM message,LPARAM data) {
+    std::array<musxi::shortcuts::Binding,2> released{};
+    if(code==HC_ACTION) {
+        const auto& event=*reinterpret_cast<const KBDLLHOOKSTRUCT*>(data);
+        const bool pressed=message==WM_KEYDOWN || message==WM_SYSKEYDOWN;
+        const bool first=shortcutPressed.update(event.vkCode,pressed);
+        if(first) {
+            const auto modifiers=shortcutPressed.modifiers();
+            for(size_t i=0;i<shortcutHooked.size();++i) {
+                const auto binding=shortcutRegistry.settings.bindings[i];
+                if(shortcutHooked[i] && shortcutRegistry.registered[i] && binding.key==event.vkCode && binding.modifiers==modifiers) {
+                    if(i==11 || i==12)shortcutFocusPending[i-11]=binding;
+                    else PostMessageW(testWindow,WM_HOTKEY,0x5100+i,MAKELPARAM(modifiers,binding.key));
+                }
+            }
+        }
+        for(size_t i=0;i<released.size();++i)
+            if(!pressed && event.vkCode==shortcutFocusPending[i].key){released[i]=shortcutFocusPending[i];shortcutFocusPending[i]={};}
+    }
+    const auto result=CallNextHookEx(shortcutHook,code,message,data);
+    for(size_t i=0;i<released.size();++i)if(released[i].key && shortcutHooked[i+11] && shortcutRegistry.registered[i+11]) {
+        shortcutFocusReleased[i]=released[i];
+        // shortcut: allow 50ms for the game to process key-up; use acknowledged handoff if releases are still missed.
+        shortcutFocusReleaseAt[i]=GetTickCount64()+50;
+    }
+    return result;
+}
+bool acquireShortcut(int index,musxi::shortcuts::Binding binding) {
+    if(!gameOverlayEnabled)return RegisterHotKey(testWindow,0x5100+index,binding.modifiers|MOD_NOREPEAT,binding.key)!=FALSE;
+    if(!shortcutHook) {
+        for(unsigned key=0;key<256;++key)shortcutPressed.down[key]=(GetAsyncKeyState(key)&0x8000)!=0;
+        shortcutPressed.down[VK_CONTROL]=shortcutPressed.down[VK_SHIFT]=shortcutPressed.down[VK_MENU]=false;
+        HMODULE module=nullptr;
+        if(!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                              reinterpret_cast<LPCWSTR>(&observeShortcut),&module))return false;
+        shortcutHook=SetWindowsHookExW(WH_KEYBOARD_LL,observeShortcut,module,0);
+        if(!shortcutHook)return false;
+    }
+    shortcutHooked[index]=true;return true;
+}
+void releaseShortcut(int index) {
+    if(index==11 || index==12){shortcutFocusPending[index-11]={};shortcutFocusReleased[index-11]={};shortcutFocusReleaseAt[index-11]=0;}
+    // Module state changes before restore releases the previous backend.
+    if(!shortcutHooked[index]){UnregisterHotKey(testWindow,0x5100+index);return;}
+    shortcutHooked[index]=false;
+    if(std::none_of(shortcutHooked.begin(),shortcutHooked.end(),[](bool active){return active;})) {
+        UnhookWindowsHookEx(shortcutHook);shortcutHook=nullptr;
+    }
+}
 bool shortcutForeground() {return GetForegroundWindow()==testWindow;}
 void refreshShortcutSuspension() {
     const bool suspended=shortcutRecording || (shortcutEditing && shortcutForeground());
-    if(suspended!=shortcutRegistry.suspended){shortcutRegistry.suspended=suspended;shortcutRegistry.restore();}
+    if(suspended!=shortcutRegistry.suspended || shortcutRecording!=shortcutRegistry.recording || gameOverlayEnabled!=shortcutRegistry.overlayEnabled) {
+        shortcutRegistry.suspended=suspended;shortcutRegistry.recording=shortcutRecording;shortcutRegistry.overlayEnabled=gameOverlayEnabled;shortcutRegistry.restore();
+    }
+    for(size_t i=0;i<shortcutFocusReleased.size();++i)if(shortcutFocusReleased[i].key && GetTickCount64()>=shortcutFocusReleaseAt[i]) {
+        const auto binding=shortcutFocusReleased[i];shortcutFocusReleased[i]={};shortcutFocusReleaseAt[i]=0;
+        if(shortcutHooked[i+11] && shortcutRegistry.registered[i+11])PostMessageW(testWindow,WM_HOTKEY,0x5100+i+11,MAKELPARAM(binding.modifiers,binding.key));
+    }
 }
 void initShortcuts(const std::filesystem::path& profile) {
+    shortcutRegistry.overlayEnabled=gameOverlayEnabled;
     shortcutPath=profile/(smoke?L"shortcuts-smoke.json":L"shortcuts.json");
-    shortcutRegistry.acquire=[](int i,musxi::shortcuts::Binding b){return RegisterHotKey(testWindow,0x5100+i,b.modifiers|MOD_NOREPEAT,b.key)!=FALSE;};
-    shortcutRegistry.release=[](int i){UnregisterHotKey(testWindow,0x5100+i);};
+    shortcutRegistry.acquire=acquireShortcut;
+    shortcutRegistry.release=releaseShortcut;
     if(!smoke)try {
         if(std::filesystem::is_regular_file(shortcutPath) && std::filesystem::file_size(shortcutPath)<=8192) {
             std::ifstream file(shortcutPath,std::ios::binary);shortcutRegistry.settings=musxi::shortcuts::parse(ShortcutJson::parse(file));
@@ -31,6 +92,7 @@ ShortcutJson shortcutSnapshot() {
 }
 musxi::LibraryReply executeShortcut(const std::string& action) {
     using namespace musxi;
+    if(action=="overlayVisibility" || action=="overlayEditing" || action=="overlayPlayer")return executeGameOverlayShortcut(action);
     if(action=="visibility") {
         if(!testWindow)return {409,"窗口尚未就绪",{}};
         if(!IsWindowVisible(testWindow) || IsIconic(testWindow))showFromTray(testWindow);

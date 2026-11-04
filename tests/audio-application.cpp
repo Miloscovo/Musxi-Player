@@ -177,6 +177,22 @@ int main(int argc,char** argv) {
         }
         require(repeatRequests==0,"single repeat unexpectedly requested another download");
         cloudRequestOverride=nullptr;closeAudio();
+        const auto originalLocalTracks=localTracks;
+        localTracks=Json::array({{{"id","local:gapless-a"},{"name","A"},{"path",(folder/"gapless.wav").u8string()}},
+            {{"id","local:gapless-b"},{"name","B"},{"path",(folder/"gapless-mono.wav").u8string()}}});
+        cloudQueue=localTracks;playbackOrder="sequential";playLocal(0);
+        waitState([](auto state){return state.playing && !state.pending;});
+        const auto continuousGeneration=audioBackend().snapshot().generation;
+        waitState([](auto state){return state.trackId=="local:gapless-b" && state.playing;});
+        require(audioBackend().snapshot().generation==continuousGeneration && localCurrent==1,"Application gapless transition reloaded output or lost identity");
+        require(musxi::applicationLibrary("library.setPlaybackOrder","{\"order\":\"repeat-one\"}").code==0,"repeat mode rejected");
+        for(int cycle=0;cycle<3;++cycle) {
+            const auto token=audioBackend().snapshot().transitionToken;
+            waitState([&](auto state){return state.playing && audioBackend().snapshot().transitionToken!=token;});
+            require(audioTrackId=="local:gapless-b" && audioBackend().snapshot().generation==continuousGeneration,"Application seamless loop changed source generation");
+        }
+        closeAudio();localTracks=originalLocalTracks;cloudQueue=Json::array();
+        std::cout<<"PASS real Application continuous queue and repeated gapless loop\n";
         const auto profile=folder/("history-check-"+std::to_string(GetCurrentProcessId()));
         fs::create_directories(profile/"cloud-cache");
         const auto retained=profile/"cloud-cache"/"saved.wav";

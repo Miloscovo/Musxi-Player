@@ -1,4 +1,6 @@
-import type { LyricsLine } from '../native/library.ts';
+import type { Lyrics, LyricsLine } from '../native/library.ts';
+
+export const lyricScrollTransition = { duration: 0.48, ease: [0.22, 1, 0.36, 1] as [number, number, number, number] };
 
 // Index of the line being sung at positionMs, or -1 before the first line.
 // Native replies are sorted by timeMs, so a binary search is enough.
@@ -25,4 +27,12 @@ export function observeLyricDragRegions(container: HTMLOListElement) {
     observer.disconnect();
     for (const row of Array.from(container.children)) row.classList.remove('lyric-interactive');
   };
+}
+
+// Preserve row identities across polling without delaying matching or translation updates.
+export function reuseLyrics(previous: Lyrics | null, next: Lyrics): Lyrics {
+  if (!previous || previous.id !== next.id || previous.lines.length !== next.lines.length
+    || next.lines.some((line, i) => line.timeMs !== previous.lines[i].timeMs || line.text !== previous.lines[i].text || line.translation !== previous.lines[i].translation)) return next;
+  if (JSON.stringify({ ...previous, lines: undefined }) === JSON.stringify({ ...next, lines: undefined })) return previous;
+  return { ...next, lines: previous.lines };
 }

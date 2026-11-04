@@ -63,6 +63,8 @@ main.app-shell { --sidebar-width:clamp(210px,15.5vw,240px); overflow:hidden; bor
 :root:is([data-theme=dark],[data-theme=glass]) .app-wallpaper-layer::after { background:color-mix(in srgb,var(--app-surface) calc(var(--background-opacity,1)*65%),transparent) }
 .sidebar { display:flex; flex-direction:column; width:var(--sidebar-width); min-height:0; padding:38px 10px 22px; background:var(--side) }
 .window-bar { background:transparent }
+.game-panel-return { height:32px; padding:0 16px; -webkit-app-region:no-drag }
+.game-panel-return,.wallpaper-preview-bar [data-variant=default] { --tw-primary-contrast:#fff }
 .window-buttons .window-maximize { display:grid; place-items:center }
 .sidebar .avatar-button { width:70px; height:70px; margin:0 auto; padding:0; border-radius:50%; background:var(--soft) }
 .sidebar .eyebrow { margin:14px 0 40px; color:var(--muted); font-size:13px; font-weight:600; letter-spacing:.2px; text-align:center }
@@ -98,7 +100,7 @@ main.app-shell { --sidebar-width:clamp(210px,15.5vw,240px); overflow:hidden; bor
 .song-context-item svg { margin-left:auto; width:16px; height:16px; flex-shrink:0; fill:none; stroke:currentColor; stroke-width:1.8 }
 .playlist-header .page-heading { transform:translateY(-8px) }
 .discovery-title,.recent-title { transform:translateY(-8px) }
-.settings-title { transform:translateY(-8px) }
+.settings-title,.extensions-title { transform:translateY(-8px) }
 .library-content>header::before { position:absolute; top:-32px; left:-34px; right:-34px; height:32px; background:transparent; content:"" }
 .page-heading,.header-actions { display:flex; align-items:center; min-width:0 }
 .page-heading { gap:18px }
@@ -210,8 +212,27 @@ main.app-shell { --sidebar-width:clamp(210px,15.5vw,240px); overflow:hidden; bor
 .discover-empty p { margin:0; color:var(--muted); opacity:1 }
 .pagination button { background:var(--soft); color:var(--ink) }
 .settings-content { max-width:560px; width:100%; padding-top:0; padding-bottom:24px }
-.library-sections.settings-sections { grid-template-columns:repeat(5,minmax(0,1fr)) }
+.game-overlay-settings { display:flex; flex-direction:column; gap:24px }
+.game-overlay-settings>p,.game-overlay-hints p { margin:0 }
+.game-overlay-settings>.appearance-level { margin-top:0 }
+.game-overlay-hints { display:flex; flex-direction:column; gap:12px }
+.game-overlay-hints .playback-setting { margin:0 }
+.game-overlay-hints .close-dialog-actions { flex-wrap:wrap }
+.game-overlay-hints p { color:var(--muted); opacity:1; font-size:13px; line-height:1.6 }
+.library-sections.settings-sections { grid-template-columns:repeat(var(--settings-columns,5),minmax(0,1fr)) }
 .settings-sections .library-section { min-width:0; gap:10px; padding-inline:10px }
+.extensions-content { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:24px; width:100%; padding-bottom:24px }
+.extensions-content>.playback-settings-error { grid-column:1/-1 }
+.library-content:has(.extensions-title)>.page-scroll { margin-top:32px }
+.extension-card { min-width:0; padding:24px; border:1px solid var(--line); border-radius:14px; background:var(--surface) }
+.extension-card-heading { display:flex; flex-wrap:wrap; align-items:center; gap:14px }
+.extension-icon { display:grid; flex:none; place-items:center; width:48px; height:48px; border-radius:12px; background:var(--search); color:var(--accent) }
+.extension-icon svg { width:26px; height:26px }
+.extension-card-heading>div { flex:1 1 120px; min-width:0 }
+.extension-card h2 { margin:0 0 4px; font-size:17px; font-weight:600; line-height:1.4 }
+.extension-origin { color:var(--muted); font-size:12px }
+.extension-card p { margin:18px 0 0; color:var(--muted); opacity:1; font-size:14px; line-height:1.7 }
+.extension-card .extension-status { margin-top:8px; font-size:13px }
 @media(max-width:1000px) { .library-sections.settings-sections { grid-template-columns:repeat(3,minmax(0,1fr)) } }
 @media(max-width:650px) { .library-sections.settings-sections { grid-template-columns:repeat(2,minmax(0,1fr)) } }
 .shortcut-groups { margin:24px 0 }
@@ -224,8 +245,8 @@ main.app-shell { --sidebar-width:clamp(210px,15.5vw,240px); overflow:hidden; bor
 @media(max-width:650px) { .shortcut-row { flex-wrap:wrap; padding-block:8px; gap:8px } .shortcut-binding-actions { width:100% } .shortcut-binding { flex:1 } }
 .lyrics-settings .appearance-slider { margin:12px 0 0 }
 .lyrics-settings .appearance-mode+.appearance-mode { margin-top:24px }
-.lyrics-preview { margin-top:28px; padding:20px; border-radius:10px; background:var(--search); color:var(--muted); line-height:1.6; overflow-wrap:anywhere }
-.lyrics-preview p { margin:12px 0; color:inherit; font-size:inherit; opacity:1 }
+.lyrics-preview { width:560px; height:260px; display:grid; align-content:center; gap:12px; margin-top:28px; padding:20px; border-radius:10px; background:var(--search); color:var(--muted); line-height:1.6; overflow:auto; overflow-wrap:anywhere }
+.lyrics-preview p { margin:0; color:inherit; font-size:inherit; opacity:1 }
 .lyrics-preview .current { color:var(--lyrics-color,var(--accent)); font-weight:700 }
 .playback-setting { margin-bottom:28px }
 .playback-setting label { display:block; margin-bottom:12px; font-size:15px; font-weight:600; color:var(--ink) }
@@ -249,9 +270,11 @@ main.app-shell { --sidebar-width:clamp(210px,15.5vw,240px); overflow:hidden; bor
 .wallpaper-thumbnail { display:grid; place-items:center; aspect-ratio:16/9; max-width:420px; overflow:hidden; border-radius:10px; background:var(--search); color:var(--muted); font-size:14px }
 .wallpaper-thumbnail img { width:100%; height:100%; min-height:0; object-fit:cover }
 .wallpaper-actions { display:flex; flex-wrap:wrap; gap:10px; margin-top:12px }
-.wallpaper-preview-bar { position:absolute; z-index:85; left:50%; bottom:calc(100% + 12px); transform:translateX(-50%); display:flex; align-items:center; gap:12px; max-width:calc(100vw - 32px); padding:10px 12px; border:1px solid var(--line); border-radius:10px; background:var(--app-surface); color:var(--ink); font-size:14px; box-shadow:0 4px 16px #0002; -webkit-app-region:no-drag }
+.player-floating-actions { position:absolute; z-index:85; left:50%; bottom:calc(100% + 12px); transform:translateX(-50%); display:flex; flex-direction:column; align-items:center; gap:12px; width:max-content; max-width:calc(100vw - 32px) }
+.wallpaper-preview-bar,.game-panel-actions { display:flex; align-items:center; gap:12px; max-width:100%; padding:10px 12px; border:1px solid var(--line); border-radius:10px; background:var(--app-surface); color:var(--ink); font-size:14px; box-shadow:0 4px 16px #0002; -webkit-app-region:no-drag }
 .wallpaper-preview-bar>span { white-space:nowrap }
-.player:has(.wallpaper-preview-bar) :is(.message-alerts,.update-notice) { bottom:calc(100% + 76px) }
+.player:has(.player-floating-actions) :is(.message-alerts,.update-notice) { bottom:calc(100% + 76px) }
+.player:has(.game-panel-actions):has(.wallpaper-preview-bar) :is(.message-alerts,.update-notice) { bottom:calc(100% + 140px) }
 @media(max-width:650px) { .wallpaper-preview-bar { flex-wrap:wrap; justify-content:center; gap:8px; width:max-content } }
 .appearance-setting-row { display:flex; justify-content:space-between; align-items:center; gap:16px }
 .appearance-setting-row p { margin:5px 0 0; color:var(--muted); opacity:1; font-size:13px; line-height:1.6 }
@@ -511,11 +534,11 @@ body:has(.lyrics-page[data-cover-background]:not([inert])) .window-buttons butto
 .lyrics-square-cover { width:320px; aspect-ratio:1; flex:none }
 .lyrics-square-cover .cover { width:100%; height:100%; border-radius:18px; font-size:72px; box-shadow:0 18px 40px #0002 }
 .lyrics-square-cover img.cover { display:block }
-.vinyl-cover,.lyrics-page,.lyrics-preview { --vinyl-ink:var(--vinyl-color,var(--accent)) }
-.lyrics-page,.lyrics-preview { --lyric-vinyl:color-mix(in srgb,var(--vinyl-ink) 35%,#f0f0f0) }
+.vinyl-cover,.lyrics-page,.lyrics-preview,.overlay-lyrics-viewport { --vinyl-ink:var(--vinyl-color,var(--accent)) }
+.lyrics-page,.lyrics-preview,.overlay-lyrics-viewport { --lyric-vinyl:color-mix(in srgb,var(--vinyl-ink) 35%,#f0f0f0) }
 @supports (color:hsl(from red h s l)) {
-  .vinyl-cover,.lyrics-page,.lyrics-preview { --vinyl-ink:hsl(from var(--vinyl-color,var(--accent)) h min(100,calc(s * 3)) clamp(35,l,55)) }
-  .lyrics-page,.lyrics-preview { --lyric-vinyl:hsl(from var(--vinyl-ink) h s max(l,75)) }
+  .vinyl-cover,.lyrics-page,.lyrics-preview,.overlay-lyrics-viewport { --vinyl-ink:hsl(from var(--vinyl-color,var(--accent)) h min(100,calc(s * 3)) clamp(35,l,55)) }
+  .lyrics-page,.lyrics-preview,.overlay-lyrics-viewport { --lyric-vinyl:hsl(from var(--vinyl-ink) h s max(l,75)) }
 }
 .vinyl-disc { position:relative; display:grid; place-items:center; width:100%; height:100%; overflow:hidden; border-radius:50%;
   background:repeating-radial-gradient(circle,transparent 0 2px,#ffffff08 2.5px,transparent 3px),radial-gradient(circle,transparent 52%,#0002 78%,#0006 100%),conic-gradient(from 20deg,color-mix(in srgb,var(--vinyl-ink) 55%,#100817),color-mix(in srgb,var(--vinyl-ink) 84%,#100817),color-mix(in srgb,var(--vinyl-ink) 48%,#100817),color-mix(in srgb,var(--vinyl-ink) 82%,#100817),color-mix(in srgb,var(--vinyl-ink) 55%,#100817));
@@ -641,14 +664,14 @@ body:has(.lyrics-page[data-cover-background]:not([inert])) .window-buttons butto
 .player-rail[hidden] { display:none }
 .player-rail[data-state=collapsed] { top:-16px; height:16px; cursor:s-resize }
 .player-rail::after { position:absolute; left:0; right:0; top:5px; height:2px; background:transparent; content:"" }
-.player-rail[data-state=collapsed]::after { top:auto; bottom:0 }
+.player-rail[data-state=collapsed]::after { left:16px; right:16px; top:auto; bottom:0 }
 .player-rail:hover::after,.player-rail:focus-visible::after { background:var(--line) }
 .player-content { display:contents; visibility:visible }
 .player[data-lyrics-mode] { z-index:3; transition:background-color .22s cubic-bezier(.22,1,.36,1),border-color .22s cubic-bezier(.22,1,.36,1),box-shadow .22s cubic-bezier(.22,1,.36,1) }
 .app-shell .player[data-lyrics-collapsed] { background-color:transparent; border-color:transparent; box-shadow:none }
 .player[data-lyrics-collapsed]>.player-content { visibility:hidden; transition:visibility 0s .22s }
 @media(prefers-reduced-motion:reduce) { .player[data-lyrics-mode],.player[data-lyrics-collapsed]>.player-content { transition:none } }
-.compact-player .player { margin-top:16px; -webkit-app-region:drag }
+.app-shell.compact-player .player { margin-top:16px; border-radius:inherit; -webkit-app-region:drag }
 .compact-player .app-wallpaper-layer { top:16px }
 .compact-player .player :is(button,input,.track) { -webkit-app-region:no-drag }
 body:has([data-slot="popover-content"],[data-slot="context-menu-content"]) .compact-player .player { -webkit-app-region:no-drag }

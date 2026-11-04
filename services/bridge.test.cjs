@@ -19,12 +19,13 @@ test('cover batches deduplicate URLs and isolate unavailable images', async () =
 });
 test('cover downloads prefer larger supported images and fall back to the original', async () => {
   const original=global.fetch;const calls=[];
-  global.fetch=async url=>{calls.push(url);if(url.includes('/400/'))return {ok:true,headers:{get:()=> 'text/html'},body:(async function*(){yield Buffer.from('error');})()};return {ok:true,body:(async function*(){yield Buffer.from('fixture');})()};};
+  global.fetch=async url=>{calls.push(url);if(url.startsWith('https://imge.kugou.com/')&&!url.includes('/200/'))return {ok:true,headers:{get:()=> 'text/html'},body:(async function*(){yield Buffer.from('error');})()};return {ok:true,body:(async function*(){yield Buffer.from('fixture');})()};};
   try {
     const a=new Adapter(async()=>{throw Error('No account request expected');});
     const kugou='https://imge.kugou.com/200/album.jpg';const qq='https://y.gtimg.cn/music/photo_new/T002R300x300M000abc.jpg';
     const images=(await a.run({op:'covers',urls:[kugou,qq]})).images;
-    assert.deepEqual(calls,['https://imge.kugou.com/400/album.jpg','https://y.gtimg.cn/music/photo_new/T002R800x800M000abc.jpg',kugou]);
+    assert.deepEqual(calls,['https://imge.kugou.com/1200/album.jpg','https://y.gtimg.cn/music/photo_new/T002R1200x1200M000abc.jpg',
+      'https://imge.kugou.com/1024/album.jpg','https://imge.kugou.com/800/album.jpg','https://imge.kugou.com/400/album.jpg',kugou]);
     assert.deepEqual(images.map(image=>image.url),[kugou,qq]);
     assert.ok(images.every(image=>image.image.startsWith('data:image/jpeg;base64,')));
   } finally {global.fetch=original;}
@@ -55,9 +56,74 @@ test('NetEase and QQ HTTP covers download over HTTPS but retain the requested ca
     const a=new Adapter(async()=>{throw Error('No account request expected');});
     const result=await a.run({op:'covers',urls:[...urls,urls[0],'http://localhost/private']});
     assert.deepEqual(result.images.map(image=>image.url),urls);
-    assert.deepEqual(downloaded,urls.map(url=>url.replace('http:','https:')));
+    assert.deepEqual(downloaded,['https://p1.music.126.net/cover.jpg?param=1200y1200','https://y.gtimg.cn/cover.jpg','https://qpic.y.qq.com/cover.jpg']);
     assert.ok(result.images.every(image=>image.image.startsWith('data:image/jpeg;base64,')));
   } finally {global.fetch=original;}
+});
+
+test('HD covers fall back after the stream exceeds 2 MiB without changing cache keys',async()=>{
+  const original=global.fetch;const calls=[];
+  const urls=['https://p4.music.126.net/cover.jpg?param=200y200&quality=90',
+    'https://imge.kugou.com/stdmusic/200/album.jpg','https://y.gtimg.cn/music/photo_new/T002R500x500M000abc.jpg'];
+  global.fetch=async url=>{calls.push(url);return {ok:true,body:(async function*(){yield Buffer.alloc(url.includes('1200')?2*1024*1024+1:1536*1024);})()};};
+  try{
+    const images=(await new Adapter(()=>{throw Error('No account request');}).run({op:'covers',urls})).images;
+    assert.deepEqual(images.map(image=>image.url),urls);
+    assert.ok(images.every(image=>Buffer.from(image.image.split(',')[1],'base64').length===1536*1024));
+    assert.deepEqual(calls,['https://p4.music.126.net/cover.jpg?param=1200y1200&quality=90',
+      'https://imge.kugou.com/stdmusic/1200/album.jpg','https://y.gtimg.cn/music/photo_new/T002R1200x1200M000abc.jpg',
+      'https://p4.music.126.net/cover.jpg?param=1024y1024&quality=90',
+      'https://imge.kugou.com/stdmusic/1024/album.jpg','https://y.gtimg.cn/music/photo_new/T002R800x800M000abc.jpg']);
+  }finally{global.fetch=original;}
+});
+
+test('maximum HD cover batches fit native image and pipe limits',async()=>{
+  const original=global.fetch;let calls=0;
+  global.fetch=async(url,options)=>{calls++;assert.equal(options.redirect,'error');return {ok:true,body:(async function*(){yield Buffer.alloc(2*1024*1024);})()};};
+  try{
+    const urls=Array.from({length:9},(_,i)=>`https://p1.music.126.net/${i}.jpg`);
+    const reply=await new Adapter(()=>{throw Error('No account request');}).run({op:'covers',urls:[...urls,'http://localhost/private']});
+    assert.equal(reply.images.length,8);assert.equal(calls,8);
+    assert.ok(reply.images.every(image=>image.image.length<4*1024*1024));
+    assert.ok(Buffer.byteLength(JSON.stringify({ok:true,data:reply}))<32*1024*1024);
+  }finally{global.fetch=original;}
+});
+
+test('thumbnail requests stay small across platforms and keep their original cache keys',async()=>{
+ const original=global.fetch,calls=[];
+ global.fetch=async url=>{calls.push(url);return {ok:!url.includes('300'),body:(async function*(){yield Buffer.from('small');})()};};
+ try{
+  const urls=['https://p1.music.126.net/large.jpg','https://imge.kugou.com/stdmusic/200/album.jpg','https://y.gtimg.cn/music/photo_new/T002R800x800M000abc.jpg'];
+  const result=await new Adapter(()=>{}).run({op:'covers',urls,size:300});
+  assert.equal(result.size,300);assert.deepEqual(result.images.map(image=>image.url),urls);
+  assert.ok(result.images.every(image=>image.image));
+  assert.deepEqual(calls,['https://p1.music.126.net/large.jpg?param=300y300','https://imge.kugou.com/stdmusic/300/album.jpg',
+   'https://y.gtimg.cn/music/photo_new/T002R300x300M000abc.jpg','https://p1.music.126.net/large.jpg?param=200y200',
+   'https://imge.kugou.com/stdmusic/200/album.jpg','https://y.gtimg.cn/music/photo_new/T002R150x150M000abc.jpg']);
+  for(const size of [0,400,'300',null])await assert.rejects(new Adapter(()=>{}).run({op:'covers',urls,size}));
+ }finally{global.fetch=original;}
+});
+
+test('failed thumbnails never fall back to the original large image',async()=>{
+ const original=global.fetch,calls=[];
+ global.fetch=async url=>{calls.push(url);return {ok:false};};
+ try{
+  const url='https://p1.music.126.net/large.jpg';
+  const result=await new Adapter(()=>{}).run({op:'covers',urls:[url],size:300});
+  assert.deepEqual(result.images,[{url,image:''}]);
+  assert.deepEqual(calls,[url+'?param=300y300',url+'?param=200y200']);
+ }finally{global.fetch=original;}
+});
+
+test('oversized original artwork and failed HD candidates remain bounded',async()=>{
+  const original=global.fetch;const calls=[];
+  global.fetch=async url=>{calls.push(url);return {ok:true,body:(async function*(){yield Buffer.alloc(2*1024*1024+1);})()};};
+  try{
+    const url='https://p1.music.126.net/huge.jpg';
+    const result=await new Adapter(()=>{}).run({op:'covers',urls:[url]});
+    assert.deepEqual(result.images,[{url,image:''}]);
+    assert.deepEqual(calls,[url+'?param=1200y1200',url+'?param=1024y1024',url+'?param=800y800',url]);
+  }finally{global.fetch=original;}
 });
 test('NetEase image/jpg responses load for covers and avatars',async()=>{
   const original=global.fetch;

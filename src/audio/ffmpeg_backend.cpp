@@ -11,7 +11,8 @@ namespace musxi {
 namespace {
 class FfmpegBackend final:public IAudioBackend {
     struct Request {
-        std::wstring path,device;
+        std::wstring path,device,nextPath;
+        std::uint64_t nextToken=0,nextRevision=0;
         std::uint64_t revision=0,source=0,seek=0,intent=0;
         std::uint32_t position=0;
         bool play=false;
@@ -22,9 +23,10 @@ class FfmpegBackend final:public IAudioBackend {
     bool exiting_=false;
     AudioState state_;
     std::vector<AudioEvent> events_;
-    std::wstring activePath_,inflightPath_,preferredDevice_;
+    std::wstring activePath_,inflightPath_,preferredDevice_,preparedPath_;
     WasapiPlayer player_;
     std::thread worker_;
+    void clearNext() {desired_.nextPath.clear();desired_.nextToken=0;++desired_.nextRevision;}
     void changed(bool cancel=false) {
         ++desired_.revision;state_.pending=true;state_.error.clear();
         state_.requestedPlaying=desired_.play;
@@ -32,7 +34,7 @@ class FfmpegBackend final:public IAudioBackend {
         wake_.notify_one();
     }
     void run() {
-        std::uint64_t source=0,seek=0,preparedSeek=0,intent=0,revision=0;
+        std::uint64_t source=0,seek=0,preparedSeek=0,intent=0,revision=0,nextRevision=0;
         int volume=-1;
         for(;;) {
             Request request;
@@ -58,9 +60,22 @@ class FfmpegBackend final:public IAudioBackend {
                     }
                     output=player_.snapshot();
                 }
+                if(request.nextRevision!=nextRevision) {
+                    if(request.nextToken && !request.path.empty()) {
+                        {std::lock_guard<std::mutex> lock(mutex_);preparedPath_=request.nextPath;}
+                        try {player_.prepareNext(request.nextPath,request.nextToken);}
+                        catch(...) {std::lock_guard<std::mutex> lock(mutex_);if(desired_.nextToken==request.nextToken)clearNext();}
+                    } else player_.cancelNext();
+                    nextRevision=request.nextRevision;output=player_.snapshot();
+                }
                 player_.takeEvents(); // Terminal state is observed below, never on a CEF thread.
                 std::lock_guard<std::mutex> lock(mutex_);
                 if(request.revision!=desired_.revision)continue;
+                if(output.transitionToken && output.transitionToken!=state_.transitionToken) {
+                    desired_.path=request.path=output.sourcePath;activePath_=desired_.path;
+                    if(output.transitionToken==desired_.nextToken)clearNext();
+                }
+                preparedPath_=request.nextPath;
                 const auto previous=state_.phase;
                 state_.opened=!request.path.empty();state_.playing=output.phase==OutputPhase::Playing;
                 state_.positionMs=static_cast<std::uint32_t>(std::clamp<std::int64_t>(output.positionMs,0,UINT32_MAX));
@@ -71,6 +86,7 @@ class FfmpegBackend final:public IAudioBackend {
                 state_.phase=request.path.empty()?"empty":failed?"failed":state_.pending?(request.seek!=seek?"seeking":"buffering"):
                     output.phase==OutputPhase::Playing?"playing":output.phase==OutputPhase::Ended?"ended":"paused";
                 state_.error=output.error;
+                state_.transitionToken=output.transitionToken;
                 if(failed && previous!="failed")events_.push_back({AudioEventKind::Error,state_.generation,{AudioError::BackendFailure,static_cast<std::uint32_t>(output.errorCode)}});
                 if(state_.phase=="ended" && previous!="ended")events_.push_back({AudioEventKind::Ended,state_.generation,{}});
             } catch(const std::exception& e) {
@@ -79,7 +95,7 @@ class FfmpegBackend final:public IAudioBackend {
                 std::lock_guard<std::mutex> lock(mutex_);
                 // Mark the request handled; another explicit command may retry it.
                 source=request.source;preparedSeek=seek=request.seek;intent=request.intent;
-                if(released){activePath_.clear();inflightPath_.clear();}
+                if(released){activePath_.clear();inflightPath_.clear();preparedPath_.clear();}
                 if(request.revision==desired_.revision) {
                     state_.playing=false;state_.pending=false;state_.phase="failed";state_.error=e.what();
                     events_.push_back({AudioEventKind::Error,state_.generation,{AudioError::BackendFailure,0}});
@@ -96,7 +112,8 @@ public:
     }
     AudioResult load(const std::wstring& path) override {
         if(path.empty())return {AudioError::InvalidArgument,0};
-        std::lock_guard<std::mutex> lock(mutex_);desired_.path=path;desired_.device=preferredDevice_;++desired_.source;desired_.seek=0;desired_.position=0;++desired_.intent;desired_.play=false;
+        std::lock_guard<std::mutex> lock(mutex_);clearNext();desired_.path=path;desired_.device=preferredDevice_;++desired_.source;desired_.seek=0;desired_.position=0;++desired_.intent;desired_.play=false;
+        state_.transitionToken=0;
         state_.opened=true;state_.playing=false;state_.positionMs=state_.durationMs=0;++state_.generation;state_.phase="loading";events_.clear();changed(true);return {};
     }
     AudioResult play() override {return resume();}
@@ -106,6 +123,7 @@ public:
         if(desired_.device==id)return {};
         desired_.device=id;
         if(!desired_.path.empty()) {
+            clearNext();
             // Keep an outstanding seek target; otherwise resume at the current clock.
             if(state_.phase!="loading" && state_.phase!="seeking")desired_.position=state_.positionMs;
             ++desired_.source;++desired_.seek;++desired_.intent;
@@ -124,25 +142,34 @@ public:
     }
     AudioResult seek(std::uint32_t position) override {
         std::lock_guard<std::mutex> lock(mutex_);if(desired_.path.empty())return {AudioError::NotReady,0};
-        desired_.position=position;++desired_.seek;++desired_.intent;++state_.generation;events_.clear();state_.phase="seeking";changed(true);return {};
+        clearNext();desired_.position=position;++desired_.seek;++desired_.intent;++state_.generation;events_.clear();state_.phase="seeking";changed(true);return {};
     }
     AudioResult stop() override {
         std::lock_guard<std::mutex> lock(mutex_);if(desired_.path.empty())return {AudioError::NotReady,0};
-        desired_.play=false;desired_.position=0;++desired_.seek;++desired_.intent;++state_.generation;events_.clear();state_.phase="seeking";changed(true);return {};
+        clearNext();desired_.play=false;desired_.position=0;++desired_.seek;++desired_.intent;++state_.generation;events_.clear();state_.phase="seeking";changed(true);return {};
     }
     AudioResult setVolume(int value) override {
         if(value<0 || value>100)return {AudioError::InvalidArgument,0};
         std::lock_guard<std::mutex> lock(mutex_);desired_.volume=value;changed();return {};
     }
     AudioResult unload() override {
-        std::lock_guard<std::mutex> lock(mutex_);desired_.path.clear();++desired_.source;++desired_.intent;desired_.seek=0;desired_.play=false;
+        std::lock_guard<std::mutex> lock(mutex_);clearNext();desired_.path.clear();++desired_.source;++desired_.intent;desired_.seek=0;desired_.play=false;
+        state_.transitionToken=0;
         state_.opened=state_.playing=false;state_.positionMs=state_.durationMs=0;++state_.generation;state_.phase="empty";events_.clear();changed(true);return {};
     }
     AudioState snapshot() const override {std::lock_guard<std::mutex> lock(mutex_);return state_;}
+    AudioResult prepareNext(const std::wstring& path,std::uint64_t token) override {
+        if(path.empty() || !token)return {AudioError::InvalidArgument,0};
+        std::lock_guard<std::mutex> lock(mutex_);if(desired_.path.empty())return {AudioError::NotReady,0};
+        desired_.nextPath=path;desired_.nextToken=token;++desired_.nextRevision;++desired_.revision;wake_.notify_one();return {};
+    }
+    AudioResult cancelNext() override {
+        std::lock_guard<std::mutex> lock(mutex_);clearNext();++desired_.revision;wake_.notify_one();return {};
+    }
     void poll() override {}
     std::vector<AudioEvent> takeEvents() override {std::lock_guard<std::mutex> lock(mutex_);std::vector<AudioEvent> result;result.swap(events_);return result;}
     bool sourceReleased(const std::wstring& path) const override {
-        std::lock_guard<std::mutex> lock(mutex_);return desired_.path!=path && activePath_!=path && inflightPath_!=path;
+        std::lock_guard<std::mutex> lock(mutex_);return desired_.path!=path && activePath_!=path && inflightPath_!=path && desired_.nextPath!=path && preparedPath_!=path;
     }
 };
 }

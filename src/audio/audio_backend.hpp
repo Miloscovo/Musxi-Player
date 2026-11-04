@@ -17,6 +17,7 @@ struct AudioState {
     std::uint64_t generation=0;
     std::string phase,error;
     bool pending=false,requestedPlaying=false;
+    std::uint64_t transitionToken=0;
 };
 enum class AudioEventKind { Ended, Error };
 struct AudioEvent {
@@ -37,6 +38,8 @@ public:
     virtual AudioResult seek(std::uint32_t positionMs)=0;
     virtual AudioResult setVolume(int percent)=0;
     virtual AudioResult unload()=0;
+    virtual AudioResult prepareNext(const std::wstring&,std::uint64_t) {return {AudioError::NotReady,0};}
+    virtual AudioResult cancelNext() {return {};}
     // Apply to current output asynchronously, preserving position and playback intent.
     virtual AudioResult setOutputDevicePreference(const std::wstring&) {return {AudioError::NotReady,0};}
     virtual AudioState snapshot() const=0;

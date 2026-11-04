@@ -44,6 +44,7 @@ LibraryReply applicationLibrary(const std::string& name,const std::string& param
             if(!validDefaultQuality(quality) || device.size()>1024 || device.find('\0')!=std::string::npos)return {400,"无效播放设置",{}};
             const auto before=playbackSettingsSnapshot();
             if(!device.empty() && device!=preferredOutputDevice && std::none_of(before["devices"].begin(),before["devices"].end(),[&](const Json& row){return row["id"]==device;}))return {409,"输出设备已断开，请刷新设备列表",{}};
+            cancelGapless();
             const auto result=audioBackend().setOutputDevicePreference(cloud::toWide(device));
             if(!result)return {503,"输出设备设置暂不可用",{}};
             if(!savePlaybackSettings(cloud::dataDir()/L"playback-settings.json",quality,device)) {
@@ -57,6 +58,7 @@ LibraryReply applicationLibrary(const std::string& name,const std::string& param
             const auto order=requiredText(p,"order");
             if(order!="sequential" && order!="random" && order!="repeat-one")return {400,"无效播放顺序",{}};
             playbackOrder=order;
+            cancelGapless();
             if(order=="repeat-one")cancelUnplayableSkip();
             return reply({{"id",std::to_string(++libraryOperationId)}});
         }
@@ -70,6 +72,7 @@ LibraryReply applicationLibrary(const std::string& name,const std::string& param
             if(std::none_of(cloudAccounts.begin(),cloudAccounts.end(),[&](const Json& account){return account.value("platform","")==platform && account.value("connected",false);}))return {409,"请先登录目标平台",{}};
             if(!currentPlaybackTrack.is_object() || currentPlaybackTrack.value("id","")!=id)return {409,"当前歌曲信息不可用",{}};
             const auto dir=cloud::dataDir()/L"cloud-cache"/std::to_wstring(GetCurrentProcessId());
+            cancelGapless();
             cancelUnplayableSkip();
             ++cloudGeneration;libraryPlayGeneration=cloudGeneration;libraryPlayTrackId=id;
             libraryPlayPaused=!audioBackend().snapshot().requestedPlaying;libraryQualityChange=true;libraryPlatformChange=true;cloudAutoNext=false;
@@ -95,6 +98,7 @@ LibraryReply applicationLibrary(const std::string& name,const std::string& param
                 if(!platformRollback.path.empty())return {409,"正在切换播放源，请稍后重试",{}};
                 cancelUnplayableSkip();
                 libraryPlatformChange=false;
+                cancelGapless();
                 request={{"op","audio"},{"id",id},{"quality",quality},{"cacheDir",dir.u8string()}};
                 ++cloudGeneration;libraryPlayGeneration=cloudGeneration;libraryPlayTrackId=id;
                 libraryPlayPaused=!audioBackend().snapshot().requestedPlaying;libraryQualityChange=true;cloudAutoNext=false;
@@ -127,6 +131,7 @@ LibraryReply applicationLibrary(const std::string& name,const std::string& param
             tracks.erase(std::remove_if(tracks.begin(),tracks.end(),[&](const Json& row){return removed.count(row.at("id").get<std::string>());}),tracks.end());
             if(!saveLocalCatalog(tracks,cloud::dataDir()/L"local-music.json",folders))return {503,"移除记录保存失败，请检查存储空间后重试",{}};
             localTracks=std::move(tracks);localFolders=std::move(folders);
+            cancelGapless();
             if(!trackRemoval && localFolderId==id)localFolderId.clear();
             for(int index=(int)cloudQueue.size()-1;index>=0;--index)if(removed.count(cloudQueue[index].value("id",""))) {
                 cloudQueue.erase(cloudQueue.begin()+index);if(index<=cloudCurrent)--cloudCurrent;
@@ -202,7 +207,8 @@ LibraryReply applicationLibrary(const std::string& name,const std::string& param
                     for(const auto& source:currentPlaybackTrack.value("sources",Json::array()))available.insert(platformOf(source.value("id","")));
                 for(const auto* platform:{"netease","kugou","qq"})if(available.count(platform))platforms.push_back(platform);
             }
-            return reply({{"connected",cloudConnected},{"busy",localView?(localImportPending || localScan.valid()):(cloudBusy() || !libraryNextPlay.is_null())},
+            const bool foregroundBusy=cloudBusy() && cloudOperation!="audio_prepare" && cloudOperation!="audio_prepared" && cloudOperation!="audio_cancel";
+            return reply({{"connected",cloudConnected},{"busy",localView?(localImportPending || localScan.valid()):(foregroundBusy || !libraryNextPlay.is_null())},
                 {"user",utf8(cloudUser)},{"status",utf8(cloudStatus)},{"notice",utf8(toast)},
                 {"accounts",cloudAccounts},{"loginPlatform",loginPlatform},{"qr",libraryQr},{"avatar",libraryAvatar},{"playlists",publicRows(cloudPlaylists,0,10000)},{"localPlaylists",localPlaylistRows()},
                 {"tracks",publicRows(tracks,(page-1)*50,50)},{"trackCount",tracks.size()},{"favoritesCount",cloudFavoritesCount},
@@ -225,14 +231,16 @@ LibraryReply applicationLibrary(const std::string& name,const std::string& param
                     {"kind",libraryOperationKind},{"error",libraryOperationError}}}});
         }
         if(name=="library.image") {
-            if(p.size()!=1) return {400,"无效图片参数",{}};
+            if(p.size()!=1 && !(p.size()==2 && p.contains("size"))) return {400,"无效图片参数",{}};
+            if(p.contains("size") && (!p.at("size").is_number_integer() || (p.at("size")!=300 && p.at("size")!=1200))) return {400,"无效图片尺寸",{}};
             const auto url=requiredText(p,"url",2048);bool known=url==cloudNowCover;
             for(const auto* rows:{&cloudTracks,&searchTracks,&cloudPlaylists,&cloudQueue,&recentTracks})
                 for(const auto& row:*rows) if(row.value("cover","")==url) known=true;
             if(!known) return {403,"只允许加载媒体库中的封面",{}};
-            auto found=coverCache.find(url);
+            const CoverKey key{url,p.value("size",1200)};
+            auto found=coverCache.find(key);
             if(found!=coverCache.end() && !found->second->data.empty()) return reply(found->second->data);
-            if(webWantedCovers.size()<256 || webWantedCovers.count(url)) webWantedCovers[url]=GetTickCount64()+30000;
+            if(webWantedCovers.size()<256 || webWantedCovers.count(key)) webWantedCovers[key]=GetTickCount64()+30000;
             return reply("");
         }
         if(name=="library.lyricsMatch")return reply(requestMatch(p));
@@ -276,6 +284,7 @@ LibraryReply applicationLibrary(const std::string& name,const std::string& param
             return result;
         }
         if(name=="library.queueNext" || name=="library.queueRemove" || name=="library.queueClear") {
+            gaplessAdopt();
             if(name=="library.queueClear") {
                 if(!p.empty())return {400,"无效清空参数",{}};
             } else if(p.size()!=(name=="library.queueNext"?2:1))return {400,"无效队列参数",{}};
@@ -305,6 +314,7 @@ LibraryReply applicationLibrary(const std::string& name,const std::string& param
                     notice(L"已加入下一首播放");
                 }
             }
+            cancelGapless();
             return reply({{"id",std::to_string(libraryOperationId)}});
         }
         if(name=="library.play" || name=="library.skip") {

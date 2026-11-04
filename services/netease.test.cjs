@@ -32,8 +32,8 @@ test('membership distinguishes active packages, expired memberships and missing 
 test('advanced tiers require exact returned level, plain FLAC and full playback',async()=>{
  let data;const adapter=new NeteaseAdapter(async()=>({body:{code:200,data:[data]}}));
  adapter.profile={id:'synthetic'};const track=adapter.song({id:1,name:'Fixture'});
- for(const quality of ['netease:jymaster','netease:jyeffect'])await assert.rejects(adapter.audioInfo(track,quality),/无效音质/);
- for(const level of ['hires']){
+ await assert.rejects(adapter.audioInfo(track,'netease:jymaster'),/无效音质/);
+ for(const level of ['hires','jyeffect']){
   data={url:'https://example.test/song.flac',type:'flac',level};
   assert.equal((await adapter.audioInfo(track,`netease:${level}`)).quality,`netease:${level}`);
   for(const bad of [{...data,level:'lossless'},{...data,level:undefined},{...data,type:'mp3',br:320000},{...data,freeTrialInfo:{}}]){
@@ -43,6 +43,20 @@ test('advanced tiers require exact returned level, plain FLAC and full playback'
  }
  data={url:'https://example.test/song',type:'nac',level:'hires'};
  await assert.rejects(adapter.audioInfo(track,'netease:hires'),/格式/);
+});
+
+test('HD pristine quality is offered only for an exact full FLAC response',async()=>{
+ let data={url:'https://example.test/song.flac',type:'flac',level:'jyeffect'};
+ const adapter=new NeteaseAdapter(async(name,p)=>({body:{code:200,data:[p.level==='jyeffect'?data:{url:null}]}}));
+ adapter.profile={id:'synthetic'};adapter.song({id:1,name:'Fixture'});
+ assert.deepEqual((await adapter.run({op:'qualities',id:'netease:1'})).options,[{id:'netease:jyeffect',name:'高清臻音'}]);
+ assert.equal((await adapter.run({op:'audio',id:'netease:1',quality:'netease:jyeffect'})).quality,'netease:jyeffect');
+ for(const bad of [{...data,level:'hires'},{...data,level:undefined},{...data,freeTrialInfo:{}},{...data,type:'nac'},{...data,url:null}]){
+  const original=data;data=bad;
+  assert.deepEqual((await adapter.run({op:'qualities',id:'netease:1'})).options,[]);
+  await assert.rejects(adapter.run({op:'audio',id:'netease:1',quality:'netease:jyeffect'}));
+  data=original;
+ }
 });
 
 test('large playlists read at most three detail batches concurrently and keep playlist order',async()=>{

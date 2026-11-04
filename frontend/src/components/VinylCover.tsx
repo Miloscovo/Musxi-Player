@@ -2,7 +2,7 @@ import { useState, type CSSProperties, type SyntheticEvent } from 'react';
 import CoverImage from './CoverImage';
 import { sampleCoverColor } from '../composables/vinylColor';
 
-export default function VinylCover({ url, playing, onColor }: { url: string; playing: boolean; onColor?: (url: string, color: string, image: string) => void }) {
+export default function VinylCover({ url, playing, onColor, fallbackImage = '' }: { url: string; playing: boolean; onColor?: (url: string, color: string, image: string) => void; fallbackImage?: string }) {
   const [sample, setSample] = useState({ url: '', color: '' });
   function sampleCover(event: SyntheticEvent<HTMLDivElement>) {
     const image = event.target;
@@ -13,6 +13,6 @@ export default function VinylCover({ url, playing, onColor }: { url: string; pla
   const color = url && sample.url === url ? sample.color : '';
   return <div className="vinyl-cover" data-playing={playing} onLoadCapture={sampleCover}
     style={color ? { '--vinyl-color': color } as CSSProperties : undefined}>
-    <div className="vinyl-disc"><CoverImage url={url} animateLoading /></div>
+    <div className="vinyl-disc"><CoverImage url={url} fallbackImage={fallbackImage} animateLoading /></div>
   </div>;
 }

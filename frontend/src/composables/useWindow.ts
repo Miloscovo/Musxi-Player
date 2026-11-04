@@ -14,6 +14,7 @@ export function useWindow() {
     try { setState(await action()); setError(''); return true; }
     catch (e) { setError(e instanceof Error ? e.message : '窗口操作失败'); return false; }
   }, []);
+  const refresh = useCallback(() => invoke(native.window.getState), [invoke]);
   useLayoutEffect(() => {
     const media = window.matchMedia('(prefers-color-scheme: dark)');
     const changed = () => setSystemDark(media.matches);
@@ -37,7 +38,7 @@ export function useWindow() {
     document.documentElement.style.setProperty('--background-opacity', String(glass ? 1 - transparency / 100 : 1));
     document.documentElement.style.setProperty('--player-background-opacity',String(playerTransparent && glass ? 1-transparency/100 : 1));
   }, [theme, transparency,playerTransparent]);
-  return { state, error, theme, appearance, setAppearance: (value:Appearance) => dispatch({ type:'appearance',value }),
+  return { state, error, refresh, theme, appearance, setAppearance: (value:Appearance) => dispatch({ type:'appearance',value }),
     transparency, setTransparency: (value:number) => dispatch({ type:'transparency',value }),
     wallpaperEnabled, playerTransparent, preview:!!visual.preview,
     setWallpaperEnabled:(value:boolean) => dispatch({ type:'wallpaper',value }),

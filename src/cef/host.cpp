@@ -16,12 +16,15 @@
 #include <string>
 #include <imm.h>
 #include "composition_surface.hpp"
+#include "overlay_pixels.hpp"
 #include "../../third_party/json.hpp"
 #include <fstream>
 #include <climits>
 #include <map>
 #include <vector>
 #include "shortcuts.hpp"
+#include "game_window.hpp"
+#include <memory>
 #include "wallpaper_store.hpp"
 #include "window_animation.hpp"
 #include "window_frame_rate.hpp"
@@ -30,6 +33,7 @@ namespace {
 std::wstring pagePath;
 HWND nativeWindow=nullptr;
 HWND testWindow=nullptr;
+void restoreGameOverlayPanel(bool minimize);
 HWND recoveryText=nullptr,retryButton=nullptr,exitButton=nullptr;
 bool smoke=false,createFailed=false,testApp=false,preview=false,hostClosing=false,desktopSmoke=false;
 COLORREF frameColor=RGB(255,255,255);
@@ -96,6 +100,7 @@ void showFromTray(HWND hwnd) {
 bool hideToTray(HWND hwnd) {
     // Never hide the only reachable window if the notification icon cannot be added.
     if(!addTray(hwnd))return false;
+    restoreGameOverlayPanel(false);
     musxi::cef_adapter::finishMainWindowTransition();
     KillTimer(hwnd,102);
     if(auto browser=musxi::cef_adapter::browserHost())browser->WasHidden(true);
@@ -172,6 +177,7 @@ LRESULT hostHitTest(HWND hwnd,LPARAM lp) {
     return region && PtInRegion(region,p.x,p.y)?HTCAPTION:HTCLIENT;
 }
 #include "desktop_lyrics.inc"
+#include "game_overlay.inc"
 #include "shortcuts.inc"
 #include "wallpaper.inc"
 // Main window placement, remembered across launches in the native profile.
@@ -295,7 +301,7 @@ LRESULT CALLBACK testProc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp) {
     case WM_DESTROY: shortcutRegistry.clear();removeTray(hwnd);return 0;
     case WM_HOTKEY: {
         const auto index=static_cast<int>(wp)-0x5100;
-        if(index>=0 && index<10 && shortcutRegistry.registered[index] && !shortcutRegistry.suspended) {
+        if(index>=0 && index<static_cast<int>(musxi::shortcuts::actions.size()) && shortcutRegistry.registered[index]) {
             const auto binding=shortcutRegistry.settings.bindings[index];
             if(HIWORD(lp)==binding.key && LOWORD(lp)==binding.modifiers)executeShortcut(musxi::shortcuts::actions[index]);
         }
@@ -410,6 +416,7 @@ LRESULT CALLBACK testProc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp) {
     }
     case WM_DPICHANGED: {finishCompactTransition();auto r=reinterpret_cast<RECT*>(lp);SetWindowPos(hwnd,nullptr,r->left,r->top,r->right-r->left,mainCompact?MulDiv(compactHeight,HIWORD(wp),96):r->bottom-r->top,SWP_NOZORDER);if(browser){updateWindowFrameRate(hwnd,true);browser->NotifyScreenInfoChanged();browser->WasResized();}return 0;}
     case WM_SIZE: {
+        if(wp==SIZE_MINIMIZED)restoreGameOverlayPanel(false);
         if(wp==SIZE_MINIMIZED)KillTimer(hwnd,102);
         if(browser) {
             browser->WasHidden(wp==SIZE_MINIMIZED);
@@ -508,15 +515,22 @@ void ready(void* window) {
     }
     startTick=GetTickCount64();
     if(browser && !preview && desktopVisible && !showDesktopLyrics())desktopVisible=false;
+    if(browser && !preview && !syncGameOverlayWindows()) {gameOverlayEnabled=false;syncGameOverlayWindows();}
 }
 void tick() {
-    if(testWindow)refreshShortcutSuspension();
+    if(testWindow){refreshShortcutSuspension();sampleGameOverlayPointer();refreshGameOverlayOrder();refreshWindowCompatibility();}
     CefDoMessageLoopWork();
     if(smoke && GetTickCount64()-startTick>90000)PostMessageW(nativeWindow,WM_CLOSE,0,0);
 }
 bool canClose() {
+    if(!restoreCompatibilityWindow()){
+        windowCompatibilityStatus="error";publishGameOverlayState();
+        if(trayAdded){auto data=trayData(testWindow);data.uFlags=NIF_INFO;data.dwInfoFlags=NIIF_WARNING;
+            wcscpy_s(data.szInfoTitle,L"游戏窗口恢复失败");wcscpy_s(data.szInfo,L"播放器尚未退出。请先关闭所选游戏，再退出播放器。");Shell_NotifyIconW(NIM_MODIFY,&data);}
+        return false;
+    }
     finishCompactTransition();
-    if(!hostClosing){shortcutRegistry.clear();saveDesktopSettings();saveMainWindow();hostClosing=true;}
+    if(!hostClosing){shortcutRegistry.clear();gameOverlayEditing=false;syncGameOverlayWindows();saveDesktopSettings();saveGameOverlaySettings();saveMainWindow();restoreGameOverlayPanel(false);hostClosing=true;}
     if(!musxi::cef_adapter::closeBrowsers())return false;
     // The windowless browser is gone. Remove its frozen surface before blocking
     // native cleanup and CefShutdown, rather than leaving a dead window visible.
@@ -568,7 +582,7 @@ int run(HINSTANCE instance,int show,void* sandbox) {
     if(FAILED(SHGetFolderPathW(nullptr,CSIDL_LOCAL_APPDATA,nullptr,0,local)))return 2;
     const auto data=std::filesystem::path(local)/(preview?L"MusxiPlayer-Preview":testApp?L"MusxiPlayer-Test":L"MusxiPlayer");
     std::error_code ec;std::filesystem::create_directories(data,ec);if(ec)return 2;
-    if(!preview && !updateFixture){loadDesktopSettings(data);loadMainWindow(data);}
+    if(!preview && !updateFixture){loadDesktopSettings(data);loadGameOverlaySettings(data);loadMainWindow(data);}
     initShortcuts(data);
     initWallpaper(data);
     CefString(&settings.root_cache_path)=(data/(updateFixture?L"cef-update-fixture-cache":smoke?L"cef-smoke-cache":L"cef-cache")).wstring();
@@ -590,6 +604,97 @@ int run(HINSTANCE instance,int show,void* sandbox) {
 }
 }
 namespace musxi::cef_adapter {
+std::string gameOverlayState() {return gameOverlayStateJson();}
+void gameOverlayClosed(void* window) {
+    for(auto* item:{&gameLyrics,&gameTrack})if(item->window==window) {
+        clearGameOverlayPixels(*item);DestroyWindow(item->window);item->window=nullptr;
+        if(!hostClosing) {
+            if(item==&gameLyrics)gameLyricsVisible=false;else gameTrackVisible=false;
+            saveGameOverlaySettings();publishGameOverlayState();
+        }
+        return;
+    }
+}
+void presentGameOverlay(void* window,const void* pixels,int width,int height) {
+    GameOverlayWindow* target=nullptr;
+    for(auto* item:{&gameLyrics,&gameTrack})if(item->window==window)target=item;
+    if(!target || width<=0 || height<=0 || width>16384 || height>16384)return;
+    auto& item=*target;RECT rect{};GetWindowRect(item.window,&rect);
+    const int w=rect.right-rect.left,h=rect.bottom-rect.top,slack=MulDiv(2,GetDpiForWindow(item.window),96);
+    if(std::abs(width-w)>slack || std::abs(height-h)>slack)return;
+    if(w!=item.pixelWidth || h!=item.pixelHeight) {
+        clearGameOverlayPixels(item);item.dc=CreateCompatibleDC(nullptr);
+        BITMAPINFO info{};info.bmiHeader.biSize=sizeof(BITMAPINFOHEADER);info.bmiHeader.biWidth=w;info.bmiHeader.biHeight=-h;
+        info.bmiHeader.biPlanes=1;info.bmiHeader.biBitCount=32;info.bmiHeader.biCompression=BI_RGB;
+        item.bitmap=CreateDIBSection(item.dc,&info,DIB_RGB_COLORS,&item.pixels,nullptr,0);
+        if(!item.dc || !item.bitmap){clearGameOverlayPixels(item);if(auto browser=gameOverlayBrowserHost(item.window))browser->CloseBrowser(true);return;}
+        item.previous=SelectObject(item.dc,item.bitmap);item.pixelWidth=w;item.pixelHeight=h;
+    }
+    copyOverlayPixels(item.pixels,w,h,pixels,width,height);
+    POINT origin{rect.left,rect.top},source{};SIZE size{w,h};BLENDFUNCTION blend{AC_SRC_OVER,0,255,AC_SRC_ALPHA};
+    if(!UpdateLayeredWindow(item.window,nullptr,&origin,&size,item.dc,&source,0,&blend,ULW_ALPHA))
+        if(auto browser=gameOverlayBrowserHost(item.window))browser->CloseBrowser(true);
+}
+musxi::LibraryReply gameOverlayCommand(const std::string& command,const std::string& params) {
+    try {
+        const auto data=DesktopJson::parse(params);
+        if(!data.is_object())return {400,"无效游戏悬浮参数",{}};
+        if(command=="gameOverlay.getState") {if(!data.empty())return {400,"无效游戏悬浮参数",{}};return {0,{},gameOverlayStateJson()};}
+        if(!testWindow || hostClosing)return {409,"当前窗口不支持游戏悬浮",{}};
+        if(command=="gameOverlay.setMinecraftCompatibility") {
+            if(data.size()!=1 || !data.contains("minecraftCompatibility") || !data.at("minecraftCompatibility").is_boolean())return {400,"无效 Minecraft 兼容模式参数",{}};
+            if(data.at("minecraftCompatibility").get<bool>())return {409,"自动兼容模式已取消，请使用通用窗口兼容工具手动选择游戏",{}};
+            return {0,{},gameOverlayStateJson()};
+        }
+        if(command=="gameOverlay.setWindowCompatibility" || command=="gameOverlay.listCompatibilityWindows"
+            || command=="gameOverlay.applyWindowCompatibility" || command=="gameOverlay.restoreWindowCompatibility")return windowCompatibilityCommand(command,data);
+        if(command=="gameOverlay.reportTrackHeight") {
+            if(data.size()!=1 || !data.contains("height") || !data.at("height").is_number_integer() || data.at("height")<80 || data.at("height")>1000)
+                return {400,"无效歌曲信息组件高度",{}};
+            if(!gameTrack.window)return {409,"歌曲信息组件尚未就绪",{}};
+            RECT rect{};if(!GetWindowRect(gameTrack.window,&rect))return {500,"无法读取组件尺寸",{}};
+            const int height=MulDiv(data.at("height").get<int>(),GetDpiForWindow(gameTrack.window),96);
+            if(rect.bottom-rect.top!=height) {
+                rect.bottom=rect.top+height;placeDesktop(gameTrack.window,rect,SWP_NOZORDER);saveGameOverlaySettings();
+            }
+            return {0,{},"true"};
+        }
+        static const std::map<std::string,std::string> fields{{"gameOverlay.setEnabled","enabled"},{"gameOverlay.setVisible","visible"},
+            {"gameOverlay.setLyricsVisible","lyricsVisible"},{"gameOverlay.setTrackVisible","trackVisible"},
+            {"gameOverlay.setEditing","editing"},{"gameOverlay.setPanelVisible","panelVisible"},{"gameOverlay.setHideOnHover","hideOnHover"}};
+        const auto found=fields.find(command);if(found==fields.end())return {404,"未知游戏悬浮操作",{}};
+        const auto& field=found->second;
+        if(data.size()!=1 || !data.contains(field) || !data.at(field).is_boolean())return {400,"无效游戏悬浮参数",{}};
+        const bool value=data.at(field).get<bool>();
+        if(field=="enabled" && !value && !restoreCompatibilityWindow()) {
+            windowCompatibilityStatus="error";publishGameOverlayState();
+            return {500,"无法恢复所选游戏窗口，扩展保持开启；请检查权限或先关闭游戏后重试",{}};
+        }
+        if((field=="editing" || field=="panelVisible") && value && !gameOverlayEnabled)return {409,"请先开启游戏悬浮",{}};
+        if(field=="panelVisible") {
+            if(value){if(!showGameOverlayPanel())return {500,"无法打开选歌面板",{}};}
+            else restoreGameOverlayPanel(true);
+        } else {
+            const auto old=DesktopJson::parse(gameOverlayStateJson());
+            if(field=="enabled") {
+                if(value && !gameOverlayEnabled)gameOverlayVisible=false;
+                gameOverlayEnabled=value;if(!value){gameOverlayEditing=false;restoreGameOverlayPanel(false);}
+            }
+            else if(field=="visible"){gameOverlayVisible=value;if(!value)gameOverlayEditing=false;}
+            else if(field=="lyricsVisible")gameLyricsVisible=value;
+            else if(field=="trackVisible")gameTrackVisible=value;
+            else if(field=="hideOnHover")gameOverlayHideOnHover=value;
+            else {gameOverlayEditing=value;if(value)gameOverlayVisible=true;}
+            if(!syncGameOverlayWindows()) {
+                gameOverlayEnabled=old.at("enabled");gameOverlayVisible=old.at("visible");gameLyricsVisible=old.at("lyricsVisible");gameTrackVisible=old.at("trackVisible");gameOverlayEditing=old.at("editing");
+                gameOverlayHideOnHover=old.at("hideOnHover");
+                syncGameOverlayWindows();publishGameOverlayState();return {500,"无法打开悬浮组件，请重试",{}};
+            }
+            refreshWindowCompatibility(true);refreshShortcutSuspension();saveGameOverlaySettings();publishGameOverlayState();
+        }
+        return {0,{},gameOverlayStateJson()};
+    }catch(const DesktopJson::exception&){return {400,"无效游戏悬浮参数",{}};}
+}
 musxi::LibraryReply wallpaperCommand(const std::string& command,const std::string& params) {
     using Json=nlohmann::json;
     try {
@@ -634,7 +739,7 @@ musxi::LibraryReply shortcutsCommand(const std::string& command,const std::strin
         if(command=="shortcuts.setSettings") {
             const auto next=musxi::shortcuts::parse(data);
             if(next.global && !testWindow)return {409,"此预览窗口不支持全局快捷键",{}};
-            if(!shortcutRegistry.change(next,saveShortcuts))return {409,"无法保存快捷键：组合键可能已被系统或其他程序占用，或配置无法写入；已保留原设置。",{}};
+            if(!shortcutRegistry.change(next,saveShortcuts))return {409,"无法保存快捷键：组合键被占用、无法启动监听或配置无法写入；已保留原设置。",{}};
         } else if(command=="shortcuts.suspend") {
             if(!data.is_object() || data.size()!=2 || !data.at("recording").is_boolean() || !data.at("editing").is_boolean())return {400,"无效录制状态",{}};
             shortcutRecording=data.at("recording");shortcutEditing=data.at("editing");refreshShortcutSuspension();

@@ -49,7 +49,7 @@ int main() try {
     require(savePlaybackSettings(settingsFile,"best","saved-output"),"highest quality settings save failed");
     loadPlaybackSettings(settingsFile);
     require(defaultAudioQuality=="best","highest quality setting lost after restart");
-    for(const auto quality:{"netease:hires","kugou:high"})require(validAudioQuality(quality),"advanced quality rejected");
+    for(const auto quality:{"netease:hires","netease:jyeffect","kugou:high"})require(validAudioQuality(quality),"advanced quality rejected");
     require(!validAudioQuality("qq:nac") && !validDefaultQuality("qq:master"),"unsupported quality accepted");
     fs::remove(settingsFile);defaultAudioQuality="128";preferredOutputDevice.clear();
     cloudTracks=Json::array();
@@ -90,6 +90,24 @@ int main() try {
     require(invoke("library.cancel").code==0 && libraryNextPlay.is_null() && libraryOperationStatus=="cancelled","play cancellation");
     cloudTracks[0]["cover"]="https://example.com/known";
     require(invoke("library.image",{{"url","https://example.com/known"}}).code==0 && webWantedCovers.size()==1,"known cover was not queued");
+    const std::string coverUrl="https://example.com/known";
+    require(invoke("library.image",{{"url",coverUrl},{"size",300}}).code==0 && webWantedCovers.size()==2,"thumbnail request replaced HD request");
+    for(const auto size:{Json(0),Json(400),Json(300.5),Json("300"),Json(nullptr)})
+        require(invoke("library.image",{{"url",coverUrl},{"size",size}}).code==400,"invalid image size accepted");
+    require(invoke("library.image",{{"url","https://example.com/private"},{"size",300}}).code==403,"thumbnail bypassed known URL check");
+    auto thumb=std::make_unique<CoverImage>();thumb->data="small";coverCache[{coverUrl,300}]=std::move(thumb);
+    auto large=std::make_unique<CoverImage>();large->data="large";coverCache[{coverUrl,1200}]=std::move(large);
+    require(Json::parse(invoke("library.image",{{"url",coverUrl},{"size",300}}).json)=="small","thumbnail received HD cache");
+    require(Json::parse(invoke("library.image",{{"url",coverUrl}}).json)=="large","HD received thumbnail cache");
+    coverCache.clear();webWantedCovers.clear();
+    for(const auto size:{300,1200}) {
+        const auto image=std::string("data:image/png;base64,")+(size==300?"c21hbGw=":"bGFyZ2U=");
+        std::promise<Json> downloaded;coverFuture=downloaded.get_future();
+        downloaded.set_value({{"ok",true},{"data",{{"size",size},{"images",Json::array({{{"url",coverUrl},{"image",image}}})}}}});
+        coverTick();
+        require(coverCache.at({coverUrl,size})->data==image,"download completion used the wrong cover size");
+    }
+    require(coverCache.size()==2,"download completion replaced the other size");coverCache.clear();
     auto complete=[&](const std::string& operation,const Json& response) {
         libraryOperationKind=cloudOperation=operation;libraryOperationStatus="pending";
         std::promise<Json> p;cloudFuture=p.get_future();p.set_value(response);cloudTick();
@@ -359,8 +377,11 @@ int main() try {
     require(savePlaybackHistory(recentFile),"recent persistence save failed");recentTracks=Json::array();
     require(restorePlaybackHistory(recentFile) && recentTracks.size()==500 && recentTracks[0]["id"]=="qq:505","recent restart restore failed");
     require(currentQuality=="netease:hires","advanced quality lost after restart");
+    currentQuality="netease:jyeffect";
+    require(savePlaybackHistory(recentFile),"HD pristine quality save failed");currentQuality.clear();
+    require(restorePlaybackHistory(recentFile) && currentQuality=="netease:jyeffect","HD pristine quality lost after restart");
     Json retired;{std::ifstream stream(recentFile);stream>>retired;}
-    for(const auto quality:{"netease:jymaster","netease:jyeffect","qq:master","qq:atmos2","kugou:viper_clear","kugou:viper_tape"}) {
+    for(const auto quality:{"netease:jymaster","qq:master","qq:atmos2","kugou:viper_clear","kugou:viper_tape"}) {
         require(!validAudioQuality(quality),"removed quality still accepted");
         retired["quality"]=quality;{std::ofstream stream(recentFile);stream<<retired;}
         require(restorePlaybackHistory(recentFile) && currentQuality.empty() && recentTracks.size()==500,"removed quality discarded saved history");

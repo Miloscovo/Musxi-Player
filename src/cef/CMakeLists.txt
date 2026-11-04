@@ -32,7 +32,7 @@ add_library(cef_host SHARED host.cpp)
 musxi_standard(cef_host 20)
 SET_LIBRARY_TARGET_PROPERTIES(cef_host)
 target_include_directories(cef_host PRIVATE "${CEF_ROOT}")
-target_link_libraries(cef_host PRIVATE cef_bridge musxi_wallpaper libcef_dll_wrapper libcef_lib ${CEF_STANDARD_LIBS} comctl32 shlwapi imm32 d3d11 dcomp)
+target_link_libraries(cef_host PRIVATE cef_bridge musxi_wallpaper libcef_dll_wrapper libcef_lib ${CEF_STANDARD_LIBS} comctl32 shlwapi imm32 d3d11 dcomp dwmapi)
 if(MUSXI_ENABLE_FFMPEG)
   target_compile_definitions(cef_host PRIVATE MUSXI_ENABLE_FFMPEG)
   add_custom_command(TARGET cef_host POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_if_different

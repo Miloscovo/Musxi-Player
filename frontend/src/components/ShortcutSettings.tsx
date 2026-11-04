@@ -5,7 +5,7 @@ import { emptyShortcuts, shortcutActions, type KeyBinding } from '../native/shor
 import { bindingLabel, recordedKey, sameBinding } from '../composables/shortcutKeys';
 import type { ShortcutsController } from '../composables/useShortcuts';
 
-export default function ShortcutSettings({ shortcuts: keys }: { shortcuts: ShortcutsController }) {
+export default function ShortcutSettings({ shortcuts: keys, overlayEnabled = false }: { shortcuts: ShortcutsController; overlayEnabled?: boolean }) {
   const [confirm, setConfirm] = useState(false);
   const pending = useRef<KeyBinding | null>(null);
   const cancel = useRef(keys.cancel); cancel.current = keys.cancel;
@@ -34,6 +34,8 @@ export default function ShortcutSettings({ shortcuts: keys }: { shortcuts: Short
     window.addEventListener('keydown', down, true); window.addEventListener('keyup', up, true); window.addEventListener('blur', blur);
     return () => { window.removeEventListener('keydown', down, true); window.removeEventListener('keyup', up, true); window.removeEventListener('blur', blur); };
   }, [keys.recording, keys.ready, keys.state]);
+  const actions = shortcutActions.filter(([id]) => overlayEnabled || !id.startsWith('overlay'));
+  const failed = keys.state.failed.filter(id => overlayEnabled || !id.startsWith('overlay'));
   return <section className="settings-content shortcut-settings" aria-label="快捷键设置">
     <div className="appearance-setting-row">
       <h3 id="global-shortcuts-label">启用全局快捷键</h3>
@@ -41,10 +43,10 @@ export default function ShortcutSettings({ shortcuts: keys }: { shortcuts: Short
         disabled={!keys.loaded || keys.busy || !!keys.recording} onClick={() => void keys.save({ ...keys.state, global: !keys.state.global })}><span/></Button>
     </div>
     {keys.error && <p className="playback-settings-error" role="alert">{keys.error}</p>}
-    {!!keys.state.failed.length && <p className="playback-settings-error" role="status">以下全局快捷键不可用，可能已被其他程序占用：{keys.state.failed.map(id => shortcutActions.find(([action]) => action === id)?.[1]).join('、')}。可重新绑定，窗口内仍可使用。</p>}
+    {!!failed.length && <p className="playback-settings-error" role="status">以下全局快捷键不可用，可能被其他程序占用或无法启动监听：{failed.map(id => shortcutActions.find(([action]) => action === id)?.[1]).join('、')}。可重新绑定，窗口内仍可使用。</p>}
     {!keys.loaded && !keys.error && <p className="playback-settings-loading">正在读取快捷键…</p>}
     <div className="shortcut-groups">
-      {[shortcutActions.slice(0,5), shortcutActions.slice(5,8), shortcutActions.slice(8)].map((group, index) => <div className="shortcut-group" key={index}>
+      {[actions.slice(0,5), actions.slice(5,8), actions.slice(8,10), actions.slice(10)].filter(group => group.length).map((group, index) => <div className="shortcut-group" id={group[0][0].startsWith('overlay') ? 'game-overlay-shortcuts' : undefined} key={index}>
         {group.map(([id, label]) => <div className="shortcut-row" key={id}>
           <span id={`shortcut-${id}`}>{label}</span>
           <div className="shortcut-binding-actions">

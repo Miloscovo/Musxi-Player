@@ -4,8 +4,9 @@ export type MusicPlatform = 'kugou' | 'netease' | 'qq';
 export const platformNames: Record<MusicPlatform,string> = {kugou:'酷狗概念版',netease:'网易云音乐',qq:'QQ 音乐'};
 export interface Track { platform?: MusicPlatform | ''; platforms?:MusicPlatform[]; favorite?:boolean; id: string; name: string; artist: string; album?: string; cover: string; duration: number; count: number; editable: boolean }
 export type PlaybackOrder = 'sequential' | 'random' | 'repeat-one';
-export const audioQualities = ['128','320','flac','netease:hires','kugou:high'] as const;
+export const audioQualities = ['128','320','flac','netease:hires','netease:jyeffect','kugou:high'] as const;
 export type AudioQuality = typeof audioQualities[number];
+export type CoverSize = 300 | 1200;
 export type DefaultAudioQuality = '128' | '320' | 'flac' | 'best';
 export interface PlaybackSettings { defaultQuality: DefaultAudioQuality; outputDevice: string; devices: { id: string; name: string }[] }
 export function parsePlaybackSettings(value: unknown): PlaybackSettings {
@@ -184,8 +185,8 @@ export function createLibraryClient(host: CefTransport) {
       return parsePlaybackSettings(await request(host, 'library.setPlaybackSettings', settings, { signal }));
     },
     async getState(page = 1, signal?: AbortSignal) { return parseLibraryState(await request(host, 'library.getState', { page }, { signal })); },
-    async image(url: string, signal?: AbortSignal) {
-      const value = await request(host, 'library.image', { url }, { signal });
+    async image(url: string, signal?: AbortSignal, size: CoverSize = 1200) {
+      const value = await request(host, 'library.image', { url, ...(size === 300 ? { size } : {}) }, { signal });
       if (typeof value !== 'string') throw new NativeError(502, 'Invalid image'); return safeImage(value);
     },
     // Poll while status is 'pending'; discard replies whose id is no longer the current song.

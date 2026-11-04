@@ -9,7 +9,7 @@ import VinylCover from '../components/VinylCover';
 import CoverImage from '../components/CoverImage';
 import { Button } from '../components/ui/button';
 import { useLyrics } from '../composables/useLyrics';
-import { activeLyricLine, observeLyricDragRegions } from '../composables/lyrics';
+import { activeLyricLine, lyricScrollTransition, observeLyricDragRegions } from '../composables/lyrics';
 import { useLyricsTranslation } from '../composables/lyricsTranslation';
 import { translationHint } from '../composables/translationStatus';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../components/ui/tooltip';
@@ -17,8 +17,9 @@ import type { LibraryState } from '../native/library';
 
 const origins: Record<string, string> = { 'lrc-file': '本地歌词文件', embedded: '内嵌歌词', online: '在线歌词', cache: '在线歌词', matched: '指定歌词' };
 
-export default function LyricsView({ trackId, now, positionMs, playing, canSeek, onSeek, onClose, onEntered, bottomOffset, onExpandPlayer, onPlayerCover }: {
+export default function LyricsView({ trackId, now, fallbackCover, positionMs, playing, canSeek, onSeek, onClose, onEntered, bottomOffset, onExpandPlayer, onPlayerCover }: {
   trackId: string; now?: LibraryState['now']; positionMs: number; playing: boolean; canSeek: boolean;
+  fallbackCover?: string;
   onSeek: (positionMs: number) => void; onClose: () => void;
   onEntered: () => void;
   bottomOffset: number;
@@ -92,7 +93,7 @@ export default function LyricsView({ trackId, now, positionMs, playing, canSeek,
     const top = row.offsetTop - container.clientHeight / 2 + row.clientHeight / 2;
     if (reduced) container.scrollTop = top;
     else scrollAnimation.current = animate(container.scrollTop, top, {
-      duration: 0.48, ease: [0.22, 1, 0.36, 1], onUpdate: value => { container.scrollTop = value; },
+      ...lyricScrollTransition, onUpdate: value => { container.scrollTop = value; },
     });
     return () => { scrollAnimation.current?.stop(); scrollAnimation.current = null; };
     // Showing or hiding translations changes row heights; re-centre the current line.
@@ -116,8 +117,8 @@ export default function LyricsView({ trackId, now, positionMs, playing, canSeek,
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
     </Button>
     <div className="lyrics-track" style={{ '--compact-art-size': `${titleHeight}px` } as CSSProperties}>
-      {playerStyle === 'vinyl' ? <VinylCover url={now?.cover || ''} playing={playing} onColor={(url,color,image)=>setCoverColor({url,color,image})} /> :
-        <div className="lyrics-square-cover" hidden={playerStyle === 'none'} onLoadCapture={sampleCover}><CoverImage url={now?.cover || ''} animateLoading /></div>}
+      {playerStyle === 'vinyl' ? <VinylCover url={now?.cover || ''} playing={playing} fallbackImage={fallbackCover} onColor={(url,color,image)=>setCoverColor({url,color,image})} /> :
+        <div className="lyrics-square-cover" hidden={playerStyle === 'none'} onLoadCapture={sampleCover}><CoverImage url={now?.cover || ''} fallbackImage={fallbackCover} animateLoading /></div>}
       <div ref={title} className="lyrics-title"><h2 title={now?.name}>{now?.name || '尚未选择歌曲'}</h2>
         <p>{now?.artist}</p>
         {lyrics && origins[lyrics.origin] && <span className="lyrics-origin">{origins[lyrics.origin]}</span>}

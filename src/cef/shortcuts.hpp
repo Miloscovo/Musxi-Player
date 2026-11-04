@@ -1,6 +1,7 @@
 #pragma once
 #include "../../third_party/json.hpp"
 #include <array>
+#include <algorithm>
 #include <functional>
 #include <set>
 #include <string>
@@ -9,18 +10,39 @@
 
 namespace musxi::shortcuts {
 using Json=nlohmann::json;
-inline constexpr std::array<const char*,10> actions{"playPause","previous","next","forward","backward","volumeUp","volumeDown","mute","playbackOrder","visibility"};
+inline constexpr std::array<const char*,13> actions{"playPause","previous","next","forward","backward","volumeUp","volumeDown","mute","playbackOrder","visibility","overlayVisibility","overlayEditing","overlayPlayer"};
 struct Binding { unsigned key=0,modifiers=0; };
-struct Settings { bool global=false;std::array<Binding,10> bindings{}; };
+struct PressedKeys {
+    std::array<bool,256> down{};
+    bool update(unsigned key,bool pressed) {
+        if(key>=down.size())return false;
+        const bool first=pressed && !down[key];down[key]=pressed;return first;
+    }
+    unsigned modifiers() const {
+        return ((down[0x12] || down[0xa4] || down[0xa5])?1u:0u)
+            | ((down[0x11] || down[0xa2] || down[0xa3])?2u:0u)
+            | ((down[0x10] || down[0xa0] || down[0xa1])?4u:0u)
+            | ((down[0x5b] || down[0x5c])?8u:0u);
+    }
+};
+struct Settings { bool global=false;std::array<Binding,actions.size()> bindings{}; };
 inline bool validKey(unsigned key) {
     return (key>=0x30 && key<=0x5a && !(key>0x39 && key<0x41)) || (key>=0x60 && key<=0x87)
         || key==0x08 || key==0x09 || key==0x0d || key==0x20 || (key>=0x21 && key<=0x28)
         || key==0x2d || key==0x2e || (key>=0xba && key<=0xc0) || (key>=0xdb && key<=0xde);
 }
-inline Settings parse(const Json& data) {
-    if(!data.is_object() || data.size()!=2 || !data.at("global").is_boolean() || !data.at("bindings").is_object() || data.at("bindings").size()!=actions.size())throw std::runtime_error("无效快捷键配置");
+inline Settings parse(const Json& input) {
+    auto data=input;
+    // Ignore only the retired binding so existing playback and game shortcuts survive.
+    if(data.is_object() && data.contains("bindings") && data["bindings"].is_object() && data["bindings"].size()==14)
+        data["bindings"].erase("overlayScreenshot");
+    if(!data.is_object() || data.size()!=2 || !data.at("global").is_boolean() || !data.at("bindings").is_object()
+        || (data.at("bindings").size()!=10 && data.at("bindings").size()!=actions.size()))throw std::runtime_error("无效快捷键配置");
+    for(const auto& item:data.at("bindings").items())
+        if(std::find(actions.begin(),actions.end(),item.key())==actions.end())throw std::runtime_error("无效快捷键功能");
     Settings result;result.global=data.at("global");std::set<std::pair<unsigned,unsigned>> used;
     for(size_t i=0;i<actions.size();++i) {
+        if(i>=data.at("bindings").size())continue;
         const auto& value=data.at("bindings").at(actions[i]);if(value.is_null())continue;
         if(!value.is_object() || value.size()!=2 || !value.at("key").is_number_integer() || !value.at("modifiers").is_number_integer()
             || value.at("key")<0 || value.at("key")>255 || value.at("modifiers")<0 || value.at("modifiers")>15)throw std::runtime_error("无效快捷键");
@@ -40,18 +62,23 @@ inline Json json(const Settings& settings) {
 // Registration and disk writes are injected so failed changes can be tested without stealing real keys.
 class Registry {
 public:
-    Settings settings;std::array<bool,10> registered{},unavailable{};bool suspended=false;
+    Settings settings;std::array<bool,actions.size()> registered{},unavailable{};bool suspended=false,recording=false,overlayEnabled=false;
     std::function<bool(int,Binding)> acquire;
     std::function<void(int)> release;
-    void clear() {for(int i=0;i<10;++i)if(registered[i]){release(i);registered[i]=false;}}
+    void clear() {for(int i=0;i<static_cast<int>(actions.size());++i)if(registered[i]){release(i);registered[i]=false;}}
     void restore() {
-        clear();if(!settings.global){unavailable.fill(false);return;}if(suspended)return;
-        unavailable.fill(false);
-        for(int i=0;i<10;++i)if(settings.bindings[i].key){registered[i]=acquire(i,settings.bindings[i]);unavailable[i]=!registered[i];}
+        clear();if(!settings.global){unavailable.fill(false);return;}
+        if(!suspended)unavailable.fill(false);
+        for(int i=0;i<static_cast<int>(actions.size());++i) {
+            if(i>=10 && !overlayEnabled){unavailable[i]=false;continue;}
+            // Panel shortcuts remain reachable while typing a search; recording suspends every key.
+            if(suspended && (recording || i<10))continue;
+            if(settings.bindings[i].key){registered[i]=acquire(i,settings.bindings[i]);unavailable[i]=!registered[i];}
+        }
     }
     std::vector<std::string> failed() const {
         std::vector<std::string> result;
-        if(settings.global)for(int i=0;i<10;++i)if(unavailable[i])result.push_back(actions[i]);
+        if(settings.global)for(int i=0;i<static_cast<int>(actions.size());++i)if(unavailable[i] && (i<10 || overlayEnabled))result.push_back(actions[i]);
         return result;
     }
     bool change(const Settings& next,const std::function<bool(const Settings&)>& save) {

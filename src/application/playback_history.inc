@@ -114,7 +114,7 @@ bool restorePlaybackHistory(const fs::path& file) {
         const auto mode=saved.at("mode").get<std::string>();
         auto quality=saved.at("quality").get<std::string>();
         // Removed tiers must not discard the saved queue, progress or recent history.
-        if(quality=="netease:jymaster" || quality=="netease:jyeffect" || quality=="qq:master" || quality=="qq:atmos2" || quality=="kugou:viper_clear" || quality=="kugou:viper_tape")quality.clear();
+        if(quality=="netease:jymaster" || quality=="qq:master" || quality=="qq:atmos2" || quality=="kugou:viper_clear" || quality=="kugou:viper_tape")quality.clear();
         if(mode!="sequential" && mode!="random" && mode!="repeat-one")throw std::runtime_error("Invalid playback mode");
         if(!quality.empty() && !validAudioQuality(quality))throw std::runtime_error("Invalid playback quality");
         const auto position=saved.at("positionMs").get<std::int64_t>();

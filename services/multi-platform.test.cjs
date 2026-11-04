@@ -3,6 +3,91 @@ const assert=require('node:assert/strict');
 const {MultiPlatform}=require('./multi-platform.cjs');
 function fixture(){const calls=[];const adapters=Object.fromEntries(['kugou','netease','qq'].map(platform=>[platform,{async run(r){calls.push([platform,r]);if(r.op==='init')return {connected:!!r.session,profile:{name:platform},session:r.session};if(r.op==='sync')return {playlists:[{id:platform==='kugou'?'1':platform+':1'}]};if(r.op==='search')return {tracks:[{id:platform+':song',name:platform,artist:'Artist',album:'Album'}],total:1,hasMore:false};if(r.op==='vip_auto')return {session:{cookie:{token:'private'}},outcome:'skipped'};return {status:'connected',profile:{name:platform},session:{platform}};}}]));return {calls,adapters,manager:new MultiPlatform(adapters)};}
 
+async function audioFixture(t,handler) {
+  const fs=require('node:fs/promises'),os=require('node:os'),path=require('node:path');
+  const dir=await fs.mkdtemp(path.join(os.tmpdir(),'musxi-prefetch-'));
+  const server=require('node:http').createServer(handler || ((request,response)=>response.end(Buffer.alloc(256,1))));
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  t.after(async()=>{server.closeAllConnections();await new Promise(resolve=>server.close(resolve));await fs.rm(dir,{recursive:true,force:true});});
+  return {dir,fs,url:`http://127.0.0.1:${server.address().port}/audio`};
+}
+async function prepared(manager,token) {
+  for(let count=0;count<200;count++) {
+    const reply=await manager.run({op:'audio_prepared',token});
+    if(reply.status!=='pending')return reply;
+    await new Promise(resolve=>setTimeout(resolve,5));
+  }
+  throw Error('Audio preparation did not complete');
+}
+test('audio preparation uses authorized sources on every platform and transfers cache ownership once',async t=>{
+  const {dir,fs,url}=await audioFixture(t);
+  for(const platform of ['kugou','netease','qq']) {
+    const {manager,adapters}=fixture(),id=platform==='kugou'?'song':platform+':song';
+    const requests=[];
+    adapters[platform].run=async request=>{requests.push(request);return {url,track:{id,name:'Song',artist:'Artist'},quality:'flac'};};
+    const token='prepare-'+platform;
+    assert.deepEqual(await manager.run({op:'audio_prepare',token,id,cacheDir:dir}),{token,status:'pending'});
+    const result=await prepared(manager,token);
+    assert.equal(result.status,'ready');assert.equal(result.data.track.id,id);
+    assert.equal((await fs.readFile(result.data.path)).length,256);
+    assert.equal(requests.length,1);assert.equal(requests[0].op,'audio');assert.equal(requests[0].cacheDir,undefined);
+    assert.equal(manager.active,'kugou');assert.equal(result.data.session,undefined);
+    assert.equal((await manager.run({op:'audio_prepared',token})).status,'failed');
+    await manager.run({op:'audio_cancel',token});await manager.close();
+    assert.equal((await fs.stat(result.data.path)).size,256,'Transferred file belongs to native playback');
+    await fs.unlink(result.data.path);
+  }
+});
+test('audio cancellation aborts an active download, clears partial files and does not block foreground work',async t=>{
+  let started,closed;const downloadStarted=new Promise(resolve=>started=resolve),downloadClosed=new Promise(resolve=>closed=resolve);
+  const {dir,fs,url}=await audioFixture(t,(request,response)=>{response.write(Buffer.alloc(256,1));started();response.on('close',closed);});
+  const {manager,adapters}=fixture();
+  adapters.kugou.run=async request=>request.op==='audio'?{url,track:{id:'song'},quality:'128'}:{message:'foreground'};
+  await manager.run({op:'audio_prepare',token:'slow',id:'song',cacheDir:dir});
+  const job=manager.preparing;await downloadStarted;
+  assert.equal((await manager.run({op:'tracks',id:'playlist'})).message,'foreground');
+  await manager.run({op:'audio_cancel',token:'slow'});await job.promise;await downloadClosed;
+  assert.equal(job.controller.signal.aborted,true);assert.deepEqual(await fs.readdir(dir),[]);
+  assert.equal((await manager.run({op:'audio_prepared',token:'slow'})).status,'failed');
+});
+test('new preparation and logout remove only unclaimed cache files; invalid tokens are rejected',async t=>{
+  const {dir,fs,url}=await audioFixture(t),{manager,adapters}=fixture();
+  adapters.kugou.run=async request=>request.op==='audio'?{url,track:{id:request.id},quality:'128'}:{};
+  for(const token of [undefined,1,'','a'.repeat(65),'a b','中文'])await assert.rejects(manager.run({op:'audio_prepare',token,id:'one',cacheDir:dir}),/无效预加载标识/);
+  await assert.rejects(manager.run({op:'audio_prepare',token:'valid',id:'one'}),/无效预加载请求/);
+  await manager.run({op:'audio_prepare',token:'one',id:'one',cacheDir:dir});
+  while(manager.preparing.status==='pending')await new Promise(resolve=>setTimeout(resolve,5));
+  const old=manager.preparing,oldPath=old.data.path;
+  await manager.run({op:'audio_prepare',token:'two',id:'two',cacheDir:dir});await old.promise;
+  await assert.rejects(fs.stat(oldPath),{code:'ENOENT'});
+  const second=manager.preparing;
+  await manager.run({op:'logout',platform:'kugou'});await second.promise;
+  assert.deepEqual(await fs.readdir(dir),[]);await manager.close();
+});
+test('cancelled QQ authorization is allowed to settle before a foreground request reuses its response slot',async t=>{
+  const {dir,url}=await audioFixture(t),{manager,adapters}=fixture();
+  let release,entered;const gate=new Promise(resolve=>release=resolve),started=new Promise(resolve=>entered=resolve);let calls=0;
+  adapters.qq.run=async request=>{
+    assert.equal(!!adapters.qq.pending,false,'No concurrent QQ pipe request');
+    adapters.qq.pending=true;calls++;entered();
+    if(calls===1)await gate;
+    adapters.qq.pending=false;return {url,track:{id:request.id},quality:'128'};
+  };
+  await manager.run({op:'audio_prepare',token:'qq',id:'qq:one',cacheDir:dir});await started;
+  const job=manager.preparing;await manager.run({op:'audio_cancel',token:'qq'});
+  const foreground=manager.run({op:'audio',id:'qq:two'});
+  assert.equal(job.controller.signal.aborted,true);assert.equal(calls,1);
+  release();const result=await foreground;await job.promise;
+  assert.equal(result.track.id,'qq:two');assert.equal(calls,2);await manager.close();
+});
+test('failed audio preparation reports a public failure and leaves normal audio requests usable',async()=>{
+  const {manager,adapters}=fixture();let failed=true;
+  adapters.kugou.run=async()=>{if(failed)throw Error('private upstream detail');return {url:'https://example.com/song.mp3',track:{id:'song'},quality:'128'};};
+  await manager.run({op:'audio_prepare',token:'failure',id:'song',cacheDir:'unused'});
+  const result=await prepared(manager,'failure');assert.equal(result.status,'failed');assert.doesNotMatch(result.error,/private/);
+  failed=false;assert.equal((await manager.run({op:'audio',id:'song'})).track.id,'song');await manager.close();
+});
+
 test('account initialization preserves verification failures instead of reporting confirmed logout',async()=>{
   const {manager,adapters}=fixture();
   adapters.kugou.run=async()=>({connected:false,verificationFailed:true});
@@ -200,12 +285,20 @@ test('membership is platform scoped and image failures never erase it or sign ou
   assert.equal(result.accounts.find(a=>a.platform==='netease').membership,undefined);
 });
 
-test('highest available prioritizes verified original advanced tiers and falls back',async()=>{
- for(const [platform,expected] of [['netease',['netease:hires','flac','320']],['qq',['flac','320']],['kugou',['kugou:high','flac','320']]]){
+test('highest available prioritizes advanced tiers and falls back',async()=>{
+ for(const [platform,expected] of [['netease',['netease:jyeffect','netease:hires','flac','320']],['qq',['flac','320']],['kugou',['kugou:high','flac','320']]]){
   const seen=[];const manager=new MultiPlatform({[platform]:{async run(r){seen.push(r.quality);if(r.quality!=='320')throw Error('Unavailable');return {quality:r.quality};}}});
   assert.equal((await manager.audioWithDefault(platform,{op:'audio',defaultQuality:'best'})).quality,'320');
   assert.deepEqual(seen,expected);
  }
+});
+
+test('Netease highest uses HD pristine first without changing explicit quality preferences',async()=>{
+ const seen=[];const manager=new MultiPlatform({netease:{async run(r){seen.push(r.quality);return {quality:r.quality};}}});
+ assert.equal((await manager.audioWithDefault('netease',{op:'audio',defaultQuality:'best'})).quality,'netease:jyeffect');
+ assert.equal((await manager.audioWithDefault('netease',{op:'audio',defaultQuality:'flac'})).quality,'flac');
+ assert.equal((await manager.audioWithDefault('netease',{op:'audio',defaultQuality:'best',quality:'netease:hires'})).quality,'netease:hires');
+ assert.deepEqual(seen,['netease:jyeffect','flac','netease:hires']);
 });
 
 test('online reads reuse successful results for 30 seconds and isolate cached snapshots',async()=>{

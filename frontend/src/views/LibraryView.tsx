@@ -1,7 +1,7 @@
 import { AccountDialog, PlatformIcon } from '../components/AccountDialog';
 import { platformNames, type MusicPlatform } from '../native/library';
 import { isDemoMode } from '../demo/context.ts';
-import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { animate } from 'motion/mini';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import type { useLibrary } from '../composables/useLibrary';
@@ -21,6 +21,9 @@ import { ContextMenu, ContextMenuTrigger, ContextMenuContent, ContextMenuItem,
 
 import AppearanceSettings from '../components/AppearanceSettings';
 import PlaybackSettings from '../components/PlaybackSettings';
+import GameOverlaySettings from '../components/GameOverlaySettings';
+import ExtensionsView from './ExtensionsView';
+import type { useGameOverlay } from '../composables/useGameOverlay';
 import ShortcutSettings from '../components/ShortcutSettings';
 import LyricsSettings from '../components/LyricsSettings';
 import type { ShortcutsController } from '../composables/useShortcuts';
@@ -42,11 +45,12 @@ function appendUnique(previous: Track[], incoming?: Track[]) {
   return rows;
 }
 export default function LibraryView({ library: lib, theme, appearance, onAppearance, transparency = 50, onTransparency, updates, showUpdates = 0, shortcuts,
-  wallpaper,wallpaperEnabled,onWallpaperEnabled,playerTransparent,onPlayerTransparent,playback,onResume }: {
+  wallpaper,wallpaperEnabled,onWallpaperEnabled,playerTransparent,onPlayerTransparent,playback,onResume,overlay }: {
   library: ReturnType<typeof useLibrary>; theme: Theme; appearance?: Appearance; onAppearance?: (next: Appearance) => void;
   transparency?: number; onTransparency?: (value: number) => void;
   updates?: AppUpdates; showUpdates?: number;
   shortcuts: ShortcutsController;
+  overlay: ReturnType<typeof useGameOverlay>;
   playback?: PlayerState | null; onResume?: () => void;
   wallpaper?:WallpaperController;wallpaperEnabled?:boolean;onWallpaperEnabled?:(value:boolean)=>void;
   playerTransparent?:boolean;onPlayerTransparent?:(value:boolean)=>void;
@@ -54,19 +58,24 @@ export default function LibraryView({ library: lib, theme, appearance, onAppeara
   const { state, error, pending, page } = lib;
   const playlistRows = state?.tracks || [];
   const [searchRows, setSearchRows] = useState<Track[]>([]);
-  const [view, setView] = useState<'library' | 'search' | 'settings' | 'recent'>('library');
+  const [view, setView] = useState<'library' | 'search' | 'settings' | 'recent' | 'extensions'>('library');
   const [query, setQuery] = useState(''); const [showTracks, setShowTracks] = useState(false);
   const [requestedPlaylist, setRequestedPlaylist] = useState('');
   const [requestedSearch, setRequestedSearch] = useState('');
   const searchOperationBefore = useRef('');
   const [skeletonPageRows, setSkeletonPageRows] = useState(8);
   const [librarySection, setLibrarySection] = useState<LibrarySection>('created');
-  const [settingsSection, setSettingsSection] = useState<'appearance' | 'playback' | 'shortcuts' | 'lyrics' | 'updates'>('appearance');
+  const [settingsSection, setSettingsSection] = useState<'appearance' | 'playback' | 'shortcuts' | 'lyrics' | 'overlay' | 'updates'>('appearance');
+  const jumpToGameShortcuts = useRef(false);
   const [removeFoldersOpen, setRemoveFoldersOpen] = useState(false);
   useEffect(() => {
     // The dock notice asks for the update details page.
     if (showUpdates) navigate(() => { setView('settings'); setSettingsSection('updates'); setShowTracks(false); });
   }, [showUpdates]);
+  useLayoutEffect(() => {
+    if (!overlay.state.enabled && settingsSection === 'overlay')
+      { resetScroll(); setSettingsSection('appearance'); }
+  }, [overlay.state.enabled, settingsSection]);
   const [playlistQuery, setPlaylistQuery] = useState('');
   const content = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -135,7 +144,7 @@ export default function LibraryView({ library: lib, theme, appearance, onAppeara
     : readPlaylistLoadingCount(localStorage, starting ? null : state, librarySection)) : 6;
   useEffect(() => { if (state) rememberPlaylistLoadingCounts(localStorage, state, pending, error); }, [state, pending, error]);
   const tracksVisible = view === 'recent' || view === 'search' || (view === 'library' && showTracks);
-  const fixedPageHeader = view === 'settings' || (view === 'library' && !showTracks);
+  const fixedPageHeader = view === 'settings' || view === 'extensions' || (view === 'library' && !showTracks);
   const PageBody = fixedPageHeader ? 'div' : Fragment;
   const navigationKey = JSON.stringify([view, view === 'settings' ? settingsSection :
     view === 'library' ? [librarySection, showTracks, showTracks ? state?.playlistId : ''] : '']);
@@ -167,6 +176,11 @@ export default function LibraryView({ library: lib, theme, appearance, onAppeara
     transition.current = animate(pageTargets(), { opacity: [0, 1] }, { duration: 0.09, ease: 'easeOut' });
     return () => transition.current?.cancel();
   }, [navigationKey, navigationRevision]);
+  useLayoutEffect(() => {
+    if (view !== 'settings' || settingsSection !== 'shortcuts' || !jumpToGameShortcuts.current) return;
+    pageScroll.current?.querySelector('#game-overlay-shortcuts')?.scrollIntoView({ block: 'start' });
+    jumpToGameShortcuts.current = false;
+  }, [view, settingsSection, navigationRevision]);
   const playSource = view === 'recent' ? 'recent' : view === 'search' ? 'search' : isLocal ? 'local' : 'library';
   const virtualSongs = useVirtualizer({
     count: tracksVisible ? rows.length : 0,
@@ -280,6 +294,8 @@ export default function LibraryView({ library: lib, theme, appearance, onAppeara
         <svg className="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M10 18V5l10-2v13" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round"/><circle cx="7" cy="18" r="3" fill="currentColor"/><circle cx="17" cy="16" r="3" fill="currentColor"/></svg> 音乐库</Button>
       <Button variant="unstyled" className={view === 'recent' ? 'selected' : ''} aria-pressed={view === 'recent'} onClick={() => navigate(() => { resetScroll(); setPlaylistQuery(''); setView('recent'); setShowTracks(false); })}>
         <svg className="icon" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l4 2"/></svg> 最近播放</Button>
+      <Button variant="unstyled" className={`extensions-nav${view === 'extensions' ? ' selected' : ''}`} aria-label="扩展" aria-pressed={view === 'extensions'} onClick={() => navigate(() => { resetScroll(); setView('extensions'); setShowTracks(false); })}>
+        <svg className="icon" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M6.5 7H4a1 1 0 0 0-1 1v3.5h1.5a2 2 0 0 1 0 4H3V20a1 1 0 0 0 1 1h3.5v-1.5a2 2 0 0 1 4 0V21H16a1 1 0 0 0 1-1v-4.5h1.5a2.5 2.5 0 0 0 0-5H17V8a1 1 0 0 0-1-1h-4.5V5.5a2.5 2.5 0 0 0-5 0V7Z"/></svg> 扩展</Button>
       <Button variant="unstyled" className={`settings-nav${view === 'settings' ? ' selected' : ''}`} aria-label="设置" onClick={() => navigate(() => { resetScroll(); setView('settings'); setShowTracks(false); })}>
         <svg className="icon" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.65" strokeLinecap="round" strokeLinejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.09a2 2 0 0 1 1 1.73v.5a2 2 0 0 1-1 1.73l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.38a2 2 0 0 0-.73-2.73l-.15-.09a2 2 0 0 1-1-1.73v-.5a2 2 0 0 1 1-1.73l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg> 设置</Button>
     </aside>;
@@ -289,7 +305,7 @@ export default function LibraryView({ library: lib, theme, appearance, onAppeara
     <div ref={content} className={`library-content${fixedPageHeader ? ' fixed-page-header' : ''}${scrollbarVisible ? ' scrollbar-visible' : ''}`} onScroll={checkLoadMore}>
       {<header className={view === 'library' ? (showTracks ? 'playlist-header' : 'library-home-header') : ''}><div className="page-heading">
         {view === 'library' && showTracks && <Button variant="unstyled" className="back-button" aria-label="返回歌单" onClick={() => navigate(() => { resetScroll(); setShowTracks(false); })}><svg className="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5-7 7 7 7" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg></Button>}
-        <h1 className={view === 'recent' ? 'recent-title' : view === 'search' ? 'discovery-title' : view === 'settings' ? 'settings-title' : ''}>{view === 'recent' ? '最近播放' : view === 'settings' ? '设置' : view === 'search' ? '发现' : showTracks ? (isLocal && state?.playlistId === 'musxi:local' ? '本地歌曲整合' : state?.playlistName) : '音乐库'}</h1>
+        <h1 className={view === 'recent' ? 'recent-title' : view === 'search' ? 'discovery-title' : view === 'settings' ? 'settings-title' : view === 'extensions' ? 'extensions-title' : ''}>{view === 'recent' ? '最近播放' : view === 'extensions' ? '扩展' : view === 'settings' ? '设置' : view === 'search' ? '发现' : showTracks ? (isLocal && state?.playlistId === 'musxi:local' ? '本地歌曲整合' : state?.playlistName) : '音乐库'}</h1>
       </div><div className="header-actions">
         {view === 'recent' && <Button variant="ghost" className="playlist-play-button" disabled={pending || !state?.recent?.length} onClick={()=>void lib.recentClear()}>清空记录</Button>}
         {view === 'library' && showTracks && <Button variant="ghost" className="playlist-play-button" aria-label="播放歌单" title="播放歌单"
@@ -306,11 +322,13 @@ export default function LibraryView({ library: lib, theme, appearance, onAppeara
         </form>}
       </div></header>}
       {view !== 'recent' && isDemoMode() && <p className="demo-notice">演示模式：播放进度与导入文件夹均为模拟，不播放真实音频、不读取真实文件、不登录真实账号；刷新页面后重置。</p>}
-      {view === 'settings' && <nav className="library-sections settings-sections" aria-label="设置分类">
+      {view === 'settings' && <nav className="library-sections settings-sections" aria-label="设置分类"
+        style={{ '--settings-columns': 4 + Number(overlay.state.enabled) + Number(!!updates && !updates.unsupported) } as CSSProperties}>
         {([{ id: 'appearance', label: '外观', icon: 'M12 3a9 9 0 1 0 0 18h1a2 2 0 0 0 1.5-3.3l-.2-.2a1.5 1.5 0 0 1 1.1-2.5H18a3 3 0 0 0 3-3 9 9 0 0 0-9-9ZM8 8a.8.8 0 1 0 0-1.6.8.8 0 0 0 0 1.6Zm5-1a.8.8 0 1 0 0-1.6.8.8 0 0 0 0 1.6Zm4 4a.8.8 0 1 0 0-1.6.8.8 0 0 0 0 1.6ZM6 13a.8.8 0 1 0 0-1.6.8.8 0 0 0 0 1.6Z' },
           { id: 'playback', label: '播放', icon: 'M11 4 6 8H3v8h3l5 4V4Zm4 4a6 6 0 0 1 0 8m3-11a10 10 0 0 1 0 14' },
           { id: 'shortcuts', label: '快捷键', icon: 'M4 4h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2ZM6 8h.01M10 8h.01M14 8h.01M18 8h.01M6 12h.01M10 12h.01M14 12h.01M18 12h.01M7 16h10' },
           { id: 'lyrics', label: '歌词', icon: 'M6 3h12a3 3 0 0 1 3 3v12a3 3 0 0 1-3 3H6a3 3 0 0 1-3-3V6a3 3 0 0 1 3-3ZM7 12h2m4 0h4M7 16h6m3 0h1' },
+          ...(overlay.state.enabled ? [{ id: 'overlay', label: '游戏内悬浮组件', icon: 'M7 5.5h10a4 4 0 0 1 3.9 3.2l1.2 7.6c.4 2.6-2.7 4.2-4.5 2.3L15 16H9l-2.6 2.6c-1.8 1.9-4.9.3-4.5-2.3l1.2-7.6A4 4 0 0 1 7 5.5ZM5.5 10.5h5m-2.5-2.5v5m7-3h.01m2.5 2.5h.01' }] as const : []),
           ...(updates && !updates.unsupported ? [{ id: 'updates', label: '关于与更新', icon: 'M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20ZM12 11v6m0-10h.01' }] as const : [])] as const).map(section =>
           <Button key={section.id} variant="secondary" className="library-section" aria-pressed={settingsSection === section.id}
             onClick={() => navigate(() => { resetScroll();setSettingsSection(section.id); })}><svg className="icon" viewBox="0 0 24 24" aria-hidden="true"><path d={section.icon}/></svg>{section.label}</Button>)}
@@ -362,7 +380,7 @@ export default function LibraryView({ library: lib, theme, appearance, onAppeara
           </DialogContent>
         </Dialog>
       </div>}
-      {view === 'settings' ? settingsSection === 'updates' && updates ? <UpdateSettings updates={updates}/> : settingsSection === 'shortcuts' ? <ShortcutSettings shortcuts={shortcuts}/> : settingsSection === 'lyrics' ? <LyricsSettings coverUrl={state?.now?.cover}/> : settingsSection === 'playback' ? <PlaybackSettings/> : <AppearanceSettings appearance={appearance ?? { mode: theme === 'dark' || theme === 'glass' ? 'dark' : 'light', transparent: theme === 'glass' || theme === 'glass-light', tone: 'green' }} onAppearance={onAppearance ?? (() => {})} transparency={transparency} onTransparency={onTransparency ?? (() => {})}
+      {view === 'extensions' ? <ExtensionsView overlay={overlay}/> : view === 'settings' ? settingsSection === 'updates' && updates ? <UpdateSettings updates={updates}/> : settingsSection === 'shortcuts' ? <ShortcutSettings shortcuts={shortcuts} overlayEnabled={overlay.state.enabled}/> : settingsSection === 'lyrics' ? <LyricsSettings coverUrl={state?.now?.cover}/> : settingsSection === 'overlay' ? <GameOverlaySettings overlay={overlay} onShortcutSettings={() => navigate(() => { resetScroll(); jumpToGameShortcuts.current = true; setSettingsSection('shortcuts'); })}/> : settingsSection === 'playback' ? <PlaybackSettings/> : <AppearanceSettings appearance={appearance ?? { mode: theme === 'dark' || theme === 'glass' ? 'dark' : 'light', transparent: theme === 'glass' || theme === 'glass-light', tone: 'green' }} onAppearance={onAppearance ?? (() => {})} transparency={transparency} onTransparency={onTransparency ?? (() => {})}
         wallpaper={wallpaper} wallpaperEnabled={wallpaperEnabled} onWallpaperEnabled={onWallpaperEnabled} playerTransparent={playerTransparent} onPlayerTransparent={onPlayerTransparent}/> : view === 'library' && !showTracks ? <>
         {!isLocal && <>
           {playlistsLoading ? <div className="playlist-grid" role="status" aria-label="正在加载歌单列表">
@@ -409,7 +427,7 @@ export default function LibraryView({ library: lib, theme, appearance, onAppeara
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 5 11 7-11 7z"/></svg>
               </PlayerControl>
               {current && <span className="track-wave" role="img" aria-label={playing ? '正在播放' : '已暂停'}><i/><i/><i/><i/></span>}
-            </span><CoverImage url={song.cover} animateLoading/><strong className="track-name" role="cell"><span className="track-title">{song.name}</span>{view==='recent' && (songIsLocal || !song.platforms?.length) && <span className="song-platforms"><small className={`song-platform-tag ${song.platform || 'local'}`}>{songIsLocal?'本地':song.platform==='netease'?'网易云':song.platform==='qq'?'QQ':'酷狗'}</small></span>}{(view==='search' || view==='recent' || (view==='library' && state?.playlistId==='musxi:cloud-favorites')) && song.platforms ? <span className="song-platforms">{song.platforms.map(platform=><small key={platform} className={`song-platform-tag ${platform}`} title={`${platformNames[platform]}${view==='search'?'搜索结果':view==='recent'?'歌曲来源':'收藏歌曲'}`}>{platform==='netease'?'网易云':platform==='kugou'?'酷狗':'QQ'}</small>)}</span> : view==='search' && song.platform && <small className="song-platform">{platformNames[song.platform]}</small>}</strong>
+            </span><CoverImage url={song.cover} size={300} animateLoading/><strong className="track-name" role="cell"><span className="track-title">{song.name}</span>{view==='recent' && (songIsLocal || !song.platforms?.length) && <span className="song-platforms"><small className={`song-platform-tag ${song.platform || 'local'}`}>{songIsLocal?'本地':song.platform==='netease'?'网易云':song.platform==='qq'?'QQ':'酷狗'}</small></span>}{(view==='search' || view==='recent' || (view==='library' && state?.playlistId==='musxi:cloud-favorites')) && song.platforms ? <span className="song-platforms">{song.platforms.map(platform=><small key={platform} className={`song-platform-tag ${platform}`} title={`${platformNames[platform]}${view==='search'?'搜索结果':view==='recent'?'歌曲来源':'收藏歌曲'}`}>{platform==='netease'?'网易云':platform==='kugou'?'酷狗':'QQ'}</small>)}</span> : view==='search' && song.platform && <small className="song-platform">{platformNames[song.platform]}</small>}</strong>
             <span className="track-artist" role="cell">{song.artist}</span><span className="track-album" role="cell">{song.album || '—'}</span><span className="track-duration" role="cell">{time(song.duration)}</span>
             <div className="song-actions"><PlayerControl variant="unstyled" className="song-play" disabled={pending || (!songIsLocal && !state?.connected)} aria-label={`播放 ${song.name}`} onClick={playSong}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4v16l13-8z"/></svg></PlayerControl><Button variant="unstyled" className="song-menu" disabled={busy} aria-label="歌曲操作" onClick={() => {if(!songIsLocal)void menu(song.id);}}>•••</Button></div>
           </div></ContextMenuTrigger><ContextMenuContent aria-label="歌曲操作">
