@@ -24,15 +24,14 @@ export default function GameOverlaySettings({ overlay, onShortcutSettings }: { o
       window.dispatchEvent(new Event(gameTrackTransparencyKey));
     } catch { setTransparencyError('歌曲信息组件透明度保存失败，请重试'); }
   };
-  if (!state.enabled) return null;
-  return <section className="settings-content game-overlay-settings" aria-label="游戏内悬浮组件设置" aria-busy={busy}>
-    <p>在无边框全屏游戏上显示歌词和歌曲信息。游玩时鼠标穿透，进入编辑后可分别拖动、缩放和浏览歌词。</p>
-    {!state.available && <p role="status">当前窗口暂不支持游戏内悬浮组件。</p>}
+  return <section className="settings-content game-overlay-settings" aria-label="悬浮组件设置" aria-busy={busy}>
+    <h2>悬浮组件</h2>
+    {!state.available && <p role="status">当前窗口暂不支持悬浮组件。</p>}
     {error && <p className="playback-settings-error" role="alert">{error}</p>}
     {([
-      ['game-overlay-visible', '显示悬浮组件', state.visible, overlay.setVisible],
-      ['game-overlay-track', '歌曲信息组件', state.trackVisible, overlay.setTrackVisible],
-      ['game-overlay-lyrics', '滚动歌词组件', state.lyricsVisible, overlay.setLyricsVisible],
+      ['floating-widgets-topmost', '组件置顶', state.topmost, overlay.setTopmost],
+      ['game-overlay-track', '歌曲信息组件', state.visible && state.trackVisible, overlay.setTrackVisible],
+      ['game-overlay-lyrics', '歌词悬浮窗', state.visible && state.lyricsVisible, overlay.setLyricsVisible],
     ] as const).map(([id, label, checked, update]) => <div className="appearance-setting-row" key={id}>
       <h3 id={id}>{label}</h3>
       <Button variant="unstyled" className="appearance-switch" role="switch" aria-checked={checked} aria-labelledby={id}
@@ -87,6 +86,19 @@ export default function GameOverlaySettings({ overlay, onShortcutSettings }: { o
         onChange={event => updateTransparency(Number(event.currentTarget.value))}/>
       {transparencyError && <p className="playback-settings-error" role="alert">{transparencyError}</p>}
     </div>
+    <div className="appearance-mode"><h3 id="floating-lyrics-mode-label">悬浮歌词行数</h3>
+      <div className="appearance-segments" role="group" aria-labelledby="floating-lyrics-mode-label">
+        {([['single', '单行'], ['multi', '多行']] as const).map(([value, label]) =>
+          <Button key={value} variant="unstyled" className="appearance-segment" aria-pressed={state.lyricsMode === value}
+            disabled={!state.available || busy} onClick={() => void overlay.setLyricsMode(value)}>{label}</Button>)}
+      </div>
+    </div>
+    <div className="appearance-level">
+      <div className="appearance-setting-row"><label htmlFor="floating-lyrics-font">悬浮歌词字号</label><output htmlFor="floating-lyrics-font">{state.lyricsFontSize || 20}px</output></div>
+      <input id="floating-lyrics-font" className="appearance-slider" type="range" min="16" max="48" step="1" value={state.lyricsFontSize || 20}
+        disabled={!state.available || busy} style={{ '--level': `${((state.lyricsFontSize || 20) - 16) / 32 * 100}%` } as CSSProperties}
+        onChange={event => void overlay.setLyricsFontSize(Number(event.currentTarget.value))}/>
+    </div>
     <div className="appearance-mode"><h3 id="game-lyrics-style-label">歌词样式</h3>
       <div className="appearance-segments" role="group" aria-labelledby="game-lyrics-style-label">
         {([['flat', '平面'], ['perspective', '斜向立体']] as const).map(([value, label]) =>
@@ -98,9 +110,9 @@ export default function GameOverlaySettings({ overlay, onShortcutSettings }: { o
     <div className="close-dialog-actions">
       <Button variant="secondary" disabled={!state.available || busy || (!state.lyricsVisible && !state.trackVisible)} aria-pressed={state.editing}
         onClick={() => void overlay.setEditing(!state.editing)}>{state.editing ? '完成编辑并锁定' : '编辑组件'}</Button>
-      <Button variant="secondary" onClick={onShortcutSettings}>游戏内快捷键设置</Button>
+      <Button variant="secondary" onClick={onShortcutSettings}>组件快捷键设置</Button>
     </div>
-    <div className="game-overlay-hints"><p>在“快捷键”中设置组件显隐、编辑切换和选歌面板快捷键，并启用全局快捷键，即可在游戏中操作。收起选歌面板后，歌词和歌曲信息继续显示。</p>
-    <p>模块启用时，全局快捷键会同时传给游戏，按键可能同时执行播放器和游戏操作。游戏以管理员权限运行时，请右键播放器并选择“以管理员身份运行”，以便接收游戏前台的快捷键。</p></div>
+    <div className="game-overlay-hints"><p>关闭置顶后，组件可能被游戏或其他窗口遮挡。</p><p>在“快捷键”中设置组件显隐、编辑切换和选歌面板快捷键，并启用全局快捷键，即可在游戏中操作。收起选歌面板后，歌词和歌曲信息继续显示。</p>
+    <p>启用全局快捷键后，按键会同时传给前台程序，按键可能同时执行播放器和游戏操作。游戏以管理员权限运行时，请右键播放器并选择“以管理员身份运行”，以便接收游戏前台的快捷键。</p></div>
   </section>;
 }

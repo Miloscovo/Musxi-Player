@@ -3,8 +3,8 @@ import { NativeError } from './types.ts';
 
 export interface GameOverlayState {
   available: boolean; enabled: boolean; visible: boolean; lyricsVisible: boolean;
-  trackVisible: boolean; editing: boolean; panelVisible: boolean;
-  hideOnHover: boolean;
+  trackVisible: boolean; editing: boolean; lyricsEditing: boolean; trackEditing: boolean; panelVisible: boolean;
+  hideOnHover: boolean; topmost: boolean; lyricsMode: 'single' | 'multi'; lyricsFontSize: number;
   minecraftCompatibility: boolean;
   minecraftStatus: 'off' | 'waiting' | 'windowedRequired' | 'applied' | 'userChanged' | 'error';
   windowCompatibility: boolean;
@@ -15,9 +15,9 @@ export interface CompatibilityWindow { id: string; title: string; program: strin
 const windowId = /^\d+-\d+$/;
 
 export const initialGameOverlayState: GameOverlayState = {
-  available: false, enabled: false, visible: true, lyricsVisible: true,
-  trackVisible: true, editing: false, panelVisible: false,
-  hideOnHover: false,
+  available: false, enabled: true, visible: false, lyricsVisible: true,
+  trackVisible: true, editing: false, lyricsEditing: false, trackEditing: false, panelVisible: false,
+  hideOnHover: false, topmost: true, lyricsMode: 'multi', lyricsFontSize: 0,
   minecraftCompatibility: false, minecraftStatus: 'off',
   windowCompatibility: false, windowCompatibilityStatus: 'off', windowCompatibilityTarget: '',
 };
@@ -27,6 +27,8 @@ export function parseGameOverlay(value: unknown): GameOverlayState {
       || (['available', 'enabled', 'visible', 'lyricsVisible', 'trackVisible', 'editing', 'panelVisible'] as const).some(key => typeof (value as GameOverlayState)[key] !== 'boolean'))
     throw new NativeError(502, 'Invalid game overlay state');
   const state = value as GameOverlayState;
+  if (state.lyricsEditing !== undefined && typeof state.lyricsEditing !== 'boolean') throw new NativeError(502, 'Invalid lyrics editing state');
+  if (state.trackEditing !== undefined && typeof state.trackEditing !== 'boolean') throw new NativeError(502, 'Invalid track editing state');
   if (state.hideOnHover !== undefined && typeof state.hideOnHover !== 'boolean') throw new NativeError(502, 'Invalid game overlay state');
   if ((state.minecraftCompatibility !== undefined && typeof state.minecraftCompatibility !== 'boolean')
       || (state.minecraftStatus !== undefined && !['off', 'waiting', 'windowedRequired', 'applied', 'userChanged', 'error'].includes(state.minecraftStatus)))
@@ -35,13 +37,20 @@ export function parseGameOverlay(value: unknown): GameOverlayState {
       || (state.windowCompatibilityStatus !== undefined && !['off', 'ready', 'applied', 'userChanged', 'error'].includes(state.windowCompatibilityStatus))
       || (state.windowCompatibilityTarget !== undefined && (typeof state.windowCompatibilityTarget !== 'string' || state.windowCompatibilityTarget.length > 512)))
     throw new NativeError(502, 'Invalid window compatibility state');
-  return { ...initialGameOverlayState, ...state };
+  if ((state.topmost !== undefined && typeof state.topmost !== 'boolean')
+      || (state.lyricsMode !== undefined && state.lyricsMode !== 'single' && state.lyricsMode !== 'multi')
+      || (state.lyricsFontSize !== undefined && (!Number.isInteger(state.lyricsFontSize) || (state.lyricsFontSize !== 0 && (state.lyricsFontSize < 16 || state.lyricsFontSize > 48)))))
+    throw new NativeError(502, 'Invalid floating lyrics state');
+  return { ...initialGameOverlayState, ...state, lyricsEditing: state.lyricsEditing ?? state.editing, trackEditing: state.trackEditing ?? state.editing };
 }
 
 export function createGameOverlayClient(host: CefTransport) {
   const call = async (command: string, params = {}) => parseGameOverlay(await request(host, command, params));
   return Object.freeze({
     getState: () => call('gameOverlay.getState'),
+    setTopmost: (topmost: boolean) => call('gameOverlay.setTopmost', { topmost }),
+    setLyricsMode: (lyricsMode: 'single' | 'multi') => call('gameOverlay.setLyricsMode', { lyricsMode }),
+    setLyricsFontSize: (lyricsFontSize: number) => call('gameOverlay.setLyricsFontSize', { lyricsFontSize }),
     setEnabled: (enabled: boolean) => call('gameOverlay.setEnabled', { enabled }),
     setVisible: (visible: boolean) => call('gameOverlay.setVisible', { visible }),
     setLyricsVisible: (lyricsVisible: boolean) => call('gameOverlay.setLyricsVisible', { lyricsVisible }),

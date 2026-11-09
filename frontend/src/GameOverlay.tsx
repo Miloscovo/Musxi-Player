@@ -1,5 +1,7 @@
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
-import { animate } from 'motion/react';
+import { animate, AnimatePresence, motion } from 'motion/react';
+import { reportDesktopPage } from './native/desktopSmoke';
+import FloatingLyricsControls from './DesktopLyrics';
 import CoverImage from './components/CoverImage';
 import VinylCover from './components/VinylCover';
 import { Button } from './components/ui/button';
@@ -38,12 +40,12 @@ function useOverlayAppearance(kind: 'lyrics' | 'track') {
       if (kind === 'track') setTrackTransparency(readGameTrackTransparency(localStorage));
     };
     sync(); window.addEventListener('storage', sync); window.addEventListener(lyricsDisplayKey, sync);
-    window.addEventListener(gameLyricsStyleKey, sync);
+    window.addEventListener(gameLyricsStyleKey, sync); window.addEventListener('musxi-lyrics-translation', sync);
     if (kind === 'track') window.addEventListener(gameTrackTransparencyKey, sync);
     system.addEventListener('change', sync);
     return () => {
       window.removeEventListener('storage', sync); window.removeEventListener(lyricsDisplayKey, sync);
-      window.removeEventListener(gameLyricsStyleKey, sync);
+      window.removeEventListener(gameLyricsStyleKey, sync); window.removeEventListener('musxi-lyrics-translation', sync);
       window.removeEventListener(gameTrackTransparencyKey, sync);
       system.removeEventListener('change', sync);
     };
@@ -51,10 +53,10 @@ function useOverlayAppearance(kind: 'lyrics' | 'track') {
   return { display, translation, style, trackTransparency };
 }
 
-function OverlayLyrics({ trackId, positionMs, connected, editing, display, translation, following, onManualScroll, style, active: visible }: {
+function OverlayLyrics({ trackId, positionMs, connected, editing, display, translation, following, onManualScroll, style, mode, active: visible }: {
   trackId: string; positionMs: number; connected: boolean; editing: boolean;
   display: ReturnType<typeof readLyricsDisplay>; translation: boolean; following: boolean; onManualScroll: () => void;
-  style: GameLyricsStyle; active: boolean;
+  style: GameLyricsStyle; mode: 'single' | 'multi'; active: boolean;
 }) {
   const { lyrics, failed, cover } = useDesktopTrack(trackId, visible);
   const [sample, setSample] = useState({ url: '', color: '' });
@@ -65,9 +67,10 @@ function OverlayLyrics({ trackId, positionMs, connected, editing, display, trans
   const lines = lyrics?.lines;
   const dual = synced && translation && !!lines?.some(line => line.translation);
   const active = synced && lines ? activeLyricLine(lines, positionMs) : -1;
+  const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
   useLayoutEffect(() => { if (list.current) list.current.scrollTop = 0; }, [trackId]);
   useLayoutEffect(() => {
-    const container = list.current; if (!container || !synced || !following || !visible) return;
+    const container = list.current; if (!container || !synced || !following || !visible || mode === 'single') return;
     const row = container.children[Math.max(0, active)] as HTMLElement | undefined; if (!row) return;
     let destination = -1;
     const center = () => {
@@ -84,7 +87,7 @@ function OverlayLyrics({ trackId, positionMs, connected, editing, display, trans
     center();
     const resize = new ResizeObserver(center); resize.observe(container, { box: 'border-box' });
     return () => { resize.disconnect(); scrollAnimation.current?.stop(); scrollAnimation.current = null; };
-  }, [active, lines, synced, following, display.fontSize, display.alignment, translation, visible]);
+  }, [active, lines, synced, following, display.fontSize, display.alignment, translation, visible, mode]);
   const status = !connected ? '正在连接播放器…' : !trackId ? '尚未播放歌曲' : failed ? '歌词暂不可用，正在重试…'
     : !lyrics ? '正在获取歌词…' : !lines?.length ? '暂无歌词' : '';
   const manualScroll = () => {
@@ -95,17 +98,26 @@ function OverlayLyrics({ trackId, positionMs, connected, editing, display, trans
     <span>{line.text || '♪'}</span>{dual && line.translation && <small>{line.translation}</small>}
   </li>), [lines, synced, active, dual]);
   return status ? <div className="overlay-message" role="status">{status}</div> :
-    <div className="overlay-lyrics-viewport" data-style={style} style={{
+    <div className="overlay-lyrics-viewport" data-style={style} data-mode={mode} style={{
       ...(color ? { '--vinyl-color': color, '--lyrics-color': 'var(--lyric-vinyl)' } : {}),
     } as CSSProperties}>
       {display.colorMode === 'cover' && cover && <div hidden aria-hidden="true" onLoadCapture={event => {
         if (event.target instanceof HTMLImageElement) setSample({ url: cover, color: sampleCoverColor(event.target) });
       }}><CoverImage url={cover}/></div>}
-      <ol ref={list} className="overlay-lyrics-list" aria-label={synced ? '同步滚动歌词' : '歌曲歌词'}
+      <ol ref={list} className="overlay-lyrics-list" aria-label={mode === 'single' ? '当前句歌词' : synced ? '同步滚动歌词' : '歌曲歌词'}
       data-synced={synced} data-dual={dual} data-alignment={display.alignment}
       style={{ '--overlay-lyric-size': `${display.fontSize}px` } as CSSProperties}
       onWheel={manualScroll} onPointerDown={manualScroll}>
-      {rows}
+      {mode === 'single' ? <li aria-current="true" className="overlay-single-line">
+        <AnimatePresence key={`${trackId}:${reduceMotion}`} initial={false}>
+          <motion.div key={active} className="overlay-single-content"
+            initial={reduceMotion ? false : { opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={reduceMotion ? undefined : { opacity: 0, y: -8 }}
+            transition={{ duration: reduceMotion ? 0 : .3, ease: 'easeOut' }}>
+            <span>{lines?.[Math.max(0, active)]?.text || '♪'}</span>
+            {translation && lines?.[Math.max(0, active)]?.translation && <small>{lines[Math.max(0, active)].translation}</small>}
+          </motion.div>
+        </AnimatePresence>
+      </li> : rows}
     </ol></div>;
 }
 
@@ -121,13 +133,11 @@ const OverlayTrackDetails = memo(function OverlayTrackDetails({ name, artist, co
   </div>;
 });
 
-function OverlayTrack({ player, connected, editing, busy, pause, resume, active }: {
-  player: PlayerState | null; connected: boolean; editing: boolean; busy: boolean; active: boolean;
-  pause: () => Promise<void>; resume: () => Promise<void>;
+function OverlayTrack({ player, connected, active }: {
+  player: PlayerState | null; connected: boolean; active: boolean;
 }) {
   const id = player?.opened ? player.trackId : '';
   const [track, setTrack] = useState<{ id: string; now: LibraryState['now'] } | null>(null);
-  const [error, setError] = useState('');
   useEffect(() => {
     if (!id || !active) return;
     const controller = new AbortController(); let timer: ReturnType<typeof setTimeout> | undefined;
@@ -142,30 +152,19 @@ function OverlayTrack({ player, connected, editing, busy, pause, resume, active 
     void load();
     return () => { controller.abort(); clearTimeout(timer); };
   }, [id, active]);
-  useEffect(() => setError(''), [id]);
   const now = track?.id === id ? track.now : null;
   const times = playbackTimes(!!player?.opened, player?.durationMs ?? 0, player?.positionMs ?? 0);
-  const playing = player?.requestedPlaying ?? player?.playing ?? false;
-  const skip = async (delta: -1 | 1) => {
-    try { await native.library.skip(delta); setError(''); }
-    catch (e) { setError(e instanceof Error ? e.message : '切歌失败'); }
-  };
   return <div className="overlay-track-content">
     <OverlayTrackDetails name={now?.name || ''} artist={now?.artist || ''} cover={now?.cover || ''}
       playing={!!player?.playing} connected={connected} hasTrack={!!id} />
     <progress aria-label="歌曲播放进度" max={Math.max(1, player?.durationMs ?? 0)} value={player?.positionMs ?? 0} />
     <div className="overlay-track-times"><span>{times.elapsed}</span><span>{times.total}</span></div>
-    {editing && <div className="overlay-track-controls">
-      <Button variant="unstyled" aria-label="上一首" disabled={!connected || busy || !id} onClick={() => void skip(-1)}>上一首</Button>
-      <Button variant="unstyled" aria-label={playing ? '暂停' : '播放'} disabled={!connected || busy || !id} onClick={() => void (playing ? pause() : resume())}>{playing ? '暂停' : '播放'}</Button>
-      <Button variant="unstyled" aria-label="下一首" disabled={!connected || busy || !id} onClick={() => void skip(1)}>下一首</Button>
-    </div>}
-    {error && <p className="overlay-error" role="alert">{error}</p>}
   </div>;
 }
 
 export default function GameOverlay({ kind }: { kind: 'lyrics' | 'track' }) {
   const card = useRef<HTMLElement>(null);
+  useEffect(() => new URLSearchParams(location.search).has('desktopSmoke') ? reportDesktopPage() : undefined, []);
   useLayoutEffect(() => {
     if (kind !== 'track' || !card.current) return;
     const element = card.current; let lastHeight = 0;
@@ -179,27 +178,29 @@ export default function GameOverlay({ kind }: { kind: 'lyrics' | 'track' }) {
     return () => resize.disconnect();
   }, [kind]);
   const overlay = useGameOverlay();
+  const editing = kind === 'lyrics' ? overlay.state.lyricsEditing : overlay.state.trackEditing;
   const active = overlay.state.enabled && overlay.state.visible && (kind === 'lyrics' ? overlay.state.lyricsVisible : overlay.state.trackVisible);
   const player = usePlayerState(active);
-  const { display, translation, style, trackTransparency } = useOverlayAppearance(kind);
+  const { display: pageDisplay, translation, style, trackTransparency } = useOverlayAppearance(kind);
+  const display = { ...pageDisplay, fontSize: overlay.state.lyricsFontSize || pageDisplay.fontSize };
   const [following, setFollowing] = useState(true);
   const trackId = player.state?.opened ? player.state.trackId : '';
-  useEffect(() => setFollowing(true), [trackId, overlay.state.editing]);
+  useEffect(() => setFollowing(true), [trackId, editing]);
   const control = (label: string, action: () => Promise<void>, children: ReactNode = label) =>
     <Button variant="unstyled" title={label} aria-label={label} disabled={overlay.busy} onClick={() => void action()}>{children}</Button>;
-  return <main ref={card} className="game-overlay" data-widget={kind} data-editing={overlay.state.editing} aria-label={kind === 'lyrics' ? '游戏滚动歌词' : '歌曲信息组件'}
+  return <main ref={card} className="game-overlay" data-widget={kind} data-editing={editing} aria-label={kind === 'lyrics' ? '歌词悬浮窗' : '歌曲信息组件'}
     style={kind === 'track' ? { '--game-track-opacity': 1 - trackTransparency / 100 } as CSSProperties : undefined}>
-    {overlay.state.editing && <header className="overlay-widget-header">
-      <span>{kind === 'lyrics' ? '滚动歌词' : '歌曲信息'}</span>
-      <div>{kind === 'lyrics' && !following && <Button variant="unstyled" onClick={() => setFollowing(true)}>跟随当前句</Button>}
-        {control('打开选歌面板', () => overlay.setPanelVisible(true), '选歌')}
+    {editing && <header className="overlay-widget-header">
+      <span aria-hidden="true"/>
+      <div>
         {control('完成编辑', () => overlay.setEditing(false), '完成')}
-        {control(kind === 'lyrics' ? '关闭歌词组件' : '关闭歌曲信息组件', () => kind === 'lyrics' ? overlay.setLyricsVisible(false) : overlay.setTrackVisible(false), '×')}
+        {control(kind === 'lyrics' ? '关闭歌词组件' : '关闭歌曲信息组件', () => kind === 'lyrics' ? overlay.setLyricsVisible(false) : overlay.setTrackVisible(false), '关闭')}
       </div>
     </header>}
     {kind === 'lyrics' ? <OverlayLyrics trackId={trackId} positionMs={player.state?.positionMs ?? 0} connected={player.connected}
-      editing={overlay.state.editing} display={display} translation={translation} style={style} active={active} following={following} onManualScroll={() => setFollowing(false)} />
-      : <OverlayTrack active={active} player={player.state} connected={player.connected} editing={overlay.state.editing} busy={player.busy} pause={player.pause} resume={player.resume} />}
+      mode={overlay.state.lyricsMode} editing={editing} display={display} translation={translation} style={style} active={active} following={following} onManualScroll={() => setFollowing(false)} />
+      : <OverlayTrack active={active} player={player.state} connected={player.connected} />}
+    {kind === 'lyrics' && <FloatingLyricsControls playing={player.state?.requestedPlaying ?? player.state?.playing ?? false} pause={player.pause} resume={player.resume} />}
     {(overlay.error || player.error) && <p className="overlay-error" role="alert">{overlay.error || player.error}</p>}
   </main>;
 }

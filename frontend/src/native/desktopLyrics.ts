@@ -8,7 +8,7 @@ export interface DesktopLyricsState {
   enabled: boolean; visible: boolean; locked: boolean; dual: boolean;
   panel: boolean; hover: boolean; fontSize: number; color: DesktopColor;
 }
-export const desktopFontRange = { min: 18, max: 48, step: 2 } as const;
+export const desktopFontRange = { min: 16, max: 48, step: 2 } as const;
 
 export function parseDesktopLyrics(value: unknown): DesktopLyricsState {
   const s = value as Partial<DesktopLyricsState> | null;

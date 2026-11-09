@@ -290,7 +290,7 @@ LRESULT CALLBACK testProc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp) {
     if(compactTransitionRunning && msg>=WM_MOUSEFIRST && msg<=WM_MOUSELAST)return 0;
     if(msg==TaskbarCreated && trayAdded) {
         trayAdded=false;
-        if(!addTray(hwnd)){lockDesktopLyrics(false);saveDesktopSettings();publishDesktop();showFromTray(hwnd);}
+        if(!addTray(hwnd))showFromTray(hwnd);
         return 0;
     }
     switch(msg) {
@@ -514,8 +514,7 @@ void ready(void* window) {
         }
     }
     startTick=GetTickCount64();
-    if(browser && !preview && desktopVisible && !showDesktopLyrics())desktopVisible=false;
-    if(browser && !preview && !syncGameOverlayWindows()) {gameOverlayEnabled=false;syncGameOverlayWindows();}
+    if(browser && !preview && !syncGameOverlayWindows()) {gameOverlayVisible=false;syncGameOverlayWindows();}
 }
 void tick() {
     if(testWindow){refreshShortcutSuspension();sampleGameOverlayPointer();refreshGameOverlayOrder();refreshWindowCompatibility();}
@@ -530,7 +529,7 @@ bool canClose() {
         return false;
     }
     finishCompactTransition();
-    if(!hostClosing){shortcutRegistry.clear();gameOverlayEditing=false;syncGameOverlayWindows();saveDesktopSettings();saveGameOverlaySettings();saveMainWindow();restoreGameOverlayPanel(false);hostClosing=true;}
+    if(!hostClosing){shortcutRegistry.clear();gameOverlayEditing=false;gameLyrics.hoverEditing=gameTrack.hoverEditing=false;syncGameOverlayWindows();saveGameOverlaySettings();saveMainWindow();restoreGameOverlayPanel(false);hostClosing=true;}
     if(!musxi::cef_adapter::closeBrowsers())return false;
     // The windowless browser is gone. Remove its frozen surface before blocking
     // native cleanup and CefShutdown, rather than leaving a dead window visible.
@@ -621,7 +620,14 @@ void presentGameOverlay(void* window,const void* pixels,int width,int height) {
     if(!target || width<=0 || height<=0 || width>16384 || height>16384)return;
     auto& item=*target;RECT rect{};GetWindowRect(item.window,&rect);
     const int w=rect.right-rect.left,h=rect.bottom-rect.top,slack=MulDiv(2,GetDpiForWindow(item.window),96);
-    if(std::abs(width-w)>slack || std::abs(height-h)>slack)return;
+    const bool settled=!item.moving && std::abs(width-w)<=slack && std::abs(height-h)<=slack;
+    if(settled){item.resizeHolding=false;KillTimer(item.window,102);}
+    if(!item.resizeHolding && !settled)return;
+    if(item.resizeHolding && pixels!=item.resizePixels.data()) {
+        item.resizePixelWidth=width;item.resizePixelHeight=height;
+        item.resizePixels.resize(static_cast<std::size_t>(width)*height*4);
+        std::memcpy(item.resizePixels.data(),pixels,item.resizePixels.size());
+    }
     if(w!=item.pixelWidth || h!=item.pixelHeight) {
         clearGameOverlayPixels(item);item.dc=CreateCompatibleDC(nullptr);
         BITMAPINFO info{};info.bmiHeader.biSize=sizeof(BITMAPINFOHEADER);info.bmiHeader.biWidth=w;info.bmiHeader.biHeight=-h;
@@ -630,10 +636,13 @@ void presentGameOverlay(void* window,const void* pixels,int width,int height) {
         if(!item.dc || !item.bitmap){clearGameOverlayPixels(item);if(auto browser=gameOverlayBrowserHost(item.window))browser->CloseBrowser(true);return;}
         item.previous=SelectObject(item.dc,item.bitmap);item.pixelWidth=w;item.pixelHeight=h;
     }
-    copyOverlayPixels(item.pixels,w,h,pixels,width,height);
+    if(item.resizeHolding && (w!=width || h!=height))copyResizingWindowPixels(item.pixels,w,h,pixels,width,height,
+        MulDiv(2,GetDpiForWindow(item.window),96),MulDiv(14,GetDpiForWindow(item.window),96));
+    else copyOverlayPixels(item.pixels,w,h,pixels,width,height);
     POINT origin{rect.left,rect.top},source{};SIZE size{w,h};BLENDFUNCTION blend{AC_SRC_OVER,0,255,AC_SRC_ALPHA};
     if(!UpdateLayeredWindow(item.window,nullptr,&origin,&size,item.dc,&source,0,&blend,ULW_ALPHA))
         if(auto browser=gameOverlayBrowserHost(item.window))browser->CloseBrowser(true);
+    if(settled)item.resizePixels.clear();
 }
 musxi::LibraryReply gameOverlayCommand(const std::string& command,const std::string& params) {
     try {
@@ -641,6 +650,18 @@ musxi::LibraryReply gameOverlayCommand(const std::string& command,const std::str
         if(!data.is_object())return {400,"无效游戏悬浮参数",{}};
         if(command=="gameOverlay.getState") {if(!data.empty())return {400,"无效游戏悬浮参数",{}};return {0,{},gameOverlayStateJson()};}
         if(!testWindow || hostClosing)return {409,"当前窗口不支持游戏悬浮",{}};
+        if(command=="gameOverlay.setLyricsMode" || command=="gameOverlay.setLyricsFontSize") {
+            const bool mode=command=="gameOverlay.setLyricsMode";const auto key=mode?"lyricsMode":"lyricsFontSize";
+            if(data.size()!=1 || !data.contains(key))return {400,"无效歌词参数",{}};
+            if(mode) {
+                if(!data.at(key).is_string() || (data.at(key)!="single" && data.at(key)!="multi"))return {400,"无效歌词模式",{}};
+                floatingLyricsMode=data.at(key).get<std::string>();
+            }else {
+                if(!data.at(key).is_number_integer() || data.at(key)<16 || data.at(key)>48)return {400,"无效歌词字号",{}};
+                floatingLyricsFontSize=data.at(key).get<int>();
+            }
+            saveGameOverlaySettings();publishGameOverlayState();return {0,{},gameOverlayStateJson()};
+        }
         if(command=="gameOverlay.setMinecraftCompatibility") {
             if(data.size()!=1 || !data.contains("minecraftCompatibility") || !data.at("minecraftCompatibility").is_boolean())return {400,"无效 Minecraft 兼容模式参数",{}};
             if(data.at("minecraftCompatibility").get<bool>())return {409,"自动兼容模式已取消，请使用通用窗口兼容工具手动选择游戏",{}};
@@ -661,14 +682,14 @@ musxi::LibraryReply gameOverlayCommand(const std::string& command,const std::str
         }
         static const std::map<std::string,std::string> fields{{"gameOverlay.setEnabled","enabled"},{"gameOverlay.setVisible","visible"},
             {"gameOverlay.setLyricsVisible","lyricsVisible"},{"gameOverlay.setTrackVisible","trackVisible"},
-            {"gameOverlay.setEditing","editing"},{"gameOverlay.setPanelVisible","panelVisible"},{"gameOverlay.setHideOnHover","hideOnHover"}};
+            {"gameOverlay.setEditing","editing"},{"gameOverlay.setPanelVisible","panelVisible"},{"gameOverlay.setHideOnHover","hideOnHover"},{"gameOverlay.setTopmost","topmost"}};
         const auto found=fields.find(command);if(found==fields.end())return {404,"未知游戏悬浮操作",{}};
         const auto& field=found->second;
         if(data.size()!=1 || !data.contains(field) || !data.at(field).is_boolean())return {400,"无效游戏悬浮参数",{}};
         const bool value=data.at(field).get<bool>();
-        if(field=="enabled" && !value && !restoreCompatibilityWindow()) {
-            windowCompatibilityStatus="error";publishGameOverlayState();
-            return {500,"无法恢复所选游戏窗口，扩展保持开启；请检查权限或先关闭游戏后重试",{}};
+        if(field=="enabled") {
+            if(!value)return {409,"悬浮组件已成为常驻功能，请使用显示开关隐藏组件",{}};
+            return {0,{},gameOverlayStateJson()};
         }
         if((field=="editing" || field=="panelVisible") && value && !gameOverlayEnabled)return {409,"请先开启游戏悬浮",{}};
         if(field=="panelVisible") {
@@ -676,18 +697,19 @@ musxi::LibraryReply gameOverlayCommand(const std::string& command,const std::str
             else restoreGameOverlayPanel(true);
         } else {
             const auto old=DesktopJson::parse(gameOverlayStateJson());
-            if(field=="enabled") {
-                if(value && !gameOverlayEnabled)gameOverlayVisible=false;
-                gameOverlayEnabled=value;if(!value){gameOverlayEditing=false;restoreGameOverlayPanel(false);}
-            }
-            else if(field=="visible"){gameOverlayVisible=value;if(!value)gameOverlayEditing=false;}
-            else if(field=="lyricsVisible")gameLyricsVisible=value;
-            else if(field=="trackVisible")gameTrackVisible=value;
+            const bool oldHoverEditing=gameLyrics.hoverEditing,oldSuppressed=gameLyrics.hoverSuppressed;
+            const bool oldTrackEditing=gameTrack.hoverEditing,oldTrackSuppressed=gameTrack.hoverSuppressed;
+            if(field=="visible"){gameOverlayVisible=value;if(!value){gameOverlayEditing=false;for(auto* item:{&gameLyrics,&gameTrack}){item->hoverEditing=false;item->hoverSuppressed=true;}}}
+            else if(field=="lyricsVisible"){gameLyricsVisible=value;if(value && !gameOverlayVisible){gameTrackVisible=false;gameOverlayVisible=true;}}
+            else if(field=="trackVisible"){gameTrackVisible=value;if(value && !gameOverlayVisible){gameLyricsVisible=false;gameOverlayVisible=true;}}
             else if(field=="hideOnHover")gameOverlayHideOnHover=value;
-            else {gameOverlayEditing=value;if(value)gameOverlayVisible=true;}
+            else if(field=="topmost")gameOverlayTopmost=value;
+            else {gameOverlayEditing=value;for(auto* item:{&gameLyrics,&gameTrack}){item->hoverEditing=false;item->hoverSuppressed=!value;}if(value)gameOverlayVisible=true;}
             if(!syncGameOverlayWindows()) {
                 gameOverlayEnabled=old.at("enabled");gameOverlayVisible=old.at("visible");gameLyricsVisible=old.at("lyricsVisible");gameTrackVisible=old.at("trackVisible");gameOverlayEditing=old.at("editing");
-                gameOverlayHideOnHover=old.at("hideOnHover");
+                gameOverlayHideOnHover=old.at("hideOnHover");gameOverlayTopmost=old.at("topmost");
+                gameLyrics.hoverEditing=oldHoverEditing;gameLyrics.hoverSuppressed=oldSuppressed;
+                gameTrack.hoverEditing=oldTrackEditing;gameTrack.hoverSuppressed=oldTrackSuppressed;
                 syncGameOverlayWindows();publishGameOverlayState();return {500,"无法打开悬浮组件，请重试",{}};
             }
             refreshWindowCompatibility(true);refreshShortcutSuspension();saveGameOverlaySettings();publishGameOverlayState();
@@ -788,67 +810,62 @@ bool setMainWindowCompact(bool compact,int height,std::function<void(bool)> comp
     else if(auto browser=musxi::cef_adapter::browserHost()){browser->WasHidden(false);browser->WasResized();browser->Invalidate(PET_VIEW);}
     return true;
 }
-void presentDesktopLyrics(const void* pixels,int width,int height) {paintDesktopLyrics(pixels,width,height);}
+void presentDesktopLyrics(const void*,int,int) {} // Retained for the legacy CEF client interface.
 std::string desktopLyricsDiagnostics() {
     bool painted=false,transparent=false;
-    if(desktopBits) {
-        const auto pixels=static_cast<const unsigned char*>(desktopBits);
-        for(std::size_t i=3;i<static_cast<std::size_t>(desktopPixelWidth)*desktopPixelHeight*4;i+=4) {
+    if(gameLyrics.pixels) {
+        const auto* pixels=static_cast<const unsigned char*>(gameLyrics.pixels);
+        for(std::size_t i=3;i<static_cast<std::size_t>(gameLyrics.pixelWidth)*gameLyrics.pixelHeight*4;i+=4) {
             if(pixels[i])painted=true;else transparent=true;
         }
     }
-    const auto style=desktopWindow?GetWindowLongPtrW(desktopWindow,GWL_EXSTYLE):0;
-    return DesktopJson{{"exists",desktopWindow!=nullptr},{"painted",painted},{"transparent",transparent},
+    const auto style=gameLyrics.window?GetWindowLongPtrW(gameLyrics.window,GWL_EXSTYLE):0;
+    return DesktopJson{{"exists",gameLyrics.window!=nullptr},{"visible",gameLyrics.window && IsWindowVisible(gameLyrics.window)},{"painted",painted},{"transparent",transparent},
         {"noActivate",bool(style&WS_EX_NOACTIVATE)},{"toolWindow",bool(style&WS_EX_TOOLWINDOW)},
         {"topmost",bool(style&WS_EX_TOPMOST)},{"clickThrough",bool(style&WS_EX_TRANSPARENT)}}.dump();
 }
-void desktopLyricsClosed() {
-    if(!hostClosing)saveDesktopSettings();
-    clearDesktopPixels();
-    if(desktopWindow){DestroyWindow(desktopWindow);desktopWindow=nullptr;}
-    if(desktopVisible && !desktopClosing && !hostClosing){desktopVisible=false;saveDesktopSettings();}
-    desktopClosing=false;desktopPanel=desktopHover=false;
-    if(!hostClosing)publishDesktop();
-}
+void desktopLyricsClosed() {}
 std::string desktopLyricsState() {return desktopStateJson();}
-// One setter per field; each takes exactly {field: value}.
+// Legacy callers and tray actions share the same window and preferences.
 musxi::LibraryReply desktopLyricsCommand(const std::string& command,const std::string& params) {
     try {
         const auto data=DesktopJson::parse(params);
-        if(!data.is_object())return {400,"无效桌面歌词参数",{}};
-        if(command=="desktopLyrics.getState") {if(!data.empty())return {400,"无效桌面歌词参数",{}};return {0,{},desktopStateJson()};}
-        if(!testWindow)return {409,"当前窗口不支持桌面歌词",{}};
+        if(!data.is_object())return {400,"无效歌词参数",{}};
+        if(command=="desktopLyrics.getState") {if(!data.empty())return {400,"无效歌词参数",{}};return {0,{},desktopStateJson()};}
+        if(!testWindow || hostClosing)return {409,"当前窗口不支持歌词悬浮窗",{}};
         static const std::map<std::string,std::string> fields{{"desktopLyrics.setVisible","visible"},{"desktopLyrics.setLocked","locked"},
             {"desktopLyrics.setDual","dual"},{"desktopLyrics.setPanel","panel"},{"desktopLyrics.setFontSize","fontSize"},{"desktopLyrics.setColor","color"}};
-        const auto found=fields.find(command);
-        if(found==fields.end())return {404,"未知桌面歌词操作",{}};
+        const auto found=fields.find(command);if(found==fields.end())return {404,"未知歌词操作",{}};
         const auto& field=found->second;
-        if(data.size()!=1 || !data.contains(field))return {400,"无效桌面歌词参数",{}};
+        if(data.size()!=1 || !data.contains(field))return {400,"无效歌词参数",{}};
         const auto& value=data.at(field);
+        if(field=="color")return {409,"悬浮歌词颜色跟随歌词页面",{}};
+        if(field=="dual")return {409,"译文开关已与歌词页面同步，请使用歌词页面或悬浮工具栏调整",{}};
         if(field=="fontSize") {
-            if(!value.is_number_integer() || value.get<int>()<18 || value.get<int>()>48)return {400,"无效桌面歌词参数",{}};
-            desktopFontSize=value.get<int>();
-        } else if(field=="color") {
-            if(!value.is_string() || !desktopColorValid(value.get<std::string>()))return {400,"无效桌面歌词参数",{}};
-            desktopColor=value.get<std::string>();
-        } else {
-            if(!value.is_boolean())return {400,"无效桌面歌词参数",{}};
+            if(!value.is_number_integer() || value<16 || value>48)return {400,"无效歌词字号",{}};
+            floatingLyricsFontSize=value.get<int>();
+        }else {
+            if(!value.is_boolean())return {400,"无效歌词参数",{}};
             const bool on=value.get<bool>();
             if(field=="visible") {
-                if(on) {if(!showDesktopLyrics())return {500,"无法打开桌面歌词，请稍后重试",{}};desktopVisible=true;}
-                else {desktopVisible=false;desktopPanel=false;saveDesktopSettings();desktopClosing=desktopWindow!=nullptr;closeDesktopLyricsBrowser();}
-            } else if(field=="locked") {
-                if(on && !addTray(testWindow))return {500,"托盘不可用，暂时无法锁定桌面歌词",{}};
-                lockDesktopLyrics(on);
-            } else if(field=="panel") {
-                if(on && (desktopLocked || !desktopWindow))return {409,"桌面歌词已锁定",{}};
-                desktopPanel=on;desktopInsideTick=GetTickCount64();
-            } else desktopDual=on;
+                const bool oldVisible=gameOverlayVisible,oldLyrics=gameLyricsVisible,oldTrack=gameTrackVisible;
+                // Showing only lyrics must not accidentally show the track widget.
+                if(on && !gameOverlayVisible){gameTrackVisible=false;gameOverlayVisible=true;}
+                gameLyricsVisible=on;
+                if(!on)floatingLyricsPanel=false;
+                if(!syncGameOverlayWindows()) {
+                    gameOverlayVisible=oldVisible;gameLyricsVisible=oldLyrics;gameTrackVisible=oldTrack;
+                    syncGameOverlayWindows();publishGameOverlayState();return {500,"无法显示歌词悬浮窗",{}};
+                }
+            }else if(field=="locked") {
+                const auto result=gameOverlayCommand("gameOverlay.setEditing",DesktopJson{{"editing",!on}}.dump());
+                if(result.code)return result;
+            }else if(field=="panel") {
+                return {409,"歌词工具栏随鼠标悬停自动显示",{}};
+            }
         }
-        if(field!="panel")saveDesktopSettings();
-        publishDesktop();
-        return {0,{},desktopStateJson()};
-    }catch(...){return {400,"无效桌面歌词参数",{}};}
+        saveGameOverlaySettings();publishGameOverlayState();return {0,{},desktopStateJson()};
+    }catch(const DesktopJson::exception&){return {400,"无效歌词参数",{}};}
 }
 bool minimizeToTray() {return testWindow && hideToTray(testWindow);}
 void toggleTrayWindow() {if(testWindow){if(IsWindowVisible(testWindow))hideToTray(testWindow);else showFromTray(testWindow);}}

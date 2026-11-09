@@ -812,3 +812,7 @@ html:has(.desktop-lyrics),html:has(.desktop-lyrics) body,html:has(.desktop-lyric
 .update-download-progress[data-status=failed] .update-download-status strong { color:#c44e4e }
 .update-download-progress[data-status=ready] .update-download-status strong { color:var(--accent) }
 .update-download-actions { display:flex; flex-wrap:wrap; gap:8px; margin-top:12px }
+
+.extensions-empty { grid-column:1/-1; color:var(--muted) }
+.lyrics-settings + .game-overlay-settings { padding-top:28px; border-top:1px solid var(--line); margin-top:28px }
+.game-overlay-settings>h2 { margin:0; font-size:18px }

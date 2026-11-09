@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { readLyricsDisplay } from './lyricsDisplay';
 import { native } from '../native/client';
 import { initialGameOverlayState, type GameOverlayState, type CompatibilityWindow } from '../native/gameOverlay';
 
@@ -39,6 +40,9 @@ export function useGameOverlay() {
       const next = await overlay.listCompatibilityWindows(); if (mounted.current) setWindows(next);
     }
     return {
+      setTopmost: (value: boolean) => run(() => overlay.setTopmost(value)),
+      setLyricsMode: (value: 'single' | 'multi') => run(() => overlay.setLyricsMode(value)),
+      setLyricsFontSize: (value: number) => run(() => overlay.setLyricsFontSize(value)),
       setEnabled: (value: boolean) => run(() => overlay.setEnabled(value)),
       setVisible: (value: boolean) => run(() => overlay.setVisible(value)),
       setLyricsVisible: (value: boolean) => run(() => overlay.setLyricsVisible(value)),
@@ -62,6 +66,9 @@ export function useGameOverlay() {
       }),
     };
   }, []);
+  useEffect(() => {
+    if (state.available && state.lyricsFontSize === 0) void actions.setLyricsFontSize(readLyricsDisplay(localStorage).fontSize);
+  }, [state.available, state.lyricsFontSize, actions]);
   return { state, error, busy, windows, ...actions };
 }
 

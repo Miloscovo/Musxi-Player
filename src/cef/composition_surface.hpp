@@ -1,5 +1,6 @@
 #pragma once
 #include <windows.h>
+#include "overlay_pixels.hpp"
 #include <d3d11.h>
 #include <dcomp.h>
 #include <wrl/client.h>
@@ -68,33 +69,8 @@ public:
         const bool padded=canvasWidth!=width_ || canvasHeight!=height_;
         if(padded) {
             combined_.resize(static_cast<size_t>(canvasWidth)*canvasHeight*4);
-            const auto background=view_.data()+(static_cast<size_t>(std::min(height_-1,MulDiv(20,GetDpiForWindow(window),96)))*width_+width_/2)*4;
-            const int copyWidth=std::min(width_,canvasWidth),copyHeight=std::min(height_,canvasHeight);
-            for(int y=0;y<canvasHeight;++y) {
-                auto row=combined_.data()+static_cast<size_t>(y)*canvasWidth*4;
-                const int copied=y<copyHeight?copyWidth:0;
-                if(copied)std::memcpy(row,view_.data()+static_cast<size_t>(y)*width_*4,static_cast<size_t>(copied)*4);
-                for(int x=copied;x<canvasWidth;++x)std::memcpy(row+static_cast<size_t>(x)*4,background,4);
-            }
-            // Flatten the old CSS corners before rounding the actual window boundary.
-            const int radius=std::min({MulDiv(16,GetDpiForWindow(window),96),width_/2,height_/2,canvasWidth/2,canvasHeight/2});
-            for(const bool right:{false,true})for(const bool bottom:{false,true})for(int y=0;y<radius;++y) {
-                const int sourceY=bottom?height_-1-y:y;
-                if(sourceY>=canvasHeight)continue;
-                const auto edge=view_.data()+(static_cast<size_t>(bottom?std::max(0,height_-2):std::min(1,height_-1))*width_+(right?width_-radius-1:radius))*4;
-                for(int x=0;x<radius;++x) {
-                    const int sourceX=right?width_-1-x:x;
-                    if(sourceX<canvasWidth && std::hypot(radius-x-.5,radius-y-.5)>radius-.5)
-                        std::memcpy(combined_.data()+(static_cast<size_t>(sourceY)*canvasWidth+sourceX)*4,edge,4);
-                }
-            }
-            for(int y=0;y<radius;++y)for(int x=0;x<radius;++x) {
-                const double coverage=std::clamp(radius+.5-std::hypot(radius-x-.5,radius-y-.5),0.0,1.0);
-                for(const bool right:{false,true})for(const bool bottom:{false,true}) {
-                    auto corner=combined_.data()+(static_cast<size_t>(bottom?canvasHeight-1-y:y)*canvasWidth+(right?canvasWidth-1-x:x))*4;
-                    for(int channel=0;channel<4;++channel)corner[channel]=static_cast<std::uint8_t>(std::lround(corner[channel]*coverage));
-                }
-            }
+            copyResizingWindowPixels(combined_.data(),canvasWidth,canvasHeight,view_.data(),width_,height_,
+                MulDiv(20,GetDpiForWindow(window),96),MulDiv(16,GetDpiForWindow(window),96));
             pixels=combined_.data();
         }
         if(popupVisible_ && !popup_.empty()) {

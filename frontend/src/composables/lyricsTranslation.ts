@@ -11,8 +11,8 @@ export function useLyricsTranslation(): [boolean, (shown: boolean) => void] {
   const [shown, setShown] = useState(() => { try { return readLyricsTranslation(localStorage); } catch { return true; } });
   useEffect(() => {
     const sync = () => { try { setShown(readLyricsTranslation(localStorage)); } catch { /* Keep current. */ } };
-    window.addEventListener(event, sync);
-    return () => window.removeEventListener(event, sync);
+    window.addEventListener(event, sync); window.addEventListener('storage', sync);
+    return () => { window.removeEventListener(event, sync); window.removeEventListener('storage', sync); };
   }, []);
   return [shown, value => {
     setShown(value);

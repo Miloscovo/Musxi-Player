@@ -812,50 +812,20 @@ export async function verifyWebPage() {
     renderMessages('导入完成');
     await waitFor(() => fixture.querySelector('[data-slot=alert-description]')?.textContent === '导入完成', 'New message did not display');
   } finally { root.unmount(); fixture.remove(); }
-  await native.gameOverlay.setEnabled(false);
   const settingsTab = (label: string) => Array.from(document.querySelectorAll<HTMLButtonElement>('.settings-sections button'))
     .find(button => button.textContent?.trim() === label);
-  const extensionsButton = () => document.querySelector<HTMLButtonElement>('button[aria-label="扩展"]')!;
-  const moduleSwitch = () => document.querySelector<HTMLButtonElement>('#game-overlay-enabled[role=switch]')!;
-  document.querySelector<HTMLButtonElement>('.settings-nav')?.click();
-  // The updates tab appears once updates.getState answers.
+  document.querySelector<HTMLButtonElement>('button[aria-label="扩展"]')!.click();
+  await waitFor(() => document.querySelector('.extensions-empty')?.textContent === '暂无扩展', 'Extensions empty state is missing');
+  if (document.querySelector('.extension-card')) throw new Error('Floating widgets still appear as an extension');
+  document.querySelector<HTMLButtonElement>('.settings-nav')!.click();
   await waitFor(() => !!settingsTab('关于与更新'), 'Settings tabs are missing');
   if (document.querySelectorAll('.settings-sections button').length !== 5 || settingsTab('游戏内悬浮组件'))
-    throw new Error('Disabled module left its settings tab visible');
-  const settingsTabs = document.querySelectorAll<HTMLButtonElement>('.settings-sections button');
-  if (Array.from(settingsTabs).some(tab => Math.abs(tab.getBoundingClientRect().width-settingsTabs[0].getBoundingClientRect().width)>1
-      || tab.getBoundingClientRect().height !== settingsTabs[0].getBoundingClientRect().height)
-    || document.querySelector('.settings-content h2')) throw new Error('Settings tabs or removed subtitle are incorrect');
+    throw new Error('Independent overlay settings category remains');
+  settingsTab('歌词与组件')!.click();
+  await waitFor(() => !!document.querySelector('.lyrics-settings + .game-overlay-settings'), 'Lyrics and widgets were not merged');
+  if (!(await native.gameOverlay.getState()).enabled) throw new Error('Floating widgets are not always available');
   settingsTab('快捷键')!.click();
-  await waitFor(() => document.querySelectorAll('.shortcut-binding').length === 10, 'Disabled module left shortcut rows visible');
-  extensionsButton().click();
-  await waitFor(() => !!moduleSwitch() && !moduleSwitch().disabled, 'Extensions module card is missing');
-  if (moduleSwitch().getAttribute('aria-checked') !== 'false') throw new Error('Game module is enabled by default');
-  moduleSwitch().click();
-  await waitFor(() => moduleSwitch()?.getAttribute('aria-checked') === 'true', 'Module card did not enable the player');
-  const enabledModule = await native.gameOverlay.getState();
-  if (!enabledModule.enabled || enabledModule.visible || enabledModule.editing || enabledModule.panelVisible)
-    throw new Error('Enabling the module automatically opened overlay windows or the player');
-  document.querySelector<HTMLButtonElement>('.settings-nav')!.click();
-  await waitFor(() => !!settingsTab('游戏内悬浮组件'), 'Enabled module settings tab is missing');
-  if (document.querySelectorAll('.settings-sections button').length !== 6) throw new Error('Enabled module settings tabs are incorrect');
-  settingsTab('游戏内悬浮组件')!.click();
-  await waitFor(() => !!document.querySelector('[aria-labelledby=game-overlay-visible]'), 'Enabled player settings did not open');
-  document.querySelector<HTMLButtonElement>('[role=switch][aria-labelledby=game-overlay-visible]')!.click();
-  await waitFor(() => document.querySelector('[aria-labelledby=game-overlay-visible]')?.getAttribute('aria-checked') === 'true', 'Manual component display did not turn on');
-  if (!(await native.gameOverlay.getState()).visible) throw new Error('Manual component display was not saved');
-  settingsTab('快捷键')!.click();
-  await waitFor(() => document.querySelectorAll('.shortcut-binding').length === 13, 'Enabled module shortcut rows are missing');
-  settingsTab('游戏内悬浮组件')!.click();
-  await waitFor(() => !!document.querySelector('[aria-labelledby=game-overlay-visible]'));
-  await native.gameOverlay.setEnabled(false);
-  await waitFor(() => !settingsTab('游戏内悬浮组件') && !document.querySelector('[aria-labelledby=game-overlay-visible]'), 'Disabled module left its settings content selected');
-  extensionsButton().click();
-  await waitFor(() => moduleSwitch()?.getAttribute('aria-checked') === 'false', 'Module card retained an enabled state');
-  document.querySelector<HTMLButtonElement>('.settings-nav')!.click();
-  await waitFor(() => document.querySelectorAll('.settings-sections button').length === 5);
-  settingsTab('快捷键')!.click();
-  await waitFor(() => document.querySelectorAll('.shortcut-binding').length === 10, 'Module disable did not remove shortcut rows');
+  await waitFor(() => document.querySelectorAll('.shortcut-binding').length === 13, 'Widget shortcut rows are missing');
   // Smoke disables network access for both tagged releases and development builds.
   settingsTab('关于与更新')!.click();
   await waitFor(() => !!document.querySelector('.update-settings .update-status'), 'Update settings did not load');
@@ -870,7 +840,7 @@ export async function verifyWebPage() {
   if (document.querySelector('.settings-content h2') || document.querySelectorAll('#default-audio-quality option').length !== 4)
     throw new Error('Playback settings structure is incorrect');
   settingsTab('快捷键')!.click();
-  await waitFor(() => document.querySelectorAll('.shortcut-binding').length === 10 && !document.querySelector<HTMLButtonElement>('.shortcut-binding')?.disabled, 'Shortcut settings did not load');
+  await waitFor(() => document.querySelectorAll('.shortcut-binding').length === 13 && !document.querySelector<HTMLButtonElement>('.shortcut-binding')?.disabled, 'Shortcut settings did not load');
   await checkFixedPageHeader(document);
   const originalVolume = (await native.player.getState()).volumePercent;
   const shortcutBinding = (id: string) => document.querySelector<HTMLButtonElement>(`[aria-labelledby="shortcut-${id} shortcut-value-${id}"]`)!;
@@ -928,7 +898,7 @@ export async function verifyWebPage() {
     const cleared = await native.shortcuts.getState();
     if (cleared.global || Object.values(cleared.bindings).some(Boolean)) throw new Error('Restore defaults did not clear shortcuts');
   } finally { await native.player.setVolume(originalVolume); }
-  settingsTab('歌词')!.click();
+  settingsTab('歌词与组件')!.click();
   await waitFor(() => !!document.querySelector('.lyrics-preview'), 'Lyrics settings did not load');
   const savedLyrics = localStorage.getItem('musxi-lyrics-display');
   try {

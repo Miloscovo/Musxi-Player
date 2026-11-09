@@ -3,10 +3,10 @@ html:has(.game-overlay),html:has(.game-overlay) body,html:has(.game-overlay) #ap
 }
 .game-overlay {
   display:flex; flex-direction:column; width:100%; height:100%; min-width:0; max-width:none; padding:12px;
-  overflow:hidden; border:1px solid #68798a40; border-radius:14px; background:#ffffffd9; color:var(--ink);
+  overflow:hidden; border:1px solid #68798a40; border-radius:14px; background:#ffffffb3; color:var(--ink);
   box-shadow:inset 0 0 0 1px #ffffff12; -webkit-app-region:no-drag;
 }
-:root:is([data-theme=dark],[data-theme=glass]) .game-overlay { background:#131313d9; border-color:#ffffff26 }
+:root:is([data-theme=dark],[data-theme=glass]) .game-overlay { background:#131313b3; border-color:#ffffff26 }
 :root .game-overlay[data-widget=track] { height:auto; background:color-mix(in srgb,var(--app-surface) calc(var(--game-track-opacity,1)*100%),transparent) }
 .game-overlay[data-editing=true] { border-color:var(--accent); -webkit-app-region:drag }
 .game-overlay[data-widget=lyrics][data-editing=false] { background:transparent; border-color:transparent; box-shadow:none }
@@ -52,6 +52,19 @@ html:has(.game-overlay),html:has(.game-overlay) body,html:has(.game-overlay) #ap
 .overlay-track-content progress::-webkit-progress-bar { background:#80948a40 }
 .overlay-track-content progress::-webkit-progress-value { background:var(--accent) }
 .overlay-track-times { display:flex; justify-content:space-between; color:var(--muted); font-size:11px; font-variant-numeric:tabular-nums }
-.overlay-track-controls { display:flex; justify-content:center; gap:12px }
 .overlay-error { flex:none; margin:4px 0 0; color:#bd4850; font-size:12px; overflow-wrap:anywhere }
 @media (prefers-reduced-motion:reduce) { .overlay-lyrics-list[data-synced=true] li,.overlay-lyrics-viewport[data-style=perspective] .overlay-lyrics-list[data-synced=true] li { transition:none } }
+
+/* Single-line mode uses the same colors and perspective without the scrolling spacers. */
+.overlay-lyrics-viewport[data-mode=single] .overlay-lyrics-list { display:flex; flex-direction:column; justify-content:center; padding:0; overflow:hidden }
+.overlay-lyrics-viewport[data-mode=single] .overlay-lyrics-list::before,.overlay-lyrics-viewport[data-mode=single] .overlay-lyrics-list::after { display:none }
+.overlay-lyrics-viewport[data-mode=single] .overlay-single-line { display:grid }
+.overlay-single-content { grid-area:1/1; min-width:0 }
+.game-overlay[data-widget=lyrics] { position:relative; --dl-accent:var(--accent); --dl-capsule:var(--app-surface); --dl-tool:var(--ink); --dl-panel-line:var(--line) }
+.game-overlay .dl-unlock { z-index:3; min-height:28px; padding:0 12px; background:var(--app-surface); color:var(--ink) }
+.game-overlay .dl-capsule { z-index:4; max-width:calc(100% - 24px); height:auto; min-height:38px; flex-wrap:wrap; justify-content:center }
+.game-overlay .dl-tool { min-height:30px; padding:0 6px; border-radius:15px; color:var(--dl-tool) }
+.game-overlay .dl-tool:hover,.game-overlay .dl-size-step:hover { background:var(--hover-surface) }
+.game-overlay .dl-play { background:var(--accent-fill); color:#fff }
+.game-overlay .dl-play:hover { background:color-mix(in srgb,var(--accent-fill) 88%,#fff) }
+.game-overlay:has(.dl-capsule) { padding-bottom:66px }

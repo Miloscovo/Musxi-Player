@@ -218,8 +218,8 @@ export default function App() {
         </PlayerControl>
         <PlayerControl variant="unstyled" aria-label="下一首" onClick={() => library.skip(1)}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M17.5 5.5v13"/><path d="M5.5 5.5v13L16 12z"/></svg></PlayerControl>
       </PlayerActions>}
-      <div className="player-side">{desktop.state.enabled && <PlayerControl variant="unstyled" className="desktop-lyrics-toggle" aria-label="桌面歌词"
-        aria-pressed={desktop.state.visible} title={desktop.state.visible ? '关闭桌面歌词' : '打开桌面歌词'} onClick={() => void desktop.setVisible(!desktop.state.visible)}>
+      <div className="player-side">{desktop.state.enabled && <PlayerControl variant="unstyled" className="desktop-lyrics-toggle" aria-label="歌词悬浮窗"
+        aria-pressed={desktop.state.visible} title={desktop.state.visible ? '关闭歌词悬浮窗' : '打开歌词悬浮窗'} onClick={() => void desktop.setVisible(!desktop.state.visible)}>
         <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2.8" y="4.5" width="18.4" height="15" rx="4"/><text x="12" y="16.1" textAnchor="middle">词</text></svg>
       </PlayerControl>}{state && <div className="volume-control">
         <PlayerControl variant="unstyled" className="icon volume-button" aria-label={state.volumePercent===0 ? '取消静音' : '静音'} aria-pressed={state.volumePercent===0} disabled={busy || !connected}

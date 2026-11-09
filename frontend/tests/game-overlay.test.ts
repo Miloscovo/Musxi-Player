@@ -112,3 +112,42 @@ test('game overlay synchronously rejected subscriptions cancel once and missing 
   createGameOverlayClient({}).subscribe(() => assert.fail('Missing host delivered state'), e => codes.push(e.code))();
   assert.deepEqual(codes, [404, 503]); assert.deepEqual(cancelled, [4]);
 });
+
+test('unified floating lyrics defaults and new state are validated', async () => {
+  assert.equal(initialGameOverlayState.enabled, true);
+  assert.equal(initialGameOverlayState.visible, false);
+  assert.equal(initialGameOverlayState.topmost, true);
+  assert.equal(initialGameOverlayState.lyricsMode, 'multi');
+  for (const bad of [{ topmost: 1 }, { lyricsMode: 'dual' }, { lyricsFontSize: 15 }, { lyricsFontSize: 49 }, { lyricsFontSize: 22.5 }])
+    assert.throws(() => parseGameOverlay({ ...state, ...bad }), /Invalid floating lyrics state/);
+  const calls: unknown[] = [];
+  const client = createGameOverlayClient({ cefQueryCancel() {}, cefQuery(query) {
+    calls.push(JSON.parse(query.request)); query.onSuccess(JSON.stringify({ version: 1, result: state })); return 1;
+  } });
+  await client.setTopmost(false); await client.setLyricsMode('single'); await client.setLyricsFontSize(16);
+  assert.deepEqual(calls, [
+    { version: 1, command: 'gameOverlay.setTopmost', params: { topmost: false } },
+    { version: 1, command: 'gameOverlay.setLyricsMode', params: { lyricsMode: 'single' } },
+    { version: 1, command: 'gameOverlay.setLyricsFontSize', params: { lyricsFontSize: 16 } },
+  ]);
+});
+
+test('lyrics-only editing is independent and older hosts inherit manual editing', () => {
+  assert.equal(parseGameOverlay({ ...state, editing: false, lyricsEditing: true }).lyricsEditing, true);
+  assert.equal(parseGameOverlay({ ...state, editing: false, lyricsEditing: true }).editing, false);
+  const { lyricsEditing, ...legacy } = state;
+  assert.equal(parseGameOverlay({ ...legacy, editing: true }).lyricsEditing, true);
+  for (const value of [null, 1, 'true'])
+    assert.throws(() => parseGameOverlay({ ...state, lyricsEditing: value }), /Invalid lyrics editing state/);
+});
+
+test('track hover editing is independent and validates legacy fallback', () => {
+  const parsed = parseGameOverlay({ ...state, trackEditing: true });
+  assert.equal(parsed.trackEditing, true);
+  assert.equal(parsed.lyricsEditing, false);
+  assert.equal(parsed.editing, false);
+  const { trackEditing, ...legacy } = state;
+  assert.equal(parseGameOverlay({ ...legacy, editing: true }).trackEditing, true);
+  for (const value of [null, 1, 'true'])
+    assert.throws(() => parseGameOverlay({ ...state, trackEditing: value }), /Invalid track editing state/);
+});

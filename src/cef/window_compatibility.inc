@@ -44,7 +44,7 @@ musxi::LibraryReply windowCompatibilityCommand(const std::string& command,const 
     if(command=="gameOverlay.setWindowCompatibility") {
         if(data.size()!=1 || !data.contains("windowCompatibility") || !data.at("windowCompatibility").is_boolean())return {400,"无效通用窗口兼容参数",{}};
         const bool value=data.at("windowCompatibility").get<bool>();
-        if(value && !gameOverlayEnabled)return {409,"请先开启游戏内悬浮组件扩展",{}};
+        if(value && !gameOverlayEnabled)return {409,"当前悬浮组件不可用",{}};
         if(!value && !restoreCompatibilityWindow()) {
             windowCompatibilityStatus="error";publishGameOverlayState();return {500,"无法恢复所选游戏窗口，请检查权限或先关闭游戏后重试",{}};
         }

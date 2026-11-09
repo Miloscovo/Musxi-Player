@@ -212,9 +212,14 @@ public:
                 static const std::set<std::string> allowed{"gameOverlay.getState","gameOverlay.subscribe","gameOverlay.setEditing","gameOverlay.setPanelVisible",
                     "gameOverlay.setLyricsVisible","gameOverlay.setTrackVisible","gameOverlay.reportTrackHeight","player.subscribe","player.getState","player.pause","player.resume",
                     "library.getState","library.lyrics","library.skip","library.image"};
-                if(!allowed.count(command)){callback->Failure(403,"Command unavailable in game overlay");return true;}
+                const bool lyrics=url_.find("gameOverlay=lyrics")!=std::string::npos;
+                const bool lyricsControl=lyrics && (command=="desktopLyrics.getState" || command=="desktopLyrics.subscribe"
+                    || command=="desktopLyrics.setLocked" || command=="desktopLyrics.setPanel" || command=="desktopLyrics.setFontSize"
+                    || command=="desktopLyrics.setVisible" && params.size()==1 && params.contains("visible") && params.at("visible")==false);
+                if(!allowed.count(command) && !lyricsControl && !(smoke_ && lyrics && command=="test.desktopReport")) {
+                    callback->Failure(403,"Command unavailable in game overlay");return true;
+                }
                 if(command=="gameOverlay.setLyricsVisible" || command=="gameOverlay.setTrackVisible") {
-                    const bool lyrics=url_.find("gameOverlay=lyrics")!=std::string::npos;
                     const char* key=lyrics?"lyricsVisible":"trackVisible";
                     if(command!=(lyrics?"gameOverlay.setLyricsVisible":"gameOverlay.setTrackVisible") || params.size()!=1 || !params.contains(key) || params.at(key)!=false) {
                         callback->Failure(403,"A widget can only close itself");return true;
@@ -275,7 +280,7 @@ public:
                 return true;
             }
             if(persistent) {callback->Failure(400,"Persistent command not allowed");return true;}
-            if(smoke_ && command=="test.desktopReport" && lyrics_) {
+            if(smoke_ && command=="test.desktopReport" && (lyrics_ || overlay_)) {
                 desktopReport=params;callback->Success(Json{{"version",1},{"result",true}}.dump());return true;
             }
             if(smoke_ && command=="test.desktop" && !lyrics_) {
@@ -474,7 +479,7 @@ bool closeBrowsers() {
     if(activeBrowser)static_cast<Client*>(activeBrowser->GetHost()->GetClient().get())->requestClose();
     return !activeBrowser && !trayBrowser && !lyricsBrowser && overlayBrowsers.empty();
 }
-CefRefPtr<CefClient> makeGameOverlayClient(const std::string& url,void* window,void* overlayWindow) {return new Client(url,window,false,overlayWindow,false,false,true);}
+CefRefPtr<CefClient> makeGameOverlayClient(const std::string& url,void* window,void* overlayWindow) {return new Client(url,window,url.find("desktopSmoke=1")!=std::string::npos,overlayWindow,false,false,true);}
 CefRefPtr<CefBrowserHost> gameOverlayBrowserHost(void* window) {const auto found=overlayBrowsers.find(static_cast<HWND>(window));return found==overlayBrowsers.end()?nullptr:found->second->GetHost();}
 CefRefPtr<CefClient> makeDesktopLyricsClient(const std::string& url,void* window,void* lyricsWindow) {desktopReport=nullptr;return new Client(url,window,url.find("desktopSmoke=1")!=std::string::npos,lyricsWindow,false,true);}
 CefRefPtr<CefBrowserHost> desktopLyricsBrowserHost() {return lyricsBrowser?lyricsBrowser->GetHost():nullptr;}

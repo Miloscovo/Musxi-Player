@@ -20,7 +20,7 @@ export function useDesktopLyrics() {
   const actions = useMemo(() => {
     const run = async (action: () => Promise<DesktopLyricsState>) => {
       try { setState(await action()); setError(''); }
-      catch (e) { setError(e instanceof Error ? e.message : '桌面歌词操作失败'); }
+      catch (e) { setError(e instanceof Error ? e.message : '歌词悬浮窗操作失败'); }
     };
     const d = native.desktopLyrics;
     return {

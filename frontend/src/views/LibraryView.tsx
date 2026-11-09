@@ -65,17 +65,13 @@ export default function LibraryView({ library: lib, theme, appearance, onAppeara
   const searchOperationBefore = useRef('');
   const [skeletonPageRows, setSkeletonPageRows] = useState(8);
   const [librarySection, setLibrarySection] = useState<LibrarySection>('created');
-  const [settingsSection, setSettingsSection] = useState<'appearance' | 'playback' | 'shortcuts' | 'lyrics' | 'overlay' | 'updates'>('appearance');
+  const [settingsSection, setSettingsSection] = useState<'appearance' | 'playback' | 'shortcuts' | 'lyrics' | 'updates'>('appearance');
   const jumpToGameShortcuts = useRef(false);
   const [removeFoldersOpen, setRemoveFoldersOpen] = useState(false);
   useEffect(() => {
     // The dock notice asks for the update details page.
     if (showUpdates) navigate(() => { setView('settings'); setSettingsSection('updates'); setShowTracks(false); });
   }, [showUpdates]);
-  useLayoutEffect(() => {
-    if (!overlay.state.enabled && settingsSection === 'overlay')
-      { resetScroll(); setSettingsSection('appearance'); }
-  }, [overlay.state.enabled, settingsSection]);
   const [playlistQuery, setPlaylistQuery] = useState('');
   const content = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -323,12 +319,11 @@ export default function LibraryView({ library: lib, theme, appearance, onAppeara
       </div></header>}
       {view !== 'recent' && isDemoMode() && <p className="demo-notice">演示模式：播放进度与导入文件夹均为模拟，不播放真实音频、不读取真实文件、不登录真实账号；刷新页面后重置。</p>}
       {view === 'settings' && <nav className="library-sections settings-sections" aria-label="设置分类"
-        style={{ '--settings-columns': 4 + Number(overlay.state.enabled) + Number(!!updates && !updates.unsupported) } as CSSProperties}>
+        style={{ '--settings-columns': 4 + Number(!!updates && !updates.unsupported) } as CSSProperties}>
         {([{ id: 'appearance', label: '外观', icon: 'M12 3a9 9 0 1 0 0 18h1a2 2 0 0 0 1.5-3.3l-.2-.2a1.5 1.5 0 0 1 1.1-2.5H18a3 3 0 0 0 3-3 9 9 0 0 0-9-9ZM8 8a.8.8 0 1 0 0-1.6.8.8 0 0 0 0 1.6Zm5-1a.8.8 0 1 0 0-1.6.8.8 0 0 0 0 1.6Zm4 4a.8.8 0 1 0 0-1.6.8.8 0 0 0 0 1.6ZM6 13a.8.8 0 1 0 0-1.6.8.8 0 0 0 0 1.6Z' },
           { id: 'playback', label: '播放', icon: 'M11 4 6 8H3v8h3l5 4V4Zm4 4a6 6 0 0 1 0 8m3-11a10 10 0 0 1 0 14' },
           { id: 'shortcuts', label: '快捷键', icon: 'M4 4h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2ZM6 8h.01M10 8h.01M14 8h.01M18 8h.01M6 12h.01M10 12h.01M14 12h.01M18 12h.01M7 16h10' },
-          { id: 'lyrics', label: '歌词', icon: 'M6 3h12a3 3 0 0 1 3 3v12a3 3 0 0 1-3 3H6a3 3 0 0 1-3-3V6a3 3 0 0 1 3-3ZM7 12h2m4 0h4M7 16h6m3 0h1' },
-          ...(overlay.state.enabled ? [{ id: 'overlay', label: '游戏内悬浮组件', icon: 'M7 5.5h10a4 4 0 0 1 3.9 3.2l1.2 7.6c.4 2.6-2.7 4.2-4.5 2.3L15 16H9l-2.6 2.6c-1.8 1.9-4.9.3-4.5-2.3l1.2-7.6A4 4 0 0 1 7 5.5ZM5.5 10.5h5m-2.5-2.5v5m7-3h.01m2.5 2.5h.01' }] as const : []),
+          { id: 'lyrics', label: '歌词与组件', icon: 'M6 3h12a3 3 0 0 1 3 3v12a3 3 0 0 1-3 3H6a3 3 0 0 1-3-3V6a3 3 0 0 1 3-3ZM7 12h2m4 0h4M7 16h6m3 0h1' },
           ...(updates && !updates.unsupported ? [{ id: 'updates', label: '关于与更新', icon: 'M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20ZM12 11v6m0-10h.01' }] as const : [])] as const).map(section =>
           <Button key={section.id} variant="secondary" className="library-section" aria-pressed={settingsSection === section.id}
             onClick={() => navigate(() => { resetScroll();setSettingsSection(section.id); })}><svg className="icon" viewBox="0 0 24 24" aria-hidden="true"><path d={section.icon}/></svg>{section.label}</Button>)}
@@ -380,7 +375,7 @@ export default function LibraryView({ library: lib, theme, appearance, onAppeara
           </DialogContent>
         </Dialog>
       </div>}
-      {view === 'extensions' ? <ExtensionsView overlay={overlay}/> : view === 'settings' ? settingsSection === 'updates' && updates ? <UpdateSettings updates={updates}/> : settingsSection === 'shortcuts' ? <ShortcutSettings shortcuts={shortcuts} overlayEnabled={overlay.state.enabled}/> : settingsSection === 'lyrics' ? <LyricsSettings coverUrl={state?.now?.cover}/> : settingsSection === 'overlay' ? <GameOverlaySettings overlay={overlay} onShortcutSettings={() => navigate(() => { resetScroll(); jumpToGameShortcuts.current = true; setSettingsSection('shortcuts'); })}/> : settingsSection === 'playback' ? <PlaybackSettings/> : <AppearanceSettings appearance={appearance ?? { mode: theme === 'dark' || theme === 'glass' ? 'dark' : 'light', transparent: theme === 'glass' || theme === 'glass-light', tone: 'green' }} onAppearance={onAppearance ?? (() => {})} transparency={transparency} onTransparency={onTransparency ?? (() => {})}
+      {view === 'extensions' ? <ExtensionsView/> : view === 'settings' ? settingsSection === 'updates' && updates ? <UpdateSettings updates={updates}/> : settingsSection === 'shortcuts' ? <ShortcutSettings shortcuts={shortcuts} overlayEnabled={overlay.state.enabled}/> : settingsSection === 'lyrics' ? <><LyricsSettings coverUrl={state?.now?.cover}/><GameOverlaySettings overlay={overlay} onShortcutSettings={() => navigate(() => { resetScroll(); jumpToGameShortcuts.current = true; setSettingsSection('shortcuts'); })}/></> : settingsSection === 'playback' ? <PlaybackSettings/> : <AppearanceSettings appearance={appearance ?? { mode: theme === 'dark' || theme === 'glass' ? 'dark' : 'light', transparent: theme === 'glass' || theme === 'glass-light', tone: 'green' }} onAppearance={onAppearance ?? (() => {})} transparency={transparency} onTransparency={onTransparency ?? (() => {})}
         wallpaper={wallpaper} wallpaperEnabled={wallpaperEnabled} onWallpaperEnabled={onWallpaperEnabled} playerTransparent={playerTransparent} onPlayerTransparent={onPlayerTransparent}/> : view === 'library' && !showTracks ? <>
         {!isLocal && <>
           {playlistsLoading ? <div className="playlist-grid" role="status" aria-label="正在加载歌单列表">

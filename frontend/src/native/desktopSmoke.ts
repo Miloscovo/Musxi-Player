@@ -6,7 +6,7 @@ import { request, type CefTransport } from './transport';
 export function reportDesktopPage() {
   const host = window as unknown as CefTransport;
   // Exercise the native minimum width even when the smoke host starts wider.
-  const root = document.querySelector<HTMLElement>('.desktop-lyrics');
+  const root = document.querySelector<HTMLElement>('.game-overlay');
   const controlsFit = () => {
     const width = root?.style.width ?? '';
     if (root) root.style.width = '480px';
@@ -19,10 +19,10 @@ export function reportDesktopPage() {
     return fits;
   };
   const send = () => void request(host, 'test.desktopReport', {
-    text: document.querySelector('.dl-lyrics')?.textContent ?? '',
+    text: document.querySelector('.overlay-message,.overlay-lyrics-list')?.textContent ?? '',
     panel: !!document.querySelector('.dl-capsule'), unlock: !!document.querySelector('.dl-unlock'),
-    color: document.querySelector<HTMLElement>('.desktop-lyrics')?.dataset.color ?? '',
-    size: document.querySelector<HTMLElement>('.desktop-lyrics')?.style.getPropertyValue('--dl-size') ?? '',
+    color: document.querySelector<HTMLElement>('.overlay-lyrics-viewport')?.dataset.style ?? '',
+    size: document.querySelector<HTMLElement>('.overlay-lyrics-list')?.style.getPropertyValue('--overlay-lyric-size') ?? '',
     tone: document.documentElement.dataset.tone ?? '',
     controlsFit: controlsFit(),
   }).catch(() => {});
@@ -41,18 +41,18 @@ export async function verifyDesktopWindow() {
     }
     throw new Error(`Desktop check timed out (${what}): ${JSON.stringify(last)}`);
   };
-  const pushed: boolean[] = [];
-  const stop = native.desktopLyrics.subscribe(state => pushed.push(state.panel), () => {});
+  const stop = native.desktopLyrics.subscribe(() => {}, () => {});
   await native.desktopLyrics.setVisible(true);
-  const view = await wait(value => value.painted && value.page?.text === 'Musxi Player', 'idle text');
+  const view = await wait(value => value.painted && value.page?.text === '尚未播放歌曲', 'idle text');
   if (!view.noActivate || !view.toolWindow || !view.topmost || !view.transparent) throw new Error('Desktop window styles/alpha incorrect');
-  if (view.page.panel) throw new Error('Desktop panel visible by default');
-  await native.desktopLyrics.setPanel(true);
-  await wait(value => value.page?.panel, 'panel');
-  if (!(await probe()).page?.controlsFit) throw new Error('Desktop controls clipped at minimum width');
-  if (!pushed.includes(true)) throw new Error('Desktop state was not pushed to the main page');
-  await native.desktopLyrics.setFontSize(40); await native.desktopLyrics.setColor('dark');
-  await wait(value => value.page?.size === '40px' && value.page?.color === 'dark', 'font/color');
+  if ((await native.gameOverlay.getState()).editing) throw new Error('Lyrics unexpectedly entered manual editing');
+  await native.desktopLyrics.setLocked(false);
+  try {
+    await native.desktopLyrics.setPanel(true);
+    throw new Error('Obsolete toolbar toggle unexpectedly succeeded');
+  } catch (error) { if (!(error && typeof error === 'object' && 'code' in error && error.code === 409)) throw error; }
+  await native.desktopLyrics.setFontSize(40);
+  if ((await native.gameOverlay.getState()).lyricsFontSize !== 40) throw new Error('Legacy font setter did not update unified state');
   await native.desktopLyrics.setLocked(true);
   await wait(value => value.clickThrough && !value.page?.panel, 'lock');
   if ((await native.desktopLyrics.getState()).panel) throw new Error('Locking kept the panel open');
@@ -62,7 +62,7 @@ export async function verifyDesktopWindow() {
   await wait(value => value.page?.tone === 'blue', 'tone sync');
   localStorage.removeItem('musxi-tone');
   await native.desktopLyrics.setVisible(false);
-  await wait(value => !value.exists, 'close');
+  await wait(value => !value.visible, 'close');
   await native.desktopLyrics.setVisible(true);
   await wait(value => value.painted && !value.page?.panel, 'reopen');
   stop();
