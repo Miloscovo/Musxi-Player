@@ -20,7 +20,7 @@ test('track height reporting validates bounds, payload, and acknowledgement', as
 
 test('game overlay state rejects missing fields and nonboolean flags', () => {
   assert.deepEqual(parseGameOverlay(state), state);
-  for (const bad of [null, [], {}, { ...state, editing: 1 }, { ...state, available: undefined }, { ...state, panelVisible: 'false' }])
+  for (const bad of [null, [], {}, { ...state, editing: 1 }, { ...state, available: undefined }])
     assert.throws(() => parseGameOverlay(bad), /Invalid game overlay state/);
 });
 
@@ -31,7 +31,7 @@ test('game overlay setters preserve independent widget selection and command fie
   } });
   assert.deepEqual(await client.getState(), state);
   await client.setEnabled(true); await client.setVisible(false); await client.setLyricsVisible(false);
-  await client.setTrackVisible(true); await client.setEditing(true); await client.setPanelVisible(false);
+  await client.setTrackVisible(true); await client.setEditing(true);
   await client.setHideOnHover(true);
   await client.setMinecraftCompatibility(true);
   await client.setWindowCompatibility(true); await client.applyWindowCompatibility('123-4'); await client.restoreWindowCompatibility();
@@ -42,7 +42,6 @@ test('game overlay setters preserve independent widget selection and command fie
     { version: 1, command: 'gameOverlay.setLyricsVisible', params: { lyricsVisible: false } },
     { version: 1, command: 'gameOverlay.setTrackVisible', params: { trackVisible: true } },
     { version: 1, command: 'gameOverlay.setEditing', params: { editing: true } },
-    { version: 1, command: 'gameOverlay.setPanelVisible', params: { panelVisible: false } },
     { version: 1, command: 'gameOverlay.setHideOnHover', params: { hideOnHover: true } },
     { version: 1, command: 'gameOverlay.setMinecraftCompatibility', params: { minecraftCompatibility: true } },
     { version: 1, command: 'gameOverlay.setWindowCompatibility', params: { windowCompatibility: true } },

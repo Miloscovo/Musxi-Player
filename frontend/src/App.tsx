@@ -22,13 +22,13 @@ import { useAppUpdates } from './composables/useAppUpdates';
 import UpdateNotice from './components/UpdateNotice';
 import { useShortcuts } from './composables/useShortcuts';
 import { useWallpaper } from './composables/useWallpaper';
+import LiquidGlassSurface from './components/LiquidGlassSurface';
 
 export default function App() {
   const shell = useWindow(); const library = useLibrary();
   const wallpaper = useWallpaper(shell);
   const desktop = useDesktopLyrics(); const updates = useAppUpdates();
   const overlay = useGameOverlay();
-  useEffect(() => { if (overlay.state.panelVisible) void shell.refresh(); }, [overlay.state.panelVisible, shell.refresh]);
   const shortcuts = useShortcuts(overlay.state.enabled);
   const [showUpdates, setShowUpdates] = useState(0);
   const currentTrack = library.state?.now;
@@ -163,7 +163,7 @@ export default function App() {
       <motion.div className="library-layer" inert={lyricsOpen || lyricsCovered} data-covered={lyricsCovered && (transparentLyrics || lyricsOpen) || undefined} initial={false}
         animate={{ opacity: transparentLyrics && (lyricsOpen || lyricsCovered) ? 0 : 1 }} transition={{ duration: reducedMotion ? 0 : 0.08 }}
         onAnimationComplete={() => { if (transparentLyrics && lyricsOpen) setLyricsCovered(true); }}><LibraryView library={library} playback={state} onResume={() => void resume()} theme={shell.theme} appearance={shell.appearance} onAppearance={shell.setAppearance} transparency={shell.transparency} onTransparency={shell.setTransparency} updates={updates} showUpdates={showUpdates} shortcuts={shortcuts} overlay={overlay}
-        wallpaper={wallpaper} wallpaperEnabled={shell.wallpaperEnabled} onWallpaperEnabled={shell.setWallpaperEnabled} playerTransparent={shell.playerTransparent} onPlayerTransparent={shell.setPlayerTransparent}/></motion.div>
+        wallpaper={wallpaper} wallpaperEnabled={shell.wallpaperEnabled} onWallpaperEnabled={shell.setWallpaperEnabled} playerTransparent={shell.playerTransparent} onPlayerTransparent={shell.setPlayerTransparent} liquidGlass={shell.liquidGlass} onLiquidGlass={shell.setLiquidGlass}/></motion.div>
       <AnimatePresence onExitComplete={() => { if (!lyricsOpen) setLyricsCovered(false); }}>
         {lyricsOpen && (!transparentLyrics || lyricsCovered) && <LyricsView key="lyrics" trackId={state?.opened ? state.trackId : ''} now={currentTrack} fallbackCover={smallCover} positionMs={state?.positionMs ?? 0}
           playing={!!state?.playing} canSeek={connected && !!state?.opened && !!state.durationMs} onSeek={positionMs => void seek(positionMs)} onClose={closeLyrics} onEntered={lyricsEntered}
@@ -174,6 +174,7 @@ export default function App() {
       // Menus and lyrics need the full viewport rather than a clipped player strip.
       if(compact && (event.target as Element).closest('[aria-haspopup],.lyrics-toggle'))void setCompact(false);
     }}>
+      {shell.liquidGlass && <LiquidGlassSurface/>}
       {shell.state.enabled && <Button variant="unstyled" ref={playerRail} className="player-rail" hidden={playerCollapsed} data-state={compact ? 'collapsed' : 'expanded'} disabled={compactBusy || playerCollapsed}
         aria-label={railLabel} aria-expanded={!compact && !playerCollapsed}
         title={railLabel} onClick={() => { if (lyricsOpen && !compact) setLyricsPlayerCollapsed(value => !value); else void setCompact(!compact); }} />}
@@ -218,8 +219,8 @@ export default function App() {
         </PlayerControl>
         <PlayerControl variant="unstyled" aria-label="下一首" onClick={() => library.skip(1)}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M17.5 5.5v13"/><path d="M5.5 5.5v13L16 12z"/></svg></PlayerControl>
       </PlayerActions>}
-      <div className="player-side">{desktop.state.enabled && <PlayerControl variant="unstyled" className="desktop-lyrics-toggle" aria-label="歌词悬浮窗"
-        aria-pressed={desktop.state.visible} title={desktop.state.visible ? '关闭歌词悬浮窗' : '打开歌词悬浮窗'} onClick={() => void desktop.setVisible(!desktop.state.visible)}>
+      <div className="player-side">{desktop.state.enabled && <PlayerControl variant="unstyled" className="desktop-lyrics-toggle" aria-label="歌词悬浮组件"
+        aria-pressed={desktop.state.visible} title={desktop.state.visible ? '关闭歌词悬浮组件' : '打开歌词悬浮组件'} onClick={() => void desktop.setVisible(!desktop.state.visible)}>
         <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2.8" y="4.5" width="18.4" height="15" rx="4"/><text x="12" y="16.1" textAnchor="middle">词</text></svg>
       </PlayerControl>}{state && <div className="volume-control">
         <PlayerControl variant="unstyled" className="icon volume-button" aria-label={state.volumePercent===0 ? '取消静音' : '静音'} aria-pressed={state.volumePercent===0} disabled={busy || !connected}
@@ -236,10 +237,7 @@ export default function App() {
       </div>
       {!compact && !lyricsOpen && <UpdateNotice updates={updates} onDetails={() => setShowUpdates(n => n + 1)} />}
       <MessageAlerts messages={messages} />
-      {((overlay.state.panelVisible && !compact) || shell.preview) && <div className="player-floating-actions">
-      {overlay.state.panelVisible && !compact && <div className="game-panel-actions">
-        <Button className="game-panel-return" disabled={overlay.busy} onClick={() => void overlay.setPanelVisible(false)}>返回游戏</Button>
-      </div>}
+      {shell.preview && <div className="player-floating-actions">
       {shell.preview && <div className="wallpaper-preview-bar" role="status"><span>正在预览壁纸</span>
         <Button variant="secondary" disabled={wallpaper.busy} onClick={wallpaper.cancel}>取消预览</Button>
         <Button disabled={wallpaper.busy} onClick={()=>void wallpaper.apply()}>应用壁纸</Button>

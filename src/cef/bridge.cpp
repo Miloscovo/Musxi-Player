@@ -209,7 +209,7 @@ public:
                 callback->Failure(403,"Only the track widget can report its height");return true;
             }
             if(overlay_) {
-                static const std::set<std::string> allowed{"gameOverlay.getState","gameOverlay.subscribe","gameOverlay.setEditing","gameOverlay.setPanelVisible",
+                static const std::set<std::string> allowed{"gameOverlay.getState","gameOverlay.subscribe","gameOverlay.setEditing",
                     "gameOverlay.setLyricsVisible","gameOverlay.setTrackVisible","gameOverlay.reportTrackHeight","player.subscribe","player.getState","player.pause","player.resume",
                     "library.getState","library.lyrics","library.skip","library.image"};
                 const bool lyrics=url_.find("gameOverlay=lyrics")!=std::string::npos;

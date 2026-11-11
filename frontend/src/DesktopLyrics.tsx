@@ -25,7 +25,7 @@ export default function FloatingLyricsControls({ playing, pause, resume }: {
   };
   const wheel = (event: WheelEvent) => { if (event.deltaY) resize(event.deltaY < 0 ? desktopFontRange.step : -desktopFontRange.step); };
   return <>
-    {d.panel && <div className="dl-capsule" role="toolbar" aria-label="歌词悬浮窗控制">
+    {d.panel && <div className="dl-capsule" role="toolbar" aria-label="歌词悬浮组件控制">
       <Tool label="上一首" onClick={() => void native.library.skip(-1).catch(() => {})}><Icon><rect className="fill" x="5" y="5.5" width="2.6" height="13" rx="1.1"/><path className="fill" d="M19 6.4v11.2a1 1 0 0 1-1.5.9L9 13a1.2 1.2 0 0 1 0-2l8.5-5.5a1 1 0 0 1 1.5.9z"/></Icon></Tool>
       <Tool label={playing ? '暂停' : '播放'} className="dl-play" onClick={() => void (playing ? pause() : resume())}>
         {playing ? <Icon><rect className="fill" x="7.2" y="6" width="3.4" height="12" rx="1.3"/><rect className="fill" x="13.4" y="6" width="3.4" height="12" rx="1.3"/></Icon>

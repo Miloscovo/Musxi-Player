@@ -1,4 +1,4 @@
-param([Parameter(Mandatory=$true)][string]$HostPath,[string]$MinecraftFixturePath='',[switch]$CompatibilityOnly,[switch]$FocusOnly,[switch]$HoverOnly,[switch]$NavigationOnly,[switch]$UnifiedOnly,[switch]$MigrationOnly,[switch]$ResizeOnly)
+param([Parameter(Mandatory=$true)][string]$HostPath,[string]$MinecraftFixturePath='',[switch]$CompatibilityOnly,[switch]$FocusOnly,[switch]$HoverOnly,[switch]$NavigationOnly,[switch]$UnifiedOnly,[switch]$MigrationOnly,[switch]$ResizeOnly,[switch]$GlassOnly)
 $ErrorActionPreference='Stop'
 $hostExe=(Resolve-Path -LiteralPath $HostPath).Path
 $node=(Get-Command node -ErrorAction Stop).Source
@@ -138,7 +138,7 @@ function Wait-TrackFit {
  Wait-For { $height=Evaluate "document.querySelector('.game-overlay')?Math.ceil(document.querySelector('.game-overlay').getBoundingClientRect().height):0" 'track';$height -gt 0 -and [Math]::Abs((Track-Height)-$height) -le 1 } 'Track native window did not fit its visible content'
 }
 function Check-OverlayKeys([bool]$available) {
- foreach($key in @(132,133,134)){
+ foreach($key in @(132,133)){
   $acquired=[GameOverlayCheck]::RegisterHotKey($keyProbe,$key,0x4007,$key)
   if($acquired){[void][GameOverlayCheck]::UnregisterHotKey($keyProbe,$key)}
   Require ($acquired -eq $available) "Overlay shortcut $key ownership is incorrect for the module state"
@@ -150,7 +150,6 @@ function Press-TestShortcut([int]$key,[bool]$expectDelivery=$true,[IntPtr]$targe
  Wait-For {[GameOverlayCheck]::GetForegroundWindow() -eq $target} 'Could not focus the shortcut test target; no keys sent'
  $before=@([GameOverlayCheck]::ReceivedKeys.ToArray() | Where-Object {$_ -eq $key}).Count
  $released=@([GameOverlayCheck]::ReleasedKeys.ToArray() | Where-Object {$_ -eq $key}).Count
- $panelBefore=if($key -eq 134){(State).panelVisible}else{$null}
  $editingBefore=if($key -eq 133){(State).editing}else{$null}
  $pressed=[Collections.Generic.List[int]]::new()
  try {
@@ -158,10 +157,9 @@ function Press-TestShortcut([int]$key,[bool]$expectDelivery=$true,[IntPtr]$targe
   [GameOverlayCheck]::Key($key,$true)
   Start-Sleep -Milliseconds 100
   if($whileHeld){& $whileHeld}
-  if($key -eq 134){Require ((State).panelVisible -eq $panelBefore) 'Selection panel changed before the original game key was released'}
   if($key -eq 133){Require ((State).editing -eq $editingBefore) 'Editing changed before the original game key was released'}
  } finally {for($i=$pressed.Count-1;$i -ge 0;--$i){[GameOverlayCheck]::Key($pressed[$i],$false)}}
- # Windows can combine repeats; opening the selection panel deliberately changes the input target.
+ # Windows can combine repeats; editing deliberately changes the input target.
  if($expectDelivery){
   try {Wait-For {@([GameOverlayCheck]::ReceivedKeys.ToArray() | Where-Object {$_ -eq $key}).Count -gt $before} 'Bound key did not reach the foreground application'}
   catch {throw "Key $key did not reach the input window (before=$before, received=$([GameOverlayCheck]::ReceivedKeys.ToArray() -join ','), foreground=$([GameOverlayCheck]::GetForegroundWindow()), sink=$([GameOverlayCheck]::Sink))"}
@@ -316,6 +314,7 @@ try {
  [IO.File]::WriteAllText((Join-Path $profile 'desktop-lyrics.json'),'{"version":1,"visible":false,"locked":false,"dual":true,"x":0,"y":0,"width":680,"height":180}')
  $bindings=[ordered]@{}
  foreach($action in @('playPause','previous','next','forward','backward','volumeUp','volumeDown','mute','playbackOrder','visibility','overlayVisibility','overlayEditing','overlayPlayer')){$bindings[$action]=$null}
+ $bindings.visibility=@{key=135;modifiers=7};$bindings.overlayPlayer=@{key=134;modifiers=7};$bindings.overlayScreenshot=$bindings.visibility
  [IO.File]::WriteAllText((Join-Path $profile 'shortcuts.json'),(@{global=$false;bindings=$bindings}|ConvertTo-Json -Depth 4 -Compress))
  $arguments=@('--test-app',"--remote-debugging-port=$port")
  $app=Start-Process -FilePath $hostExe -ArgumentList $arguments -WindowStyle Hidden -PassThru
@@ -379,11 +378,17 @@ try {
  Require (-not $invalid.ok -and $invalid.code -eq 400) 'Extra overlay parameters were accepted'
  [void](Bridge 'gameOverlay.setEnabled' @{enabled=$true})
  Require (-not (State).visible) 'Enabling the module automatically showed widgets'
- Require (-not [GameOverlayCheck]::IsWindowVisible((Find-Window 'MusxiGameOverlay' 'Musxi Player 歌词悬浮窗')) -and -not [GameOverlayCheck]::IsWindowVisible((Find-Window 'MusxiGameOverlay' 'Musxi Player 歌曲信息'))) 'Enabling the module showed widgets before manual display'
+ Require (-not [GameOverlayCheck]::IsWindowVisible((Find-Window 'MusxiGameOverlay' 'Musxi Player 歌词悬浮组件')) -and -not [GameOverlayCheck]::IsWindowVisible((Find-Window 'MusxiGameOverlay' 'Musxi Player 歌曲信息'))) 'Enabling the module showed widgets before manual display'
  $shortcutState=Bridge 'shortcuts.getState'
- Require ($shortcutState.bindings.PSObject.Properties.Name.Count -eq 13) 'Unexpected shortcut actions remain'
- $removed=Bridge 'shortcuts.execute' @{action='overlayScreenshot'} -AllowFailure
- Require (-not $removed.ok -and $removed.code -eq 400) 'Removed shortcut still executes'
+ Require ($shortcutState.bindings.PSObject.Properties.Name.Count -eq 12) 'Unexpected shortcut actions remain'
+ Require (-not $shortcutState.global -and $shortcutState.bindings.visibility.key-eq135 -and $shortcutState.bindings.visibility.modifiers-eq7) 'Retiring panel shortcuts discarded another binding or the global preference'
+ Require ((State).PSObject.Properties.Name -notcontains 'panelVisible') 'Removed panel state remains exposed'
+ foreach($action in @('overlayPlayer','overlayScreenshot')){
+  $removed=Bridge 'shortcuts.execute' @{action=$action} -AllowFailure
+  Require (-not $removed.ok -and $removed.code-eq400) 'Removed shortcut still executes'
+ }
+ $removedPanel=Bridge 'gameOverlay.setPanelVisible' @{panelVisible=$true} -AllowFailure
+ Require (-not $removedPanel.ok -and $removedPanel.code-eq404) 'Removed panel interface remains callable'
  $shortcutsBeforeJump=$shortcutState | ConvertTo-Json -Depth 8 -Compress
  [void](Evaluate "document.querySelector('button[aria-label=设置]').click();true")
  Wait-For {Evaluate "Array.from(document.querySelectorAll('.library-section')).some(b=>b.textContent==='歌词与组件')"} 'Game player settings category unavailable'
@@ -391,20 +396,146 @@ try {
  Wait-For {Evaluate "Array.from(document.querySelectorAll('.game-overlay-settings button')).some(b=>b.textContent==='组件快捷键设置')"} 'Game shortcut settings entry unavailable'
  Require (Evaluate "!Array.from(document.querySelectorAll('.game-overlay-settings button')).some(b=>b.textContent==='打开选歌面板'||b.textContent==='收起选歌面板')") 'Old selection-panel settings button was retained'
  [void](Evaluate "Array.from(document.querySelectorAll('.game-overlay-settings button')).find(b=>b.textContent==='组件快捷键设置').click();true")
- Wait-For {Evaluate "(()=>{const g=document.querySelector('#game-overlay-shortcuts'),s=document.querySelector('.page-scroll');if(!g||!s)return false;const a=g.getBoundingClientRect(),b=s.getBoundingClientRect();return document.querySelector('.library-section[aria-pressed=true]')?.textContent==='快捷键'&&g.querySelectorAll('.shortcut-row').length===3&&a.top>=b.top-1&&a.top<b.bottom&&s.scrollTop>0})()"} 'Settings entry did not switch category and scroll to the game shortcut group'
+ Wait-For {Evaluate "(()=>{const g=document.querySelector('#game-overlay-shortcuts'),s=document.querySelector('.page-scroll');if(!g||!s)return false;const a=g.getBoundingClientRect(),b=s.getBoundingClientRect();return document.querySelector('.library-section[aria-pressed=true]')?.textContent==='快捷键'&&g.querySelectorAll('.shortcut-row').length===2&&a.top>=b.top-1&&a.top<b.bottom&&s.scrollTop>0})()"} 'Settings entry did not switch category and scroll to the game shortcut group'
  Require ((Bridge 'shortcuts.getState' | ConvertTo-Json -Depth 8 -Compress) -eq $shortcutsBeforeJump) 'Navigation changed shortcut bindings or global enable state'
- Require (-not (State).panelVisible) 'Shortcut settings navigation opened the game selection panel'
+ Require (Evaluate "!document.querySelector('.game-panel-return')") 'Removed return-to-game button remains visible'
  [void](Evaluate "Array.from(document.querySelectorAll('.library-section')).find(b=>b.textContent==='歌词与组件').click();true")
  Wait-For {Evaluate "!!document.querySelector('.game-overlay-settings')"} 'Could not return to game player settings'
  [void](Evaluate "Array.from(document.querySelectorAll('.library-section')).find(b=>b.textContent==='快捷键').click();true")
  Wait-For {Evaluate "!!document.querySelector('.shortcut-settings')&&document.querySelector('.page-scroll').scrollTop===0"} 'Ordinary shortcut navigation inherited the one-time scroll target'
- Write-Output 'PASS: game shortcut settings entry switches category, scrolls once to all three bindings and preserves shortcuts and panel state'
+ Write-Output 'PASS: game shortcut settings entry switches category, scrolls once to both bindings, preserves shortcuts and rejects retired panel commands'
  if($NavigationOnly){return}
+ if($GlassOnly) {
+  [void](Evaluate "window.__glassStorageBackup=Object.entries(localStorage);document.querySelector('button[aria-label=设置]').click();true")
+  [void](Evaluate "Array.from(document.querySelectorAll('.settings-sections button')).find(b=>b.textContent==='外观').click();true")
+  Wait-For {Evaluate "!!document.querySelector('[aria-labelledby=liquid-glass-label]')"} 'Liquid glass setting did not appear'
+  $glassToggle="document.querySelector('[aria-labelledby=liquid-glass-label]')"
+  try {
+   Wait-For {Evaluate "!document.querySelector('[aria-labelledby=wallpaper-label]').disabled"} 'Wallpaper switch did not become available'
+   [void](Evaluate "(()=>{const e=document.querySelector('[aria-labelledby=wallpaper-label]');if(e.getAttribute('aria-checked')==='true')e.click();return true})()")
+   [void](Evaluate "(()=>{const e=document.querySelector('[aria-labelledby=transparency-label]');if(e.getAttribute('aria-checked')==='true')e.click();return true})()")
+   Require (Evaluate "!document.querySelector('[aria-labelledby=wallpaper-label]').disabled" ) 'Opaque appearance disabled the wallpaper switch'
+   [void](Evaluate "document.querySelector('[aria-labelledby=wallpaper-label]').click();true")
+   Wait-For {Evaluate "document.querySelector('[aria-labelledby=transparency-label]').getAttribute('aria-checked')==='true'&&localStorage.getItem('musxi-transparent')==='true'&&localStorage.getItem('musxi-wallpaper-enabled')==='true'"} 'Wallpaper enable did not enable and save transparency'
+   [void](Evaluate "document.querySelector('[aria-labelledby=wallpaper-label]').click();true")
+   Wait-For {Evaluate "document.querySelector('[aria-labelledby=transparency-label]').getAttribute('aria-checked')==='false'&&localStorage.getItem('musxi-transparent')==='false'&&localStorage.getItem('musxi-wallpaper-enabled')==='false'"} 'Wallpaper disable did not disable and save transparency'
+   Write-Output 'PASS: wallpaper toggle remains available when opaque and controls saved transparency in both directions'
+   [void](Bridge 'gameOverlay.setVisible' @{visible=$true})
+   $track=Find-Window 'MusxiGameOverlay' 'Musxi Player 歌曲信息'
+   if(Evaluate "$glassToggle.getAttribute('aria-checked')==='true'"){[void](Evaluate "$glassToggle.click();true")}
+   Wait-For {Evaluate "!document.querySelector('.liquid-glass-surface')"} 'Disabled glass changed the main appearance'
+   [void](Evaluate "$glassToggle.click();true")
+   Wait-For {Evaluate "document.querySelectorAll('.liquid-glass-surface').length===2&&localStorage.getItem('musxi-liquid-glass')==='true'"} 'Glass did not enable or persist on both main surfaces'
+   Wait-For {Evaluate "!!document.querySelector('.liquid-glass-surface')&&!document.querySelector('.liquid-glass-warp')" 'track'} 'Track did not synchronize the material-only glass setting'
+   # A striped wallpaper in the actual app proves pixel refraction, not just CSS support.
+   [void](Evaluate "(()=>{const c=document.createElement('canvas');c.width=c.height=1024;const x=c.getContext('2d');for(let i=0;i<1024;i+=8){x.fillStyle=i%16?'#31a7dc':'#dd4a68';x.fillRect(i,0,8,1024)}const layer=document.createElement('div');layer.className='app-wallpaper-layer';layer.id='glass-fixture';const img=new Image();img.src=c.toDataURL();layer.append(img);document.querySelector('.app-shell').prepend(layer);for(const e of document.querySelectorAll('.sidebar,.player')){e.style.setProperty('--liquid-fill','transparent');e.style.setProperty('--liquid-opacity','.5')}return true})()")
+   Start-Sleep -Milliseconds 250
+   $glassEvidence=Join-Path (Split-Path -Parent $PSScriptRoot) 'build/liquid-glass-qa'
+   [void][IO.Directory]::CreateDirectory($glassEvidence)
+   Add-Type -AssemblyName System.Drawing
+   $wasMaximized=(Bridge 'window.getState').maximized
+   foreach($layout in @('normal','maximized')) {
+    $maximize=$layout-eq'maximized'
+    if((Bridge 'window.getState').maximized-ne$maximize){[void](Bridge 'window.maximize')}
+    Wait-For {(Bridge 'window.getState').maximized-eq$maximize} 'Glass viewport did not reach the requested layout'
+    foreach($variant in @('refracted','blur-only')) {
+     [void](Evaluate "for(const e of document.querySelectorAll('.liquid-glass-warp')){if(!e.dataset.filter)e.dataset.filter=e.style.filter;e.style.filter=e.dataset.filter}true")
+     if($variant-eq'blur-only'){[void](Evaluate "for(const e of document.querySelectorAll('.liquid-glass-warp'))e.style.filter='none';true")}
+     Start-Sleep -Milliseconds 250
+     $shot=& $node $driver $port 'main' '--screenshot'
+     Require ($LASTEXITCODE-eq0) 'Glass screenshot failed'
+     [IO.File]::WriteAllBytes((Join-Path $glassEvidence "$layout-$variant.png"),[Convert]::FromBase64String(($shot|ConvertFrom-Json)))
+    }
+    $a=[Drawing.Bitmap]::new((Join-Path $glassEvidence "$layout-refracted.png"));$b=[Drawing.Bitmap]::new((Join-Path $glassEvidence "$layout-blur-only.png"))
+    try {
+     $regions=Evaluate "({width:innerWidth,panes:Array.from(document.querySelectorAll('.sidebar,.player')).map(e=>{const r=e.getBoundingClientRect();return {name:e.className,x:r.x,y:r.y,width:r.width,height:r.height}})})"
+     $scale=$a.Width/$regions.width
+     foreach($region in $regions.panes) {
+      $edge=0;$center=0
+      $left=[int][Math]::Ceiling($region.x*$scale);$top=[int][Math]::Ceiling($region.y*$scale)
+      $right=[int][Math]::Floor(($region.x+$region.width)*$scale);$bottom=[int][Math]::Floor(($region.y+$region.height)*$scale)
+      for($y=$top+1;$y-lt$bottom-1;$y+=3){for($x=$left+1;$x-lt$right-1;$x+=3){
+       $distance=[Math]::Min([Math]::Min($x-$left,$right-$x),[Math]::Min($y-$top,$bottom-$y))/$scale
+       $p=$a.GetPixel($x,$y);$q=$b.GetPixel($x,$y)
+       if([Math]::Abs($p.R-$q.R)+[Math]::Abs($p.G-$q.G)+[Math]::Abs($p.B-$q.B)-gt12){if($distance-lt12){$edge++}elseif($distance-gt20){$center++}}
+      }}
+      Write-Output "$layout $($region.name): changed edge samples=$edge, center samples=$center"
+      Require ($edge-gt20) 'CEF did not render the edge refraction'
+      Require ($center-le3) 'Refraction changed pixels outside the fixed edge band'
+     }
+    }finally{$a.Dispose();$b.Dispose()}
+   }
+   if((Bridge 'window.getState').maximized-ne$wasMaximized){[void](Bridge 'window.maximize')}
+   [void](Evaluate "for(const e of document.querySelectorAll('.sidebar,.player')){e.style.removeProperty('--liquid-fill');e.style.removeProperty('--liquid-opacity')}for(const e of document.querySelectorAll('.liquid-glass-warp'))e.style.filter=e.dataset.filter;true")
+   foreach($mode in @(@{label='浅色';theme='light'},@{label='深色';theme='dark'})) {
+    [void](Evaluate "Array.from(document.querySelectorAll('[aria-labelledby=appearance-mode-label] button')).find(b=>b.textContent==='$($mode.label)').click();true")
+    $transparentTheme=if($mode.theme-eq'light'){'glass-light'}else{'glass'}
+    Wait-For {Evaluate "document.documentElement.dataset.theme==='$($mode.theme)'||document.documentElement.dataset.theme==='$transparentTheme'"} 'Glass theme did not update'
+    Require (Evaluate "Array.from(document.querySelectorAll('.sidebar strong,.player h2')).every(e=>getComputedStyle(e).opacity==='1'&&getComputedStyle(e).filter==='none')" ) 'Glass changed foreground text opacity or filtering'
+   }
+   if(Evaluate "document.querySelector('[aria-labelledby=transparency-label]').getAttribute('aria-checked')!=='true'"){[void](Evaluate "document.querySelector('[aria-labelledby=transparency-label]').click();true")}
+   if(Evaluate "document.querySelector('[aria-labelledby=player-transparency-label]').getAttribute('aria-checked')!=='true'"){[void](Evaluate "document.querySelector('[aria-labelledby=player-transparency-label]').click();true")}
+   foreach($level in @(0,25,50,75,100)) {
+    [void](Evaluate "(()=>{const e=document.querySelector('#appearance-transparency');Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(e,$level);e.dispatchEvent(new Event('input',{bubbles:true}));return true})()")
+    $expected=(1-$level/100).ToString([Globalization.CultureInfo]::InvariantCulture)
+    Wait-For {Evaluate "Array.from(document.querySelectorAll('.sidebar,.player')).every(e=>{const c=document.createElement('canvas');c.width=c.height=1;const x=c.getContext('2d');x.fillStyle=getComputedStyle(e.querySelector('.liquid-glass-tint')).backgroundColor;x.fillRect(0,0,1,1);return Math.abs(x.getImageData(0,0,1,1).data[3]/255-$expected)<.005&&['.liquid-glass-blur','.liquid-glass-warp'].every(s=>getComputedStyle(e.querySelector(s)).opacity==='1')&&Math.abs(Number(getComputedStyle(e.querySelector('.liquid-glass-shine')).opacity)-Number(getComputedStyle(e).getPropertyValue('--liquid-shine')))<.001})"} 'Tint transparency changed glass effect strength or failed to update'
+   }
+   # At 100% tint transparency, actual wallpaper pixels must still be blurred.
+   foreach($variant in @('transparent-glass','transparent-clear')) {
+    if($variant-eq'transparent-clear'){[void](Evaluate "for(const e of document.querySelectorAll('.liquid-glass-blur,.liquid-glass-warp')){e.style.backdropFilter='none';e.style.filter='none'}true")}
+    Start-Sleep -Milliseconds 200
+    $shot=& $node $driver $port 'main' '--screenshot'
+    Require ($LASTEXITCODE-eq0) 'Transparent glass screenshot failed'
+    [IO.File]::WriteAllBytes((Join-Path $glassEvidence "$variant.png"),[Convert]::FromBase64String(($shot|ConvertFrom-Json)))
+   }
+   $a=[Drawing.Bitmap]::new((Join-Path $glassEvidence 'transparent-glass.png'));$b=[Drawing.Bitmap]::new((Join-Path $glassEvidence 'transparent-clear.png'))
+   try {
+    $regions=Evaluate "({width:innerWidth,panes:Array.from(document.querySelectorAll('.sidebar,.player')).map(e=>{const r=e.getBoundingClientRect();return {name:e.className,x:r.x,y:r.y,width:r.width,height:r.height}})})"
+    $scale=$a.Width/$regions.width
+    foreach($region in $regions.panes) {
+     $changed=0
+     for($y=[int](($region.y+24)*$scale);$y-lt($region.y+$region.height-24)*$scale;$y+=4){for($x=[int](($region.x+24)*$scale);$x-lt($region.x+$region.width-24)*$scale;$x+=4){
+      $p=$a.GetPixel($x,$y);$q=$b.GetPixel($x,$y)
+      if([Math]::Abs($p.R-$q.R)+[Math]::Abs($p.G-$q.G)+[Math]::Abs($p.B-$q.B)-gt20){$changed++}
+     }}
+     Write-Output "100% transparent $($region.name): blurred center samples=$changed"
+     Require ($changed-gt100) 'Fully transparent tint lost its visible backdrop blur'
+    }
+   }finally{$a.Dispose();$b.Dispose()}
+   [void](Evaluate "document.querySelector('#glass-fixture').remove();for(const e of document.querySelectorAll('.liquid-glass-blur,.liquid-glass-warp'))e.style.removeProperty('backdrop-filter');for(const e of document.querySelectorAll('.liquid-glass-warp'))e.style.filter=e.dataset.filter;true")
+   [void](Evaluate "localStorage.setItem('musxi-game-track-transparency','100');window.dispatchEvent(new Event('musxi-game-track-transparency'));true" 'track')
+   Wait-For {Evaluate "(()=>{const c=document.createElement('canvas');c.width=c.height=1;const x=c.getContext('2d');x.fillStyle=getComputedStyle(document.querySelector('.liquid-glass-tint')).backgroundColor;x.fillRect(0,0,1,1);return getComputedStyle(document.querySelector('.liquid-glass-shine')).opacity==='0'&&x.getImageData(0,0,1,1).data[3]===0&&getComputedStyle(document.querySelector('.overlay-track-details')).opacity==='1'})()" 'track'} 'Glass did not preserve full track transparency and clear text'
+   [void](Bridge 'gameOverlay.setEditing' @{editing=$true})
+   Wait-TrackFit
+   Wait-For {(Hit-Widget $track 'track' '.overlay-widget-header>span')-eq2} 'Transparent glass track lost its edit drag region'
+   Require ([GameOverlayCheck]::SetWindowPos($track,[IntPtr](-1),700,180,0,0,0x11)) 'Could not position glass track for real input'
+   Drag-Title $track 'track' 'Glass decoration blocked real title dragging'
+   $before=[GameOverlayCheck+Rect]::new();[void][GameOverlayCheck]::GetWindowRect($track,[ref]$before)
+   $edgeX=$before.right-2;$edgeY=[int](($before.top+$before.bottom)/2)
+   Require (([GameOverlayCheck]::Hit($track,$edgeX,$edgeY))-eq11) 'Glass track lost its right resize edge'
+   Require (([GameOverlayCheck]::GetAsyncKeyState(1)-band0x8000)-eq0) 'Release the mouse before glass resize testing'
+   [GameOverlayCheck]::Move($edgeX,$edgeY)
+   try {
+    [GameOverlayCheck]::Button($true);$mouseHeld=$true
+    for($step=1;$step-le20;$step++){[GameOverlayCheck]::Move($edgeX+3*$step,$edgeY);Start-Sleep -Milliseconds 25}
+   }finally{if($mouseHeld){[GameOverlayCheck]::Button($false);$mouseHeld=$false}}
+   Wait-For {$after=[GameOverlayCheck+Rect]::new();[void][GameOverlayCheck]::GetWindowRect($track,[ref]$after);[Math]::Abs($after.right-$after.left-($before.right-$before.left)-60)-le2} 'Glass track did not complete real edge resizing'
+   Wait-TrackFit
+   Require ((State).editing) 'Glass resizing ended manual editing'
+   [void](Bridge 'gameOverlay.setEditing' @{editing=$false})
+   [void](Evaluate "$glassToggle.click();true")
+   Wait-For {!(Evaluate "!!document.querySelector('.liquid-glass-surface')") -and !(Evaluate "!!document.querySelector('.liquid-glass-surface')" 'track')} 'Disabling glass did not restore both main and track appearances'
+   Write-Output 'PASS: opt-in glass, persistence, cross-window sync, CEF pixel displacement, clear text, zero-alpha material and edit drag region'
+  }finally {
+   [void](Evaluate "localStorage.clear();for(const [key,value] of window.__glassStorageBackup)localStorage.setItem(key,value);true")
+  }
+  return
+ }
  if($ResizeOnly) {
   [void](Bridge 'gameOverlay.setVisible' @{visible=$true})
   [void](Bridge 'gameOverlay.setEditing' @{editing=$true})
-  Wait-For {(Find-Window 'MusxiGameOverlay' 'Musxi Player 歌词悬浮窗')-ne[IntPtr]::Zero -and (Find-Window 'MusxiGameOverlay' 'Musxi Player 歌曲信息')-ne[IntPtr]::Zero} 'Resize windows did not open'
-  $lyrics=Find-Window 'MusxiGameOverlay' 'Musxi Player 歌词悬浮窗';$track=Find-Window 'MusxiGameOverlay' 'Musxi Player 歌曲信息'
+  Wait-For {(Find-Window 'MusxiGameOverlay' 'Musxi Player 歌词悬浮组件')-ne[IntPtr]::Zero -and (Find-Window 'MusxiGameOverlay' 'Musxi Player 歌曲信息')-ne[IntPtr]::Zero} 'Resize windows did not open'
+  $lyrics=Find-Window 'MusxiGameOverlay' 'Musxi Player 歌词悬浮组件';$track=Find-Window 'MusxiGameOverlay' 'Musxi Player 歌曲信息'
   [void][GameOverlayCheck]::SetWindowPos($lyrics,[IntPtr](-1),80,100,600,380,0x10)
   [void][GameOverlayCheck]::SetWindowPos($track,[IntPtr](-1),1000,100,360,160,0x10)
   $fixture=& $node $driver $port 'lyrics' '--lyric-fixture'
@@ -412,8 +543,10 @@ try {
   Start-Sleep -Milliseconds 500
   $evidence=Join-Path (Split-Path -Parent $PSScriptRoot) 'build/resize-qa'
   [void][IO.Directory]::CreateDirectory($evidence)
+  $trackMetrics="(()=>{const e=document.querySelector('.game-overlay'),c=e.querySelector('.cover,.vinyl-cover'),b=e.querySelector('.overlay-widget-header button');return {width:e.getBoundingClientRect().width,title:e.querySelector('h1').getBoundingClientRect().height,progress:e.querySelector('progress').getBoundingClientRect().height,padding:parseFloat(getComputedStyle(e).paddingTop),cover:c?.getBoundingClientRect().width||0,button:b?.getBoundingClientRect().width||0}})()"
   foreach($case in @(@{page='lyrics';window=$lyrics;delta=240},@{page='track';window=$track;delta=240},@{page='lyrics';window=$lyrics;delta=-160},@{page='track';window=$track;delta=-160})) {
    $page=$case.page;$window=$case.window;$delta=$case.delta
+   if($page-eq'track'){$beforeMetrics=Evaluate $trackMetrics 'track'}
    [void](Evaluate "(()=>{window.__resizeProbe={frames:[],sizes:[],running:true};const p=window.__resizeProbe,m=document.createElement('div');m.style.cssText='position:absolute;left:3px;top:3px;width:4px;height:4px;background:red;pointer-events:none';document.body.append(m);const frame=()=>{if(!p.running){m.remove();return}p.frames.push(Date.now());m.style.opacity=p.frames.length%2?'1':'.5';requestAnimationFrame(frame)};requestAnimationFrame(frame);p.observer=new ResizeObserver(()=>p.sizes.push({time:Date.now(),width:innerWidth,height:innerHeight}));p.observer.observe(document.documentElement);return true})()" $page)
    $before=[GameOverlayCheck+Rect]::new();[void][GameOverlayCheck]::GetWindowRect($window,[ref]$before)
    $x=$before.right-3;$y=[int](($before.top+$before.bottom)/2)
@@ -453,16 +586,51 @@ try {
    }
    $settled=[GameOverlayCheck+Rect]::new();[void][GameOverlayCheck]::GetWindowRect($window,[ref]$settled)
    Require ($settled.left-eq$before.left -and $settled.top-eq$before.top) 'Resizing shifted the component origin'
-   if($page-eq'track'){Require ($settled.bottom-$settled.top-eq$before.bottom-$before.top) 'Width resizing changed compact track height'}
+   if($page-eq'track'){
+    Wait-TrackFit
+    $afterMetrics=Evaluate $trackMetrics 'track';$ratio=$afterMetrics.width/$beforeMetrics.width
+    foreach($metric in @('title','progress','padding','cover')){
+     Require ([Math]::Abs($afterMetrics.$metric-$beforeMetrics.$metric*$ratio)-le1) "Track $metric did not scale with width"
+    }
+    Require ([Math]::Abs($afterMetrics.button-$beforeMetrics.button)-lt1) 'Track editor buttons scaled with content'
+    Require ((($delta-gt0)-and((Track-Height)-gt($before.bottom-$before.top))) -or (($delta-lt0)-and((Track-Height)-lt($before.bottom-$before.top)))) 'Track height did not follow scaled content'
+   }
    Require ((State).editing) 'Resizing ended manual editing'
   }
-  Write-Output 'PASS: real mouse resizing completes for both widgets, with edge/renderer timing evidence'
+  $originalCover=Evaluate "localStorage.getItem('musxi-lyrics-player-style')" 'lyrics'
+  try {
+   [GameOverlayCheck]::Move(0,0)
+   foreach($coverStyle in @('vinyl','square','none')){
+    [void](Evaluate "localStorage.setItem('musxi-lyrics-player-style','$coverStyle');true" 'lyrics')
+    $selector=switch($coverStyle){'vinyl'{'.overlay-track-details>.vinyl-cover'} 'square'{'.overlay-track-details>.cover'} 'none'{'.overlay-track-details:not(:has(.cover))'}}
+    Wait-For {Evaluate "!!document.querySelector('$selector')" 'track'} 'Scale test cover style did not synchronize'
+    foreach($width in @(300,360,720,1600)){
+     [void][GameOverlayCheck]::SetWindowPos($track,[IntPtr](-1),80,100,$width,200,0x10)
+     Wait-For {[Math]::Abs((Evaluate 'innerWidth' 'track')-$width)-le1} 'Scale test width did not settle'
+     Wait-TrackFit
+     $metrics=Evaluate $trackMetrics 'track';$factor=$metrics.width/360
+     Require ([Math]::Abs($metrics.title-21.6*$factor)-le1 -and [Math]::Abs($metrics.progress-4*$factor)-le1 -and [Math]::Abs($metrics.padding-12*$factor)-le1) 'Content dimensions do not match the default-width scale'
+     Require (Evaluate "(()=>{const title=document.querySelector('h1'),style=getComputedStyle(title),buttons=document.querySelector('.overlay-widget-header>div'),scale=Number(getComputedStyle(document.querySelector('.overlay-track-content')).zoom);return title.getBoundingClientRect().right-parseFloat(style.paddingRight)*scale<=buttons.getBoundingClientRect().left-4})()" 'track') 'Scaled title overlaps fixed editor buttons'
+     $editingHeight=Track-Height
+     [void](Bridge 'gameOverlay.setEditing' @{editing=$false})
+     Wait-TrackFit
+     Require ([Math]::Abs((Track-Height)-$editingHeight)-le1) 'Scaled track changed size when leaving editing'
+     [void](Bridge 'gameOverlay.setEditing' @{editing=$true})
+     Wait-TrackFit
+     Require ([Math]::Abs((Track-Height)-$editingHeight)-le1) 'Scaled track changed size when entering editing'
+    }
+   }
+  } finally {
+   $restoreCover=if($null-eq$originalCover){"localStorage.removeItem('musxi-lyrics-player-style');true"}else{"localStorage.setItem('musxi-lyrics-player-style',"+($originalCover|ConvertTo-Json -Compress)+");true"}
+   [void](Evaluate $restoreCover 'lyrics')
+  }
+  Write-Output 'PASS: real mouse resizing, proportional content at 300/360/720/1600 widths, fixed editor buttons, all cover styles and stable edit dimensions'
   return
  }
  if($UnifiedOnly) {
   [void](Bridge 'gameOverlay.setVisible' @{visible=$true})
-  Wait-For {(Find-Window 'MusxiGameOverlay' 'Musxi Player 歌词悬浮窗') -ne [IntPtr]::Zero} 'Unified lyrics did not open'
-  $lyrics=Find-Window 'MusxiGameOverlay' 'Musxi Player 歌词悬浮窗';$track=Find-Window 'MusxiGameOverlay' 'Musxi Player 歌曲信息'
+  Wait-For {(Find-Window 'MusxiGameOverlay' 'Musxi Player 歌词悬浮组件') -ne [IntPtr]::Zero} 'Unified lyrics did not open'
+  $lyrics=Find-Window 'MusxiGameOverlay' 'Musxi Player 歌词悬浮组件';$track=Find-Window 'MusxiGameOverlay' 'Musxi Player 歌曲信息'
   Require ((Find-Window 'MusxiDesktopLyrics') -eq [IntPtr]::Zero) 'Duplicate legacy lyrics window exists'
   Require ([GameOverlayCheck]::SetWindowPos($lyrics,[IntPtr]::Zero,80,100,0,0,0x15)) 'Could not position lyrics for hover coverage'
   Require ([GameOverlayCheck]::SetWindowPos($track,[IntPtr]::Zero,1000,100,0,0,0x15)) 'Could not position track for hover coverage'
@@ -500,6 +668,7 @@ try {
    Require ((Hit-Widget $(if($page-eq'lyrics'){$lyrics}else{$track}) $page '.overlay-widget-header>span') -eq 2) 'Empty widget header lost its drag region'
   }
   Require (Evaluate "!document.querySelector('.overlay-track-content button')" 'track') 'Song info retained playback controls'
+  Require (Evaluate "(()=>{const title=document.querySelector('.overlay-track-details h1'),buttons=document.querySelector('.overlay-widget-header>div'),style=getComputedStyle(title),zoom=Number(getComputedStyle(document.querySelector('.overlay-track-content')).zoom);return title.getBoundingClientRect().right-parseFloat(style.paddingRight)*zoom<=buttons.getBoundingClientRect().left-4&&style.textOverflow==='ellipsis'})()" 'track') 'Track title text overlaps editing buttons'
   Wait-TrackFit
   [void](Bridge 'desktopLyrics.setFontSize' @{fontSize=36})
   Require ((State).lyricsFontSize-eq36) 'Toolbar font is not shared with widget settings'
@@ -553,7 +722,7 @@ try {
   [GameOverlayCheck]::Move($insideX,$insideY)
   Wait-For {(State).lyricsEditing -and !(State).editing -and [GameOverlayCheck]::GetForegroundWindow()-eq$lyrics} 'Hover did not enter the lyrics-only focused editor'
   Require ((Has-Style $track 0x20) -and (Has-Style $track 0x08000000)) 'Hovering lyrics unlocked or activated the song-info widget'
-  Wait-For {Evaluate "!!document.querySelector('.dl-capsule')&&!!document.querySelector('.overlay-widget-header')&&!document.querySelector('.dl-unlock')&&!document.querySelector('[aria-label=锁定歌词悬浮窗]')" 'lyrics'} 'Hover editor or toolbar controls are incorrect'
+  Wait-For {Evaluate "!!document.querySelector('.dl-capsule')&&!!document.querySelector('.overlay-widget-header')&&!document.querySelector('.dl-unlock')&&!document.querySelector('[aria-label=锁定歌词悬浮组件]')" 'lyrics'} 'Hover editor or toolbar controls are incorrect'
   [void][GameOverlayCheck]::PostMessage($lyrics,0x205,[IntPtr]::Zero,[IntPtr]::Zero)
   Start-Sleep -Milliseconds 160
   Require (Evaluate "!!document.querySelector('.dl-capsule')" 'lyrics') 'Right click still toggles the hover toolbar'
@@ -591,11 +760,6 @@ try {
   [GameOverlayCheck]::Move(0,0);Start-Sleep -Milliseconds 160
   [GameOverlayCheck]::Move($insideX,$insideY)
   Wait-For {(State).lyricsEditing} 'Hover did not resume after leaving the switched-away region'
-  [void](Bridge 'gameOverlay.setPanelVisible' @{panelVisible=$true})
-  Wait-For {(State).panelVisible -and !(State).lyricsEditing} 'Opening the selection panel retained hover editing'
-  Start-Sleep -Milliseconds 200
-  Require (!(State).lyricsEditing -and [GameOverlayCheck]::GetForegroundWindow()-eq$main) 'Hover interrupted the open selection panel'
-  [void](Bridge 'gameOverlay.setPanelVisible' @{panelVisible=$false})
   [void](Bridge 'gameOverlay.setEditing' @{editing=$true})
   [GameOverlayCheck]::Move(0,0)
   Start-Sleep -Milliseconds 200
@@ -615,6 +779,8 @@ try {
   Wait-For {(State).trackEditing -and !(State).lyricsEditing -and !(State).editing -and [GameOverlayCheck]::GetForegroundWindow()-eq$track} 'Track hover did not enter its isolated focused editor'
   Require ((Has-Style $lyrics 0x20) -and !(Has-Style $track 0x20)) 'Track hover unlocked lyrics or left track click-through'
   Wait-TrackFit
+  $editingTrackBounds=[GameOverlayCheck+Rect]::new();[void][GameOverlayCheck]::GetWindowRect($track,[ref]$editingTrackBounds)
+  Require (($editingTrackBounds.right-$editingTrackBounds.left)-eq($trackBounds.right-$trackBounds.left) -and ($editingTrackBounds.bottom-$editingTrackBounds.top)-eq($trackBounds.bottom-$trackBounds.top)) 'Track hover editing changed the window size'
   [void][GameOverlayCheck]::PostMessage($track,0x231,[IntPtr]::Zero,[IntPtr]::Zero)
   [GameOverlayCheck]::Move(0,0);Start-Sleep -Milliseconds 200
   Require ((State).trackEditing) 'Track move/resize did not retain hover editing outside its bounds'
@@ -624,18 +790,17 @@ try {
   Wait-For {(State).trackEditing} 'Track hover did not resume'
   [void](Evaluate "document.querySelector('[aria-label=完成编辑]').click();true" 'track')
   Wait-For {!(State).trackEditing} 'Track Done did not lock'
+  Wait-TrackFit
+  Require ((Track-Height)-eq($trackBounds.bottom-$trackBounds.top)) 'Finishing track editing changed the window height'
   Start-Sleep -Milliseconds 240
   Require (!(State).trackEditing) 'Track Done re-entered before pointer exit'
   [GameOverlayCheck]::Move(0,0);Start-Sleep -Milliseconds 160
   [GameOverlayCheck]::Move($trackX,$trackY)
   Wait-For {(State).trackEditing} 'Track Done suppression did not clear after leaving'
-  [void](Bridge 'gameOverlay.setPanelVisible' @{panelVisible=$true})
-  Require ((State).panelVisible -and !(State).trackEditing) 'Selection panel retained track hover editing'
-  [void](Bridge 'gameOverlay.setPanelVisible' @{panelVisible=$false})
   [GameOverlayCheck]::Move(0,0)
   $prefs=Get-Content -LiteralPath (Join-Path $profile 'game-overlay.json') -Raw|ConvertFrom-Json
   Require ($prefs.version-eq2 -and $prefs.lyricsFontSize-eq36 -and $prefs.topmost -and $prefs.lyricsMode-eq'multi') 'Unified preferences were not persisted'
-  Write-Output 'PASS: unified lyrics, hover-only editor/toolbar and focus return, isolated track, Done suppression, resize guard, application switch/panel exceptions, persistent manual editor and prior mode/appearance checks'
+  Write-Output 'PASS: unified lyrics, hover-only editor/toolbar and focus return, isolated track, Done suppression, resize guard, application switch exceptions, persistent manual editor and prior mode/appearance checks'
   return
  }
 
@@ -735,8 +900,8 @@ try {
  $minecraft=$null
  Write-Output 'PASS: manual window selection, stale/fullscreen rejection, exact client bounds, focus preservation, restoration, user changes, tool shutdown, legacy auto removal and no reapply after game restart'
  [void](Bridge 'gameOverlay.setVisible' @{visible=$true})
- Wait-For {(Find-Window 'MusxiGameOverlay' 'Musxi Player 歌词悬浮窗') -ne [IntPtr]::Zero -and (Find-Window 'MusxiGameOverlay' 'Musxi Player 歌曲信息') -ne [IntPtr]::Zero} 'Both overlay windows were not created'
- $lyrics=Find-Window 'MusxiGameOverlay' 'Musxi Player 歌词悬浮窗';$track=Find-Window 'MusxiGameOverlay' 'Musxi Player 歌曲信息'
+ Wait-For {(Find-Window 'MusxiGameOverlay' 'Musxi Player 歌词悬浮组件') -ne [IntPtr]::Zero -and (Find-Window 'MusxiGameOverlay' 'Musxi Player 歌曲信息') -ne [IntPtr]::Zero} 'Both overlay windows were not created'
+ $lyrics=Find-Window 'MusxiGameOverlay' 'Musxi Player 歌词悬浮组件';$track=Find-Window 'MusxiGameOverlay' 'Musxi Player 歌曲信息'
  foreach($widget in @($lyrics,$track)){
   Require ([GameOverlayCheck]::IsWindowVisible($widget)) 'Enabled widget is hidden'
   Require (Has-Style $widget 0x08080028) 'Widget lacks layered/topmost/noactivate/click-through styles'
@@ -799,15 +964,11 @@ try {
  Require ([GameOverlayCheck]::IsWindowVisible($lyrics) -and [GameOverlayCheck]::IsWindowVisible($track)) 'Editing retained hover-hidden components'
  [void](Bridge 'gameOverlay.setEditing' @{editing=$false})
  Wait-For {-not [GameOverlayCheck]::IsWindowVisible($lyrics)} 'Locking did not resume hover hiding'
- [void](Bridge 'gameOverlay.setPanelVisible' @{panelVisible=$true})
- Wait-For {[GameOverlayCheck]::IsWindowVisible($lyrics) -and [GameOverlayCheck]::GetForegroundWindow() -eq $main} 'Selection panel did not restore hover-hidden components'
- [void](Bridge 'gameOverlay.setPanelVisible' @{panelVisible=$false})
- Wait-For {-not [GameOverlayCheck]::IsWindowVisible($lyrics)} 'Closing the panel did not resume hover hiding'
  [void](Bridge 'gameOverlay.setHideOnHover' @{hideOnHover=$false})
  Wait-For {[GameOverlayCheck]::IsWindowVisible($lyrics) -and [GameOverlayCheck]::IsWindowVisible($track)} 'Disabling hover hiding did not restore components'
  foreach($widget in @($lyrics,$track)){$bounds=$hoverBounds["$widget"];[void][GameOverlayCheck]::SetWindowPos($widget,[IntPtr](-1),$bounds.left,$bounds.top,0,0,0x11)}
  [void][GameOverlayCheck]::SetWindowPos([GameOverlayCheck]::Sink,[IntPtr](-1),$sinkBounds.left,$sinkBounds.top,$sinkBounds.right-$sinkBounds.left,$sinkBounds.bottom-$sinkBounds.top,0x10)
- Write-Output 'PASS: cursor visibility hides/restores both components regardless of position, unchanged selection/focus, player foreground, editing, panel and option-off restoration'
+ Write-Output 'PASS: cursor visibility hides/restores both components regardless of position, unchanged selection/focus, player foreground, editing and option-off restoration'
  if($HoverOnly){
   [void](Bridge 'gameOverlay.setHideOnHover' @{hideOnHover=$true})
   Stop-TestPlayer
@@ -820,6 +981,8 @@ try {
  $focusBindings=$focusSettings.bindings | ConvertTo-Json -Depth 5 | ConvertFrom-Json
  $focusBindings.overlayEditing=[pscustomobject]@{key=133;modifiers=7}
  [void](Bridge 'shortcuts.setSettings' @{global=$true;bindings=$focusBindings})
+ Press-TestShortcut 134
+ Require ([GameOverlayCheck]::GetForegroundWindow()-eq[GameOverlayCheck]::Sink -and !(State).editing) 'Retired panel shortcut still changes focus or editing'
  Press-TestShortcut 133
  Wait-For {(State).editing -and [GameOverlayCheck]::GetForegroundWindow() -eq $lyrics} 'Editing did not take actual foreground focus'
  foreach($widget in @($lyrics,$track)){Require (-not (Has-Style $widget 0x08000000) -and -not (Has-Style $widget 0x20)) 'Editing widget still refuses activation or mouse input'}
@@ -831,17 +994,8 @@ try {
  Wait-For {-not (State).editing -and [GameOverlayCheck]::GetForegroundWindow() -eq [GameOverlayCheck]::Sink} 'Locking did not return focus to the original game'
  foreach($widget in @($lyrics,$track)){Require (Has-Style $widget 0x08000020) 'Locked widget did not restore noactivate and click-through'}
  [void](Bridge 'gameOverlay.setEditing' @{editing=$true})
- [void](Bridge 'gameOverlay.setPanelVisible' @{panelVisible=$true})
- Wait-For {[GameOverlayCheck]::GetForegroundWindow() -eq $main} 'Selection panel did not take focus from editor'
- Wait-For {Evaluate "(()=>{const c=document.querySelector('.game-panel-actions'),b=c?.getBoundingClientRect(),a=document.querySelector('.app-body')?.getBoundingClientRect(),p=document.querySelector('.player')?.getBoundingClientRect(),s=document.querySelector('.app-shell')?.getBoundingClientRect();return !!b&&!!a&&!!p&&!!s&&b.width>0&&b.width<s.width&&Math.abs(a.bottom-p.top)<=1&&Math.abs(b.bottom-(p.top-12))<=1&&Math.abs(b.left+b.width/2-s.left-s.width/2)<=1&&getComputedStyle(c).backgroundColor!=='rgba(0, 0, 0, 0)'&&!document.querySelector('.window-bar .game-panel-return')})()"} 'Return-to-game floating card lacks background, has a layout gap or is not centered above player'
- Require (Evaluate "(()=>{const w=document.createElement('div');w.className='wallpaper-preview-bar';w.innerHTML='<span>正在预览壁纸</span><button>取消预览</button><button>应用壁纸</button>';const f=document.querySelector('.player-floating-actions');f.append(w);try{const a=document.querySelector('.game-panel-actions').getBoundingClientRect(),b=w.getBoundingClientRect();return a.bottom+11<=b.top&&getComputedStyle(w).backgroundColor===getComputedStyle(document.querySelector('.game-panel-actions')).backgroundColor}finally{w.remove()}})()") 'Wallpaper preview and return-to-game floating cards overlap or use different backgrounds'
- [void](Evaluate "document.querySelector('.game-panel-return').click();true")
- Wait-For {[GameOverlayCheck]::GetForegroundWindow() -eq $lyrics} 'Selection panel did not return focus to editor'
- Wait-For {Evaluate "!document.querySelector('.game-panel-return')"} 'Return-to-game button remained after closing selection panel'
- [void](Bridge 'gameOverlay.setPanelVisible' @{panelVisible=$true})
  [void](Bridge 'gameOverlay.setEditing' @{editing=$false})
- [void](Bridge 'gameOverlay.setPanelVisible' @{panelVisible=$false})
- Wait-For {[GameOverlayCheck]::GetForegroundWindow() -eq [GameOverlayCheck]::Sink} 'Finishing editing inside panel lost the original game return target'
+ Wait-For {[GameOverlayCheck]::GetForegroundWindow() -eq [GameOverlayCheck]::Sink} 'Finishing editing lost the original game return target'
  [void](Bridge 'gameOverlay.setEditing' @{editing=$true})
  [void](Bridge 'gameOverlay.setLyricsVisible' @{lyricsVisible=$false})
  Wait-For {[GameOverlayCheck]::GetForegroundWindow() -eq $track} 'Hiding the focused editor did not activate the remaining component'
@@ -878,7 +1032,7 @@ try {
   Require ([GameOverlayCheck]::GetForegroundWindow() -eq [GameOverlayCheck]::Sink) 'Ordinary component display stole focus'
  }
  [void](Bridge 'shortcuts.setSettings' @{global=$focusSettings.global;bindings=$focusSettings.bindings})
- Write-Output 'PASS: editing foreground/CEF/keyboard focus, real track drag, key-down/up passthrough, panel/editor handoff, individual visibility, lock/hide return, user focus preservation and locked noactivate'
+ Write-Output 'PASS: editing foreground/CEF/keyboard focus, real track drag, key-down/up passthrough, individual visibility, lock/hide return, user focus preservation and locked noactivate'
  if($FocusOnly){
   [void](Bridge 'gameOverlay.setEditing' @{editing=$true})
   Wait-For {[GameOverlayCheck]::GetForegroundWindow() -eq $lyrics} 'Exit test editor did not take focus'
@@ -935,7 +1089,7 @@ try {
  Require ((Hit-Widget $lyrics 'lyrics' '.overlay-lyrics-list,.overlay-message') -eq -1) 'Locked lyrics did not pass native hit testing through'
  [void](Bridge 'gameOverlay.setEditing' @{editing=$true})
  Wait-TrackFit
- Require ((Track-Height) -gt $compactHeight) 'Editing did not grow the track widget for controls'
+ Require ([Math]::Abs((Track-Height)-$compactHeight)-le1) 'Editing changed the track window height'
  Wait-For {!(Has-Style $lyrics 0x20) -and !(Has-Style $track 0x20)} 'Editing did not release click-through'
  Wait-For {Evaluate "!!document.querySelector('.overlay-widget-header>span')" 'lyrics'} 'Editing header did not render'
  Require (Evaluate "getComputedStyle(document.querySelector('.game-overlay')).backgroundColor!=='rgba(0, 0, 0, 0)'" 'lyrics') 'Editing lyrics have no visible background'
@@ -944,7 +1098,7 @@ try {
  Require ((Hit-Widget $lyrics 'lyrics' '.overlay-lyrics-list,.overlay-message') -eq 1) 'Lyrics content became draggable instead of scrollable'
  Wait-For {(Hit-Widget $track 'track' '.overlay-widget-header>span') -eq 2} 'Track widget title is not a native drag region'
  Require ((Hit-Widget $track 'track' '.overlay-widget-header button') -eq 1) 'Track widget button became draggable'
- Require ((Hit-Widget $track 'track' '.overlay-track-content') -eq 1) 'Track widget content became draggable'
+ Require ((Hit-Widget $track 'track' '.overlay-track-content') -eq 2) 'Track widget content lost its edit drag region'
  [void](Evaluate "localStorage.setItem('musxi-game-track-transparency','100');true")
  Wait-For { (Evaluate $readTrackAlpha 'track').alpha -eq 0 } 'Fully transparent track did not retain a zero-alpha background in editing'
  $trackBeforeTransparentDrag=[GameOverlayCheck+Rect]::new();[void][GameOverlayCheck]::GetWindowRect($track,[ref]$trackBeforeTransparentDrag)
@@ -1034,26 +1188,8 @@ try {
  [void](Bridge 'gameOverlay.setTrackVisible' @{trackVisible=$false})
  Require ([GameOverlayCheck]::IsWindowVisible($lyrics) -and -not [GameOverlayCheck]::IsWindowVisible($track)) 'Independent track visibility failed'
  [void](Bridge 'gameOverlay.setTrackVisible' @{trackVisible=$true})
- # Enter compact mode through React so this also catches stale frontend window state.
- Wait-For {Evaluate "!!document.querySelector('.player-rail:not(:disabled)')"} 'Compact player control is unavailable'
- [void](Evaluate "document.querySelector('.player-rail').click();true")
- Wait-For {(Bridge 'window.getState').compact -and (Evaluate "!!document.querySelector('.compact-player')")} 'Player did not enter compact mode in native and React state'
- [void](Bridge 'gameOverlay.setPanelVisible' @{panelVisible=$true})
- Wait-For {
-  -not (Bridge 'window.getState').compact -and (Evaluate "(()=>{const body=document.querySelector('.app-body'),library=document.querySelector('.library-shell');return !document.querySelector('.compact-player')&&!!body&&!body.hidden&&!!library&&library.getBoundingClientRect().height>0})()")
- } 'Opening overlay player left React compact or the library hidden'
- Require ((Has-Style $main 8) -and [GameOverlayCheck]::IsWindowVisible($main) -and -not [GameOverlayCheck]::IsIconic($main)) 'Selection panel did not become visible and topmost'
- [void](Bridge 'gameOverlay.setPanelVisible' @{panelVisible=$false})
- Wait-For {[GameOverlayCheck]::IsIconic($main)} 'Closing selection panel did not minimize it'
- Require ((Has-Style $main 8) -eq $initialTopmost) 'Closing panel did not restore original topmost state'
- Require ([GameOverlayCheck]::SetWindowPos($main,[IntPtr](-1),0,0,0,0,0x13)) 'Could not prepare existing topmost state'
- [void](Bridge 'gameOverlay.setPanelVisible' @{panelVisible=$true})
- [void](Bridge 'gameOverlay.setPanelVisible' @{panelVisible=$false})
- Require (Has-Style $main 8) 'Closing panel removed a pre-existing topmost setting'
- $restoreOrder=if($initialTopmost){[IntPtr](-1)}else{[IntPtr](-2)}
- [void][GameOverlayCheck]::SetWindowPos($main,$restoreOrder,0,0,0,0,0x13)
  $settings=Bridge 'shortcuts.getState'
- foreach($entry in @(@('overlayVisibility',132),@('overlayEditing',133),@('overlayPlayer',134))){$settings.bindings.($entry[0])=[pscustomobject]@{key=$entry[1];modifiers=7}}
+ foreach($entry in @(@('overlayVisibility',132),@('overlayEditing',133))){$settings.bindings.($entry[0])=[pscustomobject]@{key=$entry[1];modifiers=7}}
  $settings.bindings.volumeUp=[pscustomobject]@{key=131;modifiers=7}
  $registered=Bridge 'shortcuts.setSettings' @{global=$true;bindings=$settings.bindings}
  Require ($registered.failed.Count -eq 0) 'Overlay test shortcuts failed to register'
@@ -1075,13 +1211,11 @@ try {
  [void](Bridge 'player.setVolume' @{volumePercent=$volume})
  foreach($step in @(
   @{index=10;field='visible';expected=$false},@{index=10;field='visible';expected=$true},
-  @{index=11;field='editing';expected=$true},@{index=11;field='editing';expected=$false},
-  @{index=12;field='panelVisible';expected=$true},@{index=12;field='panelVisible';expected=$false}
+  @{index=11;field='editing';expected=$true},@{index=11;field='editing';expected=$false}
  )){
   $index=$step.index
   $key=132+$index-10
-  if($index -eq 12 -and -not $step.expected){Press-TestShortcut $key $false $main}
-  elseif($index -eq 11 -and -not $step.expected){Press-TestShortcut $key $false $lyrics}
+  if($index -eq 11 -and -not $step.expected){Press-TestShortcut $key $false $lyrics}
   else{Press-TestShortcut $key}
   Wait-For {(State).($step.field) -eq $step.expected} "Shortcut did not toggle $($step.field)"
   $state=State
@@ -1092,30 +1226,20 @@ try {
     Require ((Has-Style $lyrics 0x20) -eq (-not $state.editing)) 'Editing shortcut and click-through disagree'
     if($state.editing){Require ([GameOverlayCheck]::GetForegroundWindow() -eq $lyrics) 'Editing shortcut did not take component focus'}
    }
-   12 {
-    Require ([GameOverlayCheck]::IsIconic($main) -eq (-not $state.panelVisible)) 'Player shortcut and main window state disagree'
-    if($state.panelVisible){
-     Wait-For {[GameOverlayCheck]::GetForegroundWindow() -eq $main} 'Selection panel did not take actual foreground focus'
-     $gui=[GameOverlayCheck+GuiInfo]::new();$gui.size=[Runtime.InteropServices.Marshal]::SizeOf($gui)
-     Require ([GameOverlayCheck]::GetGUIThreadInfo(0,[ref]$gui) -and $gui.focus -eq $main) 'Selection panel did not take keyboard focus'
-     [void][GameOverlayCheck]::ShowWindow([GameOverlayCheck]::Sink,6)
-     Require ([GameOverlayCheck]::IsIconic([GameOverlayCheck]::Sink)) 'Could not simulate a fullscreen game minimizing on focus loss'
-    } else {Wait-For {[GameOverlayCheck]::GetForegroundWindow() -eq [GameOverlayCheck]::Sink -and -not [GameOverlayCheck]::IsIconic([GameOverlayCheck]::Sink)} 'Closing selection panel did not restore the minimized game and return focus'}
-   }
   }
  }
- Press-TestShortcut 134 $true ([GameOverlayCheck]::Sink) {[void](Bridge 'shortcuts.suspend' @{recording=$true;editing=$false})}
- Require (-not (State).panelVisible) 'Recording failed to cancel the pending panel key release'
+ Press-TestShortcut 134
+ Require ([GameOverlayCheck]::GetForegroundWindow()-eq[GameOverlayCheck]::Sink) 'Retired panel key still takes focus'
+ Press-TestShortcut 133 $true ([GameOverlayCheck]::Sink) {[void](Bridge 'shortcuts.suspend' @{recording=$true;editing=$false})}
+ Require (-not (State).editing) 'Recording failed to cancel the pending editing key release'
  [void](Bridge 'shortcuts.suspend' @{recording=$false;editing=$false})
  [void](Bridge 'shortcuts.suspend' @{recording=$true;editing=$false})
  Press-TestShortcut 132
  Require ((State).visible) 'Recording retained the global listener'
  [void](Bridge 'shortcuts.suspend' @{recording=$false;editing=$false})
- [void](Bridge 'gameOverlay.setPanelVisible' @{panelVisible=$true})
  [void](Bridge 'gameOverlay.setEditing' @{editing=$true})
  $disabled=Bridge 'gameOverlay.setEnabled' @{enabled=$false} -AllowFailure
  Require (-not $disabled.ok -and $disabled.code-eq409 -and (State).enabled) 'Always-available widgets could be disabled'
- [void](Bridge 'gameOverlay.setPanelVisible' @{panelVisible=$false})
  [void](Bridge 'gameOverlay.setEditing' @{editing=$false})
  [void](Bridge 'gameOverlay.setVisible' @{visible=$false})
  Check-OverlayKeys $true
@@ -1134,7 +1258,7 @@ try {
  Require ($app.ExitCode -eq 0) 'Test player exited with an error'
  [void][GameOverlayCheck]::GetWindowRect($minecraftWindow,[ref]$restored)
  Require ($restored.right-$restored.left-eq600 -and $restored.bottom-$restored.top-eq400) 'Player exit did not restore Minecraft window'
- Write-Output 'PASS: overlay lifecycle, module enable/manual display, independent visibility, transparent lyrics, native drag hit regions/real mouse drag, click-through editing, placement persistence/clamp, compact-to-full panel UI, panel topmost/minimize, shortcut dispatch/release/restore, and widget command permissions'
+ Write-Output 'PASS: overlay lifecycle, module enable/manual display, independent visibility, transparent lyrics, native drag hit regions/real mouse drag, click-through editing, placement persistence/clamp, retired panel rejection and binding migration, shortcut dispatch/release/restore, and widget command permissions'
 } finally {
  try {
   if($mouseHeld){[GameOverlayCheck]::Button($false);$mouseHeld=$false}

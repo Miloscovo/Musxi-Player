@@ -8,9 +8,9 @@ export default function WallpaperSettings({ wallpaper,transparent,enabled,onEnab
   return <>
     <div className="appearance-wallpaper">
       <div className="appearance-setting-row">
-        <div><h3 id="wallpaper-label">自定义静态壁纸</h3><p id="wallpaper-description">使用本地图片作为播放器背景</p></div>
+        <div><h3 id="wallpaper-label">自定义静态壁纸</h3><p id="wallpaper-description">使用本地图片作为播放器背景，开关同步控制透明效果</p></div>
         <Button variant="unstyled" className="appearance-switch" role="switch" aria-checked={enabled} aria-labelledby="wallpaper-label" aria-describedby="wallpaper-description"
-          disabled={!transparent || !wallpaper.loaded || wallpaper.busy} onClick={()=>onEnabled(!enabled)}><span/></Button>
+          disabled={!wallpaper.loaded || wallpaper.busy} onClick={()=>onEnabled(!enabled)}><span/></Button>
       </div>
       {!transparent && <p className="wallpaper-hint">预览时将临时开启透明效果</p>}
       <div className="wallpaper-manager">

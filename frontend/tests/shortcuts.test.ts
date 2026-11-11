@@ -7,21 +7,22 @@ const event = (key: string, code: string, modifiers = {}) => ({ key, code, ctrlK
 test('all shortcuts start unbound and global shortcuts start disabled', () => {
   const defaults = emptyShortcuts();
   assert.equal(defaults.global, false);
-  assert.equal(Object.keys(defaults.bindings).length, 13);
+  assert.equal(Object.keys(defaults.bindings).length, 12);
   assert.ok(shortcutActions.every(([id]) => defaults.bindings[id] === null));
   assert.deepEqual(parseShortcuts(defaults), defaults);
   assert.equal(bindingLabel(null), '未绑定');
 });
 
-test('thirteen-action settings retain game bindings and reject removed actions', () => {
+test('retired panel and screenshot bindings are discarded without losing other shortcuts', () => {
   const state = emptyShortcuts();
-  state.bindings.overlayPlayer = { key: 74, modifiers: 0 };
-  const old = { ...state, bindings: Object.fromEntries(shortcutActions.slice(0,13).map(([id]) => [id, state.bindings[id]])) };
-  const migrated = parseShortcuts(old);
-  assert.deepEqual(migrated.bindings.overlayPlayer, state.bindings.overlayPlayer);
-  assert.equal(Object.hasOwn(migrated.bindings,'overlayScreenshot'), false);
+  state.global = true;
+  state.bindings.playPause = { key: 32, modifiers: 0 };
+  state.bindings.overlayEditing = { key: 75, modifiers: 0 };
+  const old = { ...state, bindings: { ...state.bindings, overlayPlayer: { key: 74, modifiers: 0 } } };
+  assert.deepEqual(parseShortcuts(old), state);
+  assert.deepEqual(parseShortcuts({ ...old, bindings: { ...old.bindings, overlayScreenshot: state.bindings.playPause } }), state);
   assert.equal(Object.keys(old.bindings).length, 13);
-  const invalid = { ...old.bindings }; delete invalid.overlayPlayer; invalid.overlayScreenshot = null;
+  const invalid: Record<string, unknown> = { ...old.bindings }; delete invalid.overlayEditing;
   assert.throws(() => parseShortcuts({ ...old, bindings: invalid }));
 });
 
@@ -31,7 +32,7 @@ test('older ten-action settings retain every binding when game shortcuts are add
   const old = { ...state, bindings: Object.fromEntries(shortcutActions.slice(0,10).map(([id]) => [id, state.bindings[id]])) };
   const migrated = parseShortcuts(old);
   assert.deepEqual(migrated.bindings.playPause, { key: 32, modifiers: 0 });
-  assert.equal(migrated.bindings.overlayPlayer, null);
+  assert.equal(migrated.bindings.overlayEditing, null);
   assert.equal(Object.keys(old.bindings).length, 10);
   assert.throws(() => parseShortcuts({ ...old, bindings: { ...old.bindings, unknown: null } }));
   const missing = { ...old.bindings };delete missing.playPause;

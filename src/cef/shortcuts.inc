@@ -6,10 +6,10 @@ int shortcutLastVolume=50;
 HHOOK shortcutHook=nullptr;
 std::array<bool,musxi::shortcuts::actions.size()> shortcutHooked{};
 musxi::shortcuts::PressedKeys shortcutPressed;
-std::array<musxi::shortcuts::Binding,2> shortcutFocusPending{},shortcutFocusReleased{};
-std::array<ULONGLONG,2> shortcutFocusReleaseAt{};
+std::array<musxi::shortcuts::Binding,1> shortcutFocusPending{},shortcutFocusReleased{};
+std::array<ULONGLONG,1> shortcutFocusReleaseAt{};
 LRESULT CALLBACK observeShortcut(int code,WPARAM message,LPARAM data) {
-    std::array<musxi::shortcuts::Binding,2> released{};
+    std::array<musxi::shortcuts::Binding,1> released{};
     if(code==HC_ACTION) {
         const auto& event=*reinterpret_cast<const KBDLLHOOKSTRUCT*>(data);
         const bool pressed=message==WM_KEYDOWN || message==WM_SYSKEYDOWN;
@@ -19,7 +19,7 @@ LRESULT CALLBACK observeShortcut(int code,WPARAM message,LPARAM data) {
             for(size_t i=0;i<shortcutHooked.size();++i) {
                 const auto binding=shortcutRegistry.settings.bindings[i];
                 if(shortcutHooked[i] && shortcutRegistry.registered[i] && binding.key==event.vkCode && binding.modifiers==modifiers) {
-                    if(i==11 || i==12)shortcutFocusPending[i-11]=binding;
+                    if(i==11)shortcutFocusPending[0]=binding;
                     else PostMessageW(testWindow,WM_HOTKEY,0x5100+i,MAKELPARAM(modifiers,binding.key));
                 }
             }
@@ -49,7 +49,7 @@ bool acquireShortcut(int index,musxi::shortcuts::Binding binding) {
     shortcutHooked[index]=true;return true;
 }
 void releaseShortcut(int index) {
-    if(index==11 || index==12){shortcutFocusPending[index-11]={};shortcutFocusReleased[index-11]={};shortcutFocusReleaseAt[index-11]=0;}
+    if(index==11){shortcutFocusPending[0]={};shortcutFocusReleased[0]={};shortcutFocusReleaseAt[0]=0;}
     // Module state changes before restore releases the previous backend.
     if(!shortcutHooked[index]){UnregisterHotKey(testWindow,0x5100+index);return;}
     shortcutHooked[index]=false;
@@ -92,7 +92,7 @@ ShortcutJson shortcutSnapshot() {
 }
 musxi::LibraryReply executeShortcut(const std::string& action) {
     using namespace musxi;
-    if(action=="overlayVisibility" || action=="overlayEditing" || action=="overlayPlayer")return executeGameOverlayShortcut(action);
+    if(action=="overlayVisibility" || action=="overlayEditing")return executeGameOverlayShortcut(action);
     if(action=="visibility") {
         if(!testWindow)return {409,"窗口尚未就绪",{}};
         if(!IsWindowVisible(testWindow) || IsIconic(testWindow))showFromTray(testWindow);

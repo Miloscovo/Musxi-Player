@@ -20,6 +20,7 @@ import { ContextMenu, ContextMenuTrigger, ContextMenuContent, ContextMenuItem,
   ContextMenuSub, ContextMenuSubTrigger, ContextMenuSubContent } from '../components/ui/context-menu';
 
 import AppearanceSettings from '../components/AppearanceSettings';
+import LiquidGlassSurface from '../components/LiquidGlassSurface';
 import PlaybackSettings from '../components/PlaybackSettings';
 import GameOverlaySettings from '../components/GameOverlaySettings';
 import ExtensionsView from './ExtensionsView';
@@ -45,7 +46,7 @@ function appendUnique(previous: Track[], incoming?: Track[]) {
   return rows;
 }
 export default function LibraryView({ library: lib, theme, appearance, onAppearance, transparency = 50, onTransparency, updates, showUpdates = 0, shortcuts,
-  wallpaper,wallpaperEnabled,onWallpaperEnabled,playerTransparent,onPlayerTransparent,playback,onResume,overlay }: {
+  wallpaper,wallpaperEnabled,onWallpaperEnabled,playerTransparent,onPlayerTransparent,liquidGlass,onLiquidGlass,playback,onResume,overlay }: {
   library: ReturnType<typeof useLibrary>; theme: Theme; appearance?: Appearance; onAppearance?: (next: Appearance) => void;
   transparency?: number; onTransparency?: (value: number) => void;
   updates?: AppUpdates; showUpdates?: number;
@@ -54,6 +55,7 @@ export default function LibraryView({ library: lib, theme, appearance, onAppeara
   playback?: PlayerState | null; onResume?: () => void;
   wallpaper?:WallpaperController;wallpaperEnabled?:boolean;onWallpaperEnabled?:(value:boolean)=>void;
   playerTransparent?:boolean;onPlayerTransparent?:(value:boolean)=>void;
+  liquidGlass?:boolean;onLiquidGlass?:(value:boolean)=>void;
 }) {
   const { state, error, pending, page } = lib;
   const playlistRows = state?.tracks || [];
@@ -273,6 +275,7 @@ export default function LibraryView({ library: lib, theme, appearance, onAppeara
   const time = (ms: number) => `${Math.floor(ms / 60000)}:${String(Math.floor(ms / 1000) % 60).padStart(2, '0')}`;
 
   const sidebar = <aside className="sidebar" aria-label="主导航">
+      {liquidGlass && <LiquidGlassSurface/>}
       <div className="sidebar-accounts">{(['netease','qq','kugou'] as MusicPlatform[]).map(platform => {
         const entry = state?.accounts?.find(a => a.platform === platform);
         const connected = entry?.connected ?? (platform === 'kugou' && !!state?.connected);
@@ -376,7 +379,7 @@ export default function LibraryView({ library: lib, theme, appearance, onAppeara
         </Dialog>
       </div>}
       {view === 'extensions' ? <ExtensionsView/> : view === 'settings' ? settingsSection === 'updates' && updates ? <UpdateSettings updates={updates}/> : settingsSection === 'shortcuts' ? <ShortcutSettings shortcuts={shortcuts} overlayEnabled={overlay.state.enabled}/> : settingsSection === 'lyrics' ? <><LyricsSettings coverUrl={state?.now?.cover}/><GameOverlaySettings overlay={overlay} onShortcutSettings={() => navigate(() => { resetScroll(); jumpToGameShortcuts.current = true; setSettingsSection('shortcuts'); })}/></> : settingsSection === 'playback' ? <PlaybackSettings/> : <AppearanceSettings appearance={appearance ?? { mode: theme === 'dark' || theme === 'glass' ? 'dark' : 'light', transparent: theme === 'glass' || theme === 'glass-light', tone: 'green' }} onAppearance={onAppearance ?? (() => {})} transparency={transparency} onTransparency={onTransparency ?? (() => {})}
-        wallpaper={wallpaper} wallpaperEnabled={wallpaperEnabled} onWallpaperEnabled={onWallpaperEnabled} playerTransparent={playerTransparent} onPlayerTransparent={onPlayerTransparent}/> : view === 'library' && !showTracks ? <>
+        wallpaper={wallpaper} wallpaperEnabled={wallpaperEnabled} onWallpaperEnabled={onWallpaperEnabled} playerTransparent={playerTransparent} onPlayerTransparent={onPlayerTransparent} liquidGlass={liquidGlass} onLiquidGlass={onLiquidGlass}/> : view === 'library' && !showTracks ? <>
         {!isLocal && <>
           {playlistsLoading ? <div className="playlist-grid" role="status" aria-label="正在加载歌单列表">
             {Array.from({ length: skeletonCount }, (_, index) => <div key={index} className="playlist playlist-skeleton" aria-hidden="true">

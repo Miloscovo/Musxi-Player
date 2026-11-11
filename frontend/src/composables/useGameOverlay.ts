@@ -48,7 +48,6 @@ export function useGameOverlay() {
       setLyricsVisible: (value: boolean) => run(() => overlay.setLyricsVisible(value)),
       setTrackVisible: (value: boolean) => run(() => overlay.setTrackVisible(value)),
       setEditing: (value: boolean) => run(() => overlay.setEditing(value)),
-      setPanelVisible: (value: boolean) => run(() => overlay.setPanelVisible(value)),
       setHideOnHover: (value: boolean) => run(() => overlay.setHideOnHover(value)),
       setWindowCompatibility: (value: boolean) => run(async () => {
         const next = await overlay.setWindowCompatibility(value);

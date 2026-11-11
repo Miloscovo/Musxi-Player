@@ -3,6 +3,7 @@ import { animate, AnimatePresence, motion } from 'motion/react';
 import { reportDesktopPage } from './native/desktopSmoke';
 import FloatingLyricsControls from './DesktopLyrics';
 import CoverImage from './components/CoverImage';
+import LiquidGlassSurface from './components/LiquidGlassSurface';
 import VinylCover from './components/VinylCover';
 import { Button } from './components/ui/button';
 import { resolveTheme } from './composables/appearance';
@@ -27,11 +28,13 @@ function useOverlayAppearance(kind: 'lyrics' | 'track') {
   const [display, setDisplay] = useState(() => readLyricsDisplay(localStorage));
   const [translation, setTranslation] = useState(() => readLyricsTranslation(localStorage));
   const [style, setStyle] = useState(() => readGameLyricsStyle(localStorage));
+  const [liquidGlass, setLiquidGlass] = useState(() => readVisualSettings(localStorage).liquidGlass);
   const [trackTransparency, setTrackTransparency] = useState(() => kind === 'track' ? readGameTrackTransparency(localStorage) : 0);
   useEffect(() => {
     const system = matchMedia('(prefers-color-scheme: dark)');
     const sync = () => {
-      const { appearance, transparency } = readVisualSettings(localStorage);
+      const { appearance, transparency, liquidGlass } = readVisualSettings(localStorage);
+      setLiquidGlass(liquidGlass);
       document.documentElement.dataset.theme = resolveTheme(appearance, system.matches);
       document.documentElement.dataset.tone = appearance.tone;
       document.documentElement.style.setProperty('--background-opacity', String(appearance.transparent ? 1 - transparency / 100 : 1));
@@ -50,7 +53,7 @@ function useOverlayAppearance(kind: 'lyrics' | 'track') {
       system.removeEventListener('change', sync);
     };
   }, [kind]);
-  return { display, translation, style, trackTransparency };
+  return { display, translation, style, trackTransparency, liquidGlass };
 }
 
 function OverlayLyrics({ trackId, positionMs, connected, editing, display, translation, following, onManualScroll, style, mode, active: visible }: {
@@ -167,8 +170,13 @@ export default function GameOverlay({ kind }: { kind: 'lyrics' | 'track' }) {
   useEffect(() => new URLSearchParams(location.search).has('desktopSmoke') ? reportDesktopPage() : undefined, []);
   useLayoutEffect(() => {
     if (kind !== 'track' || !card.current) return;
-    const element = card.current; let lastHeight = 0;
+    const element = card.current; let lastHeight = 0, lastWidth = 0;
     const measure = () => {
+      const width = element.getBoundingClientRect().width;
+      if (width > 0 && width !== lastWidth) {
+        lastWidth = width;
+        element.style.setProperty('--game-track-scale', String(width / 360));
+      }
       const height = Math.ceil(element.getBoundingClientRect().height);
       if (height === lastHeight) return;
       lastHeight = height;
@@ -181,15 +189,16 @@ export default function GameOverlay({ kind }: { kind: 'lyrics' | 'track' }) {
   const editing = kind === 'lyrics' ? overlay.state.lyricsEditing : overlay.state.trackEditing;
   const active = overlay.state.enabled && overlay.state.visible && (kind === 'lyrics' ? overlay.state.lyricsVisible : overlay.state.trackVisible);
   const player = usePlayerState(active);
-  const { display: pageDisplay, translation, style, trackTransparency } = useOverlayAppearance(kind);
+  const { display: pageDisplay, translation, style, trackTransparency, liquidGlass } = useOverlayAppearance(kind);
   const display = { ...pageDisplay, fontSize: overlay.state.lyricsFontSize || pageDisplay.fontSize };
   const [following, setFollowing] = useState(true);
   const trackId = player.state?.opened ? player.state.trackId : '';
   useEffect(() => setFollowing(true), [trackId, editing]);
   const control = (label: string, action: () => Promise<void>, children: ReactNode = label) =>
     <Button variant="unstyled" title={label} aria-label={label} disabled={overlay.busy} onClick={() => void action()}>{children}</Button>;
-  return <main ref={card} className="game-overlay" data-widget={kind} data-editing={editing} aria-label={kind === 'lyrics' ? '歌词悬浮窗' : '歌曲信息组件'}
+  return <main ref={card} className="game-overlay" data-widget={kind} data-editing={editing} aria-label={kind === 'lyrics' ? '歌词悬浮组件' : '歌曲信息组件'}
     style={kind === 'track' ? { '--game-track-opacity': 1 - trackTransparency / 100 } as CSSProperties : undefined}>
+    {kind === 'track' && liquidGlass && <LiquidGlassSurface refract={false}/>}
     {editing && <header className="overlay-widget-header">
       <span aria-hidden="true"/>
       <div>

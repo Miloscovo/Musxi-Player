@@ -63,8 +63,7 @@ main.app-shell { --sidebar-width:clamp(210px,15.5vw,240px); overflow:hidden; bor
 :root:is([data-theme=dark],[data-theme=glass]) .app-wallpaper-layer::after { background:color-mix(in srgb,var(--app-surface) calc(var(--background-opacity,1)*65%),transparent) }
 .sidebar { display:flex; flex-direction:column; width:var(--sidebar-width); min-height:0; padding:38px 10px 22px; background:var(--side) }
 .window-bar { background:transparent }
-.game-panel-return { height:32px; padding:0 16px; -webkit-app-region:no-drag }
-.game-panel-return,.wallpaper-preview-bar [data-variant=default] { --tw-primary-contrast:#fff }
+.wallpaper-preview-bar [data-variant=default] { --tw-primary-contrast:#fff }
 .window-buttons .window-maximize { display:grid; place-items:center }
 .sidebar .avatar-button { width:70px; height:70px; margin:0 auto; padding:0; border-radius:50%; background:var(--soft) }
 .sidebar .eyebrow { margin:14px 0 40px; color:var(--muted); font-size:13px; font-weight:600; letter-spacing:.2px; text-align:center }
@@ -271,10 +270,9 @@ main.app-shell { --sidebar-width:clamp(210px,15.5vw,240px); overflow:hidden; bor
 .wallpaper-thumbnail img { width:100%; height:100%; min-height:0; object-fit:cover }
 .wallpaper-actions { display:flex; flex-wrap:wrap; gap:10px; margin-top:12px }
 .player-floating-actions { position:absolute; z-index:85; left:50%; bottom:calc(100% + 12px); transform:translateX(-50%); display:flex; flex-direction:column; align-items:center; gap:12px; width:max-content; max-width:calc(100vw - 32px) }
-.wallpaper-preview-bar,.game-panel-actions { display:flex; align-items:center; gap:12px; max-width:100%; padding:10px 12px; border:1px solid var(--line); border-radius:10px; background:var(--app-surface); color:var(--ink); font-size:14px; box-shadow:0 4px 16px #0002; -webkit-app-region:no-drag }
+.wallpaper-preview-bar { display:flex; align-items:center; gap:12px; max-width:100%; padding:10px 12px; border:1px solid var(--line); border-radius:10px; background:var(--app-surface); color:var(--ink); font-size:14px; box-shadow:0 4px 16px #0002; -webkit-app-region:no-drag }
 .wallpaper-preview-bar>span { white-space:nowrap }
 .player:has(.player-floating-actions) :is(.message-alerts,.update-notice) { bottom:calc(100% + 76px) }
-.player:has(.game-panel-actions):has(.wallpaper-preview-bar) :is(.message-alerts,.update-notice) { bottom:calc(100% + 140px) }
 @media(max-width:650px) { .wallpaper-preview-bar { flex-wrap:wrap; justify-content:center; gap:8px; width:max-content } }
 .appearance-setting-row { display:flex; justify-content:space-between; align-items:center; gap:16px }
 .appearance-setting-row p { margin:5px 0 0; color:var(--muted); opacity:1; font-size:13px; line-height:1.6 }
@@ -735,7 +733,7 @@ html:has(.desktop-lyrics),html:has(.desktop-lyrics) body,html:has(.desktop-lyric
 .dl-play svg { width:16px; height:16px }
 .dl-divider { width:1px; height:18px; margin:0 5px; background:var(--dl-panel-line) }
 .dl-text-icon { font-size:13px; font-weight:650; line-height:1 }
-.dl-size { display:flex; gap:2px; padding:0 4px }
+.dl-size { display:flex; align-items:center; gap:2px; padding:0 4px }
 .dl-size-step { display:grid; place-items:center; width:18px; height:22px; border-radius:11px; font-size:15px; line-height:1 }
 .dl-size-step:hover { background:color-mix(in srgb,currentColor 14%,transparent) }
 .dl-size-value { min-width:40px; font-size:12px; font-weight:600; font-variant-numeric:tabular-nums; text-align:center }

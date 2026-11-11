@@ -31,7 +31,7 @@ export default function GameOverlaySettings({ overlay, onShortcutSettings }: { o
     {([
       ['floating-widgets-topmost', '组件置顶', state.topmost, overlay.setTopmost],
       ['game-overlay-track', '歌曲信息组件', state.visible && state.trackVisible, overlay.setTrackVisible],
-      ['game-overlay-lyrics', '歌词悬浮窗', state.visible && state.lyricsVisible, overlay.setLyricsVisible],
+      ['game-overlay-lyrics', '歌词悬浮组件', state.visible && state.lyricsVisible, overlay.setLyricsVisible],
     ] as const).map(([id, label, checked, update]) => <div className="appearance-setting-row" key={id}>
       <h3 id={id}>{label}</h3>
       <Button variant="unstyled" className="appearance-switch" role="switch" aria-checked={checked} aria-labelledby={id}
@@ -53,7 +53,7 @@ export default function GameOverlaySettings({ overlay, onShortcutSettings }: { o
           aria-labelledby="window-compatibility-label" disabled={!state.available || busy}
           onClick={() => void overlay.setWindowCompatibility(!state.windowCompatibility)}><span/></Button>
       </div>
-      <p>游戏全屏时看不到组件，可先切换为带标题栏的普通窗口模式，再选择游戏窗口并点击“应用”，使游戏画面完整铺满屏幕。关闭兼容模式可恢复原布局；重启播放器后需重新开启并应用。</p>
+      <p>全屏时看不到组件，可先切换为带标题栏的普通窗口模式，再选择窗口并点击“应用”，使画面完整铺满屏幕。关闭兼容模式可恢复原布局；重启播放器后需重新开启并应用。</p>
       {state.windowCompatibility && <>
         <div className="playback-setting">
           <label htmlFor="compatibility-window">游戏窗口</label>
@@ -112,7 +112,7 @@ export default function GameOverlaySettings({ overlay, onShortcutSettings }: { o
         onClick={() => void overlay.setEditing(!state.editing)}>{state.editing ? '完成编辑并锁定' : '编辑组件'}</Button>
       <Button variant="secondary" onClick={onShortcutSettings}>组件快捷键设置</Button>
     </div>
-    <div className="game-overlay-hints"><p>关闭置顶后，组件可能被游戏或其他窗口遮挡。</p><p>在“快捷键”中设置组件显隐、编辑切换和选歌面板快捷键，并启用全局快捷键，即可在游戏中操作。收起选歌面板后，歌词和歌曲信息继续显示。</p>
+    <div className="game-overlay-hints"><p>关闭置顶后，组件可能被游戏或其他窗口遮挡。</p><p>在“快捷键”中设置组件显隐、编辑切换快捷键，并启用全局快捷键，即可在游戏中操作。</p>
     <p>启用全局快捷键后，按键会同时传给前台程序，按键可能同时执行播放器和游戏操作。游戏以管理员权限运行时，请右键播放器并选择“以管理员身份运行”，以便接收游戏前台的快捷键。</p></div>
   </section>;
 }

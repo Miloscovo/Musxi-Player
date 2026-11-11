@@ -24,9 +24,9 @@ export default function TrayMenu() {
     <ContextMenuContent className="tray-context-menu" collisionPadding={0} onCloseAutoFocus={event => event.preventDefault()}>
       <ContextMenuItem onSelect={() => void act(native.window.toggleVisibility)}>显示/隐藏</ContextMenuItem>
       {desktop.state.enabled && <><ContextMenuItem onSelect={() => void act(() => native.desktopLyrics.setVisible(!desktop.state.visible))}>
-        {desktop.state.visible ? '关闭歌词悬浮窗' : '打开歌词悬浮窗'}</ContextMenuItem>
+        {desktop.state.visible ? '关闭歌词悬浮组件' : '打开歌词悬浮组件'}</ContextMenuItem>
         <ContextMenuItem disabled={!desktop.state.visible} onSelect={() => void act(() => native.desktopLyrics.setLocked(!desktop.state.locked))}>
-          {desktop.state.locked ? '解锁歌词悬浮窗' : '锁定歌词悬浮窗'}</ContextMenuItem></>}
+          {desktop.state.locked ? '解锁歌词悬浮组件' : '锁定歌词悬浮组件'}</ContextMenuItem></>}
       <ContextMenuItem onSelect={() => void act(native.window.close)}>退出</ContextMenuItem>
       {error && <div role="alert">{error}</div>}
     </ContextMenuContent>

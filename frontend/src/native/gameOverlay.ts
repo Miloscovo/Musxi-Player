@@ -3,7 +3,7 @@ import { NativeError } from './types.ts';
 
 export interface GameOverlayState {
   available: boolean; enabled: boolean; visible: boolean; lyricsVisible: boolean;
-  trackVisible: boolean; editing: boolean; lyricsEditing: boolean; trackEditing: boolean; panelVisible: boolean;
+  trackVisible: boolean; editing: boolean; lyricsEditing: boolean; trackEditing: boolean;
   hideOnHover: boolean; topmost: boolean; lyricsMode: 'single' | 'multi'; lyricsFontSize: number;
   minecraftCompatibility: boolean;
   minecraftStatus: 'off' | 'waiting' | 'windowedRequired' | 'applied' | 'userChanged' | 'error';
@@ -16,7 +16,7 @@ const windowId = /^\d+-\d+$/;
 
 export const initialGameOverlayState: GameOverlayState = {
   available: false, enabled: true, visible: false, lyricsVisible: true,
-  trackVisible: true, editing: false, lyricsEditing: false, trackEditing: false, panelVisible: false,
+  trackVisible: true, editing: false, lyricsEditing: false, trackEditing: false,
   hideOnHover: false, topmost: true, lyricsMode: 'multi', lyricsFontSize: 0,
   minecraftCompatibility: false, minecraftStatus: 'off',
   windowCompatibility: false, windowCompatibilityStatus: 'off', windowCompatibilityTarget: '',
@@ -24,7 +24,7 @@ export const initialGameOverlayState: GameOverlayState = {
 
 export function parseGameOverlay(value: unknown): GameOverlayState {
   if (!value || typeof value !== 'object' || Array.isArray(value)
-      || (['available', 'enabled', 'visible', 'lyricsVisible', 'trackVisible', 'editing', 'panelVisible'] as const).some(key => typeof (value as GameOverlayState)[key] !== 'boolean'))
+      || (['available', 'enabled', 'visible', 'lyricsVisible', 'trackVisible', 'editing'] as const).some(key => typeof (value as GameOverlayState)[key] !== 'boolean'))
     throw new NativeError(502, 'Invalid game overlay state');
   const state = value as GameOverlayState;
   if (state.lyricsEditing !== undefined && typeof state.lyricsEditing !== 'boolean') throw new NativeError(502, 'Invalid lyrics editing state');
@@ -56,7 +56,6 @@ export function createGameOverlayClient(host: CefTransport) {
     setLyricsVisible: (lyricsVisible: boolean) => call('gameOverlay.setLyricsVisible', { lyricsVisible }),
     setTrackVisible: (trackVisible: boolean) => call('gameOverlay.setTrackVisible', { trackVisible }),
     setEditing: (editing: boolean) => call('gameOverlay.setEditing', { editing }),
-    setPanelVisible: (panelVisible: boolean) => call('gameOverlay.setPanelVisible', { panelVisible }),
     setHideOnHover: (hideOnHover: boolean) => call('gameOverlay.setHideOnHover', { hideOnHover }),
     setMinecraftCompatibility: (minecraftCompatibility: boolean) => call('gameOverlay.setMinecraftCompatibility', { minecraftCompatibility }),
     setWindowCompatibility: (windowCompatibility: boolean) => call('gameOverlay.setWindowCompatibility', { windowCompatibility }),

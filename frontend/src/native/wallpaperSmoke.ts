@@ -28,13 +28,15 @@ export async function verifyWallpaperUI() {
   try {
     await appearancePage();await setToggle('transparency-label',true);await setToggle('player-transparency-label',true);
     await setToggle('transparency-label',false);
-    if(!toggle('wallpaper-label').disabled)throw new Error('Wallpaper enabled without main transparency');
+    await waitFor(()=>!toggle('wallpaper-label').disabled,'Wallpaper toggle must be available without main transparency');
     if(!document.querySelector<HTMLInputElement>('#appearance-transparency')?.disabled || !document.querySelector('.wallpaper-thumbnail')
       || button('.wallpaper-actions',document.querySelector('.wallpaper-thumbnail img')?'更换壁纸':'选择图片').disabled)
       throw new Error('Wallpaper selection must remain available without transparency');
     if(!toggle('player-transparency-label').disabled || toggle('player-transparency-label').getAttribute('aria-checked')!=='true'
       || getComputedStyle(document.documentElement).getPropertyValue('--player-background-opacity').trim()!=='1')throw new Error('Dock transparency was not suspended with its preference retained');
     button('.wallpaper-actions','恢复默认').click();await waitFor(()=>toggle('wallpaper-label').getAttribute('aria-checked')==='false' && !document.querySelector('.wallpaper-thumbnail img'));
+    await setToggle('wallpaper-label',true);await waitFor(()=>toggle('transparency-label').getAttribute('aria-checked')==='true');
+    await setToggle('wallpaper-label',false);await waitFor(()=>toggle('transparency-label').getAttribute('aria-checked')==='false');
     await nextChoice('png');button('.wallpaper-actions','选择图片').click();await waitFor(()=>!!document.querySelector('.wallpaper-thumbnail img'));
     if(document.querySelector('.app-wallpaper-layer') || await native.wallpaper.getState())throw new Error('Candidate wallpaper applied before preview');
     button('.wallpaper-actions','预览效果').click();await waitFor(()=>!!document.querySelector('.wallpaper-preview-bar'));

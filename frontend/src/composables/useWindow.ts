@@ -7,7 +7,7 @@ export function useWindow() {
   const [state, setState] = useState<WindowState>({ enabled: false, maximized: false });
   const [error, setError] = useState('');
   const [visual, dispatch] = useReducer(reduceVisual, undefined, () => ({ saved:readVisualSettings(localStorage), preview:null }));
-  const { appearance, transparency, wallpaperEnabled, playerTransparent } = visual.preview ?? visual.saved;
+  const { appearance, transparency, wallpaperEnabled, playerTransparent, liquidGlass } = visual.preview ?? visual.saved;
   const [systemDark, setSystemDark] = useState(() => window.matchMedia('(prefers-color-scheme: dark)').matches);
   const theme = resolveTheme(appearance, systemDark);
   const invoke = useCallback(async (action: () => Promise<WindowState>) => {
@@ -40,7 +40,8 @@ export function useWindow() {
   }, [theme, transparency,playerTransparent]);
   return { state, error, refresh, theme, appearance, setAppearance: (value:Appearance) => dispatch({ type:'appearance',value }),
     transparency, setTransparency: (value:number) => dispatch({ type:'transparency',value }),
-    wallpaperEnabled, playerTransparent, preview:!!visual.preview,
+    wallpaperEnabled, playerTransparent, liquidGlass, preview:!!visual.preview,
+    setLiquidGlass:(value:boolean) => dispatch({ type:'glass',value }),
     setWallpaperEnabled:(value:boolean) => dispatch({ type:'wallpaper',value }),
     setPlayerTransparent:(value:boolean) => dispatch({ type:'player',value }),
     beginPreview:() => dispatch({ type:'begin' }), cancelPreview:() => dispatch({ type:'cancel' }),

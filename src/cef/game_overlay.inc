@@ -8,16 +8,15 @@ struct GameOverlayWindow {
     std::vector<std::uint8_t> resizePixels;
     int resizePixelWidth=0,resizePixelHeight=0;
 };
-GameOverlayWindow gameLyrics{"lyrics",L"Musxi Player 歌词悬浮窗",nullptr,INT_MIN,INT_MIN,520,480};
+GameOverlayWindow gameLyrics{"lyrics",L"Musxi Player 歌词悬浮组件",nullptr,INT_MIN,INT_MIN,520,480};
 GameOverlayWindow gameTrack{"track",L"Musxi Player 歌曲信息",nullptr,INT_MIN,INT_MIN,360,120};
 bool gameOverlayEnabled=true,gameOverlayVisible=false,gameLyricsVisible=true,gameTrackVisible=true;
-bool gameOverlayEditing=false,gameOverlayPanel=false,gameOverlayPreviousTopmost=false;
+bool gameOverlayEditing=false;
 bool gameOverlayHideOnHover=false,gameOverlayTopmost=true;
 bool floatingLyricsPanel=false,floatingLyricsHover=false;
 std::string floatingLyricsMode="multi";
 int floatingLyricsFontSize=0; // Resolved from the existing lyrics-page preference on first UI connection.
 ULONGLONG gameOverlayPointerCheck=0;
-HWND gameOverlayReturnWindow=nullptr;
 HWND gameOverlayEditReturnWindow=nullptr;
 bool gameOverlayEditFocused=false;
 HWND gameOverlayForeground=nullptr;
@@ -27,7 +26,7 @@ bool windowCompatibility=false;
 std::string windowCompatibilityStatus="off",windowCompatibilityTarget;
 std::string gameOverlayStateJson() {
     return DesktopJson{{"available",testWindow!=nullptr},{"enabled",gameOverlayEnabled},{"visible",gameOverlayVisible},
-        {"lyricsVisible",gameLyricsVisible},{"trackVisible",gameTrackVisible},{"editing",gameOverlayEditing},{"lyricsEditing",gameOverlayEditing || gameLyrics.hoverEditing},{"trackEditing",gameOverlayEditing || gameTrack.hoverEditing},{"panelVisible",gameOverlayPanel},{"hideOnHover",gameOverlayHideOnHover},{"topmost",gameOverlayTopmost},{"lyricsMode",floatingLyricsMode},{"lyricsFontSize",floatingLyricsFontSize},
+        {"lyricsVisible",gameLyricsVisible},{"trackVisible",gameTrackVisible},{"editing",gameOverlayEditing},{"lyricsEditing",gameOverlayEditing || gameLyrics.hoverEditing},{"trackEditing",gameOverlayEditing || gameTrack.hoverEditing},{"hideOnHover",gameOverlayHideOnHover},{"topmost",gameOverlayTopmost},{"lyricsMode",floatingLyricsMode},{"lyricsFontSize",floatingLyricsFontSize},
         {"minecraftCompatibility",false},{"minecraftStatus","off"},{"windowCompatibility",windowCompatibility},
         {"windowCompatibilityStatus",windowCompatibilityStatus},{"windowCompatibilityTarget",windowCompatibilityTarget}}.dump();
 }
@@ -113,49 +112,6 @@ bool focusGameOverlayWindow(HWND window) {
     }
     if(GetForegroundWindow()!=window)return false;
     SetFocus(window);return GetFocus()==window;
-}
-void restoreGameOverlayPanel(bool minimize) {
-    if(!gameOverlayPanel)return;
-    gameOverlayPanel=false;
-    if(testWindow) {
-        if(minimize)ShowWindow(testWindow,SW_MINIMIZE);
-        SetWindowPos(testWindow,gameOverlayPreviousTopmost?HWND_TOPMOST:HWND_NOTOPMOST,0,0,0,0,SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE);
-    }
-    if(minimize && IsWindow(gameOverlayReturnWindow) && IsWindowVisible(gameOverlayReturnWindow)) {
-        if(IsIconic(gameOverlayReturnWindow))ShowWindow(gameOverlayReturnWindow,SW_RESTORE);
-        SetForegroundWindow(gameOverlayReturnWindow);
-    }
-    gameOverlayReturnWindow=nullptr;publishGameOverlayState();
-}
-bool showGameOverlayPanel() {
-    if(!gameOverlayEnabled || !testWindow || hostClosing)return false;
-    if(gameLyrics.hoverEditing || gameTrack.hoverEditing) {
-        const auto reply=musxi::cef_adapter::gameOverlayCommand("gameOverlay.setEditing",DesktopJson{{"editing",false}}.dump());
-        if(reply.code)return false;
-    }
-    const bool opening=!gameOverlayPanel,wasVisible=IsWindowVisible(testWindow),wasMinimized=IsIconic(testWindow);
-    if(!gameOverlayPanel) {
-        const auto foreground=GetForegroundWindow();
-        if(foreground!=testWindow)gameOverlayReturnWindow=foreground;
-        gameOverlayPreviousTopmost=(GetWindowLongPtrW(testWindow,GWL_EXSTYLE)&WS_EX_TOPMOST)!=0;
-    }
-    const auto failed=[&] {
-        if(opening) {
-            SetWindowPos(testWindow,gameOverlayPreviousTopmost?HWND_TOPMOST:HWND_NOTOPMOST,0,0,0,0,SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE);
-            if(wasMinimized)ShowWindow(testWindow,SW_MINIMIZE);
-            else if(!wasVisible)ShowWindow(testWindow,SW_HIDE);
-            gameOverlayReturnWindow=nullptr;
-        }
-        return false;
-    };
-    if(musxi::cef_adapter::mainWindowCompact()) {
-        if(!musxi::cef_adapter::setMainWindowCompact(false,130))return failed();
-        musxi::cef_adapter::finishMainWindowTransition();
-    }
-    if(!SetWindowPos(testWindow,HWND_TOPMOST,0,0,0,0,SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE))return failed();
-    showFromTray(testWindow);
-    if(!focusGameOverlayWindow(testWindow))return failed();
-    gameOverlayPanel=true;publishGameOverlayState();return true;
 }
 bool syncGameOverlayWindows();
 bool gameOverlayWindowEditing(const GameOverlayWindow& item) {
@@ -288,14 +244,14 @@ bool createGameOverlayWindow(GameOverlayWindow& item) {
     updateGameLyricsFrameRate(item,true);return true;
 }
 bool raiseGameOverlayWindows() {
-    if(!gameOverlayEnabled || !gameOverlayVisible || gameOverlayPanel)return true;
+    if(!gameOverlayEnabled || !gameOverlayVisible)return true;
     bool ok=true;
     for(auto* item:{&gameLyrics,&gameTrack})if(item->window && IsWindowVisible(item->window))
         if(!SetWindowPos(item->window,gameOverlayTopmost?HWND_TOPMOST:HWND_NOTOPMOST,0,0,0,0,SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE))ok=false;
     return ok;
 }
 void refreshGameOverlayOrder() {
-    if(!gameOverlayEnabled || !gameOverlayVisible || gameOverlayPanel || !gameOverlayTopmost)return;
+    if(!gameOverlayEnabled || !gameOverlayVisible || !gameOverlayTopmost)return;
     const auto foreground=GetForegroundWindow();
     const auto now=GetTickCount64();
     if(foreground==gameOverlayForeground && now<gameOverlayOrderCheck)return;
@@ -313,7 +269,7 @@ void refreshGameOverlayOrder() {
 bool updateGameOverlayHover() {
     CURSORINFO cursor{sizeof(cursor)};DWORD process=0;
     const auto foreground=GetForegroundWindow();
-    const bool active=gameOverlayHideOnHover && gameOverlayEnabled && gameOverlayVisible && !gameOverlayEditing && !gameLyrics.hoverEditing && !gameTrack.hoverEditing && !gameOverlayPanel
+    const bool active=gameOverlayHideOnHover && gameOverlayEnabled && gameOverlayVisible && !gameOverlayEditing && !gameLyrics.hoverEditing && !gameTrack.hoverEditing
         && foreground && GetWindowThreadProcessId(foreground,&process) && process!=GetCurrentProcessId()
         && GetCursorInfo(&cursor) && (cursor.flags&CURSOR_SHOWING);
     bool changed=false;
@@ -328,7 +284,7 @@ bool syncGameOverlayWindows() {
     bool ok=true;
     if(!gameOverlayEnabled || !gameOverlayVisible || !gameLyricsVisible)gameLyrics.hoverEditing=false;
     if(!gameOverlayEnabled || !gameOverlayVisible || !gameTrackVisible)gameTrack.hoverEditing=false;
-    floatingLyricsPanel=(gameOverlayEditing || gameLyrics.hoverEditing) && floatingLyricsHover && !gameOverlayPanel;
+    floatingLyricsPanel=(gameOverlayEditing || gameLyrics.hoverEditing) && floatingLyricsHover;
     updateGameOverlayHover();
     const auto foreground=GetForegroundWindow();
     const bool ownedFocus=foreground && (foreground==gameLyrics.window || foreground==gameTrack.window);
@@ -356,8 +312,6 @@ bool syncGameOverlayWindows() {
     } else if(gameOverlayEditFocused) {
         if(ownedFocus && IsWindow(gameOverlayEditReturnWindow) && IsWindowVisible(gameOverlayEditReturnWindow))
             focusGameOverlayWindow(gameOverlayEditReturnWindow);
-        if(gameOverlayReturnWindow && (gameOverlayReturnWindow==gameLyrics.window || gameOverlayReturnWindow==gameTrack.window))
-            gameOverlayReturnWindow=gameOverlayEditReturnWindow;
         gameOverlayEditReturnWindow=nullptr;gameOverlayEditFocused=false;
     }
     publishDesktop();return raiseGameOverlayWindows() && ok;
@@ -377,9 +331,9 @@ void sampleGameOverlayPointer() {
         if(item==&gameLyrics)floatingLyricsHover=inside;
         if(!inside)item->hoverSuppressed=false;
         const bool ownedFocus=item->window && GetForegroundWindow()==item->window;
-        if(item->hoverEditing && !interacting && (!inside || !ownedFocus || gameOverlayPanel || hostClosing)) {
+        if(item->hoverEditing && !interacting && (!inside || !ownedFocus || hostClosing)) {
             item->hoverEditing=false;item->hoverSuppressed=inside;editChanged=true;
-        }else if(inside && !item->hoverEditing && !interacting && !gameOverlayEditing && !item->hoverSuppressed && !gameOverlayPanel && !hostClosing) {
+        }else if(inside && !item->hoverEditing && !interacting && !gameOverlayEditing && !item->hoverSuppressed && !hostClosing) {
             // A covered widget must not steal the foreground window's focus.
             const auto hit=GetAncestor(WindowFromPoint(point),GA_ROOT);
             bool covered=false;
@@ -393,7 +347,7 @@ void sampleGameOverlayPointer() {
             if(!covered){item->hoverEditing=true;editChanged=true;}
         }
     }
-    const bool panel=(gameOverlayEditing || gameLyrics.hoverEditing) && (floatingLyricsHover || gameLyrics.moving || gameLyrics.window && GetCapture()==gameLyrics.window) && !gameOverlayPanel;
+    const bool panel=(gameOverlayEditing || gameLyrics.hoverEditing) && (floatingLyricsHover || gameLyrics.moving || gameLyrics.window && GetCapture()==gameLyrics.window);
     const bool panelChanged=floatingLyricsPanel!=panel;floatingLyricsPanel=panel;
     if(editChanged) {
         if(!syncGameOverlayWindows()) {
@@ -405,7 +359,6 @@ void sampleGameOverlayPointer() {
 }
 musxi::LibraryReply executeGameOverlayShortcut(const std::string& action) {
     if(!gameOverlayEnabled)return {409,"请先在设置中开启游戏悬浮",{}};
-    if(action=="overlayPlayer")return musxi::cef_adapter::gameOverlayCommand("gameOverlay.setPanelVisible",DesktopJson{{"panelVisible",!gameOverlayPanel}}.dump());
     if(action=="overlayVisibility")return musxi::cef_adapter::gameOverlayCommand("gameOverlay.setVisible",DesktopJson{{"visible",!gameOverlayVisible}}.dump());
     if(action=="overlayEditing")return musxi::cef_adapter::gameOverlayCommand("gameOverlay.setEditing",DesktopJson{{"editing",!(gameOverlayEditing || gameLyrics.hoverEditing || gameTrack.hoverEditing)}}.dump());
     return {400,"无效游戏悬浮操作",{}};

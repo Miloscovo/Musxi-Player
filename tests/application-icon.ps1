@@ -40,6 +40,28 @@ public static class ApplicationIconCheck {
 }
 '@
 Add-Type -AssemblyName System.Drawing
+$pngPath=[IO.Path]::ChangeExtension($IconPath,'.png')
+if (Test-Path -LiteralPath $pngPath) {
+    $artwork=[Drawing.Bitmap]::new($pngPath)
+    try {
+        $whiteSamples=0;$blackSamples=0
+        for ($y=0;$y -lt $artwork.Height;$y+=8) {
+            for ($x=0;$x -lt $artwork.Width;$x+=8) {
+                $pixel=$artwork.GetPixel($x,$y)
+                $radius=$artwork.Width*.2
+                if (($x -ge $radius+2 -and $x -lt $artwork.Width-$radius-2 -or $y -ge $radius+2 -and $y -lt $artwork.Height-$radius-2) -and $pixel.A -ne 255) { throw "Artwork became transparent at ($x,$y)." }
+                if ($pixel.R -gt 240 -and $pixel.G -gt 240 -and $pixel.B -gt 240) { $whiteSamples++ }
+                if ($pixel.R -lt 32 -and $pixel.G -lt 32 -and $pixel.B -lt 32) { $blackSamples++ }
+            }
+        }
+        if ($whiteSamples -lt 100 -or $blackSamples -lt 100) {
+            throw 'Icon lost its white artwork or black background.'
+        }
+        foreach ($point in @(@(0,0),@(($artwork.Width-1),0),@(0,($artwork.Height-1)),@(($artwork.Width-1),($artwork.Height-1)))) {
+            if ($artwork.GetPixel($point[0],$point[1]).A -ne 0) { throw 'Rounded PNG corner is not transparent.' }
+        }
+    } finally { $artwork.Dispose() }
+}
 $applications=@($output)
 if ($ApplicationPath) { $applications+=$ApplicationPath }
 foreach ($application in $applications) {
@@ -61,7 +83,21 @@ try {
         if ($handle -eq [IntPtr]::Zero) { throw "Windows cannot load the ${size}px icon." }
         $icon=[Drawing.Icon]::FromHandle($handle);$bitmap=$icon.ToBitmap()
         try {
-            if ($bitmap.Width -ne $size -or $bitmap.Height -ne $size -or $bitmap.GetPixel(0,0).A -ne 0 -or $bitmap.GetPixel([int]($size/2),[int]($size/2)).A -ne 255) { throw 'Unexpected icon dimensions or transparency.' }
+            if ($bitmap.Width -ne $size -or $bitmap.Height -ne $size) { throw 'Unexpected icon dimensions.' }
+            $whitePixels=0;$blackPixels=0
+            for ($y=0;$y -lt $size;$y++) {
+                for ($x=0;$x -lt $size;$x++) {
+                    $pixel=$bitmap.GetPixel($x,$y)
+                    $radius=$size*.2
+                    if (($x -ge $radius+2 -and $x -lt $size-$radius-2 -or $y -ge $radius+2 -and $y -lt $size-$radius-2) -and $pixel.A -ne 255) { throw 'Icon interior contains unwanted transparency.' }
+                    if ($pixel.R -gt 240 -and $pixel.G -gt 240 -and $pixel.B -gt 240) { $whitePixels++ }
+                    if ($pixel.R -lt 32 -and $pixel.G -lt 32 -and $pixel.B -lt 32) { $blackPixels++ }
+                }
+            }
+            if ($whitePixels -eq 0 -or $blackPixels -lt $size*$size*.5) { throw 'Icon lost its white artwork or black background.' }
+            foreach ($point in @(@(0,0),@(($size-1),0),@(0,($size-1)),@(($size-1),($size-1)))) {
+                if ($bitmap.GetPixel($point[0],$point[1]).A -ne 0) { throw 'Rounded ICO corner is not transparent.' }
+            }
         } finally { $bitmap.Dispose();$icon.Dispose();$null=[ApplicationIconCheck]::DestroyIcon($handle) }
     }
 } finally { $null=[MusxiIconResources]::FreeLibrary($source);$null=[MusxiIconResources]::FreeLibrary($target) }

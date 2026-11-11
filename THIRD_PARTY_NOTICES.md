@@ -1,5 +1,9 @@
 # Third-party notices and license audit
 
+## Liquid glass backgrounds (2026-11-09)
+
+The displacement map in `frontend/src/composables/liquidGlassMap.ts` and background-only SVG displacement/filter-layer technique in `LiquidGlassSurface.tsx` are adapted from [rdev/liquid-glass-react](https://github.com/rdev/liquid-glass-react/tree/ac48eab18d1f7f444ae30002d240cae29c863a21), commit `ac48eab18d1f7f444ae30002d240cae29c863a21`, Copyright 2025 MAX ROVENSKY, MIT. The complete upstream license is retained in [licenses/liquid-glass-react-LICENSE.txt](licenses/liquid-glass-react-LICENSE.txt). The adapted subset uses one displacement pass, restrained blur and static highlights; no mouse elasticity, shader generator, chromatic channel passes, or npm runtime dependency is bundled. Original project licensing remains unchanged.
+
 ## Application launcher artwork (2026-10-22)
 
 The custom Musxi Player artwork in `assets/icons/` was supplied by the project owner. The Windows build copies the pinned CEF `bootstrap.exe` and replaces its icon resources with this artwork; the resulting application EXE differs from the SDK bootstrap. The original SDK file, other PE resources, CEF startup mechanism, and existing copyrights and license materials are retained.

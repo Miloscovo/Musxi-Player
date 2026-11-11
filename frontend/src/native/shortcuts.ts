@@ -6,8 +6,7 @@ export const shortcutActions = [
   ['forward', '歌曲快进'], ['backward', '歌曲快退'], ['volumeUp', '音量增加'],
   ['volumeDown', '音量降低'], ['mute', '静音 / 取消静音'],
   ['playbackOrder', '切换播放模式'], ['visibility', '显示 / 隐藏播放器窗口'],
-  ['overlayVisibility', '显示 / 隐藏游戏组件'], ['overlayEditing', '编辑 / 锁定游戏组件'],
-  ['overlayPlayer', '打开 / 收起游戏选歌面板'],
+  ['overlayVisibility', '显示 / 隐藏悬浮组件'], ['overlayEditing', '编辑 / 锁定悬浮组件'],
 ] as const;
 export type ShortcutAction = typeof shortcutActions[number][0];
 export interface KeyBinding { key: number; modifiers: number }
@@ -20,6 +19,11 @@ export function validShortcutKey(key: number) {
 }
 export function parseShortcuts(value: unknown): ShortcutState {
   let state = value as ShortcutState | null;
+  if (state?.bindings && typeof state.bindings === 'object' && !Array.isArray(state.bindings)) {
+    const bindings = { ...state.bindings } as Record<string, KeyBinding | null>;
+    delete bindings.overlayPlayer; delete bindings.overlayScreenshot;
+    state = { ...state, bindings: bindings as ShortcutSettings['bindings'] };
+  }
   if (!state || typeof state.global !== 'boolean' || typeof state.suspended !== 'boolean' || !state.bindings || typeof state.bindings !== 'object' || Array.isArray(state.bindings)
     || ![10, shortcutActions.length].includes(Object.keys(state.bindings).length)
     || Object.keys(state.bindings).some(id => !shortcutActions.some(([action]) => action === id))

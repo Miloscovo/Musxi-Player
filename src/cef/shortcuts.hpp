@@ -10,7 +10,7 @@
 
 namespace musxi::shortcuts {
 using Json=nlohmann::json;
-inline constexpr std::array<const char*,13> actions{"playPause","previous","next","forward","backward","volumeUp","volumeDown","mute","playbackOrder","visibility","overlayVisibility","overlayEditing","overlayPlayer"};
+inline constexpr std::array<const char*,12> actions{"playPause","previous","next","forward","backward","volumeUp","volumeDown","mute","playbackOrder","visibility","overlayVisibility","overlayEditing"};
 struct Binding { unsigned key=0,modifiers=0; };
 struct PressedKeys {
     std::array<bool,256> down{};
@@ -33,9 +33,11 @@ inline bool validKey(unsigned key) {
 }
 inline Settings parse(const Json& input) {
     auto data=input;
-    // Ignore only the retired binding so existing playback and game shortcuts survive.
-    if(data.is_object() && data.contains("bindings") && data["bindings"].is_object() && data["bindings"].size()==14)
+    // Ignore only retired bindings so existing playback and widget shortcuts survive.
+    if(data.is_object() && data.contains("bindings") && data["bindings"].is_object()) {
+        data["bindings"].erase("overlayPlayer");
         data["bindings"].erase("overlayScreenshot");
+    }
     if(!data.is_object() || data.size()!=2 || !data.at("global").is_boolean() || !data.at("bindings").is_object()
         || (data.at("bindings").size()!=10 && data.at("bindings").size()!=actions.size()))throw std::runtime_error("无效快捷键配置");
     for(const auto& item:data.at("bindings").items())
@@ -71,7 +73,7 @@ public:
         if(!suspended)unavailable.fill(false);
         for(int i=0;i<static_cast<int>(actions.size());++i) {
             if(i>=10 && !overlayEnabled){unavailable[i]=false;continue;}
-            // Panel shortcuts remain reachable while typing a search; recording suspends every key.
+            // Widget shortcuts remain reachable in text fields; recording suspends every key.
             if(suspended && (recording || i<10))continue;
             if(settings.bindings[i].key){registered[i]=acquire(i,settings.bindings[i]);unavailable[i]=!registered[i];}
         }

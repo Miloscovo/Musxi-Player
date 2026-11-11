@@ -33,7 +33,6 @@ namespace {
 std::wstring pagePath;
 HWND nativeWindow=nullptr;
 HWND testWindow=nullptr;
-void restoreGameOverlayPanel(bool minimize);
 HWND recoveryText=nullptr,retryButton=nullptr,exitButton=nullptr;
 bool smoke=false,createFailed=false,testApp=false,preview=false,hostClosing=false,desktopSmoke=false;
 COLORREF frameColor=RGB(255,255,255);
@@ -100,7 +99,6 @@ void showFromTray(HWND hwnd) {
 bool hideToTray(HWND hwnd) {
     // Never hide the only reachable window if the notification icon cannot be added.
     if(!addTray(hwnd))return false;
-    restoreGameOverlayPanel(false);
     musxi::cef_adapter::finishMainWindowTransition();
     KillTimer(hwnd,102);
     if(auto browser=musxi::cef_adapter::browserHost())browser->WasHidden(true);
@@ -416,7 +414,6 @@ LRESULT CALLBACK testProc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp) {
     }
     case WM_DPICHANGED: {finishCompactTransition();auto r=reinterpret_cast<RECT*>(lp);SetWindowPos(hwnd,nullptr,r->left,r->top,r->right-r->left,mainCompact?MulDiv(compactHeight,HIWORD(wp),96):r->bottom-r->top,SWP_NOZORDER);if(browser){updateWindowFrameRate(hwnd,true);browser->NotifyScreenInfoChanged();browser->WasResized();}return 0;}
     case WM_SIZE: {
-        if(wp==SIZE_MINIMIZED)restoreGameOverlayPanel(false);
         if(wp==SIZE_MINIMIZED)KillTimer(hwnd,102);
         if(browser) {
             browser->WasHidden(wp==SIZE_MINIMIZED);
@@ -529,7 +526,7 @@ bool canClose() {
         return false;
     }
     finishCompactTransition();
-    if(!hostClosing){shortcutRegistry.clear();gameOverlayEditing=false;gameLyrics.hoverEditing=gameTrack.hoverEditing=false;syncGameOverlayWindows();saveGameOverlaySettings();saveMainWindow();restoreGameOverlayPanel(false);hostClosing=true;}
+    if(!hostClosing){shortcutRegistry.clear();gameOverlayEditing=false;gameLyrics.hoverEditing=gameTrack.hoverEditing=false;syncGameOverlayWindows();saveGameOverlaySettings();saveMainWindow();hostClosing=true;}
     if(!musxi::cef_adapter::closeBrowsers())return false;
     // The windowless browser is gone. Remove its frozen surface before blocking
     // native cleanup and CefShutdown, rather than leaving a dead window visible.
@@ -682,7 +679,7 @@ musxi::LibraryReply gameOverlayCommand(const std::string& command,const std::str
         }
         static const std::map<std::string,std::string> fields{{"gameOverlay.setEnabled","enabled"},{"gameOverlay.setVisible","visible"},
             {"gameOverlay.setLyricsVisible","lyricsVisible"},{"gameOverlay.setTrackVisible","trackVisible"},
-            {"gameOverlay.setEditing","editing"},{"gameOverlay.setPanelVisible","panelVisible"},{"gameOverlay.setHideOnHover","hideOnHover"},{"gameOverlay.setTopmost","topmost"}};
+            {"gameOverlay.setEditing","editing"},{"gameOverlay.setHideOnHover","hideOnHover"},{"gameOverlay.setTopmost","topmost"}};
         const auto found=fields.find(command);if(found==fields.end())return {404,"未知游戏悬浮操作",{}};
         const auto& field=found->second;
         if(data.size()!=1 || !data.contains(field) || !data.at(field).is_boolean())return {400,"无效游戏悬浮参数",{}};
@@ -691,11 +688,8 @@ musxi::LibraryReply gameOverlayCommand(const std::string& command,const std::str
             if(!value)return {409,"悬浮组件已成为常驻功能，请使用显示开关隐藏组件",{}};
             return {0,{},gameOverlayStateJson()};
         }
-        if((field=="editing" || field=="panelVisible") && value && !gameOverlayEnabled)return {409,"请先开启游戏悬浮",{}};
-        if(field=="panelVisible") {
-            if(value){if(!showGameOverlayPanel())return {500,"无法打开选歌面板",{}};}
-            else restoreGameOverlayPanel(true);
-        } else {
+        if(field=="editing" && value && !gameOverlayEnabled)return {409,"请先开启游戏悬浮",{}};
+        {
             const auto old=DesktopJson::parse(gameOverlayStateJson());
             const bool oldHoverEditing=gameLyrics.hoverEditing,oldSuppressed=gameLyrics.hoverSuppressed;
             const bool oldTrackEditing=gameTrack.hoverEditing,oldTrackSuppressed=gameTrack.hoverSuppressed;
@@ -832,7 +826,7 @@ musxi::LibraryReply desktopLyricsCommand(const std::string& command,const std::s
         const auto data=DesktopJson::parse(params);
         if(!data.is_object())return {400,"无效歌词参数",{}};
         if(command=="desktopLyrics.getState") {if(!data.empty())return {400,"无效歌词参数",{}};return {0,{},desktopStateJson()};}
-        if(!testWindow || hostClosing)return {409,"当前窗口不支持歌词悬浮窗",{}};
+        if(!testWindow || hostClosing)return {409,"当前窗口不支持歌词悬浮组件",{}};
         static const std::map<std::string,std::string> fields{{"desktopLyrics.setVisible","visible"},{"desktopLyrics.setLocked","locked"},
             {"desktopLyrics.setDual","dual"},{"desktopLyrics.setPanel","panel"},{"desktopLyrics.setFontSize","fontSize"},{"desktopLyrics.setColor","color"}};
         const auto found=fields.find(command);if(found==fields.end())return {404,"未知歌词操作",{}};
@@ -855,7 +849,7 @@ musxi::LibraryReply desktopLyricsCommand(const std::string& command,const std::s
                 if(!on)floatingLyricsPanel=false;
                 if(!syncGameOverlayWindows()) {
                     gameOverlayVisible=oldVisible;gameLyricsVisible=oldLyrics;gameTrackVisible=oldTrack;
-                    syncGameOverlayWindows();publishGameOverlayState();return {500,"无法显示歌词悬浮窗",{}};
+                    syncGameOverlayWindows();publishGameOverlayState();return {500,"无法显示歌词悬浮组件",{}};
                 }
             }else if(field=="locked") {
                 const auto result=gameOverlayCommand("gameOverlay.setEditing",DesktopJson{{"editing",!on}}.dump());

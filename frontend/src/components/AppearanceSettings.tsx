@@ -18,11 +18,12 @@ const tones: { id: AppearanceTone; label: string; color: string }[] = [
   { id: 'red', label: '红色', color: '#c23e43' },
 ];
 
-export default function AppearanceSettings({ appearance, onAppearance, transparency, onTransparency,wallpaper,wallpaperEnabled,onWallpaperEnabled,playerTransparent,onPlayerTransparent }: {
+export default function AppearanceSettings({ appearance, onAppearance, transparency, onTransparency,wallpaper,wallpaperEnabled,onWallpaperEnabled,playerTransparent,onPlayerTransparent,liquidGlass,onLiquidGlass }: {
   appearance: Appearance; onAppearance: (next: Appearance) => void;
   transparency: number; onTransparency: (value: number) => void;
   wallpaper?:WallpaperController;wallpaperEnabled?:boolean;onWallpaperEnabled?:(value:boolean)=>void;
   playerTransparent?:boolean;onPlayerTransparent?:(value:boolean)=>void;
+  liquidGlass?:boolean;onLiquidGlass?:(value:boolean)=>void;
 }) {
   const [lyricsBackground, setLyricsBackground] = useLyricsBackground();
   const [playerStyle, setPlayerStyle] = usePlayerStyle();
@@ -79,6 +80,12 @@ export default function AppearanceSettings({ appearance, onAppearance, transpare
           onChange={event => onTransparency(Number(event.currentTarget.value))}/>
         <div className="appearance-slider-labels" aria-hidden="true"><span>不透明</span><span>更透明</span></div>
       </div>
+    </div>
+    <div className="appearance-wallpaper appearance-setting-row">
+      <div><h3 id="liquid-glass-label">液态玻璃</h3><p id="liquid-glass-description">侧边栏和播放栏的底色全透明时仍保留模糊与折射；播放栏底色需开启播放栏透明。歌曲信息仅使用静态玻璃质感。</p></div>
+      <Button variant="unstyled" className="appearance-switch" role="switch" aria-checked={!!liquidGlass}
+        disabled={wallpaper?.busy || !onLiquidGlass} aria-labelledby="liquid-glass-label" aria-describedby="liquid-glass-description"
+        onClick={() => onLiquidGlass?.(!liquidGlass)}><span/></Button>
     </div>
     {wallpaper && <WallpaperSettings wallpaper={wallpaper} transparent={appearance.transparent} enabled={!!wallpaperEnabled} onEnabled={onWallpaperEnabled!}
       playerTransparent={!!playerTransparent} onPlayerTransparent={onPlayerTransparent!}/>}

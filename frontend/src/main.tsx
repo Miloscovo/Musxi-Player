@@ -4,6 +4,7 @@ import TrayMenu from './TrayMenu';
 import GameOverlay from './GameOverlay';
 import './style.css';
 import './shadcn.css';
+import './liquid-glass.css';
 
 const root = createRoot(document.getElementById('app')!);
 const params = new URLSearchParams(location.search);
