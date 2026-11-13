@@ -17,7 +17,7 @@ const wait = async probe => {
   throw Error('Update fixture timed out');
 };
 (async () => {
-  if (new URLSearchParams(location.search).has('desktopLyrics')) {
+  if (new URLSearchParams(location.search).has('desktopLyrics') || new URLSearchParams(location.search).get('gameOverlay') === 'lyrics') {
     for (const command of ['updates.getState', 'updates.check', 'updates.setPreferences', 'updates.ignoreRelease', 'updates.fixtureDiagnostics', 'updates.openDownload', 'updates.openReleaseNotes', 'updates.startDownload', 'updates.cancelDownload', 'updates.install']) {
       await rejected(command, {}, 403);
     }

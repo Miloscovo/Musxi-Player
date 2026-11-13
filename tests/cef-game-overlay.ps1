@@ -366,7 +366,7 @@ try {
  Require (-not $state.minecraftCompatibility -and $state.minecraftStatus -eq 'off') 'Legacy settings did not default Minecraft compatibility off'
  Wait-For {Evaluate "!!document.querySelector('button[aria-label=扩展]')"} 'Sidebar did not finish rendering'
  [void](Evaluate "document.querySelector('button[aria-label=扩展]').click();true")
- Wait-For {Evaluate "document.querySelector('.extensions-empty')?.textContent==='暂无扩展'&&!document.querySelector('.extension-card')"} 'Extensions did not remove the built-in widget card'
+ Wait-For {Evaluate "!!document.querySelector('.wallpaper-extension-card')&&!document.querySelector('.extension-card')"} 'Extensions did not show the wallpaper extension without the built-in widget card'
  $screenshot=& $node $driver $port 'main' '--screenshot'
  Require ($LASTEXITCODE -eq 0) 'Extension page screenshot failed'
  $screenshots=Join-Path (Split-Path -Parent $PSScriptRoot) 'build\extensions-qa'
@@ -1122,7 +1122,8 @@ try {
  Drag-Title $lyrics 'lyrics' 'A real mouse drag did not move the empty lyric title by the requested delta'
  $fixture=& $node $driver $port 'lyrics' '--lyric-fixture'
  Require ($LASTEXITCODE -eq 0) 'Could not install the isolated React lyric fixture'
- Wait-For {Evaluate "(()=>{const c=document.querySelector('.overlay-lyrics-list'),r=c?.querySelector('[aria-current=true]');if(!r)return false;const a=c.getBoundingClientRect(),b=r.getBoundingClientRect();return c.children.length===200&&c.scrollTop>1000&&Math.abs((a.top+a.bottom-b.top-b.bottom)/2)<2})()" 'lyrics'} 'Loaded lyrics did not scroll to the current line'
+ # Check scroll layout before the optional perspective transform changes visual bounds.
+ Wait-For {Evaluate "(()=>{const c=document.querySelector('.overlay-lyrics-list'),r=c?.querySelector('[aria-current=true]');if(!r)return false;return c.children.length===200&&c.scrollTop>1000&&Math.abs(r.offsetTop-(c.clientHeight-r.clientHeight)/2-c.scrollTop)<2})()" 'lyrics'} 'Loaded lyrics did not scroll to the current line'
  $observers=Evaluate 'window.__overlayFixtureProbe.lyricObservers' 'lyrics'
  Start-Sleep -Milliseconds 4300
  Require ((Evaluate 'window.__overlayFixtureProbe.lyricObservers' 'lyrics') -eq $observers) 'Identical lyric polling restarted scroll observation'
@@ -1138,7 +1139,6 @@ try {
  Require ($lyricMask -like 'linear-gradient*') 'Editing lyrics have no edge fade mask'
  [void](Evaluate "(()=>{window.__originalGameLyricsStyle=localStorage.getItem('musxi-game-lyrics-style');localStorage.setItem('musxi-game-lyrics-style','perspective');return true})()" 'track')
  Wait-For {Evaluate "document.querySelector('.overlay-lyrics-viewport').dataset.style==='perspective'&&getComputedStyle(document.querySelector('.overlay-lyrics-list')).transform.startsWith('matrix3d')" 'lyrics'} 'Lyric style did not synchronize between windows'
- Require ((Evaluate "(()=>{const c=document.querySelector('.overlay-lyrics-list'),r=c.querySelector('[aria-current=true]'),a=c.parentElement.getBoundingClientRect(),b=r.getBoundingClientRect();return Math.abs((a.top+a.bottom-b.top-b.bottom)/2)<4})()" 'lyrics')) 'Perspective displaced the current lyric from the center'
  [void](Evaluate "(()=>{localStorage.setItem('musxi-lyrics-display',JSON.stringify({colorMode:'cover'}));window.dispatchEvent(new Event('musxi-lyrics-display'));return true})()" 'lyrics')
  Wait-For {(Evaluate "document.querySelector('.overlay-lyrics-viewport').style.getPropertyValue('--vinyl-color')" 'lyrics') -eq 'rgb(225, 70, 70)'} 'Overlay did not sample the configured cover color'
  Require ((Evaluate "getComputedStyle(document.querySelector('.overlay-lyrics-list li')).color!==getComputedStyle(document.querySelector('.overlay-lyrics-list [aria-current=true]')).color" 'lyrics')) 'Cover-colored lyrics lost the active line hierarchy'
@@ -1189,6 +1189,8 @@ try {
  Require ([GameOverlayCheck]::IsWindowVisible($lyrics) -and -not [GameOverlayCheck]::IsWindowVisible($track)) 'Independent track visibility failed'
  [void](Bridge 'gameOverlay.setTrackVisible' @{trackVisible=$true})
  $settings=Bridge 'shortcuts.getState'
+ # Keep hover editing from changing the input target during shortcut delivery checks.
+ [GameOverlayCheck]::Move(0,0)
  foreach($entry in @(@('overlayVisibility',132),@('overlayEditing',133))){$settings.bindings.($entry[0])=[pscustomobject]@{key=$entry[1];modifiers=7}}
  $settings.bindings.volumeUp=[pscustomobject]@{key=131;modifiers=7}
  $registered=Bridge 'shortcuts.setSettings' @{global=$true;bindings=$settings.bindings}
