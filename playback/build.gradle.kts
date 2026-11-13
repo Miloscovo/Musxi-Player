@@ -11,6 +11,7 @@ dependencies {
     api(project(":core"))
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.robolectric:robolectric:4.17")
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
     api("androidx.media3:media3-session:1.8.0")
     implementation("androidx.media3:media3-exoplayer:1.8.0")

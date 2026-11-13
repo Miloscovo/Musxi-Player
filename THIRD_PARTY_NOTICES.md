@@ -1,5 +1,7 @@
 # Musxi Android 许可与来源
 
+2026-11-13 发布后CI检查将自动换源的时间测试改为协程虚拟时钟，新增 `kotlinx-coroutines-test:1.10.2`（JetBrains，Apache-2.0）作为 playback 的 `testImplementation`，与既有 coroutines 版本一致。仅供宿主测试，不进入产品APK；许可全文沿用 `app/src/main/assets/licenses/` 中既有 Kotlin/coroutines 声明。
+
 2026-10-23 安卓0.1验收候选复用 Musxi PC 应用图标：来自本地PC v0.5.1工作树 `assets/icons/musxi.png`，PC CEF构建同目录 `musxi.ico` 用于exe。来源提交 `e72fba9feb6da22a1b8b207ba2fa07b29b96d36c`，沿用本项目的Musxi品牌素材及GPL来源记录；安卓只做不同密度缩放与自适应适配；alpha02 在 108dp 前景中增加 18dp inset，将完整图案收至可见 72dp 区域，避免主标识被裁切，未引入第三方图标包。AndroidX设备端Compose验收依赖仅进入androidTest测试APK，沿用AndroidX Apache-2.0声明，不进入产品运行依赖。
 
 本安卓工程源自 [Miloscovo/Musxi-Player](https://github.com/Miloscovo/Musxi-Player)，早期在个人 fork 的 android/development 分支开发，现于 [qwt1011/Musxi-Player-Android](https://github.com/qwt1011/Musxi-Player-Android) 独立保存。最初 PC 检出基线为 `80743c6aae9ab6b56c13200f53b0ebbb8e852de1`；上次安卓 PR #24 的提交为 `ac3ac80f4259244a50fb5269aa0fdf5bd1c59afd`，上游合并提交为 `c5821a70659a16ddbe08ad8fad6bf60cce5cf532`。独立仓库初始提交保留同一安卓源码树、许可与来源，不携入整个 PC 历史。

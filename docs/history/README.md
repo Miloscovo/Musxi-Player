@@ -5,6 +5,7 @@
 ## 2026-11-13 Android v0.3
 
 - [v0.3发布说明](../android-v0.3-release.md)：汇总v0.2之后的前后端进展，版本0.3.0／code6，README参考LoveACE结构并采用自有素材。重新统一2,784项全过、Lint0错误149警告；正式包沿用v0.2签名，Release Lint0错误55警告。包与发布证据位于项目 `.local/artifacts/release-0.3.0/`、`release-v0.3-preparation/`。没有重新安装手机、真实平台写入或将旧设备结果冒充新正式包验收。
+- 2026-11-13 23:02正式发布完成，上游[PR #30](https://github.com/Miloscovo/Musxi-Player/pull/30)已创建，三附件回下载散列匹配。首轮云端分别暴露自动换源真实延时顺序、本地音频测试准备／收尾问题；测试稳定性补丁重新本地统一2,784项全过，Lint0错误150警告（新增测试依赖版本提示），证据 `.local/artifacts/verification/20261113T151805094Z-24544/`。不改发布包、标签或生产行为，首轮失败与后续CI分别留存。
 
 ## 2026-11-13 锁屏歌词 C 后端
 

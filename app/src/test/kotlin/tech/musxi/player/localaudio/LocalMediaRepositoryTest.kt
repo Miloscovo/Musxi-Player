@@ -38,13 +38,19 @@ class LocalMediaRepositoryTest {
 
     @Before fun setup() = runBlocking {
         store = SqliteLocalAudioStore(context, dbName)
+        // Open Robolectric's SQLite helper on the test thread before repository IO starts.
+        store.read()
         images = Images(File(temporary.root, "covers"))
         repository = AppLocalAudioRepository(store, LocalAudioFiles(File(temporary.root, "media")), documents, scope, artwork = images, settings = settings)
-        repository.createFolder("视频声音") { folder = it.getOrThrow() }.join()
+        var created: Result<LocalAudioFolder>? = null
+        repository.createFolder("视频声音") { created = it }.join()
+        folder = requireNotNull(created) { "Folder setup did not complete: ${repository.state.value}" }.getOrThrow()
     }
-    @After fun close() {
+    @After fun close() = runBlocking {
         images.gate?.second?.countDown()
-        scope.cancel(); store.close(); context.deleteDatabase(dbName)
+        scope.coroutineContext[Job]!!.cancelAndJoin()
+        store.close(); context.deleteDatabase(dbName)
+        Unit
     }
 
     @Test fun copyRetainsTheWholeVideoAndItsKindAndUsesTheCopyForCoverExtraction() = runBlocking {

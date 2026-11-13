@@ -4,7 +4,7 @@
 
 ## 用户安排与工作范围
 
-- v0.3发布入口：[正式Release与安装包](https://github.com/qwt1011/Musxi-Player-Android/releases/tag/v0.3.0)、[对应源码](https://github.com/qwt1011/Musxi-Player-Android/tree/v0.3.0)、[完整更新说明](android-v0.3-release.md)。PC上游PR使用fork分支`qwt1011:android/v0.3`，基于`android/development`的PR #28合并点c8b1ab3，保持与本次安卓源码树一致；不合并PC main。用户已在本机更新GitHub登录授权，先前403属于历史失败，实际提交、PR、Release与校验结果保留在项目 `.local/artifacts/release-v0.3-preparation/`，不打印令牌。
+- v0.3已正式发布：[Release与安装包](https://github.com/qwt1011/Musxi-Player-Android/releases/tag/v0.3.0)、[对应源码](https://github.com/qwt1011/Musxi-Player-Android/tree/v0.3.0)、[完整更新说明](android-v0.3-release.md)。安卓发布提交adb4c0b；PC上游[PR #30](https://github.com/Miloscovo/Musxi-Player/pull/30)使用fork分支`qwt1011:android/v0.3`，基于`android/development`的PR #28合并点c8b1ab3，保持与安卓main源码树一致；不合并PC main或自动合并PR。三附件公开回下载的大小与散列均匹配。首次云端检查暴露两项宿主测试时序问题，main和PR已补虚拟时钟及数据库测试初始化／收尾，不改已发布APK或移动标签；实际提交、CI与校验结果保留在项目 `.local/artifacts/release-v0.3-preparation/`。用户已更新GitHub授权，先前403仅为历史失败，不打印令牌。
 
 - 当前任务为Android v0.3发布：用户明确授权核对安卓独立仓库及PC上游基线、提交全部现有开发、向上游android/development提交新PR，并在安卓仓库发布正式签名APK与更新说明；不合并PC主线。版本升为0.3.0／code6，沿用v0.2密钥。README参考LoveACE结构，使用自有图标与合成页面样张。前述历史“不提交／不推送”仅约束对应旧轮，不撤销本轮明确授权；真实账号／平台写入仍不在发布操作范围。
 
@@ -38,6 +38,8 @@
 - 唯一主目录 `C:\text\Musxi-Player安卓`；保留既有未提交后端与 CC 前端。未获新授权不提交、推送、发布，不操作平台收藏、创建或恢复历史队列。
 
 ## 当前验证基线
+
+发布后CI稳定性补丁已在本地重新统一验证：2,784项通过，0失败／错误／跳过，Lint0错误150警告，主包／设备测试包编译及954条路径冻结通过；证据 `.local/artifacts/verification/20261113T151805094Z-24544/`。相较发布构建新增的1条警告仅为协程测试依赖的版本提示，测试依赖按现有运行库保持1.10.2。首次PC CI的5／40ms真实延时顺序不稳定改为虚拟时钟；安卓CI的LocalMedia测试准备与清理补主线程预开库、主线程读取回调Result、cancelAndJoin后再关数据库。仅测试／测试依赖和文档变化，无生产行为修改。云端最终结果以本轮材料中的android-ci-result／upstream-ci-result和最新运行记录为准，不覆盖首次失败证据。
 
 v0.3发布轮已完成本次0.3.0／code6源码的统一验证：2,784项全过、0失败／错误／跳过，Lint0错误149警告，主包／设备测试包编译及954条源码路径冻结一致；证据 `.local/artifacts/verification/20261113T140810256Z-31376/`，debug APK `08c8e10e6e093024bed50f17867fb39eb5aed6650e49861d96013464a1d8cba9`。正式签名APK为19,250,861字节，SHA-256 `a3729ca554fdefab47ea95a184a84b71690474cff01959e59b37faa8e8f1d461`，沿用v0.2证书，v2签名／版本／release清单检查与DEX调试类抽查通过，Release Lint0错误55警告；包位于 `.local/artifacts/release-0.3.0/`。发布详情见[v0.3说明](android-v0.3-release.md)；本次没有安装手机或执行真实平台写入，覆盖升级待用户实际执行。以下各轮保留各自历史包与实机范围。
 
