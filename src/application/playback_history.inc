@@ -72,8 +72,12 @@ void prependRecentTrack(Json& recent,const Json& row) {
     if(recent.size()>500)recent.erase(recent.begin()+500,recent.end());
 }
 void recordRecentTrack(const Json& row) {
-    prependRecentTrack(recentTracks,row);
-    playbackSaveAt=0;
+    try {
+        prependRecentTrack(recentTracks,row);
+        playbackSaveAt=0;
+    } catch(const std::exception&) {
+        notice(L"歌曲资料异常，已跳过本次最近播放记录");
+    }
 }
 bool savePlaybackHistory(const fs::path& file) {
     auto temporary=file;temporary+=L".tmp";

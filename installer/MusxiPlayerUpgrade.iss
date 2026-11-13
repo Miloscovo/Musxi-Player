@@ -1,9 +1,9 @@
-#define AppVersion "0.7.0"
+#define AppVersion "0.7.1"
 [Setup]
 AppId={{A696A45D-3218-45C2-A565-EAC5642B976E}
 AppName=Musxi Player 测试版
 AppVersion={#AppVersion}
-VersionInfoVersion=0.7.0.0
+VersionInfoVersion=0.7.1.0
 DefaultDirName={localappdata}\Programs\Musxi Player
 DefaultGroupName=Musxi Player
 PrivilegesRequired=lowest

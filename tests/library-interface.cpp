@@ -439,6 +439,17 @@ int main() try {
     libraryPlayGeneration=cloudGeneration;pollAudio();
     require(recentTracks.size()==1 && recentTracks[0]["id"]=="original","successful playback not recorded");
     require(playbackSaveAt==0,"new recent history did not schedule immediate persistence");
+    {
+        const auto validTrack=currentPlaybackTrack,history=recentTracks;
+        for(const auto& album:Json::array({nullptr,std::string(4097,'x'),Json::object()})) {
+            currentPlaybackTrack=validTrack;currentPlaybackTrack["album"]=album;
+            ++cloudGeneration;libraryPlayGeneration=cloudGeneration;
+            pollAudio();
+            require(recentTracks==history && switched->state.playing,"invalid history metadata escaped the audio tick or interrupted playback");
+            require(recentRecordedGeneration==cloudGeneration,"invalid history metadata retried on every tick");
+        }
+        currentPlaybackTrack=validTrack;
+    }
     recordRecentTrack({{"id","qq:other"},{"name","Other"},{"path","PRIVATE"},{"cookie","PRIVATE"}});
     ++cloudGeneration;libraryPlayGeneration=cloudGeneration;libraryQualityChange=true;libraryPlatformChange=false;pollAudio();
     require(recentTracks[0]["id"]=="qq:other","quality reload reordered recent history");

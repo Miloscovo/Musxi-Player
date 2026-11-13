@@ -1,0 +1,16 @@
+# Musxi Player 0.7.1
+
+## 稳定性修复
+
+- 修复一条可能导致闪退的异常路径：播放歌曲后，最近播放记录遇到空值、字段类型异常或过长的歌曲资料时，异常可能越过窗口定时回调。
+- 此类资料异常现在会跳过本次最近播放记录，保留已有历史并继续播放，同时显示简短提示。
+- 增加异常歌曲资料的回归检查，验证播放继续、历史保留及同一播放请求不重复记录。
+
+## 安装与源码
+
+- Windows x64 安装包：`MusxiPlayer-Setup-0.7.1.exe`。
+- `MusxiPlayer-Update-0.7.1.json` 为应用更新校验清单，无需手动打开。
+- 本版本应用源码：[v0.7.1](https://github.com/Miloscovo/Musxi-Player/tree/v0.7.1)。
+- 第三方源码、固定版本、许可证与重链接材料获取说明：[源码交付索引](https://github.com/Miloscovo/Musxi-Player/blob/efd72195e2202325c8a8af8b79068f63ccd1cd18/docs/release-source-delivery.md)。
+
+该异常路径在 0.6.0 和 0.7.0 中均存在；由于缺少反馈用户的崩溃日志，尚不能确认它就是此前反馈中的闪退原因，仍需用户复测。

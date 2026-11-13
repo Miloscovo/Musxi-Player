@@ -1,5 +1,14 @@
 # Musxi fixed FFmpeg source delivery
 
+## v0.7.1
+
+The v0.7.1 installer fixes nonfatal handling of invalid recent-playback metadata.
+It retains the audited CEF and FFmpeg binaries and fixed third-party source
+directions below. Application source is available at the v0.7.1 tag; installed
+`release-source-record.json` identifies the exact clean application commit.
+Release uploads contain the Windows x64 installer and its update manifest.
+See [Chinese release notes](release-notes-0.7.1.md).
+
 ## v0.7.0
 
 The v0.7.0 installer retains the audited CEF and FFmpeg binaries and fixed
