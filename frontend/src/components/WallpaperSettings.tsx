@@ -1,12 +1,14 @@
 import { Button } from './ui/button';
 import type { WallpaperController } from '../composables/useWallpaper';
 
-export default function WallpaperSettings({ wallpaper,transparent,enabled,onEnabled,playerTransparent,onPlayerTransparent }: {
+export default function WallpaperSettings({ wallpaper,transparent,enabled,onEnabled,playerTransparent,onPlayerTransparent,dynamicEnabled }: {
   wallpaper:WallpaperController;transparent:boolean;enabled:boolean;onEnabled:(value:boolean)=>void;
   playerTransparent:boolean;onPlayerTransparent:(value:boolean)=>void;
+  dynamicEnabled?:boolean;
 }) {
   return <>
     <div className="appearance-wallpaper">
+      <fieldset className="wallpaper-static-controls" disabled={dynamicEnabled}>
       <div className="appearance-setting-row">
         <div><h3 id="wallpaper-label">自定义静态壁纸</h3><p id="wallpaper-description">使用本地图片作为播放器背景，开关同步控制透明效果</p></div>
         <Button variant="unstyled" className="appearance-switch" role="switch" aria-checked={enabled} aria-labelledby="wallpaper-label" aria-describedby="wallpaper-description"
@@ -22,6 +24,7 @@ export default function WallpaperSettings({ wallpaper,transparent,enabled,onEnab
         </div>
       </div>
       {wallpaper.error && <p className="playback-settings-error" role="alert">{wallpaper.error}</p>}
+      </fieldset>
     </div>
     <div className="appearance-wallpaper appearance-setting-row">
       <div><h3 id="player-transparency-label">播放栏透明</h3><p id="player-transparency-description">让播放栏背景与播放器自然融合</p></div>

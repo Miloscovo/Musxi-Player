@@ -23,6 +23,8 @@ import UpdateNotice from './components/UpdateNotice';
 import { useShortcuts } from './composables/useShortcuts';
 import { useWallpaper } from './composables/useWallpaper';
 import LiquidGlassSurface from './components/LiquidGlassSurface';
+import { useDynamicWallpaper } from './composables/useDynamicWallpaper';
+import DynamicWallpaperLayer from './components/DynamicWallpaperLayer';
 
 export default function App() {
   const shell = useWindow(); const library = useLibrary();
@@ -48,6 +50,7 @@ export default function App() {
   const [compactTransition, setCompactTransition] = useState<boolean | null>(null);
   const compactBusy = compactTransition !== null;
   const compact = !!shell.state.compact && compactTransition !== false;
+  const dynamicWallpaper = useDynamicWallpaper(compact);
   const playerCollapsed = lyricsOpen && !compact && lyricsPlayerCollapsed;
   const railLabel = lyricsOpen && !compact ? '收起播放栏' : (compact ? '展开主界面' : '收起主界面');
   useEffect(() => { if ((lyricsOpen || compact) && shortcuts.recording) void shortcuts.cancel(); }, [lyricsOpen, compact, shortcuts.recording]);
@@ -70,9 +73,9 @@ export default function App() {
     return () => observer.disconnect();
   }, []);
   async function setCompact(value: boolean) {
-    if(compactBusy || wallpaper.busy)return;
+    if(compactBusy || wallpaper.busy || dynamicWallpaper.busy)return;
     setCompactTransition(value);
-    try { if(value)wallpaper.cancel();await shell.setCompact(value, Math.ceil(playerElement.current?.getBoundingClientRect().height ?? 110) + 16); }
+    try { if(value){wallpaper.cancel();dynamicWallpaper.cancel();}await shell.setCompact(value, Math.ceil(playerElement.current?.getBoundingClientRect().height ?? 110) + 16); }
     finally { setCompactTransition(null); }
   }
   const closeLyrics = useCallback(() => setLyricsOpen(false), []);
@@ -112,10 +115,10 @@ export default function App() {
     player: { text: error, error: true },
     playback: { text: playbackMessage, error: state?.phase === 'failed' },
     window: { text: shell.error || desktop.error || overlay.error || shortcuts.error, error: true },
-    wallpaper: { text:wallpaper.error,error:true },
+    wallpaper: { text:dynamicWallpaper.error || wallpaper.error,error:true },
     connection: { text: connected ? '' : '正在连接…' },
     updates: updates.message,
-  }), [updates.message, library.error, operation?.status, operation?.error, operation?.id, notice, error, playbackMessage, state?.phase, shell.error, desktop.error, overlay.error, shortcuts.error, wallpaper.error, connected, actionNotice]);
+  }), [updates.message, library.error, operation?.status, operation?.error, operation?.id, notice, error, playbackMessage, state?.phase, shell.error, desktop.error, overlay.error, shortcuts.error, wallpaper.error, dynamicWallpaper.error, connected, actionNotice]);
   useEffect(() => {
     const seekElement = seekInput.current; const volumeElement = volumeInput.current;
     async function seekChanged() {
@@ -135,10 +138,12 @@ export default function App() {
     };
   }, [hasState, seek, setVolume]);
   const showWallpaper=!!wallpaper.image && (!compact || shell.playerTransparent);
-  return <main className={`app-shell${compact ? ' compact-player' : ''}${showWallpaper?' has-wallpaper':''}`} onContextMenu={event => {
+  const dynamicShowing = dynamicWallpaper.showing && !compact;
+  return <main className={`app-shell${compact ? ' compact-player' : ''}${showWallpaper?' has-wallpaper':''}${dynamicShowing?' has-dynamic-wallpaper':''}`} onContextMenu={event => {
     if ((event.target as Element).closest('button')) event.preventDefault();
   }}>
     {showWallpaper && <div className="app-wallpaper-layer" aria-hidden="true"><img src={wallpaper.image!.url} alt="" onError={wallpaper.imageFailed}/></div>}
+    {dynamicWallpaper.settings.enabled && <DynamicWallpaperLayer wallpaper={dynamicWallpaper} compact={compact}/>}
     {shell.state.enabled && !compact && <div className="window-bar">
       <div className="window-buttons">
       <Button variant="unstyled" aria-label="最小化" onClick={shell.minimize}>─</Button>
@@ -163,7 +168,7 @@ export default function App() {
       <motion.div className="library-layer" inert={lyricsOpen || lyricsCovered} data-covered={lyricsCovered && (transparentLyrics || lyricsOpen) || undefined} initial={false}
         animate={{ opacity: transparentLyrics && (lyricsOpen || lyricsCovered) ? 0 : 1 }} transition={{ duration: reducedMotion ? 0 : 0.08 }}
         onAnimationComplete={() => { if (transparentLyrics && lyricsOpen) setLyricsCovered(true); }}><LibraryView library={library} playback={state} onResume={() => void resume()} theme={shell.theme} appearance={shell.appearance} onAppearance={shell.setAppearance} transparency={shell.transparency} onTransparency={shell.setTransparency} updates={updates} showUpdates={showUpdates} shortcuts={shortcuts} overlay={overlay}
-        wallpaper={wallpaper} wallpaperEnabled={shell.wallpaperEnabled} onWallpaperEnabled={shell.setWallpaperEnabled} playerTransparent={shell.playerTransparent} onPlayerTransparent={shell.setPlayerTransparent} liquidGlass={shell.liquidGlass} onLiquidGlass={shell.setLiquidGlass}/></motion.div>
+        wallpaper={wallpaper} wallpaperEnabled={shell.wallpaperEnabled} onWallpaperEnabled={shell.setWallpaperEnabled} playerTransparent={shell.playerTransparent} onPlayerTransparent={shell.setPlayerTransparent} liquidGlass={shell.liquidGlass} onLiquidGlass={shell.setLiquidGlass} dynamicWallpaper={dynamicWallpaper}/></motion.div>
       <AnimatePresence onExitComplete={() => { if (!lyricsOpen) setLyricsCovered(false); }}>
         {lyricsOpen && (!transparentLyrics || lyricsCovered) && <LyricsView key="lyrics" trackId={state?.opened ? state.trackId : ''} now={currentTrack} fallbackCover={smallCover} positionMs={state?.positionMs ?? 0}
           playing={!!state?.playing} canSeek={connected && !!state?.opened && !!state.durationMs} onSeek={positionMs => void seek(positionMs)} onClose={closeLyrics} onEntered={lyricsEntered}
@@ -237,6 +242,11 @@ export default function App() {
       </div>
       {!compact && !lyricsOpen && <UpdateNotice updates={updates} onDetails={() => setShowUpdates(n => n + 1)} />}
       <MessageAlerts messages={messages} />
+      {dynamicWallpaper.preview && <div className="player-floating-actions"><div className="wallpaper-preview-bar" role="status">
+        <span>{dynamicWallpaper.preview.ready ? '正在预览：' : '正在加载：'}{dynamicWallpaper.preview.project.title}{dynamicWallpaper.preview.warning ? '（部分特效可能缺失）' : ''}</span>
+        <Button variant="secondary" disabled={dynamicWallpaper.busy} onClick={() => {dynamicWallpaper.cancel();dynamicWallpaper.setManager(true);}}>取消</Button>
+        <Button disabled={dynamicWallpaper.busy || !dynamicWallpaper.preview.ready} onClick={() => void dynamicWallpaper.apply()}>应用壁纸</Button>
+      </div></div>}
       {shell.preview && <div className="player-floating-actions">
       {shell.preview && <div className="wallpaper-preview-bar" role="status"><span>正在预览壁纸</span>
         <Button variant="secondary" disabled={wallpaper.busy} onClick={wallpaper.cancel}>取消预览</Button>

@@ -12,6 +12,8 @@
 #include <windowsx.h>
 #include "include/cef_render_handler.h"
 #include "include/cef_display_handler.h"
+#include "include/cef_task.h"
+#include "dynamic_wallpaper.hpp"
 
 namespace musxi::cef_adapter {
 namespace {
@@ -25,6 +27,13 @@ std::vector<Client*> eventClients;
 void dispatchPlayerEvents(const char* name,const PlayerState& state);
 bool shuttingDown=false;
 bool passed=false;
+class WallpaperTask final:public CefTask {
+    std::function<void()> run_;
+public:
+    explicit WallpaperTask(std::function<void()> run):run_(std::move(run)){}
+    void Execute()override {run_();}
+    IMPLEMENT_REFCOUNTING(WallpaperTask);
+};
 Json desktopReport;
 LRESULT CALLBACK dragHitTest(HWND hwnd,UINT message,WPARAM wp,LPARAM lp,UINT_PTR id,DWORD_PTR parent) {
     if(message==WM_NCHITTEST) {
@@ -52,9 +61,9 @@ public:
         router_=CefMessageRouterRendererSide::Create(CefMessageRouterConfig());
     }
     void OnContextCreated(CefRefPtr<CefBrowser> b,CefRefPtr<CefFrame> f,
-                          CefRefPtr<CefV8Context> c) override {router_->OnContextCreated(b,f,c);}
+                          CefRefPtr<CefV8Context> c) override {if(f->IsMain())router_->OnContextCreated(b,f,c);}
     void OnContextReleased(CefRefPtr<CefBrowser> b,CefRefPtr<CefFrame> f,
-                           CefRefPtr<CefV8Context> c) override {router_->OnContextReleased(b,f,c);}
+                           CefRefPtr<CefV8Context> c) override {if(f->IsMain())router_->OnContextReleased(b,f,c);}
     bool OnProcessMessageReceived(CefRefPtr<CefBrowser> b,CefRefPtr<CefFrame> f,
                                   CefProcessId source,CefRefPtr<CefProcessMessage> m) override {
         return router_ && router_->OnProcessMessageReceived(b,f,source,m);
@@ -136,6 +145,7 @@ public:
         if(tray_){trayBrowser=browser;return;}
         CEF_REQUIRE_UI_THREAD();
         if(overlay_)overlayBrowsers[testWindow_]=browser;else if(lyrics_)lyricsBrowser=browser;else activeBrowser=browser;
+        if(!lyrics_ && !overlay_)browser->GetHost()->SetAudioMuted(true); // Music plays in the native core; wallpaper scripts must remain silent.
         eventClients.push_back(this);
         setApplicationPlayerEvents(dispatchPlayerEvents);
     }
@@ -163,7 +173,8 @@ public:
     bool OnBeforeBrowse(CefRefPtr<CefBrowser> b,CefRefPtr<CefFrame> f,
                         CefRefPtr<CefRequest> request,bool,bool) override {
         CEF_REQUIRE_UI_THREAD();router_->OnBeforeBrowse(b,f);
-        return !f->IsMain() || request->GetURL().ToString()!=url_;
+        if(!f->IsMain())return tray_ || lyrics_ || overlay_ || !wallpaperFrameUrl(request->GetURL().ToString());
+        return request->GetURL().ToString()!=url_;
     }
     bool OnOpenURLFromTab(CefRefPtr<CefBrowser>,CefRefPtr<CefFrame>,
                          const CefString&,CefRequestHandler::WindowOpenDisposition,bool) override {return true;}
@@ -309,6 +320,19 @@ public:
                 const auto reply=shortcutsCommand(command,params.dump());
                 if(reply.code)callback->Failure(reply.code,reply.message);
                 else callback->Success(Json{{"version",1},{"result",Json::parse(reply.json)}}.dump());
+                return true;
+            }
+            if(command.rfind("dynamicWallpaper.",0)==0) {
+                if(tray_ || lyrics_ || overlay_){callback->Failure(403,"Command unavailable in this window");return true;}
+                const auto run=[command,params,callback,owner=testWindow_?testWindow_:window_]() {
+                    const auto reply=dynamicWallpaperCommand(command,params.dump(),owner);
+                    const auto respond=[callback,reply]() {
+                        if(reply.code)callback->Failure(reply.code,reply.message);
+                        else callback->Success(Json{{"version",1},{"result",Json::parse(reply.json)}}.dump());
+                    };
+                    if(CefCurrentlyOn(TID_UI))respond();else CefPostTask(TID_UI,new WallpaperTask(respond));
+                };
+                if(command=="dynamicWallpaper.scan")CefPostTask(TID_FILE_USER_VISIBLE,new WallpaperTask(run));else run();
                 return true;
             }
             if(command.rfind("wallpaper.",0)==0) {

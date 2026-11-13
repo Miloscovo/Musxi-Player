@@ -54,30 +54,27 @@ export default function GameOverlaySettings({ overlay, onShortcutSettings }: { o
           onClick={() => void overlay.setWindowCompatibility(!state.windowCompatibility)}><span/></Button>
       </div>
       <p>全屏时看不到组件，可先切换为带标题栏的普通窗口模式，再选择窗口并点击“应用”，使画面完整铺满屏幕。关闭兼容模式可恢复原布局；重启播放器后需重新开启并应用。</p>
-      {state.windowCompatibility && <>
         <div className="playback-setting">
-          <label htmlFor="compatibility-window">游戏窗口</label>
-          <select id="compatibility-window" value={selectedWindow} disabled={busy || !!state.windowCompatibilityTarget}
+          <select id="compatibility-window" aria-label="窗口" value={selectedWindow} disabled={!state.windowCompatibility || busy || !!state.windowCompatibilityTarget}
             onChange={event => setSelectedWindow(event.currentTarget.value)}>
-            <option value="">请选择游戏窗口</option>
+            <option value="">请选择窗口</option>
             {windows.map(window => <option key={window.id} value={window.id}>{window.title} — {window.program}</option>)}
           </select>
         </div>
         <div className="close-dialog-actions">
-          <Button variant="secondary" disabled={busy || !!state.windowCompatibilityTarget} onClick={() => void overlay.refreshWindows()}>刷新列表</Button>
-          <Button variant="secondary" disabled={busy || !selectedWindow || !!state.windowCompatibilityTarget}
+          <Button variant="secondary" disabled={!state.windowCompatibility || busy || !!state.windowCompatibilityTarget} onClick={() => void overlay.refreshWindows()}>刷新列表</Button>
+          <Button variant="secondary" disabled={!state.windowCompatibility || busy || !selectedWindow || !!state.windowCompatibilityTarget}
             onClick={() => void overlay.applyWindowCompatibility(selectedWindow)}>应用</Button>
-          <Button variant="secondary" disabled={busy || !state.windowCompatibilityTarget}
+          <Button variant="secondary" disabled={!state.windowCompatibility || busy || !state.windowCompatibilityTarget}
             onClick={() => void overlay.restoreWindowCompatibility()}>{state.windowCompatibilityStatus === 'userChanged' ? '结束管理' : '恢复原布局'}</Button>
         </div>
         {state.windowCompatibilityTarget && <p>当前窗口：{state.windowCompatibilityTarget}</p>}
-        {!busy && !windows.length && !state.windowCompatibilityTarget && <p>未列出游戏？请确认游戏为普通窗口模式，且播放器与游戏权限一致，再刷新列表。</p>}
+        {!busy && !windows.length && !state.windowCompatibilityTarget && <p>未列出窗口？请确认目标程序为普通窗口模式，且播放器与目标程序权限一致，再刷新列表。</p>}
         <p role={state.windowCompatibilityStatus === 'error' ? 'alert' : 'status'}>
-          {{ off: '工具已关闭。', ready: '选择窗口后点击“应用”；切回游戏不会自动应用。',
+          {{ off: '工具已关闭。', ready: '选择窗口后点击“应用”；切回目标窗口不会自动应用。',
             applied: '兼容布局已应用，画面保持完整铺满。', userChanged: '已保留你调整后的布局并停止接管，请结束管理后重新选择。',
-            error: '窗口调整或恢复未完成，请检查游戏模式和权限；恢复失败时可先关闭所选游戏。' }[state.windowCompatibilityStatus]}
+            error: '窗口调整或恢复未完成，请检查窗口模式和权限；恢复失败时可先关闭所选窗口。' }[state.windowCompatibilityStatus]}
         </p>
-      </>}
     </div>
     <div className="appearance-level">
       <div className="appearance-setting-row"><label htmlFor="game-track-transparency">歌曲信息组件透明度</label><output htmlFor="game-track-transparency">{transparency}%</output></div>

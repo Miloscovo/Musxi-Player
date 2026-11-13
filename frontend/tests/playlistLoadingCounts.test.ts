@@ -1,7 +1,21 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readPlaylistLoadingCount, rememberPlaylistLoadingCounts, readTrackLoadingCount, rememberTrackLoadingCount } from '../src/composables/playlistLoadingCounts.ts';
+import { canOpenPlaylist, readPlaylistLoadingCount, rememberPlaylistLoadingCounts, readTrackLoadingCount, rememberTrackLoadingCount } from '../src/composables/playlistLoadingCounts.ts';
 import type { LibraryState } from '../src/native/library.ts';
+
+test('startup cards become interactive per platform while cached and unverified platforms stay read-only',()=>{
+  const state={connected:true,playlistsRefreshing:true,accounts:[
+    {platform:'netease',connected:true,playlistsReady:true},
+    {platform:'qq',connected:false,verifying:true,playlistsReady:false},
+    {platform:'kugou',connected:true,playlistsReady:false},
+  ]} as LibraryState;
+  assert.equal(canOpenPlaylist(state,'netease:list'),true);
+  assert.equal(canOpenPlaylist(state,'qq:cached'),false);assert.equal(canOpenPlaylist(state,'kugou-list'),false);
+  assert.equal(canOpenPlaylist(state,'musxi:cloud-favorites'),false);
+  assert.equal(canOpenPlaylist({...state,playlistsRefreshing:false},'musxi:cloud-favorites'),true);
+  assert.equal(canOpenPlaylist({...state,connected:false},'netease:list'),false);
+  assert.equal(canOpenPlaylist({connected:true} as LibraryState,'netease:legacy'),true);
+});
 
 test('playlist skeleton counts remember successful categories and include the cloud favorites entry', () => {
   let value: string | null = null;

@@ -83,7 +83,7 @@ bool savePlaybackHistory(const fs::path& file) {
         Json current=nullptr;std::string cache;
         if(audio.opened && currentPlaybackTrack.is_object() && currentPlaybackTrack.value("id","")==audioTrackId) {
             current=playbackTrack(currentPlaybackTrack);
-            if(!cloudTempPath.empty()) {
+            if(!cloudTempPath.empty() && !fs::exists(cloudTempPath+L".download") && !fs::exists(cloudTempPath+L".failed")) {
                 cache=fs::relative(fs::path(cloudTempPath),file.parent_path()).u8string();
                 (void)playbackCachePath(file.parent_path(),cache);
             }
@@ -132,7 +132,7 @@ bool restorePlaybackHistory(const fs::path& file) {
         cloudCurrent=-1;audioBackend().setVolume(volume);
         if(current.is_null())return true;
         cloudNowTitle=cloud::toWide(current.value("name",""));cloudNowArtist=cloud::toWide(current.value("artist",""));cloudNowCover=current.value("cover","");
-        if(path.empty() || !fs::is_regular_file(path)) {notice(L"上次播放的音频已丢失，请从播放列表重新播放");return true;}
+        if(path.empty() || !fs::is_regular_file(path) || fs::exists(path.wstring()+L".download") || fs::exists(path.wstring()+L".failed")) {notice(L"上次播放的音频已丢失或未完成下载，请从播放列表重新播放");return true;}
         localActive=localIndex>=0;localCurrent=localIndex;
         audioTrackId=current.at("id").get<std::string>();
         if(!localActive)retainedPlaybackCache=cloudTempPath=path.wstring();

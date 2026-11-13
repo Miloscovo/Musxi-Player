@@ -101,14 +101,16 @@ class Adapter:
         self.lists = {self.playlist(p, editable)['id']:(p, editable) for p, editable in pairs}
         return [self.playlist(p, editable) for p, editable in self.lists.values()]
 
-    async def tracks(self, id):
+    async def tracks(self, id, single_page=None):
         self.auth()
         if id not in self.lists: raise PublicError('请先同步 QQ 歌单')
         p, editable = self.lists[id]
         rows = []
-        for page in range(1, 101):
+        for page in ([single_page] if single_page is not None else range(1, 101)):
             result = await self.client.songlist.get_detail(p.id, dirid=p.dirid, num=100, page=page)
             rows.extend(self.song(s) for s in result.songs)
+            if single_page is not None:
+                return {'playlist':self.playlist(p, editable), 'tracks':rows, 'hasMore':bool(result.hasmore)}
             if not result.hasmore: break
         else: raise PublicError('QQ 歌单歌曲超过当前上限')
         return {'playlist':self.playlist(p, editable), 'tracks':rows}
@@ -193,6 +195,10 @@ class Adapter:
         self.auth()
         if op=='sync': return {'playlists':await self.sync(), 'session':self.session()}
         if op=='tracks': return await self.tracks(r['id'])
+        if op=='tracks_page':
+            page = r.get('page')
+            if type(page) is not int or not 1 <= page <= 100: raise PublicError('无效歌单页码')
+            return await self.tracks(r['id'], page)
         if op=='avatar': return {'url':self.profile.get('avatar','')}
         if op=='membership': return await self.membership()
         song = await self.detail(r['id'])

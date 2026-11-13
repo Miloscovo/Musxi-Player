@@ -3,6 +3,86 @@ const assert=require('node:assert/strict');
 const {MultiPlatform}=require('./multi-platform.cjs');
 function fixture(){const calls=[];const adapters=Object.fromEntries(['kugou','netease','qq'].map(platform=>[platform,{async run(r){calls.push([platform,r]);if(r.op==='init')return {connected:!!r.session,profile:{name:platform},session:r.session};if(r.op==='sync')return {playlists:[{id:platform==='kugou'?'1':platform+':1'}]};if(r.op==='search')return {tracks:[{id:platform+':song',name:platform,artist:'Artist',album:'Album'}],total:1,hasMore:false};if(r.op==='vip_auto')return {session:{cookie:{token:'private'}},outcome:'skipped'};return {status:'connected',profile:{name:platform},session:{platform}};}}]));return {calls,adapters,manager:new MultiPlatform(adapters)};}
 
+test('startup exposes cached cards read-only and a ready platform before slow login, VIP and favorite reads finish',async()=>{
+  let releaseLogin,releaseExtras;
+  const login=new Promise(resolve=>{releaseLogin=resolve}),extras=new Promise(resolve=>{releaseExtras=resolve});
+  const calls=[];
+  const adapters=Object.fromEntries(['kugou','netease','qq'].map(platform=>[platform,{async run(request){
+    calls.push([platform,request.op]);
+    if(request.op==='init') {if(platform==='qq')await login;return {connected:true,profile:{id:platform,name:platform},session:{profile:{id:platform}}};}
+    if(request.op==='sync'){assert.equal(request.light,true);return {playlists:[{id:platform==='kugou'?'1':platform+':1',name:platform,editable:true,favorite:true}]};}
+    if(request.op==='tracks'){if(!request.refresh)await extras;return {playlist:{id:request.id},tracks:[{id:platform+':song',name:'Song',artist:'Artist'}]};}
+    if(['vip_auto','playlist_covers','avatar','membership'].includes(request.op)){await extras;return {};}
+    if(request.op==='logout')return {connected:false};
+    if(request.op==='qr')return {status:'waiting'};
+    throw Error('Unexpected operation');
+  }}]));
+  const manager=new MultiPlatform(adapters);
+  try {
+    const cached=[{id:'qq:cached',platform:'qq',name:'Cached',editable:true}];
+    const session={platform:'multi',accounts:Object.fromEntries(['kugou','netease','qq'].map(p=>[p,{profile:{id:p}}]))};
+    const first=await manager.run({op:'startup',session,cachedPlaylists:cached});
+    assert.equal(first.playlists[0].id,'qq:cached');assert.equal(first.accounts.every(account=>!account.playlistsReady),true);
+    for(let i=0;i<50 && !manager.accounts.netease.playlistsReady;i++)await new Promise(resolve=>setTimeout(resolve,2));
+    const ready=await manager.run({op:'startup_state'});
+    assert.equal(ready.accounts.find(a=>a.platform==='netease').playlistsReady,true);
+    assert.equal(ready.accounts.find(a=>a.platform==='qq').verifying,true);
+    assert.equal(ready.startupPending,true);assert.equal(ready.playlistsRefreshing,true);assert.equal(ready.favoritesCountKnown,false);
+    assert.ok(ready.playlists.some(row=>row.id==='netease:1'));assert.ok(!calls.some(([p,op])=>op==='avatar'));
+    assert.equal(ready.playlistSnapshots.netease.accountId,'netease');
+    const opened=await manager.run({op:'tracks_start',id:'netease:1',token:'interactive'});
+    assert.equal(opened.tracks[0].id,'netease:song');
+    releaseLogin();releaseExtras();await manager.startupJob.promise;
+    const completed=await manager.run({op:'startup_state'});
+    assert.equal(completed.startupPending,false);assert.equal(completed.playlistsRefreshing,false);assert.equal(completed.favoritesCountKnown,true);
+    assert.equal(completed.accounts.every(a=>a.playlistsReady),true);
+    const verifying=await manager.run({op:'qr',platform:'qq'});
+    assert.equal(verifying.accounts.find(a=>a.platform==='qq').playlistsReady,false);
+    assert.equal(verifying.accounts.find(a=>a.platform==='netease').playlistsReady,true);
+    await manager.run({op:'logout',platform:'qq'});
+    const loggedOut=await manager.run({op:'startup_state'});
+    assert.ok(!loggedOut.playlistSnapshots.qq);assert.equal(loggedOut.verifiedAccounts.qq,'');assert.ok(!loggedOut.playlists.some(row=>row.platform==='qq'));
+  }finally{releaseLogin();releaseExtras();await manager.close();}
+});
+
+test('startup preserves failed-account cache, clears changed-account cache and records successful empty lists',async()=>{
+  const {manager,adapters}=fixture();
+  for(const platform of ['kugou','netease','qq'])adapters[platform].run=async request=>{
+    if(request.op==='init')return platform==='netease'?{connected:false,session:{profile:null}}:{connected:platform==='qq',profile:{id:'new',name:'New'}};
+    if(request.op==='sync')return {playlists:[]};return {};
+  };
+  const old={profile:{id:'old'}};
+  try {
+    await manager.run({op:'startup',session:{platform:'multi',accounts:{netease:old,qq:old}},cachedPlaylists:[{id:'netease:old',platform:'netease'},{id:'qq:old',platform:'qq'}]});
+    await manager.startupJob.promise;const result=await manager.run({op:'startup_state'});
+    assert.deepEqual(result.playlists.map(row=>row.id),['netease:old']);
+    assert.equal(result.accounts.find(a=>a.platform==='netease').playlistsReady,false);
+    assert.equal(result.session.accounts.netease.profile.id,'old');
+    assert.equal(result.verifiedAccounts.qq,'new');assert.deepEqual(result.playlistSnapshots.qq.playlists,[]);
+  }finally{await manager.close();}
+});
+
+test('restarting verification waits for old authentication on that platform before installing the new account',async()=>{
+  let release;const gate=new Promise(resolve=>{release=resolve});let owner='';const authenticated=[];
+  const adapters=Object.fromEntries(['kugou','netease','qq'].map(platform=>[platform,{async run(request){
+    if(request.op==='init') {
+      if(platform!=='netease')return {connected:false};
+      const id=request.session.profile.id;authenticated.push(id);if(id==='old')await gate;owner=id;
+      return {connected:true,profile:{id,name:id},session:{profile:{id}}};
+    }
+    if(request.op==='sync')return {playlists:[{id:'netease:'+owner,name:owner}]};return {};
+  }}]));
+  const manager=new MultiPlatform(adapters),request=id=>({op:'startup',session:{platform:'multi',accounts:{netease:{profile:{id}}}}});
+  try {
+    await manager.run(request('old'));await manager.run(request('new'));
+    assert.deepEqual(authenticated,['old']);
+    release();await manager.startupJob.promise;
+    const state=await manager.run({op:'startup_state'});
+    assert.deepEqual(authenticated,['old','new']);assert.equal(owner,'new');
+    assert.equal(state.playlistSnapshots.netease.accountId,'new');assert.equal(state.playlists[0].id,'netease:new');
+  }finally{release();await manager.close();}
+});
+
 async function audioFixture(t,handler) {
   const fs=require('node:fs/promises'),os=require('node:os'),path=require('node:path');
   const dir=await fs.mkdtemp(path.join(os.tmpdir(),'musxi-prefetch-'));
@@ -19,6 +99,69 @@ async function prepared(manager,token) {
   }
   throw Error('Audio preparation did not complete');
 }
+
+test('playlist jobs show progress, serve stale cache while refreshing, and keep failures incomplete',async()=>{
+  const {manager,adapters}=fixture();let release,fail=false;
+  const id='netease:list',playlist={id,name:'Fixture'};
+  let gate=new Promise(resolve=>{release=resolve});
+  adapters.netease.run=async request=>{
+    const tracks=[{id:'netease:one',name:'First',artist:'Artist'}];
+    request.onProgress?.({playlist,tracks});await gate;
+    if(fail)throw Error('private service response');
+    return {playlist,tracks:[...tracks,{id:'netease:two',name:'Second',artist:'Artist'}]};
+  };
+  await manager.run({op:'tracks_start',id,token:'first'});
+  const partial=await manager.run({op:'tracks_progress',token:'first'});
+  assert.equal(partial.status,'pending');assert.equal(partial.tracks.length,1);
+  assert.equal((await manager.run({op:'tracks_progress',token:'first',revision:partial.revision})).tracks,undefined);
+  assert.equal(manager.readCache.size,0);
+  release();await manager.loading.promise;
+  assert.equal((await manager.run({op:'tracks_progress',token:'first'})).tracks.length,2);
+  assert.equal(manager.loading.status,'completed');
+  for(const value of manager.readCache.values())value.expires=0;
+  gate=new Promise(resolve=>{release=resolve});fail=true;
+  const cached=await manager.run({op:'tracks_start',id,token:'second'});
+  assert.equal(cached.status,'pending');assert.equal(cached.tracks.length,2);
+  cached.tracks[0].name='caller mutation';
+  release();await manager.loading.promise;
+  const failed=await manager.run({op:'tracks_progress',token:'second'});
+  assert.equal(failed.status,'failed');assert.equal(failed.tracks.length,2);assert.equal(failed.tracks[0].name,'First');
+  assert.ok(!failed.error.includes('private'));
+  await assert.rejects(manager.run({op:'tracks_progress',token:'first'}),/失效/);
+});
+
+test('a replaced or signed-out playlist job cannot publish old account data',async()=>{
+  const {manager,adapters}=fixture();let release;
+  const gate=new Promise(resolve=>{release=resolve});
+  adapters.netease.run=async request=>{
+    if(request.op==='tracks'){await gate;request.onProgress?.({playlist:{id:request.id},tracks:[{id:'netease:old'}]});return {playlist:{id:request.id},tracks:[{id:'netease:old'}]};}
+    return {connected:false};
+  };
+  await manager.run({op:'tracks_start',id:'netease:old',token:'old'});const old=manager.loading;
+  await manager.run({op:'tracks_start',id:'netease:new',token:'new'});
+  await manager.run({op:'logout',platform:'netease'});release();
+  await Promise.all([old.promise,manager.loading.promise]);
+  assert.equal(old.status,'failed');assert.equal(manager.loading.status,'failed');assert.equal(manager.loading.data,null);
+  assert.equal(manager.readCache.size,0);
+});
+
+test('QQ playlist pages yield the single response slot to foreground playback',async()=>{
+  const {QQAdapter}=require('./qq.cjs');const adapter=new QQAdapter();
+  const calls=[],counts=[];let foreground,running=0;
+  adapter.send=async request=>{
+    assert.equal(running++,0,'overlapping QQ commands');calls.push(request.op+(request.page || ''));
+    await new Promise(resolve=>setTimeout(resolve,2));running--;
+    return request.op==='audio'?{url:'https://example.test/authorized',track:{id:'qq:song'},quality:'128'}:
+      {playlist:{id:'qq:list'},tracks:[{id:'qq:'+request.page}],hasMore:request.page<3};
+  };
+  const list=await adapter.run({op:'tracks',id:'qq:list',onProgress:snapshot=>{
+    counts.push(snapshot.tracks.length);
+    if(snapshot.tracks.length===1)foreground=adapter.run({op:'audio',id:'qq:song'});
+  }});
+  assert.equal((await foreground).quality,'128');
+  assert.deepEqual(calls,['tracks_page1','audio','tracks_page2','tracks_page3']);
+  assert.deepEqual(counts,[1,2,3]);assert.deepEqual(list.tracks.map(row=>row.id),['qq:1','qq:2','qq:3']);
+});
 test('audio preparation uses authorized sources on every platform and transfers cache ownership once',async t=>{
   const {dir,fs,url}=await audioFixture(t);
   for(const platform of ['kugou','netease','qq']) {

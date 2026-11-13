@@ -1,6 +1,13 @@
 import type { LibraryState } from '../native/library.ts';
 
 const storageKey = 'musxi-playlist-loading-counts';
+export function canOpenPlaylist(state: LibraryState | null, id: string) {
+  if (!state?.connected) return false;
+  if (id === 'musxi:cloud-favorites') return !state.playlistsRefreshing;
+  const platform = id.startsWith('netease:') ? 'netease' : id.startsWith('qq:') ? 'qq' : 'kugou';
+  const account = state.accounts?.find(account => account.platform === platform);
+  return account ? account.connected && account.playlistsReady !== false : !state.accounts?.length;
+}
 function accountKey(state: LibraryState) {
   const accounts = state.accounts?.filter(account => account.connected);
   if (accounts?.some(account => !account.user)) return '';
@@ -18,9 +25,9 @@ export function readPlaylistLoadingCount(storage: Pick<Storage, 'getItem'>, stat
 }
 
 export function rememberPlaylistLoadingCounts(storage: Pick<Storage, 'setItem'>, state: LibraryState, pending: boolean, error: string) {
-  if (pending || error || state.busy || !state.connected || !accountKey(state)
+  if (pending || error || state.busy || state.playlistsRefreshing || !state.connected || !accountKey(state)
     || state.operation.status === 'failed' || state.operation.status === 'cancelled'
-    || (!state.playlists.length && !(state.operation.kind === 'sync' && state.operation.status === 'completed'))) return;
+    || (!state.playlists.length && !(state.playlistsRefreshing === false || state.operation.kind === 'sync' && state.operation.status === 'completed'))) return;
   const created = state.playlists.filter(list => list.editable).length;
   try {
     storage.setItem(storageKey, JSON.stringify({ account: accountKey(state), created: created + 1, saved: state.playlists.length - created }));
@@ -42,7 +49,7 @@ export function readTrackLoadingCount(storage: Pick<Storage, 'getItem'>, state: 
 }
 
 export function rememberTrackLoadingCount(storage: Pick<Storage, 'setItem'>, state: LibraryState, pending: boolean, error: string) {
-  if (pending || error || state.busy || !state.playlistId || state.operation.status === 'failed' || state.operation.status === 'cancelled'
+  if (pending || error || state.busy || state.playlistLoading || state.playlistIncomplete || !state.playlistId || state.operation.status === 'failed' || state.operation.status === 'cancelled'
     || !Number.isSafeInteger(state.trackCount) || state.trackCount < 0
     || (!state.tracks.length && !(state.trackCount === 0 && state.operation.kind === 'tracks' && state.operation.status === 'completed'))) return;
   const key = trackCountKey(state, state.playlistId);

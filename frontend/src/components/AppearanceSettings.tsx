@@ -18,12 +18,13 @@ const tones: { id: AppearanceTone; label: string; color: string }[] = [
   { id: 'red', label: '红色', color: '#c23e43' },
 ];
 
-export default function AppearanceSettings({ appearance, onAppearance, transparency, onTransparency,wallpaper,wallpaperEnabled,onWallpaperEnabled,playerTransparent,onPlayerTransparent,liquidGlass,onLiquidGlass }: {
+export default function AppearanceSettings({ appearance, onAppearance, transparency, onTransparency,wallpaper,wallpaperEnabled,onWallpaperEnabled,playerTransparent,onPlayerTransparent,liquidGlass,onLiquidGlass,dynamicWallpaperEnabled,onDynamicWallpaper }: {
   appearance: Appearance; onAppearance: (next: Appearance) => void;
   transparency: number; onTransparency: (value: number) => void;
   wallpaper?:WallpaperController;wallpaperEnabled?:boolean;onWallpaperEnabled?:(value:boolean)=>void;
   playerTransparent?:boolean;onPlayerTransparent?:(value:boolean)=>void;
   liquidGlass?:boolean;onLiquidGlass?:(value:boolean)=>void;
+  dynamicWallpaperEnabled?:boolean;onDynamicWallpaper?:()=>void;
 }) {
   const [lyricsBackground, setLyricsBackground] = useLyricsBackground();
   const [playerStyle, setPlayerStyle] = usePlayerStyle();
@@ -88,6 +89,9 @@ export default function AppearanceSettings({ appearance, onAppearance, transpare
         onClick={() => onLiquidGlass?.(!liquidGlass)}><span/></Button>
     </div>
     {wallpaper && <WallpaperSettings wallpaper={wallpaper} transparent={appearance.transparent} enabled={!!wallpaperEnabled} onEnabled={onWallpaperEnabled!}
-      playerTransparent={!!playerTransparent} onPlayerTransparent={onPlayerTransparent!}/>}
+      playerTransparent={!!playerTransparent} onPlayerTransparent={onPlayerTransparent!} dynamicEnabled={dynamicWallpaperEnabled}/>}
+    {onDynamicWallpaper && <div className="appearance-wallpaper appearance-setting-row"><div><h3>动态壁纸</h3>
+      <p>{dynamicWallpaperEnabled ? '动态壁纸扩展已启用，关闭后恢复原有背景' : '在扩展中启用 Wallpaper 动态壁纸'}</p></div>
+      <Button variant="secondary" onClick={onDynamicWallpaper}>前往扩展 →</Button></div>}
   </section>;
 }

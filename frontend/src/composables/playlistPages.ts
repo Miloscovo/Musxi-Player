@@ -10,7 +10,8 @@ export class PlaylistPages {
     const same = this.previous?.playlistId === value.playlistId;
     const edited = value.operation.status === 'completed' && ['song_update', 'tracks'].includes(value.operation.kind)
       && (this.previous?.operation.id !== value.operation.id || this.previous?.operation.status !== 'completed');
-    this.dirty = same && (this.dirty || edited || this.previous!.trackCount !== value.trackCount);
+    this.dirty = same && (this.dirty || edited || this.previous!.trackCount !== value.trackCount
+      || !!this.previous!.playlistLoading && !value.playlistLoading);
     const last = Math.max(1, Math.min(page, Math.ceil(value.trackCount / 50)));
     const pages = this.dirty ? new Map<number, Track[]>() : new Map(same ? this.pages : []);
     if (this.dirty) {

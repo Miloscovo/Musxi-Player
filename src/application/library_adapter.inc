@@ -26,6 +26,14 @@ bool knownTrack(const std::string& id) {
         for(const auto& row:*list) if(row.value("id","")==id) return true;
     return false;
 }
+bool playlistAccountReady(const std::string& id) {
+    if(cloudAccounts.empty())return cloudConnected;
+    if(id=="musxi:cloud-favorites")return cloudConnected && !playlistsRefreshing;
+    const auto platform=id.rfind("netease:",0)==0?"netease":id.rfind("qq:",0)==0?"qq":"kugou";
+    for(const auto& account:cloudAccounts)if(account.value("platform","")==platform)
+        return account.value("connected",false) && account.value("playlistsReady",true);
+    return false;
+}
 }
 LibraryReply applicationLibrary(const std::string& name,const std::string& parameters) {
     try {
@@ -161,6 +169,7 @@ LibraryReply applicationLibrary(const std::string& name,const std::string& param
             return reply({{"id",std::to_string(++libraryOperationId)}});
         }
         if(name=="library.open" && p.size()==1 && p.value("id","")=="musxi:local") {
+            libraryNextOpen=nullptr;
             loadLocalCatalog(cloud::dataDir()/L"local-music.json");localView=true;
             localFolderId.clear();
             return reply({{"id",std::to_string(++libraryOperationId)}});
@@ -169,6 +178,7 @@ LibraryReply applicationLibrary(const std::string& name,const std::string& param
             loadLocalCatalog(cloud::dataDir()/L"local-music.json");
             const auto id=requiredText(p,"id");
             if(std::none_of(localFolders.begin(),localFolders.end(),[&](const Json& row){return row.at("id")==id;}))return {404,"本地歌单不存在",{}};
+            libraryNextOpen=nullptr;
             localView=true;localFolderId=id;
             return reply({{"id",std::to_string(++libraryOperationId)}});
         }
@@ -178,6 +188,7 @@ LibraryReply applicationLibrary(const std::string& name,const std::string& param
             const auto currentId=localView?(localFolderId.empty()?"musxi:local":localFolderId):cloudPlaylistId;
             if(id!=currentId)return {409,"歌单已切换，请重试",{}};
             if(!localView && !cloudConnected)return {409,"请先扫码登录",{}};
+            if(!localView && (playlistLoading || playlistIncomplete))return {409,"请等待歌单完整加载后播放整个歌单",{}};
             if(!libraryNextPlay.is_null() || (cloudBusy() && cloudOperation!="audio"))return {409,"正在处理请求，请稍后重试",{}};
             const auto tracks=localView?localVisibleTracks():cloudTracks;
             if(tracks.empty())return {409,"歌单中暂无歌曲",{}};
@@ -207,11 +218,13 @@ LibraryReply applicationLibrary(const std::string& name,const std::string& param
                     for(const auto& source:currentPlaybackTrack.value("sources",Json::array()))available.insert(platformOf(source.value("id","")));
                 for(const auto* platform:{"netease","kugou","qq"})if(available.count(platform))platforms.push_back(platform);
             }
-            const bool foregroundBusy=cloudBusy() && cloudOperation!="audio_prepare" && cloudOperation!="audio_prepared" && cloudOperation!="audio_cancel";
-            return reply({{"connected",cloudConnected},{"busy",localView?(localImportPending || localScan.valid()):(foregroundBusy || !libraryNextPlay.is_null())},
+            const bool foregroundBusy=cloudBusy() && cloudOperation!="audio_prepare" && cloudOperation!="audio_prepared" && cloudOperation!="audio_cancel" && cloudOperation!="tracks_progress" && cloudOperation!="tracks_start" && cloudOperation!="startup" && cloudOperation!="startup_state";
+            return reply({{"connected",cloudConnected},{"busy",localView?(localImportPending || localScan.valid()):(foregroundBusy || !libraryNextPlay.is_null() || !libraryNextOpen.is_null())},
                 {"user",utf8(cloudUser)},{"status",utf8(cloudStatus)},{"notice",utf8(toast)},
                 {"accounts",cloudAccounts},{"loginPlatform",loginPlatform},{"qr",libraryQr},{"avatar",libraryAvatar},{"playlists",publicRows(cloudPlaylists,0,10000)},{"localPlaylists",localPlaylistRows()},
                 {"tracks",publicRows(tracks,(page-1)*50,50)},{"trackCount",tracks.size()},{"favoritesCount",cloudFavoritesCount},
+                {"playlistLoading",!localView && playlistLoading},{"playlistIncomplete",!localView && playlistIncomplete},
+                {"playlistsRefreshing",playlistsRefreshing},{"favoritesCountKnown",favoritesCountKnown},
                 {"playlistId",localView?(localFolderId.empty()?"musxi:local":localFolderId):cloudPlaylistId},{"playlistName",localView?localName:utf8(cloudPlaylistName)},
                 {"search",publicRows(searchTracks,0,searchTracks.size())},{"keywords",searchQuery},{"searchPage",searchPage},
                 {"searchMore",searchMore},{"searchTotal",searchTotal},
@@ -353,12 +366,23 @@ LibraryReply applicationLibrary(const std::string& name,const std::string& param
                 const auto id=requiredText(p,"id");
                 if(source!="search" && source!="library" && source!="queue") return {400,"无效列表",{}};
                 const auto& list=source=="search"?searchTracks:source=="queue"?cloudQueue:cloudTracks;
-                if(std::none_of(list.begin(),list.end(),[&](const Json& row){return row.value("id","")==id;})) return {404,"歌曲不在当前列表",{}};
+                const auto selected=std::find_if(list.begin(),list.end(),[&](const Json& row){return row.value("id","")==id;});
+                if(selected==list.end())return {404,"歌曲不在当前列表",{}};
                 next={{"source",source},{"id",id}};
+                if(source!="queue")next["track"]=*selected;
             }
             if(!cloudConnected) return {409,"请先扫码登录",{}};
-            if(cloudBusy() && cloudOperation!="audio") return {409,"正在处理其他请求，请稍后重试",{}};
+            if(cloudBusy() && (cloudOperation=="init" || cloudOperation=="logout")) return {409,"正在验证账号，请稍后重试",{}};
             schedulePlayback(std::move(next));
+            return reply({{"id",std::to_string(libraryOperationId)}});
+        }
+        if(name=="library.open" && cloudBusy() && (cloudOperation=="tracks_progress" || cloudOperation=="tracks_start" || cloudOperation=="startup" || cloudOperation=="startup_state")) {
+            if(p.size()!=1)return {400,"无效歌单参数",{}};
+            const auto id=requiredText(p,"id");
+            if(!cloudConnected)return {409,"请先扫码登录",{}};
+            if(!playlistAccountReady(id))return {409,"此平台账号或歌单尚未验证完成",{}};
+            if(id!="musxi:cloud-favorites" && std::none_of(cloudPlaylists.begin(),cloudPlaylists.end(),[&](const Json& row){return row.value("id","")==id;}))return {404,"歌单不存在",{}};
+            libraryNextOpen=p;++libraryOperationId;libraryOperationKind="tracks";libraryOperationStatus="pending";libraryOperationError.clear();
             return reply({{"id",std::to_string(libraryOperationId)}});
         }
         if(cloudBusy() || !libraryNextPlay.is_null()) return {409,"正在处理请求，请稍后重试",{}};
@@ -371,10 +395,16 @@ LibraryReply applicationLibrary(const std::string& name,const std::string& param
             request={{"op","search"},{"keywords",query},{"page",page}};
         } else if(name=="library.open") {
             if(p.size()!=1) return {400,"无效歌单参数",{}};
+            if(!cloudConnected)return {409,"请先扫码登录",{}};
             auto id=requiredText(p,"id");
+            if(!playlistAccountReady(id))return {409,"此平台账号或歌单尚未验证完成",{}};
             if(id!="musxi:cloud-favorites" && std::none_of(cloudPlaylists.begin(),cloudPlaylists.end(),[&](const Json& r){return r.value("id","")==id;})) return {404,"歌单不存在",{}};
+            libraryNextOpen=nullptr;
             localView=false;
-            request={{"op","tracks"},{"id",id}};
+            cloudPlaylistId=id;cloudTracks=Json::array();cloudPlaylistName=L"云端收藏整合";
+            for(const auto& row:cloudPlaylists)if(row.value("id","")==id)cloudPlaylistName=cloudText(row,"name");
+            playlistLoadToken=std::to_string(++playlistLoadSequence);playlistRevision=-1;playlistLoading=true;playlistIncomplete=false;playlistPollAt=0;
+            request={{"op","tracks_start"},{"id",id},{"token",playlistLoadToken}};
         } else if(name=="library.menu" || name=="library.favorite" || name=="library.add") {
             auto id=requiredText(p,"id");if(!knownTrack(id)) return {404,"歌曲不存在",{}};
             auto sourceId=id;
@@ -414,7 +444,7 @@ LibraryReply applicationLibrary(const std::string& name,const std::string& param
             if(p.size()>1 || (!p.empty() && !p.contains("platform")) || (name=="library.sync" && !p.empty())) return {400,"无效账号参数",{}};
             const auto platform=p.value("platform",std::string("kugou"));
             if(platform!="kugou" && platform!="netease" && platform!="qq")return {400,"未知账号平台",{}};
-            if(name=="library.sync" && !cloudConnected) return {409,"请先扫码登录",{}};
+            if(name=="library.sync" && !cloudConnected && (startupRevision<0 || playlistSnapshots.empty())) return {409,"请先扫码登录",{}};
             if(name=="library.login") {loginPlatform=platform;accountLogin();}
             else if(name=="library.logout") {cloudPolling=false;clearQr();cloudRequest({{"op","logout"},{"platform",platform}});}
             else accountSync();
@@ -427,7 +457,7 @@ LibraryReply applicationLibrary(const std::string& name,const std::string& param
         if(name!="library.search" && !cloudConnected) {libraryMenuRequested=false;return {409,"请先扫码登录",{}};}
         cloudRequest(request);
         if(!cloudBusy()) {libraryMenuRequested=false;return {503,utf8(cloudStatus),{}};}
-        ++libraryOperationId;libraryOperationKind=request.value("op","");libraryOperationStatus="pending";libraryOperationError.clear();
+        ++libraryOperationId;libraryOperationKind=request.value("op","")=="tracks_start"?"tracks":request.value("op","");libraryOperationStatus="pending";libraryOperationError.clear();
         return reply({{"id",std::to_string(libraryOperationId)}});
     } catch(const std::exception& e) {return {400,e.what(),{}};}
 }

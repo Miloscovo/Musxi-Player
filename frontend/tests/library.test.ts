@@ -59,8 +59,23 @@ test('page refresh refuses mixed playlist snapshots and retries after a racing o
   assert.ok(await cache.update(later, 2, async page => { pages.push(page); return later; }));
   assert.deepEqual(pages, [1]);
 });
+
+test('playlist refresh completion replaces cached pages even when playback owns the operation',async()=>{
+  const pages=new PlaylistPages();
+  const rows:Track[]=Array.from({length:75},(_,id)=>({id:String(id),name:'Cached',artist:'',cover:'',duration:0,count:0,editable:false}));
+  let loading=true;
+  const read=async(page:number)=>parseLibraryState({...snapshot,playlistId:'list',playlistLoading:loading,trackCount:rows.length,
+    tracks:rows.slice((page-1)*50,page*50),operation:{id:'play',kind:'audio',status:'pending',error:''}});
+  await pages.update(await read(1),1,read);await pages.update(await read(2),2,read);
+  rows[0]={...rows[0],name:'Fresh'};loading=false;
+  const updated=await pages.update(await read(2),2,read);
+  assert.equal(updated?.state.tracks[0].name,'Fresh');assert.equal(updated?.state.tracks.length,75);
+});
 test('library snapshot rejects invalid rows and operation status', () => {
   assert.deepEqual(parseLibraryState(snapshot), snapshot);
+  const startup={...snapshot,playlistsRefreshing:true,favoritesCountKnown:false,accounts:[{platform:'netease',name:'NetEase',connected:true,user:'Fixture',error:'',verifying:false,playlistsReady:true}]};
+  assert.deepEqual(parseLibraryState(startup),startup);
+  assert.throws(()=>parseLibraryState({...startup,accounts:[{...startup.accounts[0],playlistsReady:'yes'}]}),{code:502});
   assert.throws(() => parseLibraryState({ ...snapshot, tracks: [{ id: '1' }] }), { code: 502 });
   assert.throws(() => parseLibraryState({ ...snapshot, operation: { ...snapshot.operation, status: 'made-up' } }), { code: 502 });
   assert.throws(() => parseLibraryState({ ...snapshot, trackCount: -1 }), { code: 502 });

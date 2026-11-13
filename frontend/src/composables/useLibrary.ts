@@ -86,7 +86,7 @@ export function useLibrary() {
     r.controller = new AbortController(); setPending(false);
     void actions.refresh(); let lastRead = Date.now();
     const timer = setInterval(() => {
-      if (r.state && !r.pending && !r.state.busy && Date.now() - lastRead < 800) return;
+      if (r.state && !r.pending && !r.state.busy && !r.state.playlistLoading && !r.state.playlistsRefreshing && Date.now() - lastRead < 800) return;
       lastRead = Date.now(); void actions.refresh();
     }, 120);
     function stop() { r.active = false; clearInterval(timer); r.controller.abort(); }

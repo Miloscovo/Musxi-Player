@@ -2,7 +2,9 @@
 #include <wincodec.h>
 #include <wrl/client.h>
 #include <webp/decode.h>
+#include <webp/demux.h>
 #include <cmath>
+#include <memory>
 
 namespace musxi::wallpaper {
 namespace {
@@ -31,7 +33,7 @@ ComPtr<IWICBitmapSource> oriented(IWICImagingFactory* factory,IWICBitmapFrameDec
     return source;
 }
 }
-Image displayCopy(Image image) {
+static Image imageCopy(Image image,unsigned maxEdge,bool firstFrame) {
     Apartment apartment;
     ComPtr<IWICImagingFactory> factory;
     check(CoCreateInstance(CLSID_WICImagingFactory,nullptr,CLSCTX_INPROC_SERVER,IID_PPV_ARGS(&factory)));
@@ -40,26 +42,42 @@ Image displayCopy(Image image) {
     std::vector<unsigned char> webpPixels;
     if(image.mime=="image/webp") {
         WebPBitstreamFeatures features{};
-        if(WebPGetFeatures(image.bytes.data(),image.bytes.size(),&features)!=VP8_STATUS_OK || features.has_animation
-            || features.width!=static_cast<int>(image.width) || features.height!=static_cast<int>(image.height))
+        if(WebPGetFeatures(image.bytes.data(),image.bytes.size(),&features)!=VP8_STATUS_OK || (features.has_animation && !firstFrame))
             throw std::runtime_error("无效的静态 WebP 图片");
+        if(firstFrame){image.width=features.width;image.height=features.height;}
+        if(features.width!=static_cast<int>(image.width) || features.height!=static_cast<int>(image.height)
+            || !image.width || !image.height || image.width>16384 || image.height>16384 || uint64_t(image.width)*image.height>40000000)
+            throw std::runtime_error("图片尺寸无效或过大");
         webpPixels.resize(static_cast<size_t>(image.width)*image.height*4);
-        if(!WebPDecodeBGRAInto(image.bytes.data(),image.bytes.size(),webpPixels.data(),webpPixels.size(),image.width*4))
-            throw std::runtime_error("WebP 图片无法解码");
+        if(features.has_animation) {
+            WebPAnimDecoderOptions options{};
+            if(!WebPAnimDecoderOptionsInit(&options))throw std::runtime_error("WebP 图片无法解码");
+            options.color_mode=MODE_BGRA;const WebPData data{image.bytes.data(),image.bytes.size()};
+            std::unique_ptr<WebPAnimDecoder,decltype(&WebPAnimDecoderDelete)> animation(WebPAnimDecoderNew(&data,&options),WebPAnimDecoderDelete);
+            uint8_t* pixels=nullptr;int timestamp=0;
+            if(!animation || !WebPAnimDecoderGetNext(animation.get(),&pixels,&timestamp))throw std::runtime_error("WebP 图片无法解码");
+            std::copy_n(pixels,webpPixels.size(),webpPixels.data());
+        } else if(!WebPDecodeBGRAInto(image.bytes.data(),image.bytes.size(),webpPixels.data(),webpPixels.size(),image.width*4))
+                throw std::runtime_error("WebP 图片无法解码");
         ComPtr<IWICBitmap> bitmap;
         check(factory->CreateBitmapFromMemory(image.width,image.height,GUID_WICPixelFormat32bppBGRA,image.width*4,
             static_cast<UINT>(webpPixels.size()),webpPixels.data(),&bitmap));source=bitmap;
     } else {
         check(factory->CreateStream(&input));check(input->InitializeFromMemory(image.bytes.data(),static_cast<DWORD>(image.bytes.size())));
         check(factory->CreateDecoderFromStream(input.Get(),nullptr,WICDecodeMetadataCacheOnDemand,&decoder));
+        if(firstFrame) {
+            GUID format{};check(decoder->GetContainerFormat(&format));
+            if(format!=GUID_ContainerFormatGif && format!=GUID_ContainerFormatPng && format!=GUID_ContainerFormatJpeg)
+                throw std::runtime_error("不支持的预览图片格式");
+        }
         check(decoder->GetFrame(0,&frame));source=oriented(factory.Get(),frame.Get());
     }
     UINT width=0,height=0;check(source->GetSize(&width,&height));
     if(!width || !height || width>16384 || height>16384 || uint64_t(width)*height>40000000)throw std::runtime_error("图片尺寸无效或过大");
     const auto edge=std::max(width,height);
-    if(edge>3840) {
-        const auto scaledWidth=std::max(1u,static_cast<UINT>(std::lround(double(width)*3840/edge)));
-        const auto scaledHeight=std::max(1u,static_cast<UINT>(std::lround(double(height)*3840/edge)));
+    if(edge>maxEdge) {
+        const auto scaledWidth=std::max(1u,static_cast<UINT>(std::lround(double(width)*maxEdge/edge)));
+        const auto scaledHeight=std::max(1u,static_cast<UINT>(std::lround(double(height)*maxEdge/edge)));
         ComPtr<IWICBitmapScaler> scaler;check(factory->CreateBitmapScaler(&scaler));
         check(scaler->Initialize(source.Get(),scaledWidth,scaledHeight,WICBitmapInterpolationModeFant));
         source=scaler;width=scaledWidth;height=scaledHeight;
@@ -93,5 +111,15 @@ Image displayCopy(Image image) {
     check(output->Read(bytes.data(),static_cast<ULONG>(bytes.size()),&copied));
     if(copied!=bytes.size())throw std::runtime_error("无法生成壁纸副本");
     return inspect(std::move(bytes));
+}
+Image displayCopy(Image image) {return imageCopy(std::move(image),3840,false);}
+Image thumbnailCopy(const std::filesystem::path& file) {
+    const auto size=std::filesystem::file_size(file);
+    if(!size || size>32*1024*1024)throw std::runtime_error("预览图片过大");
+    Image image;image.bytes.resize(static_cast<size_t>(size));std::ifstream input(file,std::ios::binary);
+    input.read(reinterpret_cast<char*>(image.bytes.data()),static_cast<std::streamsize>(size));
+    if(!input || input.peek()!=std::char_traits<char>::eof())throw std::runtime_error("无法读取预览图片");
+    if(size>=12 && std::equal(image.bytes.begin(),image.bytes.begin()+4,"RIFF") && std::equal(image.bytes.begin()+8,image.bytes.begin()+12,"WEBP"))image.mime="image/webp";
+    return imageCopy(std::move(image),400,true);
 }
 }

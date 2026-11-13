@@ -28,7 +28,7 @@ target_include_directories(cef_bridge PRIVATE "${CEF_ROOT}")
 target_link_libraries(cef_bridge PRIVATE music_application libcef_dll_wrapper libcef_lib ${CEF_STANDARD_LIBS} comctl32)
 
 # CEF is the application host; Core and Application remain C++17 targets.
-add_library(cef_host SHARED host.cpp)
+add_library(cef_host SHARED host.cpp dynamic_wallpaper.cpp)
 musxi_standard(cef_host 20)
 SET_LIBRARY_TARGET_PROPERTIES(cef_host)
 target_include_directories(cef_host PRIVATE "${CEF_ROOT}")
@@ -85,6 +85,8 @@ if(BUILD_TESTING)
     "${CMAKE_SOURCE_DIR}/tests/fixtures/updates-smoke" "${CEF_TARGET_OUT_DIR}/updates-smoke")
   add_custom_command(TARGET cef_ui_assets POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_directory
     "${CMAKE_SOURCE_DIR}/tests/fixtures/wallpaper" "${CEF_TARGET_OUT_DIR}/wallpaper-fixtures")
+  add_custom_command(TARGET cef_ui_assets POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_directory
+    "${CMAKE_SOURCE_DIR}/tests/fixtures/dynamic-wallpaper" "${CEF_TARGET_OUT_DIR}/dynamic-wallpaper-fixtures")
 endif()
 SET_LPAC_ACLS(cef_host)
 foreach(asset services runtime)

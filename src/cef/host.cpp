@@ -28,6 +28,7 @@
 #include "wallpaper_store.hpp"
 #include "window_animation.hpp"
 #include "window_frame_rate.hpp"
+#include "dynamic_wallpaper.hpp"
 
 namespace {
 std::wstring pagePath;
@@ -472,6 +473,7 @@ void ready(void* window) {
     // Match Chromium's UTF-8 escaping before using an exact navigation/IPC allowlist.
     CefURLParts parts;
     const auto query=!updatesUiSmoke.empty()?"?smoke=1&updatesSmoke="+updatesUiSmoke:
+        smoke && CefCommandLine::GetGlobalCommandLine()->HasSwitch("cef-dynamic-wallpaper-smoke")?"?smoke=1&dynamicWallpaperSmoke=1":
         desktopSmoke?"?smoke=1&desktopSmoke=1":smoke?"?smoke=1":"";
     if(!CefParseURL(CefString(buffer).ToString()+query,parts)) {
         createFailed=true;PostMessageW(nativeWindow,WM_CLOSE,0,0);return;
@@ -588,6 +590,7 @@ int run(HINSTANCE instance,int show,void* sandbox) {
     // A singleton redirect/early exit is not a successful IPC smoke test.
     if(!CefInitialize(CefMainArgs(instance),settings,app,sandbox))
         return smoke?4:CefGetExitCode();
+    musxi::cef_adapter::initDynamicWallpaper(smoke?data/L"dynamic-wallpaper-smoke":data,directory/L"ui-vue/wallpaper",smoke);
     musxi::HostHooks hooks{ready,tick,canClose,!smoke && !preview && !updateFixture,testApp,updateFixture};
     musxi::setHostHooks(hooks);
     const int result=musxi::runApplication(instance);

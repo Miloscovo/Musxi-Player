@@ -98,6 +98,15 @@ int main() try {
     output->state.generation++;output->state.transitionToken=obsolete;pollAudio();
     require(audioTrackId=="local:a","old generation boundary replaced the newer source metadata");
     cancelGapless();
+    currentPlaybackTrack=remote;audioTrackId=libraryPlayTrackId="netease:1";localActive=false;
+    cloudQueue=Json::array({remote,second});cloudCurrent=0;output->state.generation++;output->state.transitionToken=0;
+    pollAudio();gapless.path=file.wstring();gapless.data={{"quality","flac"}};gapless.track=second;
+    const auto loadsBeforeManual=output->loads;
+    schedulePlayback({{"source","queue"},{"id","netease:2"}});
+    require(output->loads==loadsBeforeManual+1 && audioTrackId=="netease:2" && libraryNextPlay.is_null() && !cloudFuture.valid(),
+        "manual next-song click downloaded an already prepared source again");
+    require(currentQuality=="flac" && cloudTempPath==file.wstring(),"manual preparation reuse lost quality/cache ownership");
+    closeAudio();collectAudioCaches();
     cloudQueue=Json::array();gaplessCancelled.clear();
     fs::create_directories(gaplessCacheDir());
     const auto unfinished=gaplessCacheDir()/L"interrupted.mp3";

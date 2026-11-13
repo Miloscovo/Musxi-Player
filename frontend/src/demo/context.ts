@@ -20,6 +20,7 @@ export function createDemoTransport(): CefTransport {
   let player = { ...createDemoPlayer() };
   let shortcutSettings = emptyShortcuts(), lastVolume = 50;
   let savedWallpaper:WallpaperImage|null=null, candidateWallpaper:WallpaperImage|null=null, wallpaperNumber=0;
+  let dynamicWallpaper = { enabled:false, selected:'', directories:[] as string[], fps:60, quality:'standard' };
   const desktopListeners = new Map<number, (text: string) => void>();
   const desktop = { enabled: false, visible: false, locked: false, dual: true, panel: false, hover: false, fontSize: 30, color: 'theme' };
   const songs = demoSongs();
@@ -94,6 +95,13 @@ export function createDemoTransport(): CefTransport {
     return song;
   }
   function run(command: string, p: Record<string, any>): unknown {
+    if(command==='dynamicWallpaper.getState')return dynamicWallpaper;
+    if(command==='dynamicWallpaper.setEnabled')return dynamicWallpaper={...dynamicWallpaper,enabled:p.enabled};
+    if(command==='dynamicWallpaper.setPlayback')return dynamicWallpaper={...dynamicWallpaper,fps:p.fps,quality:p.quality};
+    if(command==='dynamicWallpaper.scan')return {items:[],directories:dynamicWallpaper.directories};
+    if(command==='dynamicWallpaper.addDirectory')fail('请在 Windows 播放器中添加本地壁纸目录');
+    if(command==='dynamicWallpaper.removeDirectory')return dynamicWallpaper;
+    if(command==='dynamicWallpaper.release')return true;
     if(command === 'wallpaper.getState')return savedWallpaper;
     if(command === 'wallpaper.choose')return candidateWallpaper={ id:`candidate-${++wallpaperNumber}`,width:1,height:1,
       url:'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAAANSURBVBhXYwievPY/AAVjApNpAv3rAAAAAElFTkSuQmCC' };

@@ -4,7 +4,7 @@ const path=require('node:path');
 const readline=require('node:readline');
 const {cacheAudio}=require('./netease.cjs');
 class QQAdapter {
-  constructor(){this.child=null;this.pending=null;}
+  constructor(){this.child=null;this.pending=null;this.queue=Promise.resolve();}
   start(request){
     if(this.child)return;
     const python=path.resolve(__dirname,'../runtime/python/python.exe');
@@ -19,12 +19,31 @@ class QQAdapter {
   }
   stop(message){const child=this.child;this.child=null;if(child)child.kill();if(this.pending){clearTimeout(this.pending.timer);this.pending.reject(Error(message));this.pending=null;}}
   async run(request){
+    if(request.op==='tracks' && request.onProgress) {
+      const tracks=[];let playlist;
+      for(let page=1;page<=100;page++) {
+        request.signal?.throwIfAborted();
+        const result=await this.command({...request,op:'tracks_page',page});
+        request.signal?.throwIfAborted();playlist=result.playlist;tracks.push(...result.tracks);
+        request.onProgress({playlist,tracks});
+        if(!result.hasMore)return {playlist,tracks};
+      }
+      throw Error('QQ 歌单歌曲超过当前上限');
+    }
+    const result=await this.command(request);
+    if(request.op==='audio')return cacheAudio(result.url,result.track,result.quality,request.cacheDir,request.signal,request.stream);
+    return result;
+  }
+  command(request) {
+    const result=this.queue.then(()=>{request.signal?.throwIfAborted();return this.send(request);});
+    this.queue=result.catch(()=>{});return result;
+  }
+  async send(request){
     this.start(request);if(this.pending)throw Error('QQ 正在处理请求');
     const result=await new Promise((resolve,reject)=>{
       const timer=setTimeout(()=>this.stop('QQ 请求超时，请稍后重试'),85000);this.pending={resolve,reject,timer};
       this.child.stdin.write(JSON.stringify(request)+'\n',error=>{if(error)this.stop('QQ 请求发送失败');});
     });
-    if(request.op==='audio')return cacheAudio(result.url,result.track,result.quality,request.cacheDir);
     return result;
   }
 }

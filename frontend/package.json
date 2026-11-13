@@ -1,6 +1,6 @@
 {
   "name": "musxi-player-ui",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "license": "GPL-3.0-or-later",
   "private": true,
   "type": "module",
@@ -8,7 +8,7 @@
     "dev": "vite",
     "ui:add": "npx shadcn@4.21.1 add",
     "typecheck": "tsc --noEmit",
-    "build": "npm run typecheck && vite build",
+    "build": "npm run typecheck && vite build && vite build --config vite.wallpaper.config.ts",
     "test": "node --experimental-strip-types --test tests/*.test.ts"
   },
   "devDependencies": {
@@ -33,6 +33,7 @@
     "motion": "13.5.0",
     "react": "19.3.0",
     "react-dom": "19.3.0",
-    "tailwind-merge": "3.7.0"
+    "tailwind-merge": "3.7.0",
+    "webwallgl": "3.0.2"
   }
 }

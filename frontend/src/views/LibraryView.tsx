@@ -6,7 +6,7 @@ import { animate } from 'motion/mini';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import type { useLibrary } from '../composables/useLibrary';
 import { isCurrentSong } from '../composables/songPlayback';
-import { readPlaylistLoadingCount, rememberPlaylistLoadingCounts, readTrackLoadingCount, rememberTrackLoadingCount } from '../composables/playlistLoadingCounts';
+import { canOpenPlaylist, readPlaylistLoadingCount, rememberPlaylistLoadingCounts, readTrackLoadingCount, rememberTrackLoadingCount } from '../composables/playlistLoadingCounts';
 import type { PlayerState } from '../native/types';
 import type { Theme } from '../native/window';
 import { safeImage, type Track } from '../native/library';
@@ -29,6 +29,7 @@ import ShortcutSettings from '../components/ShortcutSettings';
 import LyricsSettings from '../components/LyricsSettings';
 import type { ShortcutsController } from '../composables/useShortcuts';
 import type { WallpaperController } from '../composables/useWallpaper';
+import type { DynamicWallpaperController } from '../composables/useDynamicWallpaper';
 import UpdateSettings from '../components/UpdateSettings';
 import type { AppUpdates } from '../composables/useAppUpdates';
 import type { Appearance } from '../composables/appearance';
@@ -46,7 +47,7 @@ function appendUnique(previous: Track[], incoming?: Track[]) {
   return rows;
 }
 export default function LibraryView({ library: lib, theme, appearance, onAppearance, transparency = 50, onTransparency, updates, showUpdates = 0, shortcuts,
-  wallpaper,wallpaperEnabled,onWallpaperEnabled,playerTransparent,onPlayerTransparent,liquidGlass,onLiquidGlass,playback,onResume,overlay }: {
+  wallpaper,wallpaperEnabled,onWallpaperEnabled,playerTransparent,onPlayerTransparent,liquidGlass,onLiquidGlass,playback,onResume,overlay,dynamicWallpaper }: {
   library: ReturnType<typeof useLibrary>; theme: Theme; appearance?: Appearance; onAppearance?: (next: Appearance) => void;
   transparency?: number; onTransparency?: (value: number) => void;
   updates?: AppUpdates; showUpdates?: number;
@@ -56,6 +57,7 @@ export default function LibraryView({ library: lib, theme, appearance, onAppeara
   wallpaper?:WallpaperController;wallpaperEnabled?:boolean;onWallpaperEnabled?:(value:boolean)=>void;
   playerTransparent?:boolean;onPlayerTransparent?:(value:boolean)=>void;
   liquidGlass?:boolean;onLiquidGlass?:(value:boolean)=>void;
+  dynamicWallpaper:DynamicWallpaperController;
 }) {
   const { state, error, pending, page } = lib;
   const playlistRows = state?.tracks || [];
@@ -98,7 +100,7 @@ export default function LibraryView({ library: lib, theme, appearance, onAppeara
   const busy = pending || !!state?.busy;
   const [rescanning, setRescanning] = useState(false);
   useEffect(() => { if (!busy) setRescanning(false); }, [busy]);
-  const signedOut = !!state && !state.connected && !busy && !error && (['kugou','netease','qq'] as const).every(platform => {
+  const signedOut = !!state && !state.connected && !state.playlistsRefreshing && !busy && !error && (['kugou','netease','qq'] as const).every(platform => {
     const account = state.accounts?.find(account => account.platform === platform);
     return account?.connected === false && !account.error;
   });
@@ -114,30 +116,17 @@ export default function LibraryView({ library: lib, theme, appearance, onAppeara
   const searchPending = (!!requestedSearch && !searchSettled) || (state?.operation.kind === 'search' && state.operation.status === 'pending');
   const rows = view === 'recent' ? (state?.recent || []).filter(song=>!playlistFilter || [song.name,song.artist,song.album || ''].some(value=>value.toLocaleLowerCase().includes(playlistFilter))) : view === 'search' ? (requestedSearch && searchPending && state?.keywords !== requestedSearch ? [] : searchRows) :
     requestedPlaylist && busy && !error && state?.playlistId !== requestedPlaylist ? [] : isLocal && state?.playlistId !== 'musxi:local' && !state?.playlistId.startsWith('local-folder:') ? [] : filteredPlaylistRows;
-  const songsLoading = view !== 'recent' && !error && (!state || (view === 'library' && busy) || (view === 'search' && searchPending));
+  const songsLoading = view !== 'recent' && !error && (!state || (view === 'library' && (busy || state.playlistLoading)) || (view === 'search' && searchPending));
   const trackSkeletonCount = view === 'library' ? Math.min(skeletonPageRows, readTrackLoadingCount(localStorage, state, requestedPlaylist || state?.playlistId || '')) : skeletonPageRows;
   useEffect(() => {
     if (state) rememberTrackLoadingCount(localStorage, state, pending, error);
     if (!busy) setRequestedPlaylist('');
   }, [state, pending, error, busy]);
   useEffect(() => { if (searchSettled || error) setRequestedSearch(''); }, [searchSettled, error]);
-  const playlistSyncing = useRef(true);
-  const [, setPlaylistReady] = useState(0);
   const starting = !!state && !state.connected && !state.accounts?.length &&
     (state.status === '登录后，把收藏带到这里。' || state.status === '正在连接本机接口…');
-  if (error || (state && !state.connected && !busy && !starting)) playlistSyncing.current = false;
-  else if (starting && !error) playlistSyncing.current = true;
-  // shortcut: automatic sync is identified by status text, use a structured operation when the bridge exposes it.
-  else if (state?.connected && busy && ((state.operation.kind === 'sync' && state.operation.status === 'pending') ||
-    state.status.includes('正在同步收藏歌单') || state.status.includes('正在检查概念版 VIP 权益') ||
-    (state.operation.status === 'idle' && !state.playlists.length))) playlistSyncing.current = true;
-  useEffect(() => {
-    if (!state?.connected || busy || error || !playlistSyncing.current) return;
-    // shortcut: allow startup actions to settle over one polling interval; use an explicit readiness signal if the bridge adds one.
-    const timer = setTimeout(() => { playlistSyncing.current = false; setPlaylistReady(value => value + 1); }, 800);
-    return () => clearTimeout(timer);
-  }, [state?.connected, busy, error]);
-  const playlistsLoading = !error && (!state || playlistSyncing.current);
+  const playlistsLoading = !error && (!state || !state.playlists.length &&
+    (state.playlistsRefreshing ?? (busy || starting)));
   const skeletonCount = playlistsLoading ? (visiblePlaylists.length ? visiblePlaylists.length + Number(librarySection === 'created')
     : readPlaylistLoadingCount(localStorage, starting ? null : state, librarySection)) : 6;
   useEffect(() => { if (state) rememberPlaylistLoadingCounts(localStorage, state, pending, error); }, [state, pending, error]);
@@ -302,13 +291,13 @@ export default function LibraryView({ library: lib, theme, appearance, onAppeara
     <Sidebar asChild>{sidebar}</Sidebar>
     <SidebarRail/>
     <div ref={content} className={`library-content${fixedPageHeader ? ' fixed-page-header' : ''}${scrollbarVisible ? ' scrollbar-visible' : ''}`} onScroll={checkLoadMore}>
-      {<header className={view === 'library' ? (showTracks ? 'playlist-header' : 'library-home-header') : ''}><div className="page-heading">
+      {!(view === 'extensions' && dynamicWallpaper.manager && dynamicWallpaper.settings.enabled) && <header className={view === 'library' ? (showTracks ? 'playlist-header' : 'library-home-header') : ''}><div className="page-heading">
         {view === 'library' && showTracks && <Button variant="unstyled" className="back-button" aria-label="返回歌单" onClick={() => navigate(() => { resetScroll(); setShowTracks(false); })}><svg className="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5-7 7 7 7" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg></Button>}
         <h1 className={view === 'recent' ? 'recent-title' : view === 'search' ? 'discovery-title' : view === 'settings' ? 'settings-title' : view === 'extensions' ? 'extensions-title' : ''}>{view === 'recent' ? '最近播放' : view === 'extensions' ? '扩展' : view === 'settings' ? '设置' : view === 'search' ? '发现' : showTracks ? (isLocal && state?.playlistId === 'musxi:local' ? '本地歌曲整合' : state?.playlistName) : '音乐库'}</h1>
       </div><div className="header-actions">
         {view === 'recent' && <Button variant="ghost" className="playlist-play-button" disabled={pending || !state?.recent?.length} onClick={()=>void lib.recentClear()}>清空记录</Button>}
         {view === 'library' && showTracks && <Button variant="ghost" className="playlist-play-button" aria-label="播放歌单" title="播放歌单"
-          disabled={busy || !state?.trackCount || (!isLocal && !state?.connected)} onClick={() => state && void lib.playPlaylist(state.playlistId)}>
+          disabled={busy || state?.playlistLoading || state?.playlistIncomplete || !state?.trackCount || (!isLocal && !state?.connected)} onClick={() => state && void lib.playPlaylist(state.playlistId)}>
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8.5 5.5v13L19 12z"/></svg><span>播放</span>
         </Button>}
         {isLocal && showTracks && <Button variant="ghost" className="playlist-play-button" disabled={busy} aria-live="polite" onClick={() => { if(state) { setRescanning(true); void lib.rescanLocal(state.playlistId); } }}>{rescanning && busy ? '扫描中…' : '重新扫描'}</Button>}
@@ -342,6 +331,9 @@ export default function LibraryView({ library: lib, theme, appearance, onAppeara
         </Button>)}
       </nav>}
       <PageBody {...(fixedPageHeader ? { ref: pageScroll, className: `page-scroll${scrollbarVisible ? ' scrollbar-visible' : ''}` } : {})}>
+      {view === 'library' && showTracks && !isLocal && state?.playlistIncomplete &&
+        <p role="status">歌单未完整加载，当前仅显示缓存或已加载部分。
+          <Button variant="ghost" disabled={busy} onClick={() => void lib.open(state.playlistId)}>重试</Button></p>}
       {isLocal && !showTracks && <div className="playlist-grid local-import-grid">
         <Button variant="ghost" className="playlist local-all" disabled={busy} onClick={() => void open('musxi:local')}>
           <CoverImage url=""/><div className="playlist-info"><strong>本地歌曲整合</strong>{state?.playlistId === 'musxi:local' && <span>{state.trackCount} 首</span>}</div>
@@ -378,14 +370,15 @@ export default function LibraryView({ library: lib, theme, appearance, onAppeara
           </DialogContent>
         </Dialog>
       </div>}
-      {view === 'extensions' ? <ExtensionsView/> : view === 'settings' ? settingsSection === 'updates' && updates ? <UpdateSettings updates={updates}/> : settingsSection === 'shortcuts' ? <ShortcutSettings shortcuts={shortcuts} overlayEnabled={overlay.state.enabled}/> : settingsSection === 'lyrics' ? <><LyricsSettings coverUrl={state?.now?.cover}/><GameOverlaySettings overlay={overlay} onShortcutSettings={() => navigate(() => { resetScroll(); jumpToGameShortcuts.current = true; setSettingsSection('shortcuts'); })}/></> : settingsSection === 'playback' ? <PlaybackSettings/> : <AppearanceSettings appearance={appearance ?? { mode: theme === 'dark' || theme === 'glass' ? 'dark' : 'light', transparent: theme === 'glass' || theme === 'glass-light', tone: 'green' }} onAppearance={onAppearance ?? (() => {})} transparency={transparency} onTransparency={onTransparency ?? (() => {})}
-        wallpaper={wallpaper} wallpaperEnabled={wallpaperEnabled} onWallpaperEnabled={onWallpaperEnabled} playerTransparent={playerTransparent} onPlayerTransparent={onPlayerTransparent} liquidGlass={liquidGlass} onLiquidGlass={onLiquidGlass}/> : view === 'library' && !showTracks ? <>
+      {view === 'extensions' ? <ExtensionsView wallpaper={dynamicWallpaper}/> : view === 'settings' ? settingsSection === 'updates' && updates ? <UpdateSettings updates={updates}/> : settingsSection === 'shortcuts' ? <ShortcutSettings shortcuts={shortcuts} overlayEnabled={overlay.state.enabled}/> : settingsSection === 'lyrics' ? <><LyricsSettings coverUrl={state?.now?.cover}/><GameOverlaySettings overlay={overlay} onShortcutSettings={() => navigate(() => { resetScroll(); jumpToGameShortcuts.current = true; setSettingsSection('shortcuts'); })}/></> : settingsSection === 'playback' ? <PlaybackSettings/> : <AppearanceSettings appearance={appearance ?? { mode: theme === 'dark' || theme === 'glass' ? 'dark' : 'light', transparent: theme === 'glass' || theme === 'glass-light', tone: 'green' }} onAppearance={onAppearance ?? (() => {})} transparency={transparency} onTransparency={onTransparency ?? (() => {})}
+        wallpaper={wallpaper} wallpaperEnabled={wallpaperEnabled} onWallpaperEnabled={onWallpaperEnabled} playerTransparent={playerTransparent} onPlayerTransparent={onPlayerTransparent} liquidGlass={liquidGlass} onLiquidGlass={onLiquidGlass}
+        dynamicWallpaperEnabled={dynamicWallpaper.settings.enabled} onDynamicWallpaper={() => navigate(() => {resetScroll();setView('extensions');setShowTracks(false);dynamicWallpaper.setManager(dynamicWallpaper.settings.enabled);})}/> : view === 'library' && !showTracks ? <>
         {!isLocal && <>
           {playlistsLoading ? <div className="playlist-grid" role="status" aria-label="正在加载歌单列表">
             {Array.from({ length: skeletonCount }, (_, index) => <div key={index} className="playlist playlist-skeleton" aria-hidden="true">
               <i className="cover"/><div className="playlist-info"><i/><i/></div>
             </div>)}
-          </div> : <><div className="playlist-grid">{librarySection === 'created' && state?.connected && <Button variant="ghost" className="playlist" disabled={busy || !state?.connected} onClick={() => open('musxi:cloud-favorites')}><div className="cover placeholder" aria-hidden="true"><svg className="playlist-heart size-11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1.1-1.1a5.5 5.5 0 0 0-7.8 7.8L12 21l8.8-8.6a5.5 5.5 0 0 0 0-7.8Z"/></svg></div><div className="playlist-info"><strong>云端收藏整合</strong><span>{state?.favoritesCount ?? (state?.playlistId === 'musxi:cloud-favorites' ? state.trackCount : 0)} 首</span></div></Button>}{visiblePlaylists.map(list => <Button variant="ghost" key={list.id} className="playlist" disabled={busy} onClick={() => open(list.id)}><CoverImage url={list.cover} animateLoading/><div className="playlist-info"><strong>{list.name}</strong><span>{list.count} 首{list.platform && ` · ${platformNames[list.platform]}`}</span></div></Button>)}</div>
+          </div> : <><div className="playlist-grid">{librarySection === 'created' && state?.connected && <Button variant="ghost" className="playlist" disabled={busy || !canOpenPlaylist(state, 'musxi:cloud-favorites')} onClick={() => open('musxi:cloud-favorites')}><div className="cover placeholder" aria-hidden="true"><svg className="playlist-heart size-11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1.1-1.1a5.5 5.5 0 0 0-7.8 7.8L12 21l8.8-8.6a5.5 5.5 0 0 0 0-7.8Z"/></svg></div><div className="playlist-info"><strong>云端收藏整合</strong><span>{state?.favoritesCountKnown === false ? '—' : `${state?.favoritesCount ?? (state?.playlistId === 'musxi:cloud-favorites' ? state.trackCount : 0)} 首`}</span></div></Button>}{visiblePlaylists.map(list => <Button variant="ghost" key={list.id} className="playlist" disabled={busy || !canOpenPlaylist(state, list.id)} title={canOpenPlaylist(state, list.id) ? undefined : '账号验证或歌单同步完成后可打开'} onClick={() => open(list.id)}><CoverImage url={list.cover} animateLoading/><div className="playlist-info"><strong>{list.name}</strong><span>{list.count} 首{list.platform && ` · ${platformNames[list.platform]}`}</span></div></Button>)}</div>
           {signedOut ? <div className="library-section-empty"><p>登录后查看你的音乐库。</p><Button onClick={() => {setAccountPlatform(null);setAccount(true);}}>扫码登录</Button></div>
             : state?.connected && librarySection === 'saved' && !visiblePlaylists.length && <p className="library-section-empty">暂无收藏歌单。</p>}
           </>}

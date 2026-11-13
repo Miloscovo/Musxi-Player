@@ -7,7 +7,9 @@ async function waitFor(check:()=>boolean,message='Wallpaper UI did not settle') 
 const button=(scope:string,text:string)=>Array.from(document.querySelectorAll<HTMLButtonElement>(`${scope} button`)).find(item=>item.textContent?.trim()===text)!;
 const toggle=(label:string)=>document.querySelector<HTMLButtonElement>(`[aria-labelledby=${label}]`)!;
 async function setToggle(label:string,on:boolean) {
-  const control=toggle(label);if((control.getAttribute('aria-checked')==='true')!==on)control.click();
+  const control=toggle(label);if((control.getAttribute('aria-checked')==='true')!==on) {
+    await waitFor(()=>!toggle(label).disabled);toggle(label).click();
+  }
   await waitFor(()=>toggle(label).getAttribute('aria-checked')===String(on));
 }
 async function appearancePage() {

@@ -5,6 +5,7 @@ import type { PlayerEvent } from './events';
 import { createElement, type ComponentProps } from 'react';
 import { useShortcuts } from '../composables/useShortcuts';
 import { useGameOverlay } from '../composables/useGameOverlay';
+import { useDynamicWallpaper } from '../composables/useDynamicWallpaper';
 import { createRoot } from 'react-dom/client';
 import LibraryView from '../views/LibraryView';
 import MessageAlerts from '../components/MessageAlerts';
@@ -16,12 +17,15 @@ import { verifyDesktopWindow } from './desktopSmoke';
 import { observeLyricDragRegions } from '../composables/lyrics';
 import { verifyUpdatesUI } from './updatesSmoke';
 import { verifyWallpaperUI } from './wallpaperSmoke';
+import { verifyDynamicWallpaperUI } from './dynamicWallpaperSmoke';
+import { shortcutActions } from './shortcuts';
 import { rememberTrackLoadingCount } from '../composables/playlistLoadingCounts';
 
-function SmokeLibraryView(props: Omit<ComponentProps<typeof LibraryView>, 'shortcuts' | 'overlay'>) {
+function SmokeLibraryView(props: Omit<ComponentProps<typeof LibraryView>, 'shortcuts' | 'overlay' | 'dynamicWallpaper'>) {
   const overlay = useGameOverlay();
   const shortcuts = useShortcuts(overlay.state.enabled);
-  return createElement(LibraryView, { ...props, shortcuts, overlay });
+  const dynamicWallpaper = useDynamicWallpaper();
+  return createElement(LibraryView, { ...props, shortcuts, overlay, dynamicWallpaper });
 }
 
 async function waitFor(check: () => boolean, message = 'Event/UI update timed out') {
@@ -158,13 +162,13 @@ export async function verifyPlaylistLoading(library: ReturnType<typeof useLibrar
     const syncOperation={...original.operation,kind:'sync',status:'pending' as const};
     render(null);
     await waitFor(()=>fixture.querySelectorAll('.playlist-skeleton').length===6);
-    render({...original,connected:false,busy:false,status:'登录后，把收藏带到这里。',accounts:[],playlists:[],operation:{...original.operation,kind:'',status:'idle'}});
+    render({...original,connected:false,busy:false,playlistsRefreshing:true,status:'登录后，把收藏带到这里。',accounts:[],playlists:[],operation:{...original.operation,kind:'',status:'idle'}});
     await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
     if(fixture.querySelectorAll('.playlist-skeleton').length!==6)throw new Error('Startup stopped loading before connection began');
-    render({...original,connected:false,busy:true,status:'正在连接本机接口…',playlists:[],operation:{...original.operation,kind:'',status:'idle'}});
+    render({...original,connected:false,busy:false,playlistsRefreshing:true,status:'正在连接本机接口…',playlists:[],operation:{...original.operation,kind:'',status:'idle'}});
     await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
     if(fixture.querySelectorAll('.playlist-skeleton').length!==6)throw new Error('Startup stopped loading before account verification finished');
-    for(const state of [null,{...original,connected:true,busy:true,playlists:[],operation:syncOperation}]) {
+    for(const state of [null,{...original,connected:true,busy:false,playlistsRefreshing:true,playlists:[],operation:syncOperation}]) {
       render(state);
       await waitFor(()=>fixture.querySelectorAll('.playlist-skeleton').length===6);
       const cover=fixture.querySelector<HTMLElement>('.playlist-skeleton .cover')!;
@@ -175,39 +179,30 @@ export async function verifyPlaylistLoading(library: ReturnType<typeof useLibrar
         || (style.animationName==='none')!==matchMedia('(prefers-reduced-motion: reduce)').matches)
         throw new Error('Playlist skeleton layout, loading state or shimmer is incorrect');
     }
-    render({...original,connected:true,busy:false,playlists:[],operation:syncOperation},true);
-    await waitFor(()=>fixture.querySelectorAll('.playlist-skeleton').length===6);
-    render({...original,connected:true,busy:true,operation:syncOperation});
-    const createdCount=original.playlists.filter(list=>list.editable).length+1;
-    await waitFor(()=>fixture.querySelectorAll('.playlist-skeleton').length===createdCount);
-    if(fixture.querySelector('button.playlist'))throw new Error('Busy library exposed disabled playlist entries');
-    render({...original,connected:true,busy:false,operation:syncOperation},true);
+    const waitingAccounts=(['kugou','netease','qq'] as const).map(platform=>({platform,name:platform,connected:false,user:'',error:'',verifying:true,playlistsReady:false}));
+    render({...original,connected:false,busy:false,playlistsRefreshing:true,accounts:waitingAccounts});
+    await waitFor(()=>!fixture.querySelector('.playlist-skeleton') && !!fixture.querySelector('button.playlist'));
+    if(fixture.querySelector('button.playlist:not(:disabled)'))throw new Error('Unverified cached playlist was interactive');
+    const partialAccounts=waitingAccounts.map(account=>account.platform==='kugou'?{...account,connected:true,verifying:false,playlistsReady:true}:account);
+    const partialLists=[...original.playlists,{...original.playlists[0],id:'qq:cached',name:'慢平台缓存',platform:'qq' as const}];
+    for(const status of ['正在检查概念版 VIP 权益…','正在同步收藏歌单…']) {
+      render({...original,connected:true,busy:false,playlistsRefreshing:true,favoritesCountKnown:false,accounts:partialAccounts,playlists:partialLists,status});
+      await waitFor(()=>!!Array.from(fixture.querySelectorAll('button.playlist strong')).find(label=>label.textContent==='慢平台缓存'));
+      const ready=Array.from(fixture.querySelectorAll('button.playlist strong')).find(label=>label.textContent===original.playlists[0].name)!.closest('button')!;
+      const cached=Array.from(fixture.querySelectorAll('button.playlist strong')).find(label=>label.textContent==='慢平台缓存')!.closest('button')!;
+      if(fixture.querySelector('.playlist-skeleton') || ready.disabled || !cached.disabled)throw new Error('Slow platform or background work blocked a ready playlist');
+      const favorites=Array.from(fixture.querySelectorAll('button.playlist strong')).find(label=>label.textContent==='云端收藏整合')!.closest('button')!;
+      if(!favorites.disabled || !favorites.textContent?.includes('—'))throw new Error('Incomplete startup advertised an exact favorite count');
+    }
+    render({...original,connected:true,busy:false,playlistsRefreshing:false});
     await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
-    if(fixture.querySelectorAll('.playlist-skeleton').length!==createdCount)throw new Error('Pending library ended its skeleton early');
-    render({...original,connected:true,busy:false});
-    await new Promise(resolve=>setTimeout(resolve,100));
-    if(fixture.querySelectorAll('.playlist-skeleton').length!==createdCount)throw new Error('Startup loading ended during a brief idle gap');
-    render({...original,connected:true,busy:true,operation:{...original.operation,kind:'song_menu',status:'pending'}});
-    await new Promise(resolve=>setTimeout(resolve,850));
-    if(fixture.querySelectorAll('.playlist-skeleton').length!==createdCount)throw new Error('Startup loading ended while player menu kept playlists disabled');
-    render({...original,connected:true,busy:false});
-    await waitFor(()=>!fixture.querySelector('.playlist-skeleton') && !!fixture.querySelector('.playlist strong'));
-    if(fixture.querySelector('button.playlist:disabled')) throw new Error('Loaded playlists are disabled');
+    if(fixture.querySelector('.playlist-skeleton') || !fixture.querySelector('.playlist strong'))throw new Error('Ready playlists retained the startup delay');
+    if(fixture.querySelector('button.playlist:disabled'))throw new Error('Loaded playlists are disabled');
     render({...original,connected:true,busy:false,playlists:original.playlists.map((list,index)=>index===0?{...list,cover:'https://example.com/pending-cover.jpg'}:list)});
     await waitFor(()=>!!fixture.querySelector('button.playlist .cover-loading'));
-    if(fixture.querySelector('.playlist-skeleton') || fixture.querySelector('button.playlist:disabled'))
-      throw new Error('A loading cover blocked an available playlist');
+    if(fixture.querySelector('.playlist-skeleton') || fixture.querySelector('button.playlist:disabled'))throw new Error('A loading cover blocked an available playlist');
     render({...original,connected:true,busy:false});
     await waitFor(()=>!fixture.querySelector('button.playlist .cover-loading'));
-    for (const status of ['正在检查概念版 VIP 权益…','登录成功，正在检查概念版 VIP 权益…','正在同步收藏歌单…']) {
-      render({...original,connected:true,busy:true,status,operation:{...original.operation,kind:'audio',status:'completed'}});
-      await waitFor(()=>fixture.querySelectorAll('.playlist-skeleton').length===createdCount);
-      render({...original,connected:true,busy:true,status:'已同步 1 个歌单 · 点击歌单查看歌曲',operation:{...original.operation,kind:'audio',status:'completed'}});
-      await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
-      if(fixture.querySelectorAll('.playlist-skeleton').length!==createdCount)throw new Error('Automatic sync ended loading before playlist entries became available');
-      render({...original,connected:true,busy:false,status:'已同步 1 个歌单 · 点击歌单查看歌曲'});
-      await waitFor(()=>!fixture.querySelector('.playlist-skeleton'));
-    }
     for(const kind of ['song_menu','qualities','audio','song_update']) {
       for(const [busy,pending] of [[true,false],[false,true]] as const) {
         render({...original,connected:true,busy,operation:{...original.operation,kind,status:'pending'}},pending);
@@ -219,7 +214,7 @@ export async function verifyPlaylistLoading(library: ReturnType<typeof useLibrar
     const saved=fixture.querySelectorAll<HTMLButtonElement>('.library-sections button')[1];
     saved.click();
     await waitFor(()=>saved.getAttribute('aria-pressed')==='true');
-    render({...original,connected:true,busy:true,playlists:[],operation:syncOperation});
+    render({...original,connected:true,busy:true,playlistsRefreshing:true,playlists:[],operation:syncOperation});
     await waitFor(()=>fixture.querySelectorAll('.playlist-skeleton').length===6);
     render({...original,connected:true,busy:false,playlists:[]});
     await waitFor(()=>fixture.querySelector('.library-section-empty')?.textContent==='暂无收藏歌单。');
@@ -252,17 +247,17 @@ export async function verifyPlaylistLoading(library: ReturnType<typeof useLibrar
       playlists:[{...original.playlists[0],editable:true},{...original.playlists[0],id:'second',editable:true}]};
     render(counted);
     await waitFor(()=>JSON.parse(localStorage.getItem(cacheKey) || 'null')?.created===3);
-    render({...counted,busy:true,playlists:[],operation:syncOperation});
+    render({...counted,busy:true,playlistsRefreshing:true,playlists:[],operation:syncOperation});
     await waitFor(()=>fixture.querySelectorAll('.playlist-skeleton').length===3);
     render(null);
     await waitFor(()=>fixture.querySelectorAll('.playlist-skeleton').length===3);
-    render({...counted,connected:false,busy:false,user:'',accounts:[],status:'登录后，把收藏带到这里。',playlists:[]});
+    render({...counted,connected:false,busy:false,playlistsRefreshing:true,user:'',accounts:[],status:'登录后，把收藏带到这里。',playlists:[]});
     await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
     if(fixture.querySelectorAll('.playlist-skeleton').length!==3)throw new Error('Startup did not use the previous playlist count before account verification');
-    render({...counted,connected:false,busy:true,user:'',accounts:[],status:'正在连接本机接口…',playlists:[]});
+    render({...counted,connected:false,busy:true,playlistsRefreshing:true,user:'',accounts:[],status:'正在连接本机接口…',playlists:[]});
     await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
     if(fixture.querySelectorAll('.playlist-skeleton').length!==3)throw new Error('Connection discarded the previous playlist count');
-    render({...counted,user:'different-account',busy:true,playlists:[],operation:syncOperation});
+    render({...counted,user:'different-account',busy:true,playlistsRefreshing:true,playlists:[],operation:syncOperation});
     await waitFor(()=>fixture.querySelectorAll('.playlist-skeleton').length===6);
   } finally {
     root.unmount();fixture.remove();
@@ -395,6 +390,12 @@ async function checkFixedPageHeader(root: ParentNode) {
 
 // Invoked only by the real CEF --cef-smoke run (cloud startup is disabled).
 export async function verifyWebPage() {
+  if(new URLSearchParams(location.search).has('dynamicWallpaperSmoke')) {
+    await waitFor(() => !!document.querySelector('.library-shell'));
+    await verifyDynamicWallpaperUI();
+    await new Promise<void>((resolve,reject) => (window as unknown as CefTransport).cefQuery?.({request:JSON.stringify({version:1,command:'test.complete',params:{}}),persistent:false,onSuccess:()=>resolve(),onFailure:(_code,message)=>reject(new Error(message))}));
+    return;
+  }
   const updateScenario = new URLSearchParams(location.search).get('updatesSmoke');
   if (updateScenario) { await verifyUpdatesUI(updateScenario); return; }
   if (new URLSearchParams(location.search).has('desktopSmoke')) { await verifyDesktopWindow(); return; }
@@ -509,7 +510,8 @@ export async function verifyWebPage() {
     root.render(createElement(SmokeLibraryView,{library:fixtureLibrary,theme:'light'}));
     await waitFor(()=>!Array.from(fixture.querySelectorAll('.playlist strong')).some(e=>e.textContent==='云端收藏整合'));
     if(!fixture.querySelector('.library-section-empty')?.textContent?.includes('登录后'))throw new Error('Signed-out library prompt missing');
-    fixtureLibrary.state={...fixtureLibrary.state!,connected:true};
+    fixtureLibrary.state={...fixtureLibrary.state!,connected:true,accounts:fixtureLibrary.state!.accounts!.map(account=>
+      account.platform==='kugou'?{...account,connected:true,playlistsReady:true}:account)};
     root.render(createElement(SmokeLibraryView,{library:fixtureLibrary,theme:'light'}));
     await waitFor(()=>fixture.querySelector('.playlist strong')?.textContent==='云端收藏整合');
     const playlistCard=Array.from(fixture.querySelectorAll<HTMLButtonElement>('.playlist')).find(card=>card.querySelector('strong')?.textContent===playlist.name)!;
@@ -815,7 +817,7 @@ export async function verifyWebPage() {
   const settingsTab = (label: string) => Array.from(document.querySelectorAll<HTMLButtonElement>('.settings-sections button'))
     .find(button => button.textContent?.trim() === label);
   document.querySelector<HTMLButtonElement>('button[aria-label="扩展"]')!.click();
-  await waitFor(() => document.querySelector('.extensions-empty')?.textContent === '暂无扩展', 'Extensions empty state is missing');
+  await waitFor(() => !!document.querySelector('.wallpaper-extension-card'), 'Built-in wallpaper extension is missing');
   if (document.querySelector('.extension-card')) throw new Error('Floating widgets still appear as an extension');
   document.querySelector<HTMLButtonElement>('.settings-nav')!.click();
   await waitFor(() => !!settingsTab('关于与更新'), 'Settings tabs are missing');
@@ -825,7 +827,7 @@ export async function verifyWebPage() {
   await waitFor(() => !!document.querySelector('.lyrics-settings + .game-overlay-settings'), 'Lyrics and widgets were not merged');
   if (!(await native.gameOverlay.getState()).enabled) throw new Error('Floating widgets are not always available');
   settingsTab('快捷键')!.click();
-  await waitFor(() => document.querySelectorAll('.shortcut-binding').length === 13, 'Widget shortcut rows are missing');
+  await waitFor(() => document.querySelectorAll('.shortcut-binding').length === shortcutActions.length, 'Widget shortcut rows are missing');
   // Smoke disables network access for both tagged releases and development builds.
   settingsTab('关于与更新')!.click();
   await waitFor(() => !!document.querySelector('.update-settings .update-status'), 'Update settings did not load');
@@ -840,7 +842,7 @@ export async function verifyWebPage() {
   if (document.querySelector('.settings-content h2') || document.querySelectorAll('#default-audio-quality option').length !== 4)
     throw new Error('Playback settings structure is incorrect');
   settingsTab('快捷键')!.click();
-  await waitFor(() => document.querySelectorAll('.shortcut-binding').length === 13 && !document.querySelector<HTMLButtonElement>('.shortcut-binding')?.disabled, 'Shortcut settings did not load');
+  await waitFor(() => document.querySelectorAll('.shortcut-binding').length === shortcutActions.length && !document.querySelector<HTMLButtonElement>('.shortcut-binding')?.disabled, 'Shortcut settings did not load');
   await checkFixedPageHeader(document);
   const originalVolume = (await native.player.getState()).volumePercent;
   const shortcutBinding = (id: string) => document.querySelector<HTMLButtonElement>(`[aria-labelledby="shortcut-${id} shortcut-value-${id}"]`)!;
@@ -1193,6 +1195,7 @@ export async function verifyWebPage() {
       await native.player.setVolume(target);
       await waitFor(() => document.querySelector('#volume')?.textContent === `${target}%`);
       await verifyWallpaperUI();
+      await verifyDynamicWallpaperUI();
       window.name = prefix + JSON.stringify({ trackId: state.trackId, volumePercent: target,
         originalVolume: state.volumePercent, opened: state.opened });
     } catch (e) { await native.player.setVolume(state.volumePercent); throw e; }

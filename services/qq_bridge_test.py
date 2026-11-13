@@ -89,6 +89,18 @@ class QQTests(unittest.IsolatedAsyncioTestCase):
         self.a.client.song.get_song_urls=AsyncMock(return_value=S(data=[S(result=1,purl='')]))
         with self.assertRaises(PublicError): await self.a.audio(S(mid='song',file=S(media_mid='media'),type=0),'128')
 
+    async def test_single_playlist_page_preserves_hasmore_and_validates_page(self):
+        self.a.profile={'id':'synthetic'}
+        self.a.lists={'qq:list':(S(id=7,dirid=0),True)}
+        self.a.playlist=lambda p,editable:{'id':'qq:list'}
+        self.a.song=lambda song:{'id':str(song)}
+        self.a.client.songlist=S(get_detail=AsyncMock(return_value=S(songs=[1,2],hasmore=True)))
+        result=await self.a.run({'op':'tracks_page','id':'qq:list','page':2})
+        self.assertEqual(result,{'playlist':{'id':'qq:list'},'tracks':[{'id':'1'},{'id':'2'}],'hasMore':True})
+        self.a.client.songlist.get_detail.assert_awaited_once_with(7,dirid=0,num=100,page=2)
+        for page in [0,101,True,'1']:
+            with self.assertRaises(PublicError): await self.a.run({'op':'tracks_page','id':'qq:list','page':page})
+
     async def test_membership_requires_login_and_distinguishes_missing_fields(self):
         with self.assertRaises(PublicError): await self.a.run({'op':'membership'})
         self.a.profile={'id':'synthetic'}

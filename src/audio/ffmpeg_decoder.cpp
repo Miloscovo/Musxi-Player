@@ -14,6 +14,10 @@ extern "C" {
 #include <cstring>
 #include <filesystem>
 #include <limits>
+#include <chrono>
+#include <fstream>
+#include <thread>
+#include <share.h>
 
 namespace musxi {
 namespace {
@@ -43,6 +47,14 @@ struct FfmpegDecoder::Impl {
     AVChannelLayout inputLayout{},outputLayout{};
     DecodedAudioInfo info;
     std::wstring path;
+    std::int64_t downloadSize=0;
+    bool downloading() const {return downloadSize>0 && std::filesystem::exists(path+L".download");}
+    void waitDownload(std::chrono::steady_clock::time_point deadline) const {
+        checkCancelled();
+        if(std::filesystem::exists(path+L".failed"))fail("Audio download failed",AVERROR(EIO));
+        if(std::chrono::steady_clock::now()>=deadline)fail("Audio download timed out",AVERROR(ETIMEDOUT));
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
     int stream=-1,inputRate=0,inputFormat=-1;
     bool drainSent=false,decodedEof=false,finished=false,timeline=false,afterSeek=false;
     std::int64_t cursor=0,target=0,pendingStart=0;
@@ -58,15 +70,24 @@ struct FfmpegDecoder::Impl {
     }
     static int readFile(void* opaque,std::uint8_t* buffer,int size) {
         if(interrupted(opaque))return AVERROR_EXIT;
-        auto f=static_cast<Impl*>(opaque)->file;
-        const auto got=fread(buffer,1,static_cast<std::size_t>(size),f);
-        if(got)return static_cast<int>(got);
-        return ferror(f)?AVERROR(EIO):AVERROR_EOF;
+        auto s=static_cast<Impl*>(opaque);auto f=s->file;
+        const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(80);
+        // Exceptions must never cross FFmpeg's C callback boundary.
+        try {for(;;) {
+            if(s->downloadSize>0 && std::filesystem::exists(s->path+L".failed"))return AVERROR(EIO);
+            if(s->downloadSize>0)clearerr(f);
+            const auto got=fread(buffer,1,static_cast<std::size_t>(size),f);
+            if(got)return static_cast<int>(got);
+            if(ferror(f))return AVERROR(EIO);
+            if(!s->downloading())return AVERROR_EOF;
+            s->waitDownload(deadline);clearerr(f);
+        }} catch(const DecodeError& error) {return error.nativeCode;} catch(...) {return AVERROR(EIO);}
     }
     static std::int64_t seekFile(void* opaque,std::int64_t offset,int whence) {
         if(interrupted(opaque))return AVERROR_EXIT;
-        auto f=static_cast<Impl*>(opaque)->file;
+        auto s=static_cast<Impl*>(opaque);auto f=s->file;
         if(whence & AVSEEK_SIZE) {
+            if(s->downloadSize>0)return s->downloadSize;
             const auto current=_ftelli64(f);
             if(current<0 || _fseeki64(f,0,SEEK_END))return AVERROR(EIO);
             const auto size=_ftelli64(f);
@@ -75,12 +96,19 @@ struct FfmpegDecoder::Impl {
         }
         whence &= ~AVSEEK_FORCE;
         if(whence!=SEEK_SET && whence!=SEEK_CUR && whence!=SEEK_END)return AVERROR(EINVAL);
+        if(whence==SEEK_END && s->downloadSize>0) {
+            if(offset>std::numeric_limits<std::int64_t>::max()-s->downloadSize)return AVERROR(EINVAL);
+            offset+=s->downloadSize;whence=SEEK_SET;
+        }
         if(_fseeki64(f,offset,whence))return AVERROR(EIO);
         return _ftelli64(f);
     }
     void initialize(const std::wstring& localPath,PcmFormat output) {
         checkCancelled();
         path=localPath;
+        {std::ifstream marker(std::filesystem::path(path+L".download"));
+            if(marker && (!(marker>>downloadSize) || downloadSize<128 || downloadSize>512LL*1024*1024))
+                fail("Invalid download size",AVERROR(EINVAL));}
         if((avcodec_version()>>16)!=LIBAVCODEC_VERSION_MAJOR ||
            (avformat_version()>>16)!=LIBAVFORMAT_VERSION_MAJOR ||
            (avutil_version()>>16)!=LIBAVUTIL_VERSION_MAJOR ||
@@ -96,7 +124,9 @@ struct FfmpegDecoder::Impl {
             fail("Channel count/mask mismatch",AVERROR(EINVAL));
         info.output=output;
         if(outputLayout.order==AV_CHANNEL_ORDER_NATIVE)info.output.channelMask=outputLayout.u.mask;
-        if(_wfopen_s(&file,path.c_str(),L"rb"))fail("Open file",AVERROR(errno));
+        if(downloadSize>0)file=_wfsopen(path.c_str(),L"rb",_SH_DENYNO);
+        else _wfopen_s(&file,path.c_str(),L"rb");
+        if(!file)fail("Open file",AVERROR(errno));
         auto buffer=static_cast<unsigned char*>(av_malloc(32768));
         if(!buffer)fail("Allocate input",AVERROR(ENOMEM));
         io=avio_alloc_context(buffer,32768,0,this,readFile,nullptr,seekFile);
@@ -105,6 +135,7 @@ struct FfmpegDecoder::Impl {
         if(!format)fail("Allocate demuxer",AVERROR(ENOMEM));
         format->pb=io;format->flags|=AVFMT_FLAG_CUSTOM_IO;
         format->interrupt_callback={interrupted,this};
+        if(downloadSize>0) {format->probesize=65536;format->max_analyze_duration=300000;}
         // A2 accepts only local audio containers, not playlists or external URLs.
         check(av_opt_set(format,"format_whitelist","wav,mp3,flac,mov,aac,ogg,asf",0),"Demuxer policy");
         check(av_opt_set(format,"protocol_whitelist","file",0),"Protocol policy");

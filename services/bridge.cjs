@@ -2,7 +2,6 @@
 // Parent/child JSON-lines IPC only. No listening TCP port or third-party proxy.
 const path = require('node:path');
 const crypto = require('node:crypto');
-const fs = require('node:fs/promises');
 const readline = require('node:readline');
 const {inspectAudio}=require('./kugou-audio.cjs');
 const VENDOR = path.join(__dirname, 'vendor', 'KuGouMusicApi-a5a98013cce79fe0ae2ad65fc84b68176ebcfc1e');
@@ -243,8 +242,12 @@ class Adapter {
     } catch { /* Authenticated failures never expose the private service response. */ }
     throw Error(message);
   }
-  async refreshPlaylists() {
+  async refreshPlaylists(withCovers=true) {
     this.auth();const list=await this.pages('user_playlist', {}, ['info','lists'], playlist);
+    this.knownPlaylists=new Map(list.map(p=>[p.id,p]));
+    return withCovers?this.fillPlaylistCovers(list):list;
+  }
+  async fillPlaylistCovers(list=[...this.knownPlaylists.values()]) {
     const pending=list.filter(p=>p.editable && (!p.cover || p.automaticCover) && p.count>0);
     for(let i=0;i<pending.length;i+=3)await Promise.all(pending.slice(i,i+3).map(async p=>{
       try {
@@ -260,20 +263,25 @@ class Adapter {
     }));
     this.knownPlaylists=new Map(list.map(p=>[p.id,p]));return list;
   }
-  async playlistTracks(p) {
+  async playlistTracks(p,onProgress,signal) {
     const sourceId=!p.editable && !p.favorite ? p.sourceGlobalId : '';
     const list=await this.pages(sourceId?'playlist_track_all':'playlist_track_all_new',
       sourceId?{id:sourceId}:{listid:p.id},['info','songs','lists'],row=>{
       const t=track(row);t.id=`${p.id}:${t.id}`;return t;
-    });
+    },onProgress?rows=>{
+      for(const t of rows)this.knownTracks.set(t.id,t);
+      // Favorites are sorted only after all pages arrive; do not expose unstable prefixes.
+      if(!p.favorite)onProgress?.({playlist:p,tracks:rows});
+    }:undefined,signal);
     if(p.favorite) list.sort((a,b)=>b.collectedAt-a.collectedAt);
     for(const t of list) this.knownTracks.set(t.id,t);
     return list;
   }
   sameSong(a,b) {return !!a.hash && a.hash===b.hash || !!a.audioId && a.audioId===b.audioId;}
-  async pages(name, params, keys, mapper) {
+  async pages(name, params, keys, mapper,onProgress,signal) {
     const all = [], seen = new Set();
     for (let page = 1; page <= 500; page++) {
+      signal?.throwIfAborted();
       const body = await this.api(name, { ...params, page, pagesize: 100 });
       const rows = arrayAt(body.data, keys);
       let fresh = 0;
@@ -281,6 +289,7 @@ class Adapter {
         const value = mapper(row);
         if (!seen.has(value.id)) { seen.add(value.id); all.push(value); fresh++; }
       }
+      signal?.throwIfAborted();onProgress?.(all);
       // Only stop on an empty page or an explicit total; a server may cap pagesize.
       const total = Number(body.data?.total ?? body.data?.count ?? NaN);
       if (Number.isFinite(total) && total >= 0 && all.length >= total) return all;
@@ -537,15 +546,16 @@ class Adapter {
       }
       case 'sync': {
         this.auth();
-        const list = await this.refreshPlaylists();
+        const list = await this.refreshPlaylists(!request.light);
         return { playlists: list, profile: this.profile, syncedAt: new Date().toISOString(), session: this.session() };
       }
       case 'tracks': {
         this.auth(); const p = this.knownPlaylists.get(text(request.id));
         if (!p) throw new Error('请先同步歌单');
-        const list = await this.playlistTracks(p);
+        const list = await this.playlistTracks(p,request.onProgress,request.signal);
         return { playlist: p, tracks: list, syncedAt: new Date().toISOString() };
       }
+      case 'playlist_covers':return {playlists:await this.fillPlaylistCovers()};
       case 'qualities': {
         this.auth();const t=this.knownTracks.get(text(request.id));
         if(!t || !/^[a-f0-9]{32}$/.test(t.hash))throw Error('此歌曲暂时没有可播放的音频标识');
@@ -579,29 +589,7 @@ class Adapter {
         if (!['http:', 'https:'].includes(url.protocol)) throw new Error('音频地址无效');
         // Audio comes only from the account-authorized URL returned by upstream.
         if (!request.cacheDir) return { url: url.href, track: t, quality:confirmed?quality:'' };
-        // Fetch only the playback URL provided for this account. No alternate sources.
-        const dir = path.resolve(request.cacheDir);
-        await fs.mkdir(dir, { recursive: true });
-        const file = path.join(dir, crypto.randomBytes(16).toString('hex') + (advanced?.extension || (quality==='flac'?'.flac':'.mp3')));
-        let handle;
-        try {
-          const response = await fetch(url, { signal: AbortSignal.timeout(75000) });
-          if (!response.ok) throw new Error('音频服务器拒绝了请求');
-          handle = await fs.open(file, 'wx');
-          let size = 0;
-          for await (const chunk of response.body) {
-            size += chunk.length;
-            if (size > 512 * 1024 * 1024) throw new Error('音频文件超过当前播放缓存上限');
-            await handle.write(chunk);
-          }
-          if (size < 128) throw new Error('音频内容为空');
-          await handle.close(); handle = null;
-          return { path: file, track: t, quality:confirmed?quality:'' };
-        } catch {
-          if (handle) await handle.close();
-          await fs.unlink(file).catch(() => {});
-          throw new Error('音频缓存失败，请检查网络或尝试其他歌曲');
-        }
+        return require('./netease.cjs').cacheAudio(url.href,t,confirmed?quality:'',request.cacheDir,request.signal,request.stream,advanced?.extension);
       }
       case 'logout': this.reset(); return { connected: false };
       default: throw new Error('未知操作');

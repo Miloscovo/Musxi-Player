@@ -13,7 +13,7 @@ export default defineConfig(({ command }) => ({
     name: 'cef-local-html',
     generateBundle() {
       const html = readFileSync(new URL('./index.html', import.meta.url), 'utf8')
-        .replace('<head>', `<head>\n<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src data:;">\n<link rel="stylesheet" href="./style.css">`)
+        .replace('<head>', `<head>\n<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src data: https://wallpaper.musxi.invalid; frame-src https://wallpaper.musxi.invalid;">\n<link rel="stylesheet" href="./style.css">`)
         .replace('<script type="module" src="/src/main.tsx"></script>', '<script defer src="./app.js"></script>');
       this.emitFile({ type: 'asset', fileName: 'index.html', source: html });
     }

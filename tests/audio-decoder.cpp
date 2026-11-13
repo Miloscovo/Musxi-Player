@@ -7,6 +7,7 @@
 #include <numeric>
 #include <chrono>
 #include <thread>
+#include <future>
 
 namespace fs=std::filesystem;
 using musxi::FfmpegDecoder;
@@ -20,14 +21,14 @@ std::vector<float> reference(const fs::path& file) {
     std::vector<float> data(bytes/sizeof(float));std::ifstream in(file,std::ios::binary);
     in.read(reinterpret_cast<char*>(data.data()),static_cast<std::streamsize>(bytes));require(bool(in),"reference read");return data;
 }
-std::vector<float> decode(FfmpegDecoder& decoder) {
+std::vector<float> decode(FfmpegDecoder& decoder,std::int64_t origin=0) {
     std::vector<float> result;std::int64_t end=-1;
     for(int i=0;i<10000;++i) {
         auto block=decoder.read(997);
         if(block.endOfStream)return result;
         require(!block.samples.empty() && block.samples.size()<=997u*decoder.info().output.channels,"bounded read");
         if(end>=0)require(block.startFrame==end,"PCM continuity");
-        else require(block.startFrame==0,"initial PCM origin");
+        else require(block.startFrame==origin,"initial PCM origin");
         end=block.startFrame+static_cast<std::int64_t>(block.samples.size()/decoder.info().output.channels);
         for(auto sample:block.samples)require(std::isfinite(sample),"finite sample");
         result.insert(result.end(),block.samples.begin(),block.samples.end());
@@ -102,6 +103,51 @@ int main(int argc,char** argv) {
         for(const auto* ext:{"flac","mp3","m4a"})
             require(musxi::FfmpegDecoder::embeddedLyrics((folder/(std::string("lyrics.")+ext)).wstring())=="[00:00.50]Tagged line",std::string("embedded lyrics: ")+ext);
         decoder.close();decoder.close();
+        for(const auto* ext:{"flac","mp3"}) {
+            const auto original=folder/(std::string("source.")+ext),growing=folder/(std::string("growing.")+ext);
+            std::ifstream in(original,std::ios::binary);const std::string bytes((std::istreambuf_iterator<char>(in)),{});
+            const auto prefix=bytes.size()*3/4;
+            {std::ofstream out(growing,std::ios::binary);out.write(bytes.data(),prefix);}
+            {std::ofstream marker(growing.wstring()+L".download");marker<<bytes.size();}
+            std::promise<void> first;auto ready=first.get_future();
+            auto decoded=std::async(std::launch::async,[&] {
+                FfmpegDecoder reader;reader.open(growing.wstring());
+                auto block=reader.read(997);first.set_value();
+                auto tail=decode(reader,block.samples.size()/reader.info().output.channels);block.samples.insert(block.samples.end(),tail.begin(),tail.end());return block.samples;
+            });
+            const bool early=ready.wait_for(std::chrono::seconds(1))==std::future_status::ready;
+            const bool waitingForBytes=decoded.wait_for(std::chrono::milliseconds(75))==std::future_status::timeout;
+            {std::ofstream out(growing,std::ios::binary|std::ios::app);out.write(bytes.data()+prefix,bytes.size()-prefix);require(bool(out),"append growing cache");}
+            fs::remove(growing.wstring()+L".download");
+            const auto samples=decoded.get();require(early,std::string(ext)+" first PCM waited for the entire download");
+            require(waitingForBytes,"temporary EOF truncated streaming audio");
+            compare(samples,reference(folder/(std::string(ext)+".f32")),std::string(ext)+" growing cache");
+            {std::ofstream out(growing,std::ios::binary);out.write(bytes.data(),bytes.size()/3);}
+            {std::ofstream marker(growing.wstring()+L".download");marker<<bytes.size();}
+            auto seeked=std::async(std::launch::async,[&] {
+                FfmpegDecoder reader;reader.open(growing.wstring());reader.seek(2500);return reader.read(2048);
+            });
+            const bool seekWaited=seeked.wait_for(std::chrono::milliseconds(100))==std::future_status::timeout;
+            {std::ofstream out(growing,std::ios::binary|std::ios::app);out.write(bytes.data()+bytes.size()/3,bytes.size()-bytes.size()/3);require(bool(out),"append seek cache");}
+            fs::remove(growing.wstring()+L".download");
+            const auto block=seeked.get();require(seekWaited && block.startFrame==2500*48,"seek ahead of download did not wait/land correctly");
+            const auto expected=reference(folder/(std::string(ext)+".f32"));double error=0;
+            for(std::size_t i=0;i<block.samples.size();++i){const double delta=block.samples[i]-expected[block.startFrame*2+i];error+=delta*delta;}
+            require(!block.samples.empty() && std::sqrt(error/block.samples.size())<0.015,"streaming seek PCM alignment");
+            fs::remove(growing);
+        }
+        const auto stalled=folder/"stalled.mp3";
+        {std::ofstream out(stalled,std::ios::binary);}
+        {std::ofstream marker(stalled.wstring()+L".download");marker<<1024LL*1024*1024;}
+        fails([&]{FfmpegDecoder reader;reader.open(stalled.wstring());},"oversized download descriptor accepted");
+        {std::ofstream marker(stalled.wstring()+L".download");marker<<100000;}
+        std::atomic_bool stopped=false;
+        auto waiting=std::async(std::launch::async,[&] {FfmpegDecoder reader(&stopped);fails([&]{reader.open(stalled.wstring());},"stalled cancelled download succeeded");});
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));stopped=true;
+        require(waiting.wait_for(std::chrono::seconds(1))==std::future_status::ready,"download wait ignored cancellation");waiting.get();
+        {std::ofstream failed(stalled.wstring()+L".failed");failed<<"download failed";}
+        fails([&]{FfmpegDecoder reader;reader.open(stalled.wstring());},"failed download treated as ordinary EOF");
+        fs::remove(stalled);fs::remove(stalled.wstring()+L".download");fs::remove(stalled.wstring()+L".failed");
         // Renaming checks the decoder has released its local file handle.
         const auto renamed=folder/L"released.mp3";if(fs::exists(renamed))fs::remove(renamed);
         fs::rename(unicode,renamed);fs::rename(renamed,unicode);

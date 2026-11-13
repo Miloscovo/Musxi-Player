@@ -3,19 +3,50 @@ const crypto=require('node:crypto');
 const fs=require('node:fs/promises');
 const path=require('node:path');
 const QUALITIES=[{id:'128',name:'标准 · 128 kbps',level:'standard'},{id:'320',name:'高品质 · 320 kbps',level:'exhigh'},{id:'flac',name:'无损 · FLAC',level:'lossless'},{id:'netease:hires',name:'Hi-Res',level:'hires'},{id:'netease:jyeffect',name:'高清臻音',level:'jyeffect'}];
-async function cacheAudio(url,track,quality,cacheDir,signal) {
+const audioDownloads=new Set();
+async function closeAudioDownloads() {for(const job of audioDownloads)job.controller.abort();await Promise.allSettled([...audioDownloads].map(job=>job.promise));}
+async function cacheAudio(url,track,quality,cacheDir,signal,stream=false,extension) {
   signal?.throwIfAborted();
   const parsed=new URL(url);if(!['http:','https:'].includes(parsed.protocol))throw Error('音频地址无效');
   if(!cacheDir)return {url:parsed.href,track,quality};
   const dir=path.resolve(cacheDir);await fs.mkdir(dir,{recursive:true});
-  const file=path.join(dir,crypto.randomBytes(16).toString('hex')+(quality==='flac' || quality.includes(':')?'.flac':'.mp3'));
+  const file=path.join(dir,crypto.randomBytes(16).toString('hex')+(extension || (quality==='flac' || quality.includes(':')?'.flac':'.mp3')));
   let handle;
+  const controller=new AbortController();
+  let ready,early=false;
+  const first=new Promise(resolve=>{ready=resolve;});
+  const job={controller};audioDownloads.add(job);
+  job.promise=(async()=>{
   try {
-    const response=await fetch(parsed,{signal:signal?AbortSignal.any([signal,AbortSignal.timeout(75000)]):AbortSignal.timeout(75000)});if(!response.ok)throw Error();
+    const response=await fetch(parsed,{signal:AbortSignal.any([controller.signal,AbortSignal.timeout(75000),...(signal?[signal]:[])])});if(!response.ok)throw Error();
+    const total=response.headers.get('content-encoding')?0:Number(response.headers.get('content-length'));
+    if(total>512*1024*1024)throw Error();
     handle=await fs.open(file,'wx');let size=0;
-    for await(const chunk of response.body){signal?.throwIfAborted();size+=chunk.length;if(size>512*1024*1024)throw Error();await handle.write(chunk);}
-    signal?.throwIfAborted();if(size<128)throw Error();await handle.close();handle=null;return {path:file,track,quality};
-  }catch{if(handle)await handle.close();await fs.unlink(file).catch(()=>{});throw Error('音频缓存失败，请检查网络或尝试其他歌曲');}
+    for await(const chunk of response.body){
+      signal?.throwIfAborted();size+=chunk.length;if(size>512*1024*1024)throw Error();await handle.writeFile(chunk);
+      // shortcut: stream only sequential audio with a known size, add container-specific seeking before expanding this list.
+      if(size===chunk.length && stream && Number.isSafeInteger(total) && total>=128 && chunk.length>=128 &&
+        (Buffer.from(chunk.subarray(0,4)).toString()==='fLaC' || Buffer.from(chunk.subarray(0,3)).toString()==='ID3' || chunk[0]===255 && (chunk[1]&224)===224)) {
+        await fs.writeFile(file+'.download',String(total),{flag:'wx'});early=true;ready({path:file,track,quality});
+      } else if(early) {
+        // A released native source removes its marker; stop spending bandwidth on it.
+        await fs.access(file+'.download');
+      }
+    }
+    signal?.throwIfAborted();if(size<128 || total>0 && size!==total)throw Error();await handle.close();handle=null;
+    if(early)await fs.unlink(file+'.download');
+    return {path:file,track,quality};
+  }catch{
+    if(handle)await handle.close();
+    if(early) {
+      try{await fs.access(file);await fs.writeFile(file+'.failed','download failed');}catch{}
+    }
+    else await fs.unlink(file).catch(()=>{});
+    throw Error('音频缓存失败，请检查网络或尝试其他歌曲');
+  }finally{audioDownloads.delete(job);}
+  })();
+  const completed=job.promise.then(value=>value,error=>{if(early)return;throw error;});
+  return Promise.race([first,completed]);
 }
 class NeteaseAdapter {
   constructor(call){this.call=call;this.cookie='';this.profile=null;this.key='';this.tracks=new Map();this.lists=new Map();}
@@ -33,18 +64,24 @@ class NeteaseAdapter {
   song(row){const song={id:`netease:${row.id}`,serviceId:String(row.id),platform:'netease',name:row.name || '未命名歌曲',artist:(row.ar || row.artists || []).map(a=>a.name).join('、'),album:(row.al || row.album)?.name || '',cover:(row.al || row.album)?.picUrl || '',duration:Number(row.dt || row.duration || 0),count:0,editable:false};this.tracks.set(song.id,song);return song;}
   async sync(){this.auth();const rows=[];for(let offset=0;offset<10000;offset+=100){const b=await this.api('user_playlist',{uid:this.profile.id,limit:100,offset});rows.push(...(b.playlist || []));if(!b.more)break;if(offset===9900)throw Error('网易云歌单过多，请缩小范围');}
     const lists=rows.map(p=>({id:`netease:${p.id}`,serviceId:String(p.id),platform:'netease',name:p.name,artist:'',cover:p.coverImgUrl || '',duration:0,count:p.trackCount || 0,editable:String(p.creator?.userId)===this.profile.id,favorite:!!p.specialType}));this.lists=new Map(lists.map(p=>[p.id,p]));return lists;}
-  async playlist(id){
+  async playlist(id,onProgress,signal){
     const p=this.lists.get(id);if(!p)throw Error('请先同步网易云歌单');
     const detail=await this.api('playlist_detail',{id:p.serviceId});const ids=detail.playlist?.trackIds;
     if(!Array.isArray(ids))throw Error('网易云歌单数据无效');if(ids.length>10000)throw Error('歌单超过当前歌曲上限');
     const rows=[];
     for(let i=0;i<ids.length;i+=300){
+      signal?.throwIfAborted();
       const batches=[];
-      for(let start=i;start<Math.min(i+300,ids.length);start+=100)
-        batches.push(this.api('song_detail',{ids:ids.slice(start,start+100).map(row=>row.id).join(',')}));
-      for(const b of await Promise.all(batches)){
-        if(!Array.isArray(b.songs))throw Error('歌曲数据无效');rows.push(...b.songs.map(row=>this.song(row)));
+      for(let start=i;start<Math.min(i+300,ids.length);start+=100) {
+        const batch=ids.slice(start,start+100);
+        batches.push(this.api('song_detail',{ids:batch.map(row=>row.id).join(',')}).then(b=>{
+          if(!Array.isArray(b.songs))throw Error('歌曲数据无效');
+          const songs=new Map(b.songs.map(row=>[String(row.id),row]));
+          return batch.flatMap(row=>songs.has(String(row.id))?[this.song(songs.get(String(row.id)))]:[]);
+        }));
       }
+      for(const batch of await Promise.all(batches))rows.push(...batch);
+      signal?.throwIfAborted();onProgress?.({playlist:p,tracks:rows});
     }
     return {playlist:p,tracks:rows};
   }
@@ -80,10 +117,10 @@ class NeteaseAdapter {
     case 'qr':{const key=await this.api('login_qr_key');this.key=key.data?.unikey;if(!this.key)throw Error('未收到网易云二维码');const b=await this.api('login_qr_create',{key:this.key,qrimg:true});return {image:b.data?.qrimg || '',status:'waiting'};}
     case 'poll':{if(!this.key)throw Error('请重新生成二维码');const b=await this.api('login_qr_check',{key:this.key});if(![800,801,802,803].includes(b.code))throw Error('扫码状态无效，请刷新二维码');if(b.code===800)return {status:'expired'};if(b.code===803){if(typeof b.cookie!=='string' || !b.cookie)throw Error('未收到登录凭证，请重新扫码');this.cookie=b.cookie;const status=await this.api('login_status');const p=status.data?.profile;if(!p?.userId)throw Error('网易云账号验证失败');this.profile={id:String(p.userId),name:p.nickname};this.key='';return {status:'connected',profile:this.profile,session:this.session()};}return {status:b.code===802?'confirm':'waiting'};}
     case 'sync':return {playlists:await this.sync(),session:this.session()};
-    case 'tracks':this.auth();return this.playlist(r.id);
+    case 'tracks':this.auth();return this.playlist(r.id,r.onProgress,r.signal);
     case 'search':{const b=await this.api('cloudsearch',{keywords:r.keywords,type:1,limit:30,offset:(r.page-1)*30});const tracks=(b.result?.songs || []).map(row=>this.song(row));const total=b.result?.songCount || 0;return {tracks,total,hasMore:r.page*30<total};}
     case 'qualities':{this.auth();const t=this.tracks.get(r.id);if(!t)throw Error('歌曲已失效');const results=await Promise.all(QUALITIES.map(async q=>{try{const info=await this.audioInfo(t,q.id);return info.quality===q.id?{id:q.id,name:q.name}:null;}catch{return null;}}));return {id:r.id,options:results.filter(Boolean)};}
-    case 'audio':{this.auth();const t=this.tracks.get(r.id);if(!t)throw Error('歌曲已失效');const info=await this.audioInfo(t,r.quality || '128');if(r.quality && info.quality!==r.quality)throw Error('所选音质暂无权限，已保留当前播放');return cacheAudio(info.url,t,info.quality,r.cacheDir);}
+    case 'audio':{this.auth();const t=this.tracks.get(r.id);if(!t)throw Error('歌曲已失效');const info=await this.audioInfo(t,r.quality || '128');if(r.quality && info.quality!==r.quality)throw Error('所选音质暂无权限，已保留当前播放');return cacheAudio(info.url,t,info.quality,r.cacheDir,r.signal,r.stream);}
     case 'song_menu':{this.auth();const lists=await this.sync();const b=await this.api('likelist',{uid:this.profile.id});return {id:r.id,liked:(b.ids || []).map(String).includes(this.tracks.get(r.id)?.serviceId),canFavorite:true,playlists:lists.filter(p=>p.editable)};}
     case 'song_update':{this.auth();const t=this.tracks.get(r.id);if(!t)throw Error('歌曲已失效');const lists=await this.sync();let p;if(r.kind==='favorite'){await this.api('like',{id:t.serviceId,like:String(r.enabled)});p=lists.find(p=>p.favorite && p.editable);const liked=await this.api('likelist',{uid:this.profile.id});if((liked.ids || []).map(String).includes(t.serviceId)!==r.enabled)throw Error('操作已提交，暂未确认收藏结果，请稍后同步');}else {p=this.lists.get(r.playlistId);if(!p?.editable)throw Error('目标歌单不可编辑');await this.api('playlist_tracks',{op:'add',pid:p.serviceId,tracks:t.serviceId});}if(!p)throw Error('未找到对应歌单，请重新同步');const result=await this.playlist(p.id);if(r.kind==='add' && !result.tracks.some(row=>row.id===t.id))throw Error('操作已提交，暂未确认添加结果');return {...result,playlists:await this.sync(),message:r.kind==='favorite'?(r.enabled?'已收藏':'已取消收藏'):'已添加到歌单'};}
     case 'logout':this.cookie='';this.profile=null;this.key='';this.lists.clear();return {connected:false};
@@ -123,4 +160,4 @@ function liveNetease(){
     return require(path.join(root,'module',name+'.js'))({...params,unblock:'false',cookie:cookieToJson(params.cookie || '')},request);
   });
 }
-module.exports={NeteaseAdapter,liveNetease,cacheAudio};
+module.exports={NeteaseAdapter,liveNetease,cacheAudio,closeAudioDownloads};

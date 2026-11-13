@@ -87,6 +87,7 @@ void gaplessTick() {
     if(gapless.token && !gaplessValid(audio))cancelGapless();
     if(gapless.token) {gaplessPrepareOutput();return;}
     if(applicationClosing || !audio.opened || !audio.playing || audio.pending || audio.phase=="failed" ||
+       (!cloudTempPath.empty() && fs::exists(cloudTempPath+L".download")) ||
        !libraryNextPlay.is_null() || libraryQualityChange || libraryPlatformChange || unplayableSkipAt ||
        !currentPlaybackTrack.is_object() || currentPlaybackTrack.value("id","")!=audioTrackId)return;
     Json next;
@@ -163,4 +164,8 @@ bool gaplessFallback() {
         for(int i=0;i<(int)localTracks.size();++i)if(localTracks[i].value("id","")==next.requestedId){playLocal(i);return true;}
     } else if(cloudConnected) {schedulePlayback({{"source","queue"},{"id",next.requestedId}});return true;}
     return false;
+}
+bool playPreparedTrack(const Json& next) {
+    return playbackOrder!="repeat-one" && gapless.token && gapless.requestedId==next.value("id","") &&
+        !gapless.path.empty() && gapless.data.is_object() && gaplessFallback();
 }

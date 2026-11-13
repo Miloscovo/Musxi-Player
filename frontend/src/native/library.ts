@@ -23,9 +23,13 @@ export function parsePlaybackSettings(value: unknown): PlaybackSettings {
   return value as PlaybackSettings;
 }
 export interface LibraryState {
+  playlistsRefreshing?: boolean;
+  favoritesCountKnown?: boolean;
+  playlistLoading?: boolean;
+  playlistIncomplete?: boolean;
   favoritesCount?: number;
   recent?:Track[];
-  accounts?: {platform: MusicPlatform;name:string;connected:boolean;user:string;error:string;avatar?:string;membership?:{name:string;expiresAt?:number}}[];
+  accounts?: {platform: MusicPlatform;name:string;connected:boolean;user:string;error:string;avatar?:string;verifying?:boolean;playlistsReady?:boolean;membership?:{name:string;expiresAt?:number}}[];
   loginPlatform?: MusicPlatform;
   connected: boolean; busy: boolean; user: string; status: string; notice: string; qr: string; avatar: string;
   playlists: Track[]; localPlaylists?: Track[]; tracks: Track[]; trackCount: number; playlistId: string; playlistName: string;
@@ -93,6 +97,7 @@ const fields = (value: Record<string, unknown>, names: string[], type: string) =
 export function parseLibraryState(value: unknown): LibraryState {
   const v = object(value);
   fields(v, ['connected', 'busy', 'searchMore'], 'boolean');
+  for(const field of ['playlistLoading','playlistIncomplete','playlistsRefreshing','favoritesCountKnown'])if(v[field]!==undefined)fields(v,[field],'boolean');
   fields(v, ['user', 'status', 'notice', 'qr', 'avatar', 'playlistId', 'playlistName', 'keywords'], 'string');
   fields(v, ['trackCount', 'searchPage', 'searchTotal'], 'number');
   if(v.favoritesCount !== undefined)fields(v,['favoritesCount'],'number');
@@ -123,6 +128,7 @@ export function parseLibraryState(value: unknown): LibraryState {
   }
   if(v.accounts !== undefined) {
     if(!Array.isArray(v.accounts))throw new NativeError(502,'Invalid accounts');
+    for(const value of v.accounts){const account=object(value);for(const field of ['verifying','playlistsReady'])if(account[field]!==undefined)fields(account,[field],'boolean');}
     for(const value of v.accounts){const account=object(value);fields(account,['name','user','error'],'string');fields(account,['connected'],'boolean');if(account.avatar!==undefined)fields(account,['avatar'],'string');if(!['kugou','netease','qq'].includes(account.platform as string))throw new NativeError(502,'Invalid account platform');}
     for(const value of v.accounts){const account=object(value);if(account.membership!==undefined){const membership=object(account.membership);fields(membership,['name'],'string');if(membership.expiresAt!==undefined && (typeof membership.expiresAt!=='number' || !Number.isFinite(membership.expiresAt) || membership.expiresAt<=0 || membership.expiresAt>253402300799999))throw new NativeError(502,'Invalid membership expiry');}}
   }

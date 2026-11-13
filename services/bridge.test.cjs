@@ -462,6 +462,29 @@ test('incomplete original public playlist pages fail instead of replacing the so
   assert.equal(a.knownTracks.size,0);
 });
 
+test('light sync returns usable playlists before requesting missing cover tracks',async()=>{
+  const calls=[];const adapter=authenticated(async(name)=>{
+    calls.push(name);
+    if(name==='user_playlist')return response({total:1,info:[{listid:1,name:'List',is_edit:1,count:1}]});
+    return response({count:1,info:[{hash:'a'.repeat(32),cover:'https://example.test/cover.jpg'}]});
+  });
+  const result=await adapter.run({op:'sync',light:true});
+  assert.equal(result.playlists.length,1);assert.ok(adapter.knownPlaylists.has('1'));
+  assert.deepEqual(calls,['user_playlist']);
+  await adapter.run({op:'playlist_covers'});assert.ok(calls.includes('playlist_track_all_new'));
+});
+
+test('progressive playlist pages keep order and make displayed songs playable before completion',async()=>{
+  const adapter=authenticated(async(name,p)=>response({count:3,songs:[{hash:String(p.page).repeat(32),filename:`Song ${p.page}`}]}));
+  const counts=[];
+  const tracks=await adapter.playlistTracks({id:'saved',sourceGlobalId:'original'},snapshot=>{
+    counts.push(snapshot.tracks.length);
+    for(const track of snapshot.tracks)assert.ok(adapter.knownTracks.has(track.id));
+  });
+  assert.deepEqual(counts,[1,2,3]);assert.equal(tracks.length,3);
+  assert.deepEqual(tracks.map(row=>row.hash),['1','2','3'].map(n=>n.repeat(32)));
+});
+
 test('automatic playlist cover reads run with bounded concurrency and isolate missing artwork',async()=>{
   let running=0,peak=0;
   const adapter=new Adapter(async(name,params)=>{

@@ -204,6 +204,11 @@ int main(int argc,char** argv) {
         audioBackend().resume();waitState([](auto s){return s.playing && s.positionMs>410;});
         cloudQueue=Json::array({currentPlaybackTrack});currentQuality="flac";playbackOrder="random";
         const auto history=profile/"playback-history.json";
+        {std::ofstream marker(retained.wstring()+L".download");marker<<fs::file_size(retained);}
+        require(savePlaybackHistory(history),"partial history save failed");
+        Json partialHistory;{std::ifstream stream(history);stream>>partialHistory;}
+        require(partialHistory["cache"]=="" && retainedPlaybackCache.empty(),"incomplete download was persisted as restorable audio");
+        fs::remove(retained.wstring()+L".download");
         require(savePlaybackHistory(history),"online history save failed");
         Json savedHistory;{std::ifstream stream(history);stream>>savedHistory;}
         const auto savedPosition=savedHistory.at("positionMs").get<std::uint32_t>();

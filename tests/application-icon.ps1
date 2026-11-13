@@ -44,18 +44,18 @@ $pngPath=[IO.Path]::ChangeExtension($IconPath,'.png')
 if (Test-Path -LiteralPath $pngPath) {
     $artwork=[Drawing.Bitmap]::new($pngPath)
     try {
-        $whiteSamples=0;$blackSamples=0
+        $lightSamples=0;$blueSamples=0
         for ($y=0;$y -lt $artwork.Height;$y+=8) {
             for ($x=0;$x -lt $artwork.Width;$x+=8) {
                 $pixel=$artwork.GetPixel($x,$y)
                 $radius=$artwork.Width*.2
-                if (($x -ge $radius+2 -and $x -lt $artwork.Width-$radius-2 -or $y -ge $radius+2 -and $y -lt $artwork.Height-$radius-2) -and $pixel.A -ne 255) { throw "Artwork became transparent at ($x,$y)." }
-                if ($pixel.R -gt 240 -and $pixel.G -gt 240 -and $pixel.B -gt 240) { $whiteSamples++ }
-                if ($pixel.R -lt 32 -and $pixel.G -lt 32 -and $pixel.B -lt 32) { $blackSamples++ }
+                if ($x -ge $radius -and $x -lt $artwork.Width-$radius -and $y -ge $radius -and $y -lt $artwork.Height-$radius -and $pixel.A -ne 255) { throw "Artwork became transparent at ($x,$y)." }
+                if ($pixel.A -eq 255 -and $pixel.R -gt 140 -and $pixel.G -gt 180 -and $pixel.B -gt 200) { $lightSamples++ }
+                if ($pixel.A -eq 255 -and $pixel.B -gt $pixel.R+30 -and $pixel.B -gt 100) { $blueSamples++ }
             }
         }
-        if ($whiteSamples -lt 100 -or $blackSamples -lt 100) {
-            throw 'Icon lost its white artwork or black background.'
+        if ($lightSamples -lt 100 -or $blueSamples -lt 100) {
+            throw 'Icon lost its light artwork or blue background.'
         }
         foreach ($point in @(@(0,0),@(($artwork.Width-1),0),@(0,($artwork.Height-1)),@(($artwork.Width-1),($artwork.Height-1)))) {
             if ($artwork.GetPixel($point[0],$point[1]).A -ne 0) { throw 'Rounded PNG corner is not transparent.' }
@@ -84,17 +84,17 @@ try {
         $icon=[Drawing.Icon]::FromHandle($handle);$bitmap=$icon.ToBitmap()
         try {
             if ($bitmap.Width -ne $size -or $bitmap.Height -ne $size) { throw 'Unexpected icon dimensions.' }
-            $whitePixels=0;$blackPixels=0
+            $lightPixels=0;$bluePixels=0
             for ($y=0;$y -lt $size;$y++) {
                 for ($x=0;$x -lt $size;$x++) {
                     $pixel=$bitmap.GetPixel($x,$y)
                     $radius=$size*.2
-                    if (($x -ge $radius+2 -and $x -lt $size-$radius-2 -or $y -ge $radius+2 -and $y -lt $size-$radius-2) -and $pixel.A -ne 255) { throw 'Icon interior contains unwanted transparency.' }
-                    if ($pixel.R -gt 240 -and $pixel.G -gt 240 -and $pixel.B -gt 240) { $whitePixels++ }
-                    if ($pixel.R -lt 32 -and $pixel.G -lt 32 -and $pixel.B -lt 32) { $blackPixels++ }
+                    if ($x -ge $radius -and $x -lt $size-$radius -and $y -ge $radius -and $y -lt $size-$radius -and $pixel.A -ne 255) { throw 'Icon interior contains unwanted transparency.' }
+                    if ($pixel.A -eq 255 -and $pixel.R -gt 140 -and $pixel.G -gt 180 -and $pixel.B -gt 200) { $lightPixels++ }
+                    if ($pixel.A -eq 255 -and $pixel.B -gt $pixel.R+30 -and $pixel.B -gt 100) { $bluePixels++ }
                 }
             }
-            if ($whitePixels -eq 0 -or $blackPixels -lt $size*$size*.5) { throw 'Icon lost its white artwork or black background.' }
+            if ($lightPixels -eq 0 -or $bluePixels -lt $size*$size*.3) { throw 'Icon lost its light artwork or blue background.' }
             foreach ($point in @(@(0,0),@(($size-1),0),@(0,($size-1)),@(($size-1),($size-1)))) {
                 if ($bitmap.GetPixel($point[0],$point[1]).A -ne 0) { throw 'Rounded ICO corner is not transparent.' }
             }

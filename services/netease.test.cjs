@@ -1,6 +1,51 @@
 const test=require('node:test');
 const assert=require('node:assert/strict');
 const {NeteaseAdapter}=require('./netease.cjs');
+const {cacheAudio,closeAudioDownloads}=require('./netease.cjs');
+
+test('streaming cache is ready before download finishes, preserves bytes, and falls back for other containers',async t=>{
+  const fs=require('node:fs/promises'),path=require('node:path'),os=require('node:os');
+  const dir=await fs.mkdtemp(path.join(os.tmpdir(),'musxi-stream-'));
+  const bytes=Buffer.alloc(1024*1024,7);bytes.write('ID3');
+  let release,ended=false;
+  const gate=new Promise(resolve=>{release=resolve});
+  const server=require('node:http').createServer(async(req,res)=>{
+    res.writeHead(200,{'Content-Length':bytes.length});res.write(bytes.subarray(0,65536));
+    await gate;ended=true;res.end(bytes.subarray(65536));
+  });
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  t.after(async()=>{release();await closeAudioDownloads();server.closeAllConnections();server.close();await fs.rm(dir,{recursive:true,force:true});});
+  const url=`http://127.0.0.1:${server.address().port}/audio`;
+  const start=performance.now();
+  const timer=setTimeout(release,2000);
+  const audio=await cacheAudio(url,{id:'fixture'},'128',dir,undefined,true);clearTimeout(timer);
+  assert.equal(ended,false,'stream waited for the entire audio file');
+  assert.equal(Number(await fs.readFile(audio.path+'.download','utf8')),bytes.length);
+  console.log(`stream path ready: ${Math.round(performance.now()-start)}ms, before remaining bytes were sent`);
+  release();
+  for(let i=0;i<200;i++){try{await fs.access(audio.path+'.download');}catch{break;}await new Promise(r=>setTimeout(r,5));}
+  assert.deepEqual(await fs.readFile(audio.path),bytes);
+  await assert.rejects(fs.access(audio.path+'.download'));
+  bytes.write('ftyp');ended=false;
+  const fallback=await cacheAudio(url,{id:'fixture'},'128',dir,undefined,true);
+  assert.equal(ended,true);await assert.rejects(fs.access(fallback.path+'.download'));
+  assert.deepEqual(await fs.readFile(fallback.path),bytes);
+});
+
+test('an interrupted streaming download exposes failure instead of a successful truncated cache',async t=>{
+  const fs=require('node:fs/promises'),path=require('node:path'),os=require('node:os');
+  const dir=await fs.mkdtemp(path.join(os.tmpdir(),'musxi-stream-fail-'));
+  const bytes=Buffer.alloc(4096);bytes.write('fLaC');let response;
+  const server=require('node:http').createServer((req,res)=>{response=res;res.writeHead(200,{'Content-Length':8192});res.write(bytes);});
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  t.after(async()=>{await closeAudioDownloads();server.closeAllConnections();server.close();await fs.rm(dir,{recursive:true,force:true});});
+  const audio=await cacheAudio(`http://127.0.0.1:${server.address().port}`,{id:'fixture'},'flac',dir,undefined,true);
+  response.destroy();
+  for(let i=0;i<200;i++){try{await fs.access(audio.path+'.failed');break;}catch{}await new Promise(r=>setTimeout(r,5));}
+  assert.equal(await fs.readFile(audio.path+'.failed','utf8'),'download failed');
+  assert.equal((await fs.stat(audio.path)).size,4096);
+  await assert.rejects(cacheAudio('file:///private',{id:'fixture'},'flac',dir),/地址无效/);
+});
 test('avatar uses the bundled login status endpoint and preserves authentication',async()=>{
   const calls=[];
   const adapter=new NeteaseAdapter(async(name,params)=>{
@@ -66,12 +111,13 @@ test('large playlists read at most three detail batches concurrently and keep pl
     assert.equal(name,'song_detail');const batch=params.ids.split(',').map(Number);
     running++;peak=Math.max(peak,running);
     await new Promise(resolve=>setTimeout(resolve,batch[0]===1?15:2));running--;
-    return {body:{code:200,songs:batch.map(id=>({id,name:String(id)}))}};
+    return {body:{code:200,songs:batch.map(id=>({id,name:String(id)})).reverse()}};
   });
   adapter.lists.set('netease:list',{id:'netease:list',serviceId:'list'});
-  const result=await adapter.playlist('netease:list');
+  const counts=[];const result=await adapter.playlist('netease:list',snapshot=>counts.push(snapshot.tracks.length));
   assert.equal(peak,3);assert.equal(running,0);
   assert.deepEqual(result.tracks.map(track=>track.id),ids.map(row=>'netease:'+row.id));
+  assert.deepEqual(counts,[300,450]);
 });
 
 test('a failed detail batch does not return a partial playlist',async()=>{

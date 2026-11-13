@@ -70,6 +70,7 @@ inline Image read(const std::filesystem::path& file) {
     return inspect(std::move(bytes));
 }
 Image displayCopy(Image image);
+Image thumbnailCopy(const std::filesystem::path& file);
 class Store {
     std::filesystem::path directory_;Image candidate_,incoming_;unsigned nextId_=0;
     void save(const Image& image) const {

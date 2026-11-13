@@ -36,6 +36,37 @@ int main() try {
     cloud::testProfile=false;
     (void)playerService();
     auto invoke=[](const char* name,const Json& p=Json::object()) {return musxi::applicationLibrary(name,p.dump());};
+    {
+        const auto previousSnapshots=playlistSnapshots;
+        const auto folder=fs::temp_directory_path()/(L"musxi-playlist-snapshot-"+std::to_wstring(GetCurrentProcessId()));
+        fs::create_directories(folder);const auto file=folder/L"lists.json";
+        playlistSnapshots=Json::object();
+        const Json row={{"id","netease:one"},{"name","Cached"},{"count",12},{"editable",true},{"cookie","PRIVATE"},{"path","PRIVATE"}};
+        Json data={{"verifiedAccounts",{{"netease","owner"}}},{"playlistSnapshots",{{"netease",{{"accountId","owner"},{"playlists",Json::array({row})}}}}}};
+        require(savePlaylistSnapshots(file,data),"playlist snapshot save failed");
+        std::ifstream stream(file);const std::string bytes((std::istreambuf_iterator<char>(stream)),{});stream.close();
+        require(bytes.find("PRIVATE")==std::string::npos,"playlist snapshot persisted private service fields");
+        const Json session={{"platform","multi"},{"accounts",{{"netease",{{"profile",{{"id","owner"}}}}}}}};
+        require(loadPlaylistSnapshots(file,session).size()==1,"matching-account cache did not load");
+        auto invalid=data;invalid["playlistSnapshots"]["netease"]["playlists"][0]["count"]=0.5;
+        require(!savePlaylistSnapshots(file,invalid) && loadPlaylistSnapshots(file,session).size()==1,"invalid metadata replaced the last successful snapshot");
+        auto changed=session;changed["accounts"]["netease"]["profile"]["id"]="other";
+        require(loadPlaylistSnapshots(file,changed).empty(),"another account saw cached playlists");
+        require(loadPlaylistSnapshots(file,Json::object()).empty(),"cache became visible without a protected account");
+        loadPlaylistSnapshots(file,session);
+        require(savePlaylistSnapshots(file,{{"verifiedAccounts",{{"netease",""}}}}),"logout cache invalidation failed");
+        require(loadPlaylistSnapshots(file,session).empty(),"logout left reusable playlist cache");
+        require(savePlaylistSnapshots(file,data),"cache reseed failed");
+        data["playlistSnapshots"]["netease"]["playlists"]=Json::array();
+        require(savePlaylistSnapshots(file,data) && loadPlaylistSnapshots(file,session).empty(),"successful empty list retained stale cards");
+        {std::ofstream bad(file);bad<<"invalid JSON";}
+        require(loadPlaylistSnapshots(file,session).empty(),"corrupt cache did not fail closed");
+        fs::remove(file);fs::remove(folder);playlistSnapshots=previousSnapshots;
+        const auto previousAccounts=cloudAccounts;const bool wasConnected=cloudConnected;
+        cloudConnected=true;cloudAccounts=Json::array({{{"platform","netease"},{"connected",true},{"playlistsReady",true}},{{"platform","qq"},{"connected",false},{"playlistsReady",false}}});
+        require(musxi::playlistAccountReady("netease:list") && !musxi::playlistAccountReady("qq:cached"),"native cache interaction guard ignored platform readiness");
+        cloudAccounts=previousAccounts;cloudConnected=wasConnected;
+    }
     require(invoke("library.getPlaybackSettings",{{"extra",true}}).code==400,"extra playback settings parameters accepted");
     require(invoke("library.setPlaybackSettings",{{"defaultQuality","invalid"},{"outputDevice",""}}).code==400,"invalid default quality accepted");
     require(invoke("library.setPlaybackSettings",{{"defaultQuality","128"},{"outputDevice",42}}).code==400,"non-string output device accepted");
@@ -112,12 +143,59 @@ int main() try {
         libraryOperationKind=cloudOperation=operation;libraryOperationStatus="pending";
         std::promise<Json> p;cloudFuture=p.get_future();p.set_value(response);cloudTick();
     };
+    {
+        const auto beforeAccounts=cloudAccounts,beforeLists=cloudPlaylists,beforeTracks=cloudTracks;const auto beforeId=cloudPlaylistId;
+        const bool beforeInitialized=cloudInitialized;startupPollAt=GetTickCount64()+60000;
+        const Json accounts=Json::array({{{"platform","netease"},{"connected",true},{"playlistsReady",true}},{{"platform","qq"},{"connected",false},{"verifying",true},{"playlistsReady",false}}});
+        const Json lists=Json::array({{{"id","netease:ready"},{"name","Ready"}},{{"id","qq:cached"},{"name","Cached"}}});
+        complete("startup_state",{{"ok",true},{"data",{{"accounts",accounts},{"connected",true},{"profile",{{"name","Ready"}}},{"playlists",lists},
+            {"startupPending",true},{"startupRevision",1},{"playlistsRefreshing",true},{"favoritesCountKnown",false}}}});
+        const auto state=Json::parse(invoke("library.getState").json);
+        require(state["playlists"].size()==2 && !state["busy"].get<bool>() && state["playlistsRefreshing"]==true,"startup hid cards or blocked ready platforms");
+        require(state["favoritesCountKnown"]==false,"startup advertised an unknown favorite count as exact");
+        cloudRequestOverride=[](const Json& request){return Json{{"ok",true},{"data",{{"token",request.value("token","")},{"status","pending"}}}};};
+        require(invoke("library.open",{{"id","netease:ready"}}).code==0,"ready platform waited for slow startup work");
+        require(invoke("library.open",{{"id","qq:cached"}}).code==409,"unverified cached playlist was interactive");
+        cloudFuture.get();cloudRequestOverride=nullptr;
+        startupPending=playlistsRefreshing=playlistLoading=false;favoritesCountKnown=true;startupRevision=-1;
+        cloudAccounts=beforeAccounts;cloudPlaylists=beforeLists;cloudTracks=beforeTracks;cloudPlaylistId=beforeId;cloudInitialized=beforeInitialized;
+    }
     complete("search",{{"ok",true},{"data",{{"tracks",Json::array()},{"keywords","needle"},{"page",2},{"total",0},{"hasMore",false}}}});
     require(libraryOperationStatus=="completed" && searchQuery=="needle" && searchPage==2,"search completion not applied");
     complete("search",{{"ok",false},{"error","offline"}});
     require(libraryOperationStatus=="failed" && !libraryOperationError.empty(),"search failure not reported");
     complete("tracks",{{"ok",true},{"data",Json::object()}});
     require(libraryOperationStatus=="failed","malformed response reported success");
+    {
+        const auto previousTracks=cloudTracks,previousQueue=cloudQueue;const auto previousId=cloudPlaylistId;
+        cloudConnected=true;playlistLoadToken="fixture";playlistLoading=true;playlistPollAt=GetTickCount64()+60000;
+        cloudPlaylistId="list";cloudTracks=Json::array();
+        auto progress=Json{{"token","fixture"},{"status","pending"},{"playlist",{{"id","list"},{"name","Fixture"}}},
+            {"tracks",Json::array({{{"id","partial"},{"name","First"}}})}};
+        complete("tracks_progress",{{"ok",true},{"data",progress}});
+        const auto partial=Json::parse(invoke("library.getState").json);
+        require(partial["trackCount"]==1 && partial["playlistLoading"]==true,"partial playlist was not usable");
+        require(invoke("library.playPlaylist",{{"id","list"}}).code==409,"partial list was queued as a complete playlist");
+        require(invoke("library.play",{{"source","library"},{"id","partial"}}).code==0,"loaded song could not play during refresh");
+        cloudTracks=Json::array();bool requested=false;
+        cloudRequestOverride=[&](const Json& request){requested=request.value("op","")=="audio" && request.value("id","")=="partial";return Json{{"ok",false},{"error","Fixture"}};};
+        cloudTick();require(requested,"a refreshed playlist discarded the song that was just clicked");
+        if(cloudFuture.valid())cloudFuture.get();cloudRequestOverride=nullptr;
+        invoke("library.cancel");
+        progress["status"]="failed";progress["error"]="Incomplete";
+        complete("tracks_progress",{{"ok",true},{"data",progress}});
+        require(!playlistLoading && playlistIncomplete && cloudTracks.size()==1,"failed playlist lost its partial/incomplete state");
+        require(invoke("library.playPlaylist",{{"id","list"}}).code==409,"failed partial list was queued as complete");
+        progress.erase("playlist");playlistLoading=true;
+        complete("tracks_progress",{{"ok",true},{"data",progress}});
+        require(!playlistLoading && playlistIncomplete,"malformed progress left the playlist loading forever");
+        playlistIncomplete=false;playlistLoadToken.clear();
+        cloudTracks=previousTracks;cloudQueue=previousQueue;cloudPlaylistId=previousId;
+        std::promise<Json> polling;cloudFuture=polling.get_future();cloudOperation="tracks_progress";
+        require(invoke("library.open",{{"id","p"}}).code==0 && libraryNextOpen.value("id","")=="p","progress polling rejected the next playlist selection");
+        require(invoke("library.open",{{"id","missing"}}).code==404,"queued playlist selection bypassed validation");
+        libraryNextOpen=nullptr;polling.set_value(Json::object());cloudFuture.get();
+    }
     libraryMenuRequested=true;
     complete("song_menu",{{"ok",true},{"data",{{"id","0"},{"liked",true},{"canFavorite",true},{"playlists",Json::array()}}}});
     require(libraryMenu.value("liked",false) && !libraryMenuRequested,"web song menu did not receive response");
@@ -133,6 +211,16 @@ int main() try {
     require(invoke("library.setPlatform",{{"id","0"},{"platform","invalid"}}).code==400,"invalid source platform accepted");
     require(invoke("library.setPlatform",{{"id","0"},{"platform","qq"}}).code==409,"closed player source switch accepted");
     auto backend=std::make_unique<SwitchAudio>();auto* switched=backend.get();audioBackendStorage()=std::move(backend);
+    {
+        const auto cache=fs::temp_directory_path()/L"musxi-retry-download.mp3";
+        {std::ofstream failed(cache.wstring()+L".failed");failed<<"download failed";}
+        audioTrackId=libraryPlayTrackId="retry";cloudTempPath=cache.wstring();
+        switched->state.phase="failed";libraryOperationStatus="failed";libraryOperationKind="audio";
+        cloudQueue=Json::array({{{"id","retry"}}});
+        require(bool(setPlaying(true)) && libraryNextPlay.value("id","")=="retry" && libraryOperationStatus=="pending",
+            "retry reopened the failed partial file instead of requesting audio again");
+        invoke("library.cancel");cloudTempPath.clear();fs::remove(cache.wstring()+L".failed");
+    }
     const auto seed=[&] {
         switched->state={};switched->state.opened=true;switched->state.positionMs=42000;
         opened=true;audioTrackId="original";cloudTempPath=L"original-cache";currentQuality="320";
