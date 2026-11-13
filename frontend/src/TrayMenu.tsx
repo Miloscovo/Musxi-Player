@@ -15,19 +15,20 @@ export default function TrayMenu() {
     trigger.current?.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, button: 2, clientX: 0, clientY: 0 }));
     return () => document.body.classList.remove('tray-menu-page');
   }, []);
-  async function act(action: () => Promise<unknown>) {
+  async function act(event: Event, action: () => Promise<unknown>) {
+    event.preventDefault();
     try { await action(); await native.window.dismissTrayMenu(); }
     catch (e) { setError(e instanceof Error ? e.message : '托盘操作失败'); }
   }
   return <ContextMenu onOpenChange={open => { if (!open) void native.window.dismissTrayMenu().catch(() => {}); }}>
     <ContextMenuTrigger asChild><div ref={trigger} className="tray-menu-trigger" /></ContextMenuTrigger>
     <ContextMenuContent className="tray-context-menu" collisionPadding={0} onCloseAutoFocus={event => event.preventDefault()}>
-      <ContextMenuItem onSelect={() => void act(native.window.toggleVisibility)}>显示/隐藏</ContextMenuItem>
-      {desktop.state.enabled && <><ContextMenuItem onSelect={() => void act(() => native.desktopLyrics.setVisible(!desktop.state.visible))}>
+      <ContextMenuItem onSelect={event => void act(event, native.window.toggleVisibility)}>显示/隐藏</ContextMenuItem>
+      {desktop.state.enabled && <><ContextMenuItem onSelect={event => void act(event, () => native.desktopLyrics.setVisible(!desktop.state.visible))}>
         {desktop.state.visible ? '关闭歌词悬浮组件' : '打开歌词悬浮组件'}</ContextMenuItem>
-        <ContextMenuItem disabled={!desktop.state.visible} onSelect={() => void act(() => native.desktopLyrics.setLocked(!desktop.state.locked))}>
+        <ContextMenuItem disabled={!desktop.state.visible} onSelect={event => void act(event, () => native.desktopLyrics.setLocked(!desktop.state.locked))}>
           {desktop.state.locked ? '解锁歌词悬浮组件' : '锁定歌词悬浮组件'}</ContextMenuItem></>}
-      <ContextMenuItem onSelect={() => void act(native.window.close)}>退出</ContextMenuItem>
+      <ContextMenuItem onSelect={event => void act(event, native.window.close)}>退出</ContextMenuItem>
       {error && <div role="alert">{error}</div>}
     </ContextMenuContent>
   </ContextMenu>;

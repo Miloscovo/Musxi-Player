@@ -110,8 +110,12 @@ void exitFromTray() {
     if(nativeWindow)PostMessageW(nativeWindow,WM_CLOSE,0,0);
 }
 LRESULT CALLBACK trayProc(HWND hwnd,UINT message,WPARAM wp,LPARAM lp) {
+    if(message==WM_ACTIVATE && LOWORD(wp)==WA_INACTIVE && IsWindowVisible(hwnd)) {
+        // Finish the focus-changing command before closing its CEF window.
+        PostMessageW(hwnd,WM_CLOSE,0,0);return 0;
+    }
     if(message==WM_CLOSE && musxi::cef_adapter::trayBrowserReadyToClose()) {DestroyWindow(hwnd);return 0;}
-    if(message==WM_CLOSE || (message==WM_ACTIVATE && LOWORD(wp)==WA_INACTIVE && IsWindowVisible(hwnd))) {
+    if(message==WM_CLOSE) {
         ShowWindow(hwnd,SW_HIDE);musxi::cef_adapter::closeTrayBrowser();return 0;
     }
     return DefWindowProcW(hwnd,message,wp,lp);
