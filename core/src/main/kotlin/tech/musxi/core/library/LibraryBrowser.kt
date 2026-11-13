@@ -8,6 +8,12 @@ import kotlinx.coroutines.flow.asStateFlow
 interface LibraryPageFetch {
     fun playlists(offset: Int = 0, result: (Result<Page<PlaylistSummary>>) -> Unit)
     fun tracks(playlist: MediaKey, offset: Int = 0, result: (Result<Page<SongSummary>>) -> Unit)
+    fun playlists(offset: Int, isCurrent: () -> Boolean, result: (Result<Page<PlaylistSummary>>) -> Unit) {
+        if (isCurrent()) playlists(offset, result) else result(Result.failure(LibraryPageFailure("cancelled")))
+    }
+    fun tracks(playlist: MediaKey, offset: Int, isCurrent: () -> Boolean, result: (Result<Page<SongSummary>>) -> Unit) {
+        if (isCurrent()) tracks(playlist, offset, result) else result(Result.failure(LibraryPageFailure("cancelled")))
+    }
 }
 
 /** Digest identifies metadata ownership; generation rejects work from an earlier login attempt. */
@@ -76,6 +82,19 @@ class LibraryBrowser(
     private var pendingEmpty: Pair<NetworkQuery, Long>? = null
     private val mutable = MutableStateFlow(LibraryBrowseState())
     val state = mutable.asStateFlow()
+    /** Prevent an accumulating view from adopting the previous account's still-visible page. */
+    internal fun represents(expected: LibraryCacheIdentity): Boolean =
+        expected.sameAttempt(owner) && expected.sameAttempt(identity())
+    private val filler = PlaylistCacheFiller(identity, cacheAccess, fetch, io, deliver, now, platform)
+    val fillState = filler.state
+
+    fun fillPlaylist(playlist: MediaKey): kotlinx.coroutines.flow.StateFlow<PlaylistFillState> {
+        require(playlist.platform == platform)
+        // Fence an already scheduled manual write before reading the prefix to resume.
+        synchronized(gate) { ++revision; mutable.value = mutable.value.copy(refreshing = false) }
+        return filler.start(playlist)
+    }
+    fun cancelFill() = filler.cancel()
 
     fun playlists(offset: Int = 0, refresh: Boolean = true) = open(LibraryQuery(offset = offset), refresh)
     fun tracks(playlist: MediaKey, offset: Int = 0, refresh: Boolean = true) = open(LibraryQuery(playlist, offset), refresh)
@@ -83,10 +102,14 @@ class LibraryBrowser(
     fun retry() = open(state.value.query, refresh = true, bypassRecentSuccess = true)
 
     /** Does not modify account state or erase disk metadata. */
-    fun cancel() = synchronized(gate) { ++revision; mutable.value = mutable.value.copy(refreshing = false) }
+    fun cancel() {
+        cancelFill()
+        synchronized(gate) { ++revision; mutable.value = mutable.value.copy(refreshing = false) }
+    }
 
     /** For explicit cache maintenance: fence old responses, without starting another fetch. */
     fun clearCachedPages() = synchronized(gate) {
+        filler.cancel("cache_changed")
         ++revision
         ++invalidationRevision
         freshQueries.clear()
@@ -105,6 +128,7 @@ class LibraryBrowser(
     fun invalidate(expected: LibraryCacheIdentity, refreshNow: Boolean = true) {
         val latest = identity()
         if (latest == null || !expected.verified || !expected.sameAttempt(latest) || !latest.verified) return
+        filler.cancel("cache_changed")
         val query = synchronized(gate) {
             val nextInvalidation = ++invalidationRevision
             ++revision
@@ -140,21 +164,28 @@ class LibraryBrowser(
 
     /** Called for account state changes, including disconnect in a different Activity. */
     fun accountChanged() {
+        filler.accountChanged()
         val next = identity()
         val previous = synchronized(gate) { owner }
         if (next == previous) return
         val query = synchronized(gate) {
             if (next != null && queryOwner != null && queryOwner != next.owner) LibraryQuery() else state.value.query
         }
-        open(query, refresh = next?.verified == true, bypassRecentSuccess = true)
+        // Initial account collection may arrive after a caller has started filling this identity.
+        // A surviving fill already passed accountChanged's identity check above.
+        open(query, refresh = next?.verified == true, bypassRecentSuccess = true,
+            preserveFill = fillState.value.running)
     }
 
     private fun open(
         query: LibraryQuery,
         refresh: Boolean,
         bypassRecentSuccess: Boolean = false,
+        preserveFill: Boolean = false,
     ) {
         require(query.playlist == null || query.playlist.platform == platform)
+        // Manual paging owns its refresh/write lifecycle. The caller may resume filling afterwards.
+        if (!preserveFill) filler.cancel()
         val expected = identity()
         val token = synchronized(gate) {
             val keep = expected?.sameAttempt(owner) == true && mutable.value.query == query
@@ -290,9 +321,9 @@ class LibraryBrowser(
             }
         }
         try {
-            if (query.playlist == null) fetch.playlists(query.offset) { result ->
+            if (query.playlist == null) fetch.playlists(query.offset, { current(token, expected) }) { result ->
                 accept(result.map { LibraryContent.Playlists(copyPlaylists(it)) })
-            } else fetch.tracks(query.playlist, query.offset) { result ->
+            } else fetch.tracks(query.playlist, query.offset, { current(token, expected) }) { result ->
                 accept(result.map { LibraryContent.Tracks(copyTracks(it)) })
             }
         } catch (_: Exception) { accept(Result.failure(LibraryPageFailure("unclassified"))) }

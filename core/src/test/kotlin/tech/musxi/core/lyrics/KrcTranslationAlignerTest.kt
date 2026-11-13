@@ -6,6 +6,28 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class KrcTranslationAlignerTest {
+    @Test fun pcHelloFixtureKeepsRealWordClockEvenWithoutTranslation() {
+        // PC tests/lyrics-parser.cpp uses [1200,2000]<0,400,0>Hel<400,600,0>lo.
+        val words = listOf(LyricWord(0, 3, 1_200, 1_600), LyricWord(3, 5, 1_600, 2_200))
+        val parsed = KrcTranslationAligner.parse("[00:01.20]Hello",
+            listOf(KrcTranslationAligner.Row(1_200, "Hello", words = words)))
+        assertEquals(words, parsed.lines.single().words)
+        assertEquals(TranslationAvailability.NONE, parsed.translation.availability)
+        assertEquals("Hello", parsed.plainText)
+        assertTrue(unmodifiable(parsed.lines.single().words))
+    }
+
+    @Test fun normalizedWhitespaceTranslationDoesNotAttachWordRangesToDifferentText() {
+        val parsed = KrcTranslationAligner.parse("[00:01.00]a  b",
+            listOf(KrcTranslationAligner.Row(1_000, "a b", "译", listOf(LyricWord(0, 3, 1_000, 2_000)))))
+        assertEquals("译", parsed.lines.single().translation)
+        assertTrue(parsed.lines.single().words.isEmpty())
+        val invalid = KrcTranslationAligner.parse("[00:01.00]a b",
+            listOf(KrcTranslationAligner.Row(1_000, "a b", "译", listOf(LyricWord(0, 9, 1_000, 2_000)))))
+        assertEquals("译", invalid.lines.single().translation)
+        assertTrue(invalid.lines.single().words.isEmpty())
+    }
+
     @Test
     fun attachesOnlyAfterFullVerificationAndPreservesOriginalTimeline() {
         val original = """
@@ -233,9 +255,9 @@ class KrcTranslationAlignerTest {
         assertEquals(TranslationReason.INVALID_DATA, parsed.translation.lookup.reason)
     }
 
-    private fun unmodifiable(lines: List<LyricLine>): Boolean = try {
+    private fun <T> unmodifiable(lines: List<T>): Boolean = try {
         @Suppress("UNCHECKED_CAST")
-        (lines as MutableList<LyricLine>).clear()
+        (lines as MutableList<T>).clear()
         false
     } catch (_: UnsupportedOperationException) {
         true

@@ -96,7 +96,20 @@ data class PlaybackState(
     /** Queue recording and the recording supplying audio are independent public metadata. */
     val original: tech.musxi.core.library.SongSummary? = null,
     val actualSource: tech.musxi.core.library.SongSummary? = null,
-)
+    val localAudio: tech.musxi.core.localaudio.LocalAudioItem? = null,
+    val localError: tech.musxi.core.localaudio.LocalAudioError? = null,
+    /** Same elapsedRealtime clock as the position read; never a wall or Compose frame timestamp. */
+    val positionSampledAtElapsedMs: Long = 0,
+    val playbackSpeed: Float = 1f,
+    /** IDLE differs from pause: STOP may retain the current item while releasing the decoder. */
+    val stopped: Boolean = false,
+) {
+    /** Media3 isPlaying excludes buffering, pause and suppression; guard disconnected/error snapshots too. */
+    val canExtrapolatePosition: Boolean
+        get() = connected && playing && playWhenReady && !buffering && !ended &&
+            suppression == PlaybackSuppression.NONE && error == null && localError == null &&
+            playbackSpeed.isFinite() && playbackSpeed > 0f
+}
 
 /** Main-thread facade. Signed stream URLs stay in memory; diagnostics never include them. */
 @androidx.annotation.OptIn(markerClass = [androidx.media3.common.util.UnstableApi::class])
@@ -105,7 +118,10 @@ class PlaybackConnection(context: Context) {
     private val mutable = MutableStateFlow(PlaybackState())
     val state = mutable.asStateFlow()
     val queueState = queueSnapshot.asStateFlow()
+    val localQueueState = localQueueSnapshot.asStateFlow()
     val outputs = outputSnapshot.asStateFlow()
+    /** Service-owned monotonic timer, available even while the player page is closed. */
+    val sleepTimer = sleepTimerSnapshot.asStateFlow()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var controller: MediaController? = null
     private var queriedQualityTicket: String? = null
@@ -183,6 +199,37 @@ class PlaybackConnection(context: Context) {
     }
 
     fun availableOutputs(): List<OutputDevice> = outputs.value.devices
+
+    fun startSleepTimer(minutes: Int, finishTrack: Boolean = false, callback: (Result<Unit>) -> Unit = {}) {
+        if (minutes !in 1..1440) return callback(Result.failure(IllegalArgumentException("invalid_duration")))
+        sleepCommand(if (finishTrack) tech.musxi.core.playback.SleepTimerMode.AFTER_DURATION_FINISH_TRACK
+            else tech.musxi.core.playback.SleepTimerMode.AFTER_DURATION, minutes * 60_000L, callback)
+    }
+
+    fun stopAfterCurrentTrack(callback: (Result<Unit>) -> Unit = {}) =
+        sleepCommand(tech.musxi.core.playback.SleepTimerMode.END_OF_TRACK, 0, callback)
+
+    fun cancelSleepTimer(callback: (Result<Unit>) -> Unit = {}) =
+        sleepCommand(tech.musxi.core.playback.SleepTimerMode.OFF, 0, callback)
+
+    private fun sleepCommand(mode: tech.musxi.core.playback.SleepTimerMode, durationMs: Long, callback: (Result<Unit>) -> Unit) {
+        val current = controller ?: return callback(Result.failure(IllegalStateException("player_unavailable")))
+        val future = current.sendCustomCommand(SessionCommand(MusxiPlaybackService.COMMAND_SLEEP_TIMER, Bundle.EMPTY), Bundle().apply {
+            putString(MusxiPlaybackService.EXTRA_SLEEP_MODE, mode.name)
+            putLong(MusxiPlaybackService.EXTRA_SLEEP_DURATION, durationMs)
+            putString(MusxiPlaybackService.EXTRA_CURRENT_TICKET, currentQueueTicket())
+        })
+        var delivered = false
+        fun deliver(response: Result<Unit>) { if (!delivered) { delivered = true; callback(response) } }
+        val timeout = Runnable { deliver(Result.failure(IllegalStateException("sleep_timer_timeout"))) }
+        main.postDelayed(timeout, 10_000)
+        future.addListener({
+            main.removeCallbacks(timeout)
+            deliver(runCatching {
+                check(current === controller && future.get().resultCode == SessionResult.RESULT_SUCCESS) { "sleep_timer_rejected" }
+            })
+        }, Executor { main.post(it) })
+    }
     /** Opaque slot identity for rejecting a late panel result, including duplicate songs. */
     fun currentQueueTicket(): String? = controller?.sessionExtras?.getString(MusxiPlaybackService.EXTRA_CURRENT_TICKET)
 
@@ -380,6 +427,21 @@ class PlaybackConnection(context: Context) {
         dispatch(player, QueueCommandMailbox.Action.Replace(queue), callback)
     }
 
+    /** Same playback service and notification; no file/content URI crosses this controller API. */
+    fun playLocalQueue(queue: LocalAudioPlaybackQueue, playWhenReady: Boolean = true, callback: (Result<Unit>) -> Unit = {}) {
+        val player = controller ?: return callback(Result.failure(IllegalStateException("Player unavailable")))
+        dispatch(player, QueueCommandMailbox.Action.LocalReplace(queue, playWhenReady), callback)
+    }
+
+    fun jumpToLocalQueueIndex(index: Int, expectedRevision: Long, fromStart: Boolean = false, callback: (Result<Unit>) -> Unit = {}) =
+        editQueue(QueueCommandMailbox.Action.LocalJump(index, expectedRevision, fromStart), callback)
+    fun removeLocalQueueItem(index: Int, expectedRevision: Long, callback: (Result<Unit>) -> Unit = {}) =
+        editQueue(QueueCommandMailbox.Action.LocalEdit(expectedRevision, tech.musxi.core.playback.QueueEdit.Remove(index)), callback)
+    fun moveLocalQueueItem(from: Int, to: Int, expectedRevision: Long, callback: (Result<Unit>) -> Unit = {}) =
+        editQueue(QueueCommandMailbox.Action.LocalEdit(expectedRevision, tech.musxi.core.playback.QueueEdit.Move(from, to)), callback)
+    fun clearLocalQueue(expectedRevision: Long, callback: (Result<Unit>) -> Unit = {}) =
+        editQueue(QueueCommandMailbox.Action.LocalEdit(expectedRevision, tech.musxi.core.playback.QueueEdit.Clear), callback)
+
     /** Restores original queue metadata as paused/idle. No signed capability is restored or prepared. */
     fun restoreQueue(queue: PlaybackQueue, saved: tech.musxi.core.playback.SavedPlaybackQueue,
         callback: (Result<Unit>) -> Unit) {
@@ -431,6 +493,33 @@ class PlaybackConnection(context: Context) {
         it.play()
     } }
     fun seekTo(positionMs: Long) { controller?.seekTo(positionMs.coerceAtLeast(0)) }
+
+    private var speedRequest = 0L
+    /** Callback means the per-item preference was saved and the Controller command was sent. */
+    fun setPlaybackSpeed(speed: Float, callback: (Result<Unit>) -> Unit = {}) {
+        if (runCatching { tech.musxi.core.localaudio.LocalAudioLimits.requirePlaybackSpeed(speed) }.isFailure) {
+            callback(Result.failure(IllegalArgumentException("Invalid local playback speed"))); return
+        }
+        val player = controller
+        val audio = state.value.localAudio
+        val localHost = (app as? PlaybackHost)?.localAudioPlayback
+        if (player == null || audio == null || player.currentMediaItem?.mediaId != "local:${audio.id}" || localHost == null ||
+            !player.isCommandAvailable(Player.COMMAND_SET_SPEED_AND_PITCH)) {
+            callback(Result.failure(IllegalStateException("Local playback unavailable"))); return
+        }
+        val request = ++speedRequest
+        val mediaId = player.currentMediaItem!!.mediaId
+        val ticket = player.sessionExtras.getString(MusxiPlaybackService.EXTRA_CURRENT_TICKET)
+        localHost.setPlaybackSpeed(audio.id, speed) { saved ->
+            main.post {
+                callback(saved.mapCatching {
+                    check(request == speedRequest && player === controller && player.currentMediaItem?.mediaId == mediaId &&
+                        player.sessionExtras.getString(MusxiPlaybackService.EXTRA_CURRENT_TICKET) == ticket) { "Local playback changed" }
+                    player.setPlaybackParameters(androidx.media3.common.PlaybackParameters(speed, 1f))
+                })
+            }
+        }
+    }
     fun select(index: Int) { controller?.let { if (index in 0 until it.mediaItemCount) it.seekTo(index, 0) } }
     fun next() { navigate(true) }
     fun previous() { navigate(false) }
@@ -524,12 +613,17 @@ class PlaybackConnection(context: Context) {
         // Read one item's service-owned snapshot. In-band stream tags and session extras
         // may describe a different source/item while the controller changes its timeline.
         val metadata = player.currentMediaItem?.mediaMetadata
+        val local = localQueueSnapshot.value.items.getOrNull(player.currentMediaItemIndex)
+            ?.takeIf { "local:${it.id}" == player.currentMediaItem?.mediaId }
         val queuePlatform = PlaybackMetadataSnapshot.platform(metadata?.extras?.getString(PlaybackMetadataSnapshot.EXTRA_QUEUE_PLATFORM))
         val sourcePlatform = PlaybackMetadataSnapshot.platform(metadata?.extras?.getString(PlaybackMetadataSnapshot.EXTRA_SOURCE_PLATFORM))
+        val position = samplePlaybackPosition(player)
         mutable.value = PlaybackState(true, player.isPlaying,
             player.playbackState == Player.STATE_BUFFERING, player.currentMediaItem?.mediaId,
-            if (failure != null || player.playerError != null) "播放未完成，请重试或选择其他歌曲" else null,
-            player.currentPosition.coerceAtLeast(0), player.duration.coerceAtLeast(0),
+            if (failure != null || player.playerError != null) {
+                if (local != null) "音频暂时无法播放，请检查文件或重新授权" else "播放未完成，请重试或选择其他歌曲"
+            } else null,
+            position.positionMs, player.duration.coerceAtLeast(0),
             player.currentMediaItemIndex.coerceAtLeast(0), player.mediaItemCount,
             player.playWhenReady, player.playbackState == Player.STATE_ENDED,
             player.hasNextMediaItem(), player.hasPreviousMediaItem(), failure, category(MusxiPlaybackService.EXTRA_SKIPPED),
@@ -542,7 +636,8 @@ class PlaybackConnection(context: Context) {
                 else -> PlaybackSuppression.OTHER
             },
             album = metadata?.albumTitle?.toString().orEmpty(),
-            coverUrl = sourcePlatform?.let { ArtworkPolicy.sanitize(it, metadata?.artworkUri?.toString()) },
+            coverUrl = if (local != null) metadata?.artworkUri?.takeIf { it.scheme == "file" }?.toString()
+                else sourcePlatform?.let { ArtworkPolicy.sanitize(it, metadata?.artworkUri?.toString()) },
             queuePlatform = queuePlatform,
             sourcePlatform = sourcePlatform,
             sourceArtistIds = metadata?.extras?.getStringArrayList(PlaybackMetadataSnapshot.EXTRA_SOURCE_ARTIST_IDS)?.toList().orEmpty(),
@@ -559,6 +654,7 @@ class PlaybackConnection(context: Context) {
                 }
             },
             qualityName = extras.getString(MusxiPlaybackService.EXTRA_QUALITY_NAME),
+            stopped = player.playbackState == Player.STATE_IDLE,
             failureReason = failure?.let { coarse -> tech.musxi.core.playback.PlaybackFailureReason(
                 tech.musxi.core.playback.FailureReason.entries.firstOrNull {
                     it.name == extras.getString(MusxiPlaybackService.EXTRA_FAILURE_REASON)
@@ -581,7 +677,13 @@ class PlaybackConnection(context: Context) {
             connectionPhase = PlaybackConnectionPhase.CONNECTED,
             connectionAttempt = recovery.state.attempt,
             canSetPlaybackModes = player.isCommandAvailable(Player.COMMAND_SET_REPEAT_MODE) &&
-                player.isCommandAvailable(Player.COMMAND_SET_SHUFFLE_MODE))
+                player.isCommandAvailable(Player.COMMAND_SET_SHUFFLE_MODE),
+            localAudio = local,
+            localError = extras.getString(MusxiPlaybackService.EXTRA_LOCAL_FAILURE)?.let { name ->
+                tech.musxi.core.localaudio.LocalAudioError.entries.firstOrNull { it.name == name }
+            },
+            positionSampledAtElapsedMs = position.sampledAtElapsedMs,
+            playbackSpeed = position.speed)
         if (player.isPlaying) main.postDelayed(progressTick, 500)
     }
 

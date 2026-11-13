@@ -1,5 +1,7 @@
 # 账号页样张与实现（2026-10-21）
 
+> **状态：日期设计样张（2026-10-21）。** 样张为 JVM 渲染，不代表当前真机视觉验收；当前状态见 [当前开发接续](../next-session-handoff.md)，设计资料见 [文档入口](../README.md)。
+
 「我的」账号页。样张生成自 `AccountSheetTest`（Robolectric + Roborazzi，JVM 渲染，未上真机），四张：雾蓝浅色、雾蓝深色、松石青浅色、暖琥珀浅色。
 
 相关实现：`ui/account/AccountViewModel.kt`（`AccountState` → 展示态映射）、`ui/account/AccountRowCard.kt`（共用卡片与状态胶囊）、`ui/account/AccountScreen.kt`（正式页面）、`ui/design/AccountSheet.kt`（样张，复用同一套卡片与映射）。

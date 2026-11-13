@@ -44,9 +44,44 @@ The KRC1 XOR/zlib container and language metadata are decoded with bounded
 JDK/Android facilities, following this project's services/krc.cjs and
 src/lyrics/krc.cpp reference. Only validated v1 type=1/language=0 line
 translations are exposed after original-text/timeline compatibility checks.
-Romanization is excluded. No new runtime dependency or word-level UI API.
+Romanization is excluded. No new runtime dependency or word-level UI API
+was included in that historical stage.
+
+2026-11-07 KRC parsing additionally retains optional provider word timings
+and exact UTF-16 text ranges, with bounded counts and line-level fallback.
+Existing Musxi PC parser tests at revision
+824a1dfd8089f2cd9699f6da490e05727d3fe335 supply a synthetic format example.
+The Android timing model, validation and sampling use existing JDK/Kotlin
+facilities. No new runtime dependency; QRC/YRC remain separate work.
 
 2026-11-01 account-authorized audio and Hi-Res additionally adapt
 module/privilege_lite.js, user_verify.js, song_auth.js and song_url_auth.js
 from the same pinned MIT source. Account membership queries are read-only;
 automatic VIP claiming is not included. No new runtime dependency is added.
+
+2026-11-06 ordinary owned-playlist removal reuses module/playlist_tracks_del.js from the same pinned MIT source. No additional runtime dependency.
+
+Same-day owned ordinary-playlist rename and cloudlist cryptography additionally adapt
+MakcRe/KuGouMusicApi revision 7ac64e1cdd333ad9bfff644ded82a0ffeef002d1,
+module/playlist_update.js, util/request.js#createCloudRequest and util/crypto.js.
+Copyright (c) 2023 MakcRe; existing full MIT license retained. No new dependency.
+
+2026-11-13 ordinary owned-playlist deletion additionally adapts module/playlist_del.js
+and util/{crypto,request,helper}.js from revision
+7ac64e1cdd333ad9bfff644ded82a0ffeef002d1. The legacy Base64 text request profile was
+confirmed in a separately authorized single-target device probe. Ownership checks,
+bounded complete account-list readback and no-retry coordination are project code.
+Copyright (c) 2023 MakcRe; existing full MIT license retained. No new dependency.
+
+2026-11-11 optional personal daily recommendations adapt module/recommend_songs.js
+and the standard (non-lite) Android signature salt in util/helper.js
+#signatureAndroidParams from the same pinned MIT source. Read-only POST
+/everyday_song_recommend with x-router everydayrec.service.kugou.com; the returned
+batch is bounded to the existing Track model and no other recommendation surface is
+substituted. No new runtime dependency or license change.
+
+2026-11-13 ordinary owned-playlist creation and its isolated device probe adapt
+module/playlist_add.js from MakcRe/KuGouMusicApi revision
+7ac64e1cdd333ad9bfff644ded82a0ffeef002d1, using the existing Android signature.
+Explicit response-ID validation and fresh owned-list readback are project code.
+Copyright (c) 2023 MakcRe; existing full MIT license retained. No new dependency.

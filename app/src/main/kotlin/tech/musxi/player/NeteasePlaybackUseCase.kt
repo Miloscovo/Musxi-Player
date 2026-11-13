@@ -36,6 +36,7 @@ class NeteasePlaybackUseCase(
     val state = mutable.asStateFlow()
     private var request = 0L
     private var activeRemainder: tech.musxi.core.library.QueueRemainder? = null
+    private var sourcePlaylist: MediaKey? = null
 
     fun playPlaylist(playlist: MediaKey, startSong: MediaKey, knownSongs: List<SongSummary> = emptyList()) {
         val loadHead = loadQueueHead
@@ -43,11 +44,12 @@ class NeteasePlaybackUseCase(
             startPlaylistHead(playlist, startSong, knownSongs, loadHead)
             return
         }
-        start(load = { callback -> loadQueue(playlist, startSong, callback) })
+        start(load = { callback -> loadQueue(playlist, startSong, callback) }, playlistSource = playlist)
     }
 
     /** Search selection replaces the timeline with one account-bound item; no synthetic playlist ID. */
     fun playSong(song: SongSummary) {
+        sourcePlaylist = null
         val generation = generationFor(song.key)
         if (generation == null) {
             onNewIntent(); cancelPending(); mutable.value = QueueLoadState(error = "account_unavailable"); return
@@ -56,7 +58,18 @@ class NeteasePlaybackUseCase(
             coverUrl = ArtworkPolicy.sanitize(song.key.platform, song.coverUrl))), 0, generation))) })
     }
 
+    /** A complete recommendation snapshot already has an account generation and no playlist ID. */
+    fun playSnapshot(queue: PlaybackQueue, result: (Result<Unit>) -> Unit = {}) {
+        sourcePlaylist = null
+        val first = queue.songs.first()
+        if (queue.songs.any { it.key.platform != first.key.platform } || generationFor(first.key) != queue.accountGeneration) {
+            result(Result.failure(tech.musxi.core.library.LibraryPageFailure("account_changed"))); return
+        }
+        start({ callback -> callback(Result.success(queue)) }, result = result)
+    }
+
     fun restore(saved: tech.musxi.core.playback.SavedPlaybackQueue, result: (Result<Unit>) -> Unit) {
+        sourcePlaylist = null
         val generation = saved.songs.firstOrNull()?.key?.let(generationFor)
         val submit = submitRestoredQueue
         if (generation == null || submit == null) {
@@ -71,8 +84,9 @@ class NeteasePlaybackUseCase(
 
     private fun start(load: ((Result<PlaybackQueue>) -> Unit) -> Unit,
         submit: (PlaybackQueue, (Result<Unit>) -> Unit) -> Unit = submitQueue,
-        result: (Result<Unit>) -> Unit = {}, notifyIntent: Boolean = true) {
+        result: (Result<Unit>) -> Unit = {}, notifyIntent: Boolean = true, playlistSource: MediaKey? = null) {
         if (notifyIntent) onNewIntent()
+        sourcePlaylist = playlistSource
         cancelRemainder()
         val token = ++request
         mutable.value = QueueLoadState(loading = true)
@@ -100,6 +114,7 @@ class NeteasePlaybackUseCase(
     private fun startPlaylistHead(playlist: MediaKey, startSong: MediaKey, knownSongs: List<SongSummary>,
         loadHead: (MediaKey, MediaKey, List<SongSummary>, (Result<PlaylistQueueHead>) -> Unit) -> Unit) {
         onNewIntent()
+        sourcePlaylist = playlist
         cancelRemainder()
         val token = ++request
         mutable.value = QueueLoadState(loading = true)
@@ -209,7 +224,9 @@ class NeteasePlaybackUseCase(
         activeRemainder = null
     }
 
-    fun cancelPending() { ++request; cancelRemainder(); mutable.value = QueueLoadState() }
+    fun cancelPending() { ++request; cancelRemainder(); sourcePlaylist = null; mutable.value = QueueLoadState() }
+    /** Stop only pending loading from the deleted source; keep already accepted playback intact. */
+    fun playlistDeleted(key: MediaKey) { if (sourcePlaylist == key) cancelPending() }
     fun stop() { onNewIntent(); cancelPending(); stopPlayer() }
 
     private companion object {

@@ -8,24 +8,53 @@ import tech.musxi.accounts.NeteaseLibraryRepository
 import tech.musxi.accounts.KugouLibraryRepository
 import tech.musxi.accounts.QqLibraryRepository
 import tech.musxi.core.account.Platform
+import tech.musxi.core.library.LibraryPageFailure
+import tech.musxi.core.library.SongSummary
 import tech.musxi.core.library.LibraryPageFetch
 import tech.musxi.playback.PlaybackConnection
 import tech.musxi.playback.PlaybackHost
 import tech.musxi.playback.PlaybackSourceProvider
 import tech.musxi.playback.PlatformPlaybackSources
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.distinctUntilChanged
 
 open class MusxiApplication : Application(), PlaybackHost {
     val settingsRepository get() = accounts.settingsRepository
     val settings get() = settingsRepository.settings
+    override val mediaCardLyrics by lazy {
+        combine(playback.state, lyrics.state, settings, sourceSelection.state) { playback, lyrics, settings, selection ->
+            val waiting = selection.phase in setOf(tech.musxi.core.playback.SourceSelectionPhase.SEARCHING,
+                tech.musxi.core.playback.SourceSelectionPhase.CHOOSING, tech.musxi.core.playback.SourceSelectionPhase.FAILED)
+            tech.musxi.playback.MediaCardLyricsState.from(
+                settings.effectiveLockScreenLyricsMode == tech.musxi.core.settings.LockScreenLyricsMode.CARD,
+                playback, lyrics, waiting)
+        }.distinctUntilChanged()
+    }
+    /** Personalization files are durable local settings, independent of account and content caches. */
+    private val wallpaperPool by lazy { tech.musxi.player.wallpaper.AppWallpaperPool.get(this) }
+    val wallpaper by lazy { wallpaperPool.player }
+    val interfaceWallpaper by lazy { wallpaperPool.interfaceWallpaper }
+    /** Local audio survives platform logout and is never part of ordinary cache cleanup. */
+    val localAudio by lazy { tech.musxi.player.localaudio.AppLocalAudioRepository(this, settings) }
+    override val localAudioPlayback by lazy {
+        tech.musxi.player.localaudio.AppLocalAudioPlaybackAdapter(localAudio,
+            { queue, playWhenReady, result -> playback.playLocalQueue(queue, playWhenReady, result) },
+            beforePrepare = { playback.checkpointBeforeInstall(it) },
+            journalStore = tech.musxi.core.localaudio.FileLocalAudioPlaybackJournalStore(
+                java.io.File(filesDir, "local-audio-playback-v1")),
+            onNewIntent = ::cancelPlatformPlaybackWork)
+    }
     val cache by lazy { AppCacheRepository(this) { kind ->
         when (kind) {
             tech.musxi.core.cache.CacheKind.LYRICS -> { lyrics.clearCache(); lyricsRepository.clearCache() }
             tech.musxi.core.cache.CacheKind.LIBRARY_PAGES -> {
                 listOf(libraryBrowserCache, kugouLibraryBrowserCache, qqLibraryBrowserCache)
                     .filter { it.isInitialized() }.forEach { it.value.clearCachedPages() }
+                if (recommendationsHolder.isInitialized()) recommendationsHolder.value.clearCachedResults()
+                playlistCatalogs.values.forEach { it.clearCachedPages() }
             }
             tech.musxi.core.cache.CacheKind.COVERS -> Unit
         }
@@ -95,12 +124,28 @@ open class MusxiApplication : Application(), PlaybackHost {
     lateinit var accounts: AccountRepository
         private set
     val playback by lazy { PlaybackConnection(this) }
+    /** Lifecycle/permission backend only; release has no concrete page until the front end connects it. */
+    val lockScreenLyrics by lazy { tech.musxi.player.lockscreen.LockScreenLyricsController(this,
+        lockScreenLyricsHostClass()) }
+    protected open fun lockScreenLyricsHostClass(): Class<out tech.musxi.player.lockscreen.LockScreenLyricsHostActivity>? = null
+    /** Shared public content, with the applied player wallpaper; drafts never leak onto the lock screen. */
+    val lockScreenLyricsContent by lazy {
+        combine(playback.state, lyrics.state, sourceSelection.state, wallpaper.state) { playback, lyrics, selection, wallpaper ->
+            val waiting = selection.phase in setOf(tech.musxi.core.playback.SourceSelectionPhase.SEARCHING,
+                tech.musxi.core.playback.SourceSelectionPhase.CHOOSING, tech.musxi.core.playback.SourceSelectionPhase.FAILED)
+            tech.musxi.player.lockscreen.LockScreenLyricsContent.from(playback, lyrics, waiting, wallpaper.saved)
+        }.distinctUntilChanged()
+    }
     val library by lazy { NeteaseLibraryRepository(accounts) }
     val updates by lazy { tech.musxi.accounts.AppUpdateRepository(this,
         packageManager.getPackageInfo(packageName, 0).versionName ?: "0.0.0",
         releaseBuild = BuildConfig.BUILD_TYPE == "release", beforeInstall = playback::checkpointBeforeInstall) }
     val kugouLibrary by lazy { KugouLibraryRepository(accounts) }
     val qqLibrary by lazy { QqLibraryRepository(accounts) }
+    private val recommendationsHolder = lazy { AppRecommendations(accounts.createRecommendationsBrowser()) {
+            queue, result -> queuePlayback.playSnapshot(queue, result)
+        } }
+    val recommendations get() = recommendationsHolder.value
     /** Metadata only: artist/album reads use the same account lanes and page bounds as library reads. */
     val catalog = tech.musxi.core.library.CatalogTrackFetch { key, offset, result ->
         val entity = tech.musxi.core.library.MediaKey(key.platform, key.id)
@@ -113,8 +158,45 @@ open class MusxiApplication : Application(), PlaybackHost {
     }
     private val favoritesRepository by lazy { tech.musxi.accounts.FavoritesRepository(accounts, ::onFavoriteDiagnostic) }
     val playlists by lazy { tech.musxi.accounts.PlaylistRepository(accounts,
-        favoriteWrite = { song, result -> favorites.enqueueLiked(song, true, result) },
-        changed = { platform, identity -> libraryFor(platform).invalidate(identity) }) }
+        favoriteWrite = ::writePlaylistFavorite,
+        changed = { platform, identity ->
+            libraryFor(platform).invalidate(identity)
+            playlistCatalogs[platform]?.invalidate(identity)
+        }, catalogFor = ::playlistCatalog, onDeleted = { key ->
+            if (queuePlaybackHolder.isInitialized()) queuePlaybackHolder.value.playlistDeleted(key)
+        }) }
+    private val playlistCatalogs = mutableMapOf<Platform, tech.musxi.core.library.PlaylistCatalog>()
+    private fun playlistCatalog(platform: Platform) = playlistCatalogs.getOrPut(platform) {
+        accounts.createPlaylistCatalog(when (platform) {
+            Platform.NETEASE -> createLibraryFetch()
+            Platform.KUGOU -> createKugouLibraryFetch()
+            Platform.QQ -> createQqLibraryFetch()
+        }, platform)
+    }
+    private fun writePlaylistFavorite(song: SongSummary, liked: Boolean, result: (Result<Unit>) -> Unit) {
+        val platform = song.key.platform
+        val owner = accounts.playbackIdentity(platform)
+        appScope.launch {
+            val ready = kotlinx.coroutines.withTimeoutOrNull(90_000L) {
+                favorites.state.first { it.getValue(platform).let { state ->
+                    !state.loading && state.pending == null && state.queuedKeys.isEmpty()
+                } }
+                if (accounts.playbackIdentity(platform) != owner) return@withTimeoutOrNull false
+                // A membership sheet can be opened before any favorites UI has initialized its browser.
+                favorites.refresh(platform)
+                favorites.state.first { !it.getValue(platform).loading }
+                val state = favorites.state.value.getValue(platform)
+                state.synced && state.canWrite && state.error == null
+            }
+            when {
+                accounts.playbackIdentity(platform) != owner -> result(Result.failure(LibraryPageFailure("account_changed")))
+                ready == null -> result(Result.failure(LibraryPageFailure("timeout")))
+                !ready -> result(Result.failure(LibraryPageFailure("not_synced")))
+                else -> favorites.enqueueLiked(song, liked, result)
+            }
+        }
+    }
+
     private fun libraryFor(platform: Platform) = when (platform) {
         Platform.NETEASE -> libraryBrowser
         Platform.KUGOU -> kugouLibraryBrowser
@@ -133,7 +215,10 @@ open class MusxiApplication : Application(), PlaybackHost {
             }.invalidate(identity, refreshNow = false)
         }) }
     val playbackJournal: tech.musxi.core.playback.PlaybackJournalBrowser by lazy { tech.musxi.core.playback.PlaybackJournalBrowser(
-        accounts::playbackIdentity, accounts::playbackJournal, { saved, result -> queuePlayback.restore(saved, result) }) }
+        accounts::playbackIdentity, accounts::playbackJournal, { saved, result ->
+            localAudioPlayback.cancelPendingPlay()
+            queuePlayback.restore(saved, result)
+        }) }
     private val lyricsRepository by lazy { tech.musxi.accounts.LyricsRepository(accounts) }
     val lyrics by lazy { tech.musxi.core.lyrics.LyricsBrowser(accounts::playbackIdentity,
         lyricsRepository::fetchOriginal, ::fetchLyricsTranslation,
@@ -184,7 +269,7 @@ open class MusxiApplication : Application(), PlaybackHost {
         accounts.states.value.getValue(key.platform).takeIf {
             it.phase == tech.musxi.core.account.AccountPhase.CONNECTED
         }?.generation
-    }, playback::restoreQueue, { playbackJournal.cancelRestore() },
+    }, playback::restoreQueue, { playbackJournal.cancelRestore(); localAudioPlayback.cancelPendingPlay() },
         loadQueueHead = { playlist, song, known, result ->
             when (playlist.platform) {
                 Platform.NETEASE -> library.queueHead(playlist, song, known, result)
@@ -195,7 +280,17 @@ open class MusxiApplication : Application(), PlaybackHost {
         enqueueBatch = { songs, at, batchId, epoch, result -> playback.enqueueBatch(songs, at, batchId, epoch, result) },
         currentQueueEpoch = { playback.queueState.value.queueEpoch }) }
     val queuePlayback get() = queuePlaybackHolder.value
+    override fun onPlatformPlaybackRequested() {
+        localAudioPlayback.cancelPendingPlay()
+        localAudioPlayback.deactivateQueue()
+    }
+    override fun onLocalPlaybackRequested() { cancelPlatformPlaybackWork() }
     override fun onPlaybackStopRequested() {
+        localAudioPlayback.cancelPendingPlay()
+        localAudioPlayback.deactivateQueue()
+        cancelPlatformPlaybackWork()
+    }
+    private fun cancelPlatformPlaybackWork() {
         library.cancelQueueLoading()
         kugouLibrary.cancelQueueLoading()
         qqLibrary.cancelQueueLoading()
@@ -224,6 +319,24 @@ open class MusxiApplication : Application(), PlaybackHost {
         // Dedicated app-owned WebView jar. No other platform uses this browser profile.
         if (Build.VERSION.SDK_INT >= 28) WebView.setDataDirectorySuffix("netease_login")
         accounts = AccountRepository(this)
+        registerActivityLifecycleCallbacks(object : ActivityLifecycleCallbacks {
+            private val started = mutableSetOf<android.app.Activity>()
+            override fun onActivityStarted(activity: android.app.Activity) {
+                if (activity !is tech.musxi.player.lockscreen.LockScreenLyricsHostActivity) started.add(activity)
+                accounts.setForeground(started.isNotEmpty())
+                lockScreenLyrics.refreshPermissions()
+            }
+            override fun onActivityStopped(activity: android.app.Activity) {
+                started.remove(activity)
+                accounts.setForeground(started.isNotEmpty())
+            }
+            override fun onActivityDestroyed(activity: android.app.Activity) { started.remove(activity) }
+            override fun onActivityCreated(activity: android.app.Activity, state: android.os.Bundle?) = Unit
+            override fun onActivityResumed(activity: android.app.Activity) = Unit
+            override fun onActivityPaused(activity: android.app.Activity) = Unit
+            override fun onActivitySaveInstanceState(activity: android.app.Activity, state: android.os.Bundle) = Unit
+        })
+        lockScreenLyrics.start(appScope)
         updates.start()
         appScope.launch { accounts.states.collect { lyricsRepository.accountChanged() } }
         appScope.launch { accounts.states.collect { lyricsMatch.accountChanged() } }

@@ -28,8 +28,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.hapticfeedback.HapticFeedbackType
-import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
 import tech.musxi.core.library.PlaylistKind
@@ -48,8 +46,10 @@ import tech.musxi.player.ui.components.RowSpec
 import tech.musxi.player.ui.components.RowText
 import tech.musxi.player.ui.components.listLines
 import tech.musxi.player.ui.model.formatDuration
+import tech.musxi.player.ui.theme.Haptic
 import tech.musxi.player.ui.theme.Space
 import tech.musxi.player.ui.theme.nowPlayingAccent
+import tech.musxi.player.ui.theme.rememberHaptics
 import tech.musxi.player.ui.theme.tabular
 
 /** What the library tab shows above the playlist list for one platform. */
@@ -57,6 +57,8 @@ data class LibraryHomeUi(
     val accountName: String? = null,
     val resume: ResumeUi? = null,
     val recent: List<SongSummary> = emptyList(),
+    /** 每日推荐 / 猜你喜欢, right after 继续播放; null keeps the module away. */
+    val recommendation: RecommendationCardUi? = null,
 )
 
 /** The saved queue's current song, offered as a one-tap way back into what was playing. */
@@ -205,7 +207,7 @@ fun RecentStrip(
 @Composable
 private fun RecentItem(song: SongSummary, playing: Boolean, onClick: () -> Unit, onRemove: () -> Unit) {
     val cs = MaterialTheme.colorScheme
-    val haptics = LocalHapticFeedback.current
+    val haptic = rememberHaptics()
     var menuOpen by remember { mutableStateOf(false) }
     // A tile is narrow: at large font sizes it reserves two lines for the title, so the tiles stay one height.
     val titleLines = listLines()
@@ -216,10 +218,12 @@ private fun RecentItem(song: SongSummary, playing: Boolean, onClick: () -> Unit,
                 .clip(MaterialTheme.shapes.medium)
                 .combinedClickable(
                     role = Role.Button,
+                    // The long press plays Haptic.LONG_PRESS itself; the default buzz would double it.
+                    hapticFeedbackEnabled = false,
                     onClick = onClick,
                     onLongClickLabel = "移除最近播放",
                     onLongClick = {
-                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                        haptic(Haptic.LONG_PRESS)
                         menuOpen = true
                     },
                 ),

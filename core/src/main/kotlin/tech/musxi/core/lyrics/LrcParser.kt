@@ -7,6 +7,8 @@ data class LyricLine(
     val text: String,
     /** Optional, already aligned to this original row; null means no displayable translation. */
     val translation: String? = null,
+    /** Optional provider-timed spans in this exact text; no timing is inferred from line length. */
+    val words: List<LyricWord> = emptyList(),
 )
 
 enum class LyricsOrigin { AUTO, MATCHED }
@@ -17,6 +19,11 @@ data class ParsedLyrics(
     val translation: LyricsTranslation = LyricsTranslation(),
     val origin: LyricsOrigin = LyricsOrigin.AUTO,
     val offsetMs: Long = 0,
+    /**
+     * Provider-specific normalization generation. Bumped when a provider's already-cached document
+     * should be fetched again for richer timing; the UI does not read it.
+     */
+    val timingRevision: Int = 0,
 )
 
 object LrcParser {

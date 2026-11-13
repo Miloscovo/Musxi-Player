@@ -1,6 +1,7 @@
 package tech.musxi.loginpoc;
 
 import org.json.JSONArray;
+import org.json.JSONException;
 import org.json.JSONObject;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -8,7 +9,7 @@ import java.io.InputStream;
 import java.net.URI;
 import java.util.*;
 
-/** Device-local read-only adapter of the pinned MIT KuGouMusicApi modules.
+/** Device-local adapter of the pinned MIT KuGouMusicApi modules.
  * user_playlist, playlist_track_all_new, search, song_url and util/helper/request.
  * Copyright (c) 2023 MakcRe. No alternate audio or permission bypass.
  */
@@ -51,19 +52,37 @@ public final class KugouLibraryApi {
         public enum Kind { LIKED, CREATED, COLLECTED, OTHER }
         public final String id, name, coverUrl; public final int trackCount;
         public final String sourceGlobalId;
-        public final boolean favorite, editable, readOnly;
+        public final boolean favorite, editable, readOnly, systemDefault;
         public final Kind kind;
+        private final EditMetadata editMetadata;
+        private final boolean ordinaryOwned;
         Playlist(String id, String name, String coverUrl, int count) { this(id,name,coverUrl,count,false); }
         Playlist(String id, String name, String coverUrl, int count, boolean favorite) {
             this(id,name,coverUrl,count,favorite,true,null);
         }
         Playlist(String id, String name, String coverUrl, int count, boolean favorite, boolean editable,
             String sourceGlobalId) {
+            this(id,name,coverUrl,count,favorite,editable,sourceGlobalId,null,false,false);
+        }
+        private Playlist(String id, String name, String coverUrl, int count, boolean favorite, boolean editable,
+            String sourceGlobalId, EditMetadata editMetadata, boolean systemDefault, boolean ordinaryOwned) {
+            this.editMetadata=editMetadata;
+            this.ordinaryOwned=ordinaryOwned;
+            this.systemDefault=systemDefault;
             this.id=id; this.name=name; this.coverUrl=coverUrl; trackCount=count; this.favorite=favorite;
             this.sourceGlobalId=sourceGlobalId; this.editable=editable; this.readOnly=!editable;
             this.kind=favorite ? Kind.LIKED : editable ? Kind.CREATED :
                 sourceGlobalId != null ? Kind.COLLECTED : Kind.OTHER;
         }
+        /**
+         * Whether this row carries everything an ordinary-list rename needs: the list is the
+         * current user's own editable, non-favorite, non-system-default list and the account list
+         * supplied the server's edit metadata (total_ver, sort, tags, intro). is_edit=1 alone is
+         * not enough. Read-only: it never changes what renamePlaylist actually revalidates.
+         */
+        public boolean canRename() { return editable && !favorite && !systemDefault && editMetadata!=null; }
+        /** Explicit is_edit=1 / is_def=0 is required; missing or future system flags fail closed. */
+        public boolean canDelete() { return ordinaryOwned && editable && !favorite && !systemDefault && kind==Kind.CREATED; }
     }
     public static class Song {
         public final String id, name, album, coverUrl; public final List<String> artists; public final long durationMs;
@@ -84,6 +103,75 @@ public final class KugouLibraryApi {
     }
     public Page<Track> artistTracks(KugouApi.Session session,String id,int offset,int limit) throws IOException {
         return collectionTracks(session,id,offset,limit,true);
+    }
+    /**
+     * Current account's personal daily recommendation, from the standard-profile
+     * POST /everyday_song_recommend (KuGouMusicApi a5a98013 module/recommend_songs.js).
+     * Provider order is preserved, the whole batch is returned (at most 200 rows) and an
+     * explicitly empty song_list is an empty success. A malformed body is never a success,
+     * and no other recommendation surface is substituted for the personal daily batch.
+     */
+    public List<Track> dailyRecommendations(KugouApi.Session session) throws IOException {
+        if(session==null)throw error("credentials");
+        return parseDailyRecommendations(api.dailyRecommendCall(session));
+    }
+    static List<Track> parseDailyRecommendations(JSONObject root) throws IOException {
+        JSONObject data=success(root);
+        if(!(data.opt("song_list") instanceof JSONArray))throw error("protocol");
+        JSONArray list=data.optJSONArray("song_list");
+        if(list.length()>200)throw error("limit");
+        List<Track> tracks=new ArrayList<>();
+        Set<String> seen=new HashSet<>();
+        for(int i=0;i<list.length();i++) {
+            JSONObject row=list.optJSONObject(i);if(row==null)throw error("protocol");
+            String hash=text(row.opt("hash")).toLowerCase(Locale.ROOT);
+            if(!hash.matches("[a-f0-9]{32}"))throw error("identity");
+            Object rawAlbum=first(row,"album_id");
+            String album=numeric(rawAlbum==null?"0":rawAlbum,true);
+            Object rawAudioId=first(row,"mixsongid","album_audio_id");
+            String songId=hash+"_"+album+"_"+numeric(rawAudioId==null?"0":rawAudioId,true);
+            if(!seen.add(songId))throw error("identity");
+            String name=clean(first(row,"songname","ori_audio_name","audio_name","name","filename"),"");
+            name=name.replaceFirst("(?i)\\.(mp3|flac|wav|wma|aac|m4a|ape|ogg)$","").trim();
+            if(name.isEmpty())throw error("protocol");
+            Object seconds=first(row,"time_length","timelength","timelen","duration");
+            long duration=nonnegative(seconds==null?0:seconds,86_400)*1000;
+            Artists contributors=dailySingers(row);
+            tracks.add(new Track(songId,name,clean(first(row,"album_name","albumname"),""),
+                contributors.names,duration,dailyCover(row),contributors.ids));
+        }
+        return Collections.unmodifiableList(tracks);
+    }
+    /** singerinfo is the only ordered contributor array in this response; never split author_name. */
+    private static Artists dailySingers(JSONObject row) {
+        JSONArray list=row.optJSONArray("singerinfo");
+        if(list!=null && list.length()>0 && list.length()<=100) {
+            List<String> names=new ArrayList<>(), ids=new ArrayList<>();
+            boolean valid=true;
+            for(int i=0;i<list.length();i++) {
+                JSONObject item=list.optJSONObject(i);if(item==null){valid=false;break;}
+                String name=clean(item.opt("name"),"");
+                if(name.isEmpty()){valid=false;break;}
+                names.add(name);ids.add(optionalArtistId(first(item,"id","author_id")));
+            }
+            if(valid) {
+                if(ids.contains(null))ids.clear();
+                return new Artists(names,ids);
+            }
+        }
+        String fallback=clean(first(row,"author_name","singername"),"");
+        return new Artists(fallback.isEmpty()?Collections.emptyList():Collections.singletonList(fallback),Collections.emptyList());
+    }
+    private static String dailyCover(JSONObject row) {
+        Object value=first(row,"sizable_cover");
+        if(value==null) {
+            JSONObject media=row.optJSONObject("trans_param");
+            if(media!=null)value=first(media,"union_cover");
+        }
+        if(value==null)return cover(row);
+        JSONObject requested=new JSONObject();
+        try { requested.put("cover",value); } catch(JSONException malformed) { return null; }
+        return cover(requested);
     }
     public Page<Track> albumTracks(KugouApi.Session session,String id,int offset,int limit) throws IOException {
         return collectionTracks(session,id,offset,limit,false);
@@ -195,10 +283,18 @@ public final class KugouLibraryApi {
         AudioQuality(String id,String name) { this.id=id; this.name=name; }
     }
     public Page<Playlist> playlists(KugouApi.Session session,int offset,int limit) throws IOException {
+        return playlists(session,offset,limit,false);
+    }
+    private Page<Playlist> playlists(KugouApi.Session session,int offset,int limit,boolean strict) throws IOException {
         bounds(offset,limit);
         String body = "{\"userid\":"+JSONObject.quote(session.userId)+",\"token\":"+JSONObject.quote(session.token)+
             ",\"total_ver\":979,\"type\":2,\"page\":"+(offset/limit+1)+",\"pagesize\":"+limit+"}";
         JSONObject root=api.libraryCall("/v7/get_all_list",session,map("plat","1"),body,false);
+        if(strict) {
+            JSONObject data=success(root);
+            if(!(data.opt("info") instanceof JSONArray) && !(data.opt("lists") instanceof JSONArray) &&
+                !(offset==0 && total(data)==0))throw error("incomplete");
+        }
         return parsePlaylists(root,offset,limit);
     }
     public Page<Track> tracks(KugouApi.Session session,String playlistId,int offset,int limit) throws IOException {
@@ -425,6 +521,277 @@ public final class KugouLibraryApi {
                 .put("scene","false;null").put("data",new JSONArray().put(resource));
             JSONObject response=api.libraryCall("/cloudlist.service/v6/add_song",session,
                 map("last_time",String.valueOf(System.currentTimeMillis()/1000),"last_area","gztx"),body.toString(),false);
+            successAudio(response);
+            if(!Arrays.asList("1","200").contains(text(response.opt("status"))))throw error("protocol");
+            favoriteCurrent(current,System.nanoTime()+60_000_000_000L);
+        } catch(org.json.JSONException malformed) { throw error("protocol"); }
+    }
+    /** One playlist row proved by the current account list; an arbitrary caller id never becomes a write target. */
+    public Playlist accountPlaylist(KugouApi.Session session,String playlistId,
+        java.util.function.BooleanSupplier current) throws IOException {
+        Playlist target=currentAccountPlaylist(session,playlistId,current);
+        if(target==null)throw error("unavailable");
+        return target;
+    }
+
+    /**
+     * The account row with exactly this ID from a complete, bounded, fresh list read, or null when
+     * the account really has no such row. A duplicated page, a drifting total or a page that cannot
+     * advance fails closed: absence is only ever proven by an exhaustive walk.
+     */
+    private Playlist currentAccountPlaylist(KugouApi.Session session,String playlistId,
+        java.util.function.BooleanSupplier current) throws IOException {
+        numeric(playlistId,false);
+        long deadline=System.nanoTime()+60_000_000_000L;
+        Playlist target=null; Integer expected=null; int offset=0; Set<String> lists=new HashSet<>();
+        while(true) {
+            favoriteCurrent(current,deadline);
+            Page<Playlist> page=playlists(session,offset,100,true);
+            favoriteCurrent(current,deadline);
+            if(page.total>=0) {
+                if(page.total>20_000 || (expected!=null && expected!=page.total))throw error("incomplete");
+                expected=page.total;
+            } else if(expected!=null)throw error("incomplete");
+            for(Playlist p:page.items) {
+                if(!lists.add(p.id) || lists.size()>20_000)throw error("incomplete");
+                if(p.id.equals(playlistId))target=p;
+            }
+            if(page.nextOffset<0)break;
+            if(page.items.isEmpty() || page.nextOffset!=offset+100 || page.nextOffset>20_000)throw error("incomplete");
+            offset=page.nextOffset;
+        }
+        if(expected!=null && expected!=lists.size())throw error("incomplete");
+        favoriteCurrent(current,deadline);
+        return target;
+    }
+
+    /**
+     * The account row this session may delete, proven by a complete fresh list read, or null when
+     * this account holds no row with that exact ID. A row that exists but is not the current user's
+     * own ordinary editable list - the favorite list, a Kugou system default list, or a collected
+     * read-only list - is refused as permission instead of being reported as absent.
+     */
+    public Playlist deletablePlaylist(KugouApi.Session session,String playlistId,
+        java.util.function.BooleanSupplier current) throws IOException {
+        if(session==null || current==null)throw error("credentials");
+        Playlist target=currentAccountPlaylist(session,playlistId,current);
+        if(target==null)return null;
+        if(!target.canDelete())throw error("permission");
+        favoriteCurrent(current,System.nanoTime()+60_000_000_000L);
+        return target;
+    }
+
+    /**
+     * Re-proves ordinary ownership from the complete current account list, then sends at most one
+     * fixed playlist_del.js request (type=1,total_ver=0), confirmed by the 2026-11-13 device probe.
+     * No track removal, empty-list restriction or rename metadata is required. The facade's
+     * deletion coordinator always performs another complete read, even if this response is lost.
+     */
+    public void deletePlaylist(KugouApi.Session session,String playlistId,
+        java.util.function.BooleanSupplier current) throws IOException {
+        if(session==null || current==null)throw error("credentials");
+        if(deletablePlaylist(session,playlistId,current)==null)return;
+        JSONObject response=api.deletePlaylist(session,Long.parseLong(playlistId),current);
+        success(response);
+        if(response.has("error_code") && !"0".equals(text(response.opt("error_code"))))throw error("platform");
+        favoriteCurrent(current,System.nanoTime()+60_000_000_000L);
+    }
+
+    /**
+     * Creates one ordinary empty list, then resolves only the explicit response ID against a fresh
+     * complete account list. The 2026-11-13 device probe confirmed data.info.listid; neither title
+     * matches nor before/after list differences are a substitute for that ID. A failed write or
+     * readback never resends the create request.
+     */
+    public Playlist createPlaylist(KugouApi.Session session,String name,
+        java.util.function.BooleanSupplier current) throws IOException {
+        if(session==null || current==null)throw error("credentials");
+        String title=name==null?null:name.trim();
+        if(title==null || title.isEmpty() || title.codePointCount(0,title.length())>80 ||
+            name.codePoints().anyMatch(cp -> Character.isISOControl(cp) || (cp>=0xD800 && cp<=0xDFFF)))
+            throw error("request");
+        long deadline=System.nanoTime()+60_000_000_000L;
+        List<Playlist> before=creationSnapshot(session,current,deadline);
+        favoriteCurrent(current,deadline);
+        JSONObject response;
+        try {
+            JSONObject body=new JSONObject().put("userid",session.userId).put("token",session.token)
+                .put("total_ver",0).put("name",title).put("type",0).put("source",1)
+                .put("is_pri",0).put("list_create_gid","").put("from_shupinmv",0);
+            // Fixed request shape from KuGouMusicApi 7ac64e1 module/playlist_add.js.
+            response=api.libraryCall("/cloudlist.service/v5/add_list",session,
+                map("last_time",String.valueOf(System.currentTimeMillis()/1000),"last_area","gztx"),
+                body.toString(),false);
+        } catch(JSONException malformed) { throw error("protocol"); }
+        favoriteCurrent(current,deadline);
+        String id=createdPlaylistId(response);
+        for(Playlist previous:before)if(previous.id.equals(id))throw error("identity");
+        List<Playlist> after=creationSnapshot(session,current,deadline);
+        Playlist confirmed=null;
+        for(Playlist candidate:after)if(candidate.id.equals(id))confirmed=candidate;
+        if(confirmed==null)throw error("not_confirmed");
+        if(!confirmed.editable || confirmed.favorite || confirmed.systemDefault)throw error("permission");
+        // List names are display-sanitized by parsePlaylists (including emoji ZWJ/Cf).
+        // Compare using the same rule; the response ID, not the title, proves identity.
+        if(!clean(title,"未命名歌单").equals(confirmed.name))throw error("not_confirmed");
+        favoriteCurrent(current,deadline);
+        return confirmed;
+    }
+
+    /** Only the observed account-local ID route is accepted; optional ID echo must agree. */
+    private static String createdPlaylistId(JSONObject response) throws IOException {
+        JSONObject data=success(response);
+        if(response.has("error_code") && !"0".equals(text(response.opt("error_code"))))throw error("platform");
+        JSONObject info=data.optJSONObject("info");
+        if(info==null)throw error("protocol");
+        // info is a playlist resource, not an operation envelope: its status is not a success code.
+        String id=numeric(info.opt("listid"),false);
+        if(info.has("list_create_listid") && !id.equals(numeric(info.opt("list_create_listid"),false)))throw error("identity");
+        return id;
+    }
+
+    /** Full, stable account snapshot; malformed paging is not evidence of a new or absent ID. */
+    private List<Playlist> creationSnapshot(KugouApi.Session session,
+        java.util.function.BooleanSupplier current,long deadline) throws IOException {
+        List<Playlist> result=new ArrayList<>();
+        Set<String> seen=new HashSet<>(); Integer expected=null; int offset=0;
+        while(true) {
+            favoriteCurrent(current,deadline);
+            Page<Playlist> page=playlists(session,offset,100);
+            if(page.total>=0) {
+                if(expected!=null && expected!=page.total)throw error("incomplete");
+                expected=page.total;
+            }
+            for(Playlist value:page.items) {
+                if(!seen.add(value.id) || result.size()>=20_000)throw error("incomplete");
+                result.add(value);
+            }
+            if(page.nextOffset<0)break;
+            if(page.nextOffset<=offset || page.nextOffset>20_000)throw error("limit");
+            offset=page.nextOffset;
+        }
+        if(expected!=null && expected!=result.size())throw error("incomplete");
+        favoriteCurrent(current,deadline);
+        return result;
+    }
+
+    private static final class EditMetadata {
+        final long totalVersion, sort;
+        final String tags, intro;
+        EditMetadata(long version,long sort,String tags,String intro) {
+            this.totalVersion=version; this.sort=sort; this.tags=tags; this.intro=intro;
+        }
+    }
+    private static EditMetadata editMetadata(JSONObject data,JSONObject row) {
+        if(!(row.opt("tags") instanceof String) || !(row.opt("intro") instanceof String) || !row.has("sort"))return null;
+        Object version=data.has("total_ver")?data.opt("total_ver"):row.opt("total_ver");
+        try {
+            String tags=(String)row.opt("tags"), intro=(String)row.opt("intro");
+            if(tags.length()>4096 || intro.length()>16384)return null;
+            return new EditMetadata(nonnegative(version,9_007_199_254_740_991L),
+                nonnegative(row.opt("sort"),9_007_199_254_740_991L),tags,intro);
+        } catch(IOException invalid) { return null; }
+    }
+
+    /** Rename only a server-owned ordinary list. Missing metadata never becomes empty defaults. */
+    public void renamePlaylist(KugouApi.Session session,String playlistId,String name,
+        java.util.function.BooleanSupplier current) throws IOException {
+        if(name==null || name.trim().isEmpty() || name.codePointCount(0,name.length())>80 ||
+            name.codePoints().anyMatch(cp -> Character.isISOControl(cp) || (cp>=0xD800 && cp<=0xDFFF)))throw error("request");
+        String title=name.trim();
+        Playlist before=accountPlaylist(session,playlistId,current);
+        if(!before.editable || before.favorite || before.systemDefault)throw error("permission");
+        if(title.equals(before.name))return;
+        EditMetadata metadata=before.editMetadata;
+        if(metadata==null)throw error("incomplete");
+        favoriteCurrent(current,System.nanoTime()+60_000_000_000L);
+        try {
+            JSONObject data=new JSONObject().put("listid",Long.parseLong(before.id)).put("type",0)
+                .put("total_ver",metadata.totalVersion).put("sort",metadata.sort)
+                .put("tags",metadata.tags).put("intro",metadata.intro).put("name",title);
+            JSONObject response=api.renamePlaylist(session,data);
+            successAudio(response);
+            if(!Arrays.asList("1","200").contains(text(response.opt("status"))))throw error("protocol");
+        } catch(org.json.JSONException invalid) { throw error("protocol"); }
+        favoriteCurrent(current,System.nanoTime()+60_000_000_000L);
+        Playlist after=accountPlaylist(session,playlistId,current);
+        if(!after.editable || after.favorite || after.systemDefault)throw error("permission");
+        if(!title.equals(after.name))throw error("not_confirmed");
+        EditMetadata confirmed=after.editMetadata;
+        if(confirmed==null || confirmed.sort!=metadata.sort || !confirmed.tags.equals(metadata.tags) ||
+            !confirmed.intro.equals(metadata.intro))throw error("not_confirmed");
+        favoriteCurrent(current,System.nanoTime()+60_000_000_000L);
+    }
+
+    /**
+     * A complete, ordered snapshot of one playlist named by the current account list.
+     * Every page is re-checked against the same total, duplicates fail closed, and an
+     * interrupted or changed account never returns a partial list. Collected lists keep
+     * their published source route; own lists use the stored order behind tracks(offset).
+     */
+    public List<String> playlistTrackIds(KugouApi.Session session,String playlistId,
+        java.util.function.BooleanSupplier current) throws IOException {
+        Playlist playlist=accountPlaylist(session,playlistId,current);
+        long deadline=System.nanoTime()+60_000_000_000L;
+        List<String> ids=new ArrayList<>(); Set<String> seen=new HashSet<>(); Integer expected=null; int offset=0;
+        while(true) {
+            favoriteCurrent(current,deadline);
+            Page<Track> page=tracks(session,playlist.id,playlist.sourceGlobalId,offset,100);
+            if(page.total>=0) { if(expected!=null && expected!=page.total)throw error("incomplete");expected=page.total; }
+            // Every page must fill its declared window; a short page before the stated total is a truncation.
+            if(expected!=null && page.items.size()!=Math.min(100,expected-offset))throw error("incomplete");
+            for(Track track:page.items) {
+                if(!seen.add(track.id) || ids.size()>=20_000)throw error("incomplete");
+                ids.add(track.id);
+            }
+            if(page.nextOffset<0)break;
+            if(page.nextOffset<=offset || page.nextOffset>20_000)throw error("limit");
+            offset=page.nextOffset;
+        }
+        if(expected!=null && expected!=ids.size())throw error("incomplete");
+        favoriteCurrent(current,deadline);
+        return Collections.unmodifiableList(ids);
+    }
+
+    /**
+     * Remove one song from one of the current account's own editable, non-favorite lists.
+     * Ownership comes from a fresh server list read, the delete id is that row's real
+     * fileid, and the favorite list keeps its separate setLiked path.
+     */
+    public void removeFromPlaylist(KugouApi.Session session,String playlistId,String songId,
+        java.util.function.BooleanSupplier current) throws IOException {
+        numeric(playlistId,false);
+        String[] parts=songId.split("_",-1);
+        if(parts.length!=3 || !parts[0].matches("[a-f0-9]{32}"))throw error("identity");
+        numeric(parts[1],true);numeric(parts[2],true);
+        Playlist target=accountPlaylist(session,playlistId,current);
+        // is_edit=1 and is_def!=2: a read-only collected list or the favorite list is never a target here.
+        if(!target.editable || target.favorite)throw error("permission");
+        long deadline=System.nanoTime()+60_000_000_000L;
+        List<Track> matches=new ArrayList<>(); int offset=0; Integer expected=null; int read=0;
+        while(true) {
+            favoriteCurrent(current,deadline);
+            Page<Track> page=tracks(session,target.id,offset,100);
+            if(page.total>=0) { if(expected!=null && expected!=page.total)throw error("incomplete");expected=page.total; }
+            if(expected!=null && page.items.size()!=Math.min(100,expected-offset))throw error("incomplete");
+            read+=page.items.size();
+            for(Track track:page.items)if(track.id.equals(songId))matches.add(track);
+            if(page.nextOffset<0)break;
+            if(page.nextOffset<=offset || page.nextOffset>20_000)throw error("limit");
+            offset=page.nextOffset;
+        }
+        // Never delete from a list whose scan did not account for every row it declared.
+        if(expected!=null && expected!=read)throw error("incomplete");
+        if(matches.isEmpty())throw error("unavailable");
+        if(matches.size()!=1)throw error("identity");
+        String fileId=matches.get(0).fileId;
+        if(fileId==null || "0".equals(fileId))throw error("identity");
+        favoriteCurrent(current,deadline);
+        try {
+            JSONObject body=new JSONObject().put("listid",target.id).put("userid",session.userId)
+                .put("type",0).put("token",session.token).put("list_ver",0)
+                .put("data",new JSONArray().put(new JSONObject().put("fileid",Long.parseLong(fileId))));
+            JSONObject response=api.libraryCall("/v4/delete_songs",session,Collections.emptyMap(),body.toString(),false);
             successAudio(response);
             if(!Arrays.asList("1","200").contains(text(response.opt("status"))))throw error("protocol");
             favoriteCurrent(current,System.nanoTime()+60_000_000_000L);
@@ -748,7 +1115,8 @@ public final class KugouLibraryApi {
             // lists need a source route; never reject unrelated lists for that sentinel.
             String sourceGlobalId=!editable && !"2".equals(text(row.opt("is_def"))) && present(row,"list_create_gid")
                 ? identifier(row.opt("list_create_gid")) : null;
-            out.add(new Playlist(id,clean(row.opt("name"),"未命名歌单"),cover(row),tracks,favorite,editable,sourceGlobalId));
+            out.add(new Playlist(id,clean(row.opt("name"),"未命名歌单"),cover(row),tracks,favorite,editable,sourceGlobalId,editMetadata(data,row),
+                "1".equals(text(row.opt("is_def"))),editable && "0".equals(text(row.opt("is_def")))));
         }
         int total=total(data); return new Page<>(out,next(offset,rows.length(),total,limit),total);
     }

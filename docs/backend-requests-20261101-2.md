@@ -1,5 +1,7 @@
 # 后端需求单 · 第二批（2026-11-01，前端 -> Codex）
 
+> **状态：历史需求单（2026-11-01，第二批）。** 本文保留当次需求和优先级；测试数、工作区与提交前提只属于当时阶段。当前状态与下一步见 [当前开发接续](next-session-handoff.md)，文档分类见 [文档入口](README.md)。
+
 读者：负责 accounts / core / playback / platform-* 的后端开发。约定同 [第一批](backend-requests-20261101.md)：不改 `app/src/main/kotlin/tech/musxi/player/ui/`，接口变化写进本文末尾"交付说明"。行号以 2026-11-01 工作区为准，开工前复核。
 
 来源：前端交互重构的需要，以及对照 PC（`Miloscovo/Musxi-Player` main = v0.6.0，本地 `C:\text\Musxi-Player\Musxi-Player`，读 main 请用 `git show main:<path>`，工作区在别的分支）的全功能核对。账号会话、收藏、加歌单、搜索、歌词翻译、换源规则安卓已持平或更严，不在本单。

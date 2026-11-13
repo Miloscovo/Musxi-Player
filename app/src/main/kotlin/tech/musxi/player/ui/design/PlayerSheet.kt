@@ -57,7 +57,14 @@ fun PlayerSheet(accent: Accent, mode: ThemeMode, ui: PlayerUi, findSources: Bool
  * dock under the real surface, so a half-way picture is the same layout a finger drags through.
  */
 @Composable
-fun PlayerSurfaceSheet(accent: Accent, mode: ThemeMode, ui: PlayerUi, p: Float, lyrics: LyricsUi? = null) {
+fun PlayerSurfaceSheet(
+    accent: Accent,
+    mode: ThemeMode,
+    ui: PlayerUi,
+    p: Float,
+    lyrics: LyricsUi? = null,
+    wallpaper: tech.musxi.player.ui.player.WallpaperLook? = null,
+) {
     MusxiTheme(accent = accent, mode = mode) {
         val dark = mode != ThemeMode.LIGHT
         val mini = sampleMiniPlaying()
@@ -81,7 +88,7 @@ fun PlayerSurfaceSheet(accent: Accent, mode: ThemeMode, ui: PlayerUi, p: Float, 
                 PlayerSurface(
                     progress = progress, mini = mini, ui = ui, dark = dark, miniRect = miniRect,
                     nowPlaying = null, previous = null, next = null, coverShown = lyrics == null,
-                    onPlayPause = {}, onPrevious = {}, onNext = {},
+                    onPlayPause = {}, onPrevious = {}, onNext = {}, wallpaper = wallpaper,
                 ) { surface ->
                     FullPlayer(ui = ui, dark = dark, lyrics = lyrics, surface = surface)
                 }

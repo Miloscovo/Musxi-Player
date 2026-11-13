@@ -1,5 +1,12 @@
 ﻿package tech.musxi.player.ui.player
 
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.material.icons.outlined.BookmarkAdd
+import androidx.compose.material.icons.outlined.Forward30
+import androidx.compose.material.icons.outlined.Replay
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
@@ -58,11 +65,21 @@ import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.runtime.State
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.util.lerp
+import kotlin.math.roundToInt
 import coil3.compose.AsyncImage
-import tech.musxi.core.library.EditablePlaylist
 import tech.musxi.player.ui.components.Cover
 import tech.musxi.player.ui.components.OpticallyCentredText
 import tech.musxi.player.ui.components.ProgressArc
@@ -75,6 +92,9 @@ import tech.musxi.player.ui.theme.SystemBarIcons
 
 private val PlayerContentInset = 32.dp
 private val PlayerActionWidth = 48.dp
+
+/** The filled part of the seek bar; tests read its width. */
+internal const val PlayerProgressFillTag = "player-progress-fill"
 
 /**
  * Full-screen player: the one place that takes its colour from the cover.
@@ -100,8 +120,12 @@ fun FullPlayer(
     onShowOutput: () -> Unit = {},
     /** Non-null replaces the cover with lyrics and groups translation beside the song information. */
     lyrics: LyricsUi? = null,
-    /** Off by the owner's decision: enlargement and brightness already mark the current line. */
+    /** "颜色跟随封面": tint the current line with the cover's colour; off leaves it plainly brightest. */
     lyricsAccentCurrent: Boolean = false,
+    /** "字号" of the 我的 page; sizes the lyrics only. */
+    lyricsFontSize: tech.musxi.core.settings.LyricsFontSize = tech.musxi.core.settings.LyricsFontSize.MEDIUM,
+    /** Where the song is between playback updates; lets a line with word timing sweep. */
+    lyricsPlayhead: LyricsPlayhead? = null,
     onSeekLine: (Long) -> Unit = {},
     onRetryLyrics: () -> Unit = {},
     onReloginLyrics: () -> Unit = {},
@@ -112,6 +136,8 @@ fun FullPlayer(
     /** Null hides the heart entirely (nothing is playing, or the queue has no song). */
     favorite: FavoriteUi? = null,
     onToggleFavorite: () -> Unit = {},
+    /** Long press on the heart: "收藏到" (我喜欢, a playlist, or a new one). Null: no long press. */
+    onCollectTo: (() -> Unit)? = null,
     /** The play-order menu, anchored to the transport row's left button. */
     playModeMenuOpen: Boolean = false,
     onDismissPlayMode: () -> Unit = {},
@@ -130,21 +156,29 @@ fun FullPlayer(
     onShowMore: () -> Unit = {},
     onDismissMore: () -> Unit = {},
     onMoreAction: (MoreAction) -> Unit = {},
-    /** Reads the playlists the current song can be added to. Both this and [onAddToPlaylist] are needed for "加入歌单" to show. */
-    loadPlaylists: (((Result<List<EditablePlaylist>>) -> Unit) -> Unit)? = null,
-    onAddToPlaylist: ((EditablePlaylist) -> Unit)? = null,
+    /** Opens the shell's playlist sheet for the current song; null hides "加入歌单". */
+    onManagePlaylists: (() -> Unit)? = null,
     /** Opens the manual lyrics match sheet; null hides "匹配歌词". */
     onMatchLyrics: (() -> Unit)? = null,
     /** Manual search of the other platforms: "更多" item, and a button beside a failure. Null hides both. */
     onFindSources: (() -> Unit)? = null,
     /** A sleep timer is running: marks "更多" with a dot even while its menu is closed. */
     sleepTimerActive: Boolean = false,
+    /** Flips "到点后播完当前…" on the timer page; null hides that row. */
+    onSleepFinishTrackChange: ((Boolean) -> Unit)? = null,
     /**
      * Set when the continuous player (PlayerSurface) draws around this page: it then owns the
      * backdrop, the system-bar icons and the cover, and this page only reports where its cover slot
      * and progress bar are. Null keeps the page self-contained, as the design sheets use it.
      */
     surface: PlayerSurfaceLink? = null,
+    /**
+     * The live position, read only by the seek bar and its times so a playback tick recomposes that
+     * row alone (spec section 12). Null uses [PlayerUi.positionMs], as the design sheets do.
+     */
+    liveProgress: (() -> PlaybackProgress)? = null,
+    /** The controls that stand in for heart, quality and lyrics while a local recording plays. */
+    localActions: LocalPlayerActions? = null,
 ) {
     // The page's colour comes from the cover, not from the theme: on this one screen the accent is
     // borrowed from the artwork so that other screens can stay neutral without feeling empty.
@@ -186,7 +220,8 @@ fun FullPlayer(
             }
             PlayerTopBar(
                 ui, onCollapse, moreMenu, sleepTimerActive, onShowMore, onDismissMore, onMoreAction,
-                loadPlaylists, onAddToPlaylist, onMatchLyrics, onFindSources,
+                onManagePlaylists, onMatchLyrics, onFindSources, onSleepFinishTrackChange,
+                onSkip = if (ui.local) localActions?.onSkip else null,
             )
             // Cover, information, progress AND the transport row share one elastic block.
             //
@@ -194,138 +229,175 @@ fun FullPlayer(
             // fixed heights (296 + 28 + 72 + 20 + 48) the leftover space all pooled between the
             // progress bar and the controls — measured as a ~95dp void, which made the controls look
             // detached from the song they belong to.
-            Column(Modifier.fillMaxWidth().weight(1f)) {
-                val showing = lyrics
-                if (showing == null) {
-                    // Twice as much air above the cover as below the progress bar: the eye reads a
-                    // roomy top as breathing, and a roomy gap above the controls as a hole.
-                    Spacer(Modifier.weight(1f))
-                    // The cover's slot.
-                    Box(Modifier.fillMaxWidth().padding(horizontal = 32.dp).height(296.dp)) {
-                        if (surface != null) {
-                            // The continuous player draws the cover (one image for the mini row and
-                            // this page); the slot only says where it goes.
-                            Spacer(
-                                Modifier.fillMaxWidth().aspectRatio(1f).onGloballyPositioned { coords ->
-                                    val r = coords.unclippedBoundsInRoot()
-                                    if (surface.probe.cover != r) surface.probe.cover = r
-                                },
-                            )
-                        } else {
-                            Cover(
-                                seed = ui.coverSeed,
-                                modifier = Modifier.fillMaxWidth().aspectRatio(1f),
-                                shape = MaterialTheme.shapes.extraLarge,
-                                url = ui.coverUrl,
-                            )
-                        }
-                        // The small image above is the one the lists already cached, so it shows at
-                        // once. The large rendition fades in over it when it arrives; if it never
-                        // does, nothing changes. Keyed by address so a new song starts hidden.
-                        val sharpUrl = hdCoverUrl(ui.coverUrl)
-                        if (surface == null && !sharpUrl.isNullOrBlank() && sharpUrl != ui.coverUrl) {
-                            key(sharpUrl) {
-                                SharpCover(
-                                    url = sharpUrl,
+            // Task 2: the cover page and the lyrics page are one layout, moved by one value t (0 cover,
+            // 1 lyrics). The cover flies between its slot and the lyrics bar's tile (the surface draws
+            // it from the same t), the lyrics rise from below, and the gap under the progress bar
+            // closes. A tap halfway reverses the same spring from where it is.
+            val ownLyricsT = rememberLyricsFraction(lyrics != null)
+            val lyricsT = surface?.lyricsT ?: ownLyricsT
+            // The lyrics stay on screen while they leave: the caller already passes null by then.
+            val keptLyrics = remember { arrayOfNulls<LyricsUi>(1) }
+            if (lyrics != null) keptLyrics[0] = lyrics
+            val shownLyrics = lyrics ?: keptLyrics[0]
+            val lyricsComposed by remember(lyricsT) { derivedStateOf { lyricsT.value > 0f } }
+            val coverRowComposed by remember(lyricsT) { derivedStateOf { lyricsT.value < 1f } }
+            val heart = favorite
+            Layout(
+                modifier = Modifier.fillMaxWidth().weight(1f),
+                content = {
+                    // 0: the cover page's group. The slot stays laid out on the lyrics page too, so
+                    // the cover always knows where it goes back to.
+                    Column(Modifier.fillMaxWidth()) {
+                        Box(
+                            Modifier.fillMaxWidth().padding(horizontal = 32.dp).height(296.dp)
+                                .graphicsLayer { if (surface == null) alpha = 1f - lyricsT.value },
+                        ) {
+                            if (surface != null) {
+                                // The continuous player draws the cover (one image for the mini row,
+                                // this page and the lyrics tile); the slot only says where it goes.
+                                Spacer(
+                                    Modifier.fillMaxWidth().aspectRatio(1f).onGloballyPositioned { coords ->
+                                        val r = coords.unclippedBoundsInRoot()
+                                        if (surface.probe.cover != r) surface.probe.cover = r
+                                    },
+                                )
+                            } else {
+                                Cover(
+                                    seed = ui.coverSeed,
                                     modifier = Modifier.fillMaxWidth().aspectRatio(1f),
                                     shape = MaterialTheme.shapes.extraLarge,
+                                    url = ui.coverUrl,
                                 )
                             }
-                        }
-                    }
-                } else {
-                    // Lyrics use the cover's slot and the air above it. Their actions belong to
-                    // the information group below, leaving this entire width available to reading.
-                    Box(
-                        Modifier.fillMaxWidth().weight(1f)
-                            // Pulling down on a list already at its top hands the drag to the player.
-                            .then(if (surface != null) Modifier.nestedScroll(surface.pull) else Modifier),
-                    ) {
-                        LyricsBlock(
-                            ui = showing,
-                            modifier = Modifier.fillMaxSize()
-                                // Match the 20dp gap below this slot. Extra bottom padding would
-                                // move even a centred short document above the page's reading centre.
-                                .padding(start = 24.dp, end = 24.dp, top = 20.dp),
-                            accentCurrent = lyricsAccentCurrent,
-                            onSeekLine = onSeekLine,
-                            onRetry = onRetryLyrics,
-                            onRelogin = onReloginLyrics,
-                            onUserScroll = onUserScrollLyrics,
-                            onReturnToCurrent = onReturnToCurrent,
-                            onToggleTranslation = onToggleTranslation,
-                            onRefreshTranslation = onRefreshTranslation,
-                        )
-                    }
-                }
-                Spacer(Modifier.height(if (showing == null) 28.dp else 20.dp))
-                Row(
-                    Modifier.fillMaxWidth()
-                        .heightIn(min = if (showing == null) 72.dp else 104.dp)
-                        .padding(end = PlayerContentInset),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Box(Modifier.weight(1f)) { TitleBlock(ui, onFindSources) }
-                    val heart = favorite
-                    if (showing != null) {
-                        // One centre line and two disjoint 48dp targets. The small top inset
-                        // balances the badge's visible top with the title's visible top.
-                        Column(
-                            Modifier.width(PlayerActionWidth).padding(top = 8.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                        ) {
-                            Box(Modifier.size(48.dp), contentAlignment = Alignment.Center) {
-                                TranslationChipButton(
-                                    showing.translation,
-                                    onToggle = onToggleTranslation,
-                                    onRefresh = onRefreshTranslation,
-                                    activeColor = palette.accent,
-                                    onActiveColor = palette.onAccent,
-                                )
-                            }
-                            Box(Modifier.size(48.dp), contentAlignment = Alignment.Center) {
-                                if (heart != null) {
-                                    FavoriteButton(favorite = heart, onClick = onToggleFavorite)
+                            // The small image above is the one the lists already cached, so it shows at
+                            // once. The large rendition fades in over it when it arrives; if it never
+                            // does, nothing changes. Keyed by address so a new song starts hidden.
+                            val sharpUrl = hdCoverUrl(ui.coverUrl)
+                            if (surface == null && !sharpUrl.isNullOrBlank() && sharpUrl != ui.coverUrl) {
+                                key(sharpUrl) {
+                                    SharpCover(
+                                        url = sharpUrl,
+                                        modifier = Modifier.fillMaxWidth().aspectRatio(1f),
+                                        shape = MaterialTheme.shapes.extraLarge,
+                                    )
                                 }
                             }
                         }
-                    } else if (heart != null) {
-                        FavoriteButton(favorite = heart, onClick = onToggleFavorite)
-                    }
-                }
-                // The paired actions make the row taller. Tighten the next structural gap so
-                // the platform caption and progress track still form one information group.
-                Spacer(Modifier.height(if (showing == null) 13.dp else 4.dp))
-                ProgressBlock(
-                    ui, palette, onSeek, dark,
-                    // A drag that starts on the bar scrubs; the surface must not take it as a collapse.
-                    modifier = if (surface == null) {
-                        Modifier
-                    } else {
-                        Modifier.onGloballyPositioned { coords ->
-                            val r = coords.unclippedBoundsInRoot()
-                            if (surface.probe.scrub != r) surface.probe.scrub = r
+                        Spacer(Modifier.height(28.dp))
+                        Row(
+                            Modifier.fillMaxWidth().heightIn(min = 72.dp).padding(end = PlayerContentInset)
+                                .graphicsLayer { alpha = LyricsTransition.titleAlpha(lyricsT.value) }
+                                // On the lyrics page the bar says all this; the row is only a shape.
+                                .then(if (coverRowComposed) Modifier else Modifier.clearAndSetSemantics { }),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            // Nothing in this row may take a tap once it has faded behind the lyrics.
+                            Box(Modifier.weight(1f)) { TitleBlock(ui, onFindSources?.takeIf { coverRowComposed }) }
+                            if (heart != null) {
+                                Box(Modifier.size(48.dp), contentAlignment = Alignment.Center) {
+                                    if (coverRowComposed) {
+                                        FavoriteButton(favorite = heart, onClick = onToggleFavorite, onLongPress = onCollectTo)
+                                    }
+                                }
+                            }
                         }
-                    },
-                )
-                // With the cover, the gap under the progress bar is proportional elastic air. In
-                // lyrics mode it shrinks to a token gap: measured against the space above the first
-                // line, 20dp here still read as a hole — 20 above versus ~49 below. The transport
-                // row moves up with it, which is fine as long as it stays inside the thumb zone.
-                if (showing == null) {
-                    Spacer(Modifier.weight(0.45f))
-                } else {
-                    Spacer(Modifier.height(4.dp))
+                        Spacer(Modifier.height(13.dp))
+                    }
+                    // 1: the lyrics page's group: the bar with the cover tile, then the lines.
+                    Box(Modifier.fillMaxSize()) {
+                        val showing = shownLyrics
+                        if (lyricsComposed && showing != null) {
+                            Column(Modifier.fillMaxSize()) {
+                                LyricsTitleBar(
+                                    ui, showing, lyricsT, surface, palette, heart,
+                                    onToggleFavorite, onCollectTo, onToggleTranslation, onRefreshTranslation,
+                                    onBackToCover = onShowLyrics,
+                                )
+                                Box(
+                                    Modifier.fillMaxWidth().weight(1f)
+                                        .graphicsLayer {
+                                            val t = lyricsT.value
+                                            translationY = (1f - t) * LyricsTransition.Rise.toPx()
+                                            alpha = LyricsTransition.lyricsAlpha(t)
+                                        }
+                                        // Pulling down on a list already at its top hands the drag to the player.
+                                        .then(if (surface != null) Modifier.nestedScroll(surface.pull) else Modifier),
+                                ) {
+                                    LyricsBlock(
+                                        ui = showing,
+                                        modifier = Modifier.fillMaxSize().padding(start = 24.dp, end = 24.dp, top = 8.dp),
+                                        accentCurrent = lyricsAccentCurrent,
+                                        fontSize = lyricsFontSize,
+                                        playhead = lyricsPlayhead,
+                                        onSeekLine = onSeekLine,
+                                        onRetry = onRetryLyrics,
+                                        onRelogin = onReloginLyrics,
+                                        onUserScroll = onUserScrollLyrics,
+                                        onReturnToCurrent = onReturnToCurrent,
+                                        onToggleTranslation = onToggleTranslation,
+                                        onRefreshTranslation = onRefreshTranslation,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    // 2
+                    ProgressBlock(
+                        ui, palette, onSeek, dark, liveProgress,
+                        // A drag that starts on the bar scrubs; the surface must not take it as a collapse.
+                        modifier = if (surface == null) {
+                            Modifier
+                        } else {
+                            Modifier.onGloballyPositioned { coords ->
+                                val r = coords.unclippedBoundsInRoot()
+                                if (surface.probe.scrub != r) surface.probe.scrub = r
+                            }
+                        },
+                    )
+                    // 3
+                    TransportRow(
+                        ui, palette, onPlayPause, onPrevious, onNext, onShowPlayMode, onShowQuality,
+                        playModeMenuOpen, onDismissPlayMode, onSelectPlayMode,
+                        qualityMenu, onDismissQuality, onSelectQuality,
+                        localActions = localActions,
+                    )
+                },
+            ) { measurables, constraints ->
+                val w = constraints.maxWidth
+                val h = constraints.maxHeight
+                val row = Constraints(minWidth = w, maxWidth = w)
+                val progress = measurables[2].measure(row)
+                val transport = measurables[3].measure(row)
+                val cover = measurables[0].measure(row)
+                // With the cover, twice as much air above the cover as below the progress bar (the
+                // old 1 : 0.45 weights). In lyrics mode that gap shrinks to a token 4dp: 20dp there
+                // read as a hole against the space above the first line.
+                val token = 4.dp.roundToPx()
+                val lyricsHeight = (h - progress.height - transport.height - token).coerceAtLeast(0)
+                val lyricsPage = measurables[1].measure(Constraints.fixed(w, lyricsHeight))
+                val leftover = (h - cover.height - progress.height - transport.height).coerceAtLeast(0)
+                val coverGap = leftover * 0.45f / 1.45f
+                layout(w, h) {
+                    // Read here, in placement only: the motion moves rows, it does not recompose them.
+                    val t = lyricsT.value.coerceIn(0f, 1f)
+                    val gap = lerp(coverGap, token.toFloat(), t).roundToInt()
+                    val transportY = h - transport.height
+                    val progressY = transportY - gap - progress.height
+                    // The cover's group stays where the cover page has it: the slot it reports is
+                    // where the flying cover lands on the way back, so it must not drift with t.
+                    val restProgressY = transportY - coverGap.roundToInt() - progress.height
+                    cover.place(0, restProgressY - cover.height)
+                    lyricsPage.place(0, 0)
+                    progress.place(0, progressY)
+                    transport.place(0, transportY)
                 }
-                TransportRow(
-                    ui, palette, onPlayPause, onPrevious, onNext, onShowPlayMode, onShowQuality,
-                    playModeMenuOpen, onDismissPlayMode, onSelectPlayMode,
-                    qualityMenu, onDismissQuality, onSelectQuality,
-                )
             }
             Spacer(Modifier.height(12.dp))
             ToolRow(
                 onShowOutput, onShowLyrics, onShowQueue, lyricsActive = lyrics != null,
+                bookmarks = if (ui.local) localActions else null,
+                // A local recording has no lyrics source; an entry would only open a skeleton.
+                showLyrics = !ui.local,
                 outputMenu = outputMenu, onDismissOutput = onDismissOutput,
                 onSelectOutput = onSelectOutput, onOpenSystemOutput = onOpenSystemOutput,
             )
@@ -349,10 +421,12 @@ private fun PlayerTopBar(
     onShowMore: () -> Unit,
     onDismissMore: () -> Unit,
     onMoreAction: (MoreAction) -> Unit,
-    loadPlaylists: (((Result<List<EditablePlaylist>>) -> Unit) -> Unit)?,
-    onAddToPlaylist: ((EditablePlaylist) -> Unit)?,
+    onManagePlaylists: (() -> Unit)?,
     onMatchLyrics: (() -> Unit)?,
     onFindSources: (() -> Unit)?,
+    onSleepFinishTrackChange: ((Boolean) -> Unit)?,
+    /** Local recordings: back 15 s / forward 30 s, in the place the heart has for songs. */
+    onSkip: ((Long) -> Unit)? = null,
 ) {
     val cs = MaterialTheme.colorScheme
     // Which page of the overflow menu is showing. It is reset when the menu is opened rather than
@@ -367,6 +441,14 @@ private fun PlayerTopBar(
                 Icon(Icons.Filled.KeyboardArrowDown, "收起", tint = cs.onSurfaceVariant, modifier = Modifier.size(24.dp))
             }
             Spacer(Modifier.weight(1f))
+            if (onSkip != null) {
+                IconButton(onClick = { onSkip(-LocalSkipBackMs) }) {
+                    Icon(Icons.Outlined.Replay, "后退 15 秒", tint = cs.onSurfaceVariant, modifier = Modifier.size(22.dp))
+                }
+                IconButton(onClick = { onSkip(LocalSkipForwardMs) }) {
+                    Icon(Icons.Outlined.Forward30, "前进 30 秒", tint = cs.onSurfaceVariant, modifier = Modifier.size(22.dp))
+                }
+            }
             Box {
                 IconButton(onClick = {
                     morePage = MorePage.MAIN
@@ -392,10 +474,10 @@ private fun PlayerTopBar(
                     onPage = { morePage = it },
                     onDismiss = onDismissMore,
                     onAction = onMoreAction,
-                    loadPlaylists = loadPlaylists,
-                    onAddToPlaylist = onAddToPlaylist,
+                    onManagePlaylists = onManagePlaylists,
                     onMatchLyrics = onMatchLyrics,
                     onFindSources = onFindSources,
+                    onSleepFinishTrackChange = onSleepFinishTrackChange,
                 )
             }
         }
@@ -474,14 +556,19 @@ private fun ProgressBlock(
     palette: PlayerPalette,
     onSeek: (Float) -> Unit,
     dark: Boolean,
+    liveProgress: (() -> PlaybackProgress)?,
     modifier: Modifier = Modifier,
 ) {
     val cs = MaterialTheme.colorScheme
+    // Read in this row only: a new position recomposes the bar and its times, not the page.
+    val live = liveProgress?.invoke()
+    val positionMs = live?.positionMs ?: ui.positionMs
+    val fraction = live?.fraction ?: ui.progress
     // While a finger is down, the bar draws the finger's position and nothing else. Without this
     // the service keeps reporting the old position during the drag and the thumb snaps backwards
     // under the finger, which reads as "the app did not hear me".
     var dragFraction by remember { mutableStateOf<Float?>(null) }
-    val shown = dragFraction ?: ui.progress
+    val shown = dragFraction ?: fraction
     val dragging = dragFraction != null
     Column(modifier.fillMaxWidth().height(48.dp).padding(horizontal = PlayerContentInset)) {
         Box(
@@ -526,7 +613,7 @@ private fun ProgressBlock(
             )
             Box(
                 Modifier.fillMaxWidth(shown).height(if (dragging) 6.dp else 4.dp).clip(CircleShape)
-                    .background(palette.accent),
+                    .background(palette.accent).testTag(PlayerProgressFillTag),
             )
             // The thumb is drawn as an offset child so it travels with the filled part.
             Box(
@@ -538,7 +625,7 @@ private fun ProgressBlock(
         }
         Row(Modifier.fillMaxWidth()) {
             Text(
-                formatDuration(ui.positionMs),
+                formatDuration(positionMs),
                 style = MaterialTheme.typography.labelSmall.tabular, color = cs.onSurfaceVariant,
             )
             Spacer(Modifier.weight(1f))
@@ -569,6 +656,7 @@ private fun TransportRow(
     qualityMenu: QualityMenuUi?,
     onDismissQuality: () -> Unit,
     onSelectQuality: (String) -> Unit,
+    localActions: LocalPlayerActions? = null,
 ) {
     val cs = MaterialTheme.colorScheme
     val mode = playModeOf(ui.shuffle, ui.repeat)
@@ -628,11 +716,44 @@ private fun TransportRow(
                 modifier = Modifier.size(32.dp),
             )
         }
-        Box {
-            IconButton(onClick = onShowQuality) {
-                Icon(Icons.Outlined.HighQuality, "音质选择", tint = cs.onSurfaceVariant, modifier = Modifier.size(24.dp))
+        if (ui.local) {
+            // A local file has one fixed quality: its slot shows the playback speed instead, the
+            // control long recordings actually need. Same width, so the transport never moves.
+            val speed = localActions
+            val onSelectSpeed = speed?.onSelectSpeed
+            if (onSelectSpeed != null) {
+                // The chooser is the button's sibling in one Box, so the popup anchors to the button.
+                var speedMenu by androidx.compose.runtime.saveable.rememberSaveable { androidx.compose.runtime.mutableStateOf(false) }
+                Box {
+                    Box(
+                        Modifier.size(48.dp).clip(CircleShape)
+                            .clickable(role = androidx.compose.ui.semantics.Role.Button, onClick = { speedMenu = true })
+                            .semantics { contentDescription = "播放速度 ${speedLabel(speed.speed)}" },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            speedLabel(speed.speed),
+                            style = MaterialTheme.typography.labelLarge.tabular,
+                            color = if (speed.speed == 1f) cs.onSurfaceVariant else palette.accent,
+                        )
+                    }
+                    SpeedMenu(
+                        expanded = speedMenu,
+                        current = speed.speed,
+                        onDismiss = { speedMenu = false },
+                        onSelect = { value -> speedMenu = false; if (value != speed.speed) onSelectSpeed(value) },
+                    )
+                }
+            } else {
+                Spacer(Modifier.size(48.dp))
             }
-            QualityMenu(menu = qualityMenu, onDismiss = onDismissQuality, onSelect = onSelectQuality)
+        } else {
+            Box {
+                IconButton(onClick = onShowQuality) {
+                    Icon(Icons.Outlined.HighQuality, "音质选择", tint = cs.onSurfaceVariant, modifier = Modifier.size(24.dp))
+                }
+                QualityMenu(menu = qualityMenu, onDismiss = onDismissQuality, onSelect = onSelectQuality)
+            }
         }
     }
 }
@@ -644,6 +765,92 @@ internal fun PlayMode.icon(): androidx.compose.ui.graphics.vector.ImageVector = 
     PlayMode.REPEAT_ONE -> Icons.Outlined.RepeatOne
 }
 
+/**
+ * Task 2: the lyrics page's title bar. The cover lands in the tile on its left (the continuous
+ * player draws it there; the tile only reports where it is), and a tap on the tile goes back to the
+ * cover. Title, state line, translation and heart arrive once the tile is nearly in place.
+ */
+@Composable
+private fun LyricsTitleBar(
+    ui: PlayerUi,
+    lyrics: LyricsUi,
+    lyricsT: State<Float>,
+    surface: PlayerSurfaceLink?,
+    palette: PlayerPalette,
+    heart: FavoriteUi?,
+    onToggleFavorite: () -> Unit,
+    onCollectTo: (() -> Unit)?,
+    onToggleTranslation: () -> Unit,
+    onRefreshTranslation: () -> Unit,
+    onBackToCover: () -> Unit,
+) {
+    val cs = MaterialTheme.colorScheme
+    val tileShape = MaterialTheme.shapes.medium
+    Row(
+        Modifier.fillMaxWidth().heightIn(min = 72.dp).padding(start = 24.dp, end = PlayerContentInset),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            Modifier.size(LyricsTransition.TileSize)
+                .onGloballyPositioned { coords ->
+                    if (surface != null) {
+                        val r = coords.unclippedBoundsInRoot()
+                        if (surface.probe.tile != r) surface.probe.tile = r
+                    }
+                }
+                .clip(tileShape)
+                .clickable(onClickLabel = "回到封面", role = Role.Button, onClick = onBackToCover)
+                .semantics { contentDescription = "封面" },
+        ) {
+            if (surface == null) {
+                Cover(
+                    seed = ui.coverSeed,
+                    modifier = Modifier.fillMaxSize().graphicsLayer { alpha = lyricsT.value },
+                    shape = tileShape,
+                    url = ui.coverUrl,
+                )
+            }
+        }
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f).graphicsLayer { alpha = LyricsTransition.barAlpha(lyricsT.value) }) {
+            Text(
+                ui.title, style = MaterialTheme.typography.titleMedium, color = cs.onSurface,
+                maxLines = 1, overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                listOf(ui.artist, ui.album).filter { it.isNotBlank() }.joinToString(" · "),
+                style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant,
+                maxLines = 1, overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                thirdLineOf(ui), style = MaterialTheme.typography.labelSmall,
+                color = if (isProblemLine(ui)) cs.error else cs.onSurfaceVariant,
+                maxLines = 1, overflow = TextOverflow.Ellipsis,
+            )
+        }
+        // One centre line and two disjoint 48dp targets, as before the transition existed.
+        Column(
+            Modifier.width(PlayerActionWidth).graphicsLayer { alpha = LyricsTransition.barAlpha(lyricsT.value) },
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Box(Modifier.size(48.dp), contentAlignment = Alignment.Center) {
+                TranslationChipButton(
+                    lyrics.translation,
+                    onToggle = onToggleTranslation,
+                    onRefresh = onRefreshTranslation,
+                    activeColor = palette.accent,
+                    onActiveColor = palette.onAccent,
+                )
+            }
+            if (heart != null) {
+                Box(Modifier.size(48.dp), contentAlignment = Alignment.Center) {
+                    FavoriteButton(favorite = heart, onClick = onToggleFavorite, onLongPress = onCollectTo)
+                }
+            }
+        }
+    }
+}
+
 /** 48dp: output device, lyrics, queue. All neutral — none of these is the page's main action. */
 @Composable
 private fun ToolRow(
@@ -651,6 +858,9 @@ private fun ToolRow(
     onShowLyrics: () -> Unit,
     onShowQueue: () -> Unit,
     lyricsActive: Boolean,
+    showLyrics: Boolean = true,
+    /** Local recordings: the lyrics slot holds bookmarks. Tap adds one here, long press lists them. */
+    bookmarks: LocalPlayerActions? = null,
     outputMenu: OutputMenuUi?,
     onDismissOutput: () -> Unit,
     onSelectOutput: (String) -> Unit,
@@ -672,7 +882,17 @@ private fun ToolRow(
         }
         // The mode has to be visible on the control that opened it: without it the page gives no
         // hint of how to get back to the artwork.
-        ToolIcon(Icons.Outlined.Lyrics, "歌词", onShowLyrics, active = lyricsActive)
+        // The slot stays when the entry is hidden, so output and queue keep their places.
+        val add = bookmarks?.onAddBookmark
+        when {
+            showLyrics -> ToolIcon(Icons.Outlined.Lyrics, "歌词", onShowLyrics, active = lyricsActive)
+            add != null -> BookmarkTool(
+                count = bookmarks.bookmarkCount,
+                onAdd = add,
+                onList = bookmarks.onShowBookmarks,
+            )
+            else -> Spacer(Modifier.size(48.dp))
+        }
         ToolIcon(Icons.AutoMirrored.Outlined.QueueMusic, "播放队列", onShowQueue)
     }
 }
@@ -685,12 +905,52 @@ private fun ToolIcon(
     active: Boolean = false,
 ) {
     val cs = MaterialTheme.colorScheme
-    IconButton(onClick = onClick) {
+    // Task 2: the three tools move alike — the glyph sinks while held (the heart's press spring)
+    // and an active tool's colour eases in rather than switching.
+    val source = remember { MutableInteractionSource() }
+    val pressed by source.collectIsPressedAsState()
+    val scale by animateFloatAsState(if (pressed) 0.86f else 1f, Motion.Heart.press(), label = "toolPress")
+    val tint by animateColorAsState(if (active) cs.onSurface else cs.onSurfaceVariant, Motion.enter(), label = "toolTint")
+    IconButton(onClick = onClick, interactionSource = source) {
         Icon(
             icon, label,
-            tint = if (active) cs.onSurface else cs.onSurfaceVariant,
-            modifier = Modifier.size(24.dp),
+            tint = tint,
+            modifier = Modifier.size(24.dp).graphicsLayer { scaleX = scale; scaleY = scale },
         )
+    }
+}
+
+/**
+ * The bookmark button of a local recording: a tap marks where the listener is now, a long press
+ * (or a tap when there are bookmarks to show) is not needed to discover them — the count beside the
+ * glyph says they exist, and the long press opens the list.
+ */
+@Composable
+private fun BookmarkTool(count: Int, onAdd: () -> Unit, onList: (() -> Unit)?) {
+    val cs = MaterialTheme.colorScheme
+    Box(
+        Modifier
+            .size(48.dp)
+            .clip(CircleShape)
+            .combinedClickable(
+                role = androidx.compose.ui.semantics.Role.Button,
+                onClickLabel = "在当前位置加书签",
+                onLongClickLabel = if (onList != null) "查看书签" else null,
+                onClick = onAdd,
+                onLongClick = onList,
+            )
+            .semantics { contentDescription = if (count > 0) "书签，已有 $count 个" else "书签" },
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(Icons.Outlined.BookmarkAdd, null, tint = cs.onSurfaceVariant, modifier = Modifier.size(24.dp))
+        if (count > 0) {
+            Text(
+                "$count",
+                style = MaterialTheme.typography.labelSmall.tabular,
+                color = cs.onSurfaceVariant,
+                modifier = Modifier.align(Alignment.TopEnd).padding(top = 6.dp, end = 4.dp),
+            )
+        }
     }
 }
 

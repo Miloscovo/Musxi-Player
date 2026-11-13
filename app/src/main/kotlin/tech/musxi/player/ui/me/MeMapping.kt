@@ -143,22 +143,27 @@ fun meUiOf(
     settings: AppSettings,
     accent: Accent,
     cache: CacheMaintenanceState,
+    localArtworkFill: String? = null,
 ): MeUi = MeUi(
     accounts = accounts.map(::meAccountRowOf),
     playback = MePlaybackUi(
         autoSwitchSource = settings.autoSwitchSource,
         relaxDuration = settings.relaxSourceDuration,
         quality = settings.defaultQuality,
+        recommendations = settings.recommendationsEnabled,
     ),
     lyrics = MeLyricsUi(
         followCover = settings.lyricsColorMode == LyricsColorMode.COVER,
         showTranslation = showTranslationOf(settings.lyricsTranslationPreference),
         fontSize = settings.lyricsFontSize,
+        mediaCardLyrics = settings.mediaCardLyrics,
     ),
     appearance = MeAppearanceUi(
         themeMode = settings.themeMode,
         transparency = settings.transparencyEnabled,
         accent = accent,
+        localArtwork = settings.localArtworkMode != "OFF",
+        localArtworkFill = localArtworkFill,
     ),
     storage = meStorageUiOf(cache),
 )

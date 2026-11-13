@@ -49,15 +49,34 @@ public final class NeteaseApi {
     static final String SEARCH = "https://interfacepc.music.163.com/eapi/cloudsearch/pc";
     static final String SONG_URL = "https://interfacepc.music.163.com/eapi/song/enhance/player/url/v1";
     static final String LYRIC = "https://interfacepc.music.163.com/eapi/song/lyric";
+    static final String LYRIC_NEW = "https://interfacepc.music.163.com/eapi/song/lyric/v1";
     static final String LIKED_IDS = "https://interfacepc.music.163.com/eapi/song/like/get";
     static final String SET_LIKE = "https://interfacepc.music.163.com/eapi/radio/like";
     static final String PLAYLIST_TRACKS =
             "https://interfacepc.music.163.com/eapi/playlist/manipulate/tracks";
+    /** Pinned module/playlist_create.js passes the explicit WEAPI profile. */
+    static final String PLAYLIST_CREATE = ORIGIN + "/weapi/playlist/create";
+    /** Pinned module/playlist_name_update.js passes no profile, and an empty crypto resolves to
+     * EAPI while APP_CONF.encrypt stays true, so this endpoint is EAPI, not WEAPI. */
+    static final String PLAYLIST_RENAME =
+            "https://interfacepc.music.163.com/eapi/playlist/update/name";
+    /** Pinned module/playlist_delete.js passes the explicit WEAPI profile and no checkToken,
+     * so deleting an owned normal playlist needs no fresh verification token. */
+    static final String PLAYLIST_DELETE = ORIGIN + "/weapi/playlist/remove";
     static final String MEMBERSHIP = ORIGIN + "/weapi/music-vip-membership/front/vip/info";
     static final String ARTIST_TRACKS =
             "https://interfacepc.music.163.com/eapi/v1/artist/songs";
     static final String ALBUM_TRACKS = ORIGIN + "/weapi/v1/album/";
+    /** Pinned module/recommend_songs.js passes the explicit WEAPI profile. */
+    static final String DAILY_RECOMMENDATIONS = ORIGIN + "/weapi/v3/discovery/recommend/songs";
+    static final String PLAYLIST_SUBSCRIBE = "https://interfacepc.music.163.com/eapi/playlist/subscribe";
+    static final String PLAYLIST_UNSUBSCRIBE = "https://interfacepc.music.163.com/eapi/playlist/unsubscribe";
+    // Public pinned APP_CONF payload default, distinct from the fresh per-request antiCheatToken.
+    private static final String SUBSCRIBE_BODY_TOKEN = "9ca17ae2e6ffcda170e2e6ee8af14fbabdb988f225b3868eb2c15a879b9a83d274a790ac8ff54a97b889d5d42af0feaec3b92af58cff99c470a7eafd88f75e839a9ea7c14e909da883e83fb692a3abdb6b92adee9e";
     private final Transport transport;
+    /** Internal provider seam for a fresh SDK-v2 token. No v3 fallback is compatible here. */
+    interface CheckTokenProvider { String freshV2() throws IOException; }
+    private final CheckTokenProvider checkTokens;
     private final SecureRandom random = new SecureRandom();
     private final String deviceId = java.util.UUID.randomUUID().toString().replace("-", "");
 
@@ -147,7 +166,8 @@ public final class NeteaseApi {
         }
     }
     public NeteaseApi() { this(NeteaseApi::executeHttps); }
-    NeteaseApi(Transport transport) { this.transport = transport; }
+    NeteaseApi(Transport transport) { this(transport, new NeteaseCheckToken()::freshV2); }
+    NeteaseApi(Transport transport, CheckTokenProvider checkTokens) { this.transport = transport; this.checkTokens=checkTokens; }
 
     /** Browser credentials remain unsavable until verify returns an identity. */
     public static Session fromBrowserCookies(String header) throws IOException {
@@ -248,14 +268,33 @@ public final class NeteaseApi {
     /** Internal authenticated read-only API. Credential serialization never crosses the platform module. */
     JSONObject authenticatedCall(String endpoint, JSONObject input, Session session) throws IOException {
         if (session == null || !validId(session.userId)) throw error("credentials", "请先完成网易云登录");
-        if (!allowedLibraryEndpoint(endpoint))
+        if (!allowedLibraryEndpoint(endpoint) || PLAYLIST_SUBSCRIBE.equals(endpoint) || PLAYLIST_UNSUBSCRIBE.equals(endpoint))
             throw error("endpoint", "请求目标不在允许的网易云官方接口范围内");
         Response response = call(endpoint, input, session.cookies);
         if (!LYRIC.equals(endpoint)) requireSuccess(response.body);
         return response.body;
     }
 
+    /** Subscription is the only surface allowed to carry fresh verification tokens. No fallback or write retry. */
+    JSONObject setPlaylistFollowed(Session session,String playlistId,boolean followed,
+            java.util.function.BooleanSupplier current) throws IOException {
+        if(session==null || !validId(session.userId))throw error("credentials", "Missing authenticated account");
+        if(!validId(playlistId))throw error("request", "Invalid playlist identity");
+        if(!current.getAsBoolean())throw error("account_changed", "Account changed");
+        String token=checkTokens.freshV2();
+        if(token==null || !token.matches("[A-Za-z0-9+/=_-]{16,512}"))throw error("verification_required", "Platform verification unavailable");
+        if(!current.getAsBoolean() || Thread.currentThread().isInterrupted())throw error("account_changed", "Account changed");
+        JSONObject input=object("id",playlistId);
+        if(followed)put(input,"checkToken",SUBSCRIBE_BODY_TOKEN);
+        Response response=call(followed?PLAYLIST_SUBSCRIBE:PLAYLIST_UNSUBSCRIBE,input,session.cookies,token);
+        requireSuccess(response.body);
+        return response.body;
+    }
+
     private Response call(String endpoint, JSONObject input, Map<String,String> cookies) throws IOException {
+        return call(endpoint,input,cookies,null);
+    }
+    private Response call(String endpoint, JSONObject input, Map<String,String> cookies,String antiCheatToken) throws IOException {
         requireEndpoint(new URL(endpoint));
         String csrf = cookies.getOrDefault("__csrf", "");
         put(input, "e_r", false);
@@ -277,6 +316,7 @@ public final class NeteaseApi {
                 "resolution", "1920x1080", "__csrf", csrf, "channel", "netease",
                 "requestId", System.currentTimeMillis() + "_" + String.format(java.util.Locale.ROOT, "%04d", random.nextInt(1000)));
             if (cookies.containsKey("MUSIC_U")) put(header, "MUSIC_U", cookies.get("MUSIC_U"));
+            if (antiCheatToken != null) put(header, "X-antiCheatToken", antiCheatToken);
             put(input, "header", header);
             encrypted = Collections.singletonMap("params", eapi("/api/" + new URL(endpoint).getPath().substring(6), input.toString()));
             cookie = new StringBuilder();
@@ -432,9 +472,12 @@ public final class NeteaseApi {
     private static boolean allowedLibraryEndpoint(String endpoint) {
         if (USER_PLAYLIST.equals(endpoint) || PLAYLIST_DETAIL.equals(endpoint)
                 || SONG_DETAIL.equals(endpoint) || SONG_URL.equals(endpoint) || SEARCH.equals(endpoint)
-                || LYRIC.equals(endpoint) || LIKED_IDS.equals(endpoint) || SET_LIKE.equals(endpoint)
-                || PLAYLIST_TRACKS.equals(endpoint) || MEMBERSHIP.equals(endpoint)
-                || ARTIST_TRACKS.equals(endpoint)) return true;
+                || LYRIC.equals(endpoint) || LYRIC_NEW.equals(endpoint) || LIKED_IDS.equals(endpoint) || SET_LIKE.equals(endpoint)
+                || PLAYLIST_TRACKS.equals(endpoint) || PLAYLIST_CREATE.equals(endpoint)
+                || PLAYLIST_RENAME.equals(endpoint) || MEMBERSHIP.equals(endpoint)
+                || PLAYLIST_DELETE.equals(endpoint)
+                || PLAYLIST_SUBSCRIBE.equals(endpoint) || PLAYLIST_UNSUBSCRIBE.equals(endpoint)
+                || ARTIST_TRACKS.equals(endpoint) || DAILY_RECOMMENDATIONS.equals(endpoint)) return true;
         return endpoint.startsWith(ALBUM_TRACKS)
                 && endpoint.length() > ALBUM_TRACKS.length()
                 && endpoint.substring(ALBUM_TRACKS.length()).matches("[1-9][0-9]{0,18}");

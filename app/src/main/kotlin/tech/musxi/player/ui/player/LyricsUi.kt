@@ -93,6 +93,8 @@ data class LyricsUi(
     val errorKind: LyricsErrorKind = LyricsErrorKind.UNAVAILABLE,
     val browsing: Boolean = false,
     val translation: TranslationUi = TranslationUi(),
+    /** The lyrics' manual timing offset; word times are before it, so the sweep subtracts it. */
+    val offsetMs: Long = 0,
 ) {
     val isFollowing: Boolean get() = phase == LyricsPhase.TIMED && !browsing
 
@@ -130,6 +132,7 @@ fun lyricsUiOf(
     errorKind = errorKindOf(state.error),
     browsing = browsing,
     translation = translationUiOf(state, showTranslation),
+    offsetMs = state.offsetMs,
 )
 
 private fun translationUiOf(state: LyricsState, showTranslation: Boolean): TranslationUi {

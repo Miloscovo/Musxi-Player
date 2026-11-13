@@ -1,5 +1,7 @@
 # 歌词翻译后端路线与当前进度
 
+> **状态：历史路线与阶段进度（2026-10-22）。** 接口现状以 [歌词翻译合同](frontend-backend-contract-lyrics-translation.md) 为准；当前完成度与验证边界见 [当前开发接续](next-session-handoff.md)。
+
 2026-10-22 B1-08 最新：前台资格门禁已实现并同步主工程，先由 Media3 建立前台服务，再单次请求音频焦点；等待最多3秒，暂停/停止/换队列使旧请求失效，系统拒绝前台启动时返回 `BACKGROUND_RESTRICTED`，须前台明确重试。隔离后端392项、主工程515项测试全通过，Lint均无错误（分别9/76条警告，范围不同）。最终后端包酷狗实际播放、受控超时/暂停取消/显式重试通过；最终包两次真实QQ→网易云换源均因NETWORK停止，未将完整闭环记为通过。前一候选包后台换源及用户听音证据保留其包归属。见[B1-08修复与验收](backend-b108-acceptance-20261022.md)。
 
 2026-10-22 晚间：原文先显示、译文随后补入与 `app.lyrics.refreshTranslation()` 已实现，`LyricsState.canRefreshTranslation` 已可接线。酷狗实际 KUGOU 来源 Amazing Grace 搜索样本18/17行、播放及seek已补；三平台真实收藏切换均完整恢复（5/7/746）。控制器恢复与服务丢队列等注入边界、369项测试/Lint 0 errors/12 warnings及主工程编译见 [今晚验收](backend-evening-acceptance-20261022.md)。锁屏/长Doze/真实系统Binder回收/独立应用焦点和正式页面仍待补；前端继续由DS主导、cc辅助。

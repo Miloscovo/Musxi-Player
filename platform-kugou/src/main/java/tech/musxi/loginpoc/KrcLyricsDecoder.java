@@ -10,17 +10,38 @@ import java.util.*;
 import java.util.regex.*;
 import java.util.zip.Inflater;
 
-/** Bounded KRC1 container and line-level language metadata. No word-level UI contract. */
+/**
+ * Bounded KRC1 container, line-level language metadata and optional word timings.
+ * Word ranges index the final trimmed {@link Row#text}; no UI contract is implied.
+ */
 public final class KrcLyricsDecoder {
     private static final int MAX_BYTES = 1024 * 1024;
+    private static final int MAX_WORDS_PER_ROW = 4096;
+    private static final int MAX_WORDS = 100000;
     private static final int[] KEY = {64,71,97,119,94,50,116,71,81,54,49,45,206,210,110,105};
     private static final Pattern LINE = Pattern.compile("^\\[(\\d{1,9}),(\\d{1,9})](.*)$");
     private static final Pattern WORD = Pattern.compile("<(\\d{1,9}),(\\d{1,9}),(\\d{1,9})>");
     public enum Status { PRESENT, ABSENT, INVALID, UNSUPPORTED }
+    /** Absolute track times; [textStart,textEnd) indexes Row.text in UTF-16 units. */
+    public static final class Word {
+        public final int textStart, textEnd;
+        public final long startTimeMs, endTimeMs;
+        Word(int textStart, int textEnd, long startTimeMs, long endTimeMs) {
+            this.textStart=textStart; this.textEnd=textEnd;
+            this.startTimeMs=startTimeMs; this.endTimeMs=endTimeMs;
+        }
+        @Override public String toString() { return "KrcWord(redacted)"; }
+    }
     public static final class Row {
         public final long timeMs;
         public final String text, translation;
-        Row(long timeMs, String text, String translation) { this.timeMs=timeMs; this.text=text; this.translation=translation; }
+        public final List<Word> words;
+        Row(long timeMs, String text, String translation) { this(timeMs,text,translation,Collections.emptyList()); }
+        Row(long timeMs, String text, String translation, List<Word> words) {
+            this.timeMs=timeMs; this.text=text; this.translation=translation;
+            this.words=words==null || words.isEmpty()?Collections.emptyList()
+                :Collections.unmodifiableList(new ArrayList<>(words));
+        }
         @Override public String toString() { return "KrcRow(redacted)"; }
     }
     public static final class Document {
@@ -86,8 +107,9 @@ public final class KrcLyricsDecoder {
     private static Document parseText(String text) throws Exception {
         String[] lines=text.replace("\r\n","\n").replace('\r','\n').split("\n",-1);
         if(lines.length>10000)throw new Exception();
-        List<Row> rows=new ArrayList<>(); String language=null; long offset=0; boolean offsetSeen=false;
-        int originalBytes=0;
+        List<Row> rows=new ArrayList<>(); List<List<Span>> timings=new ArrayList<>();
+        String language=null; long offset=0; boolean offsetSeen=false;
+        int originalBytes=0,wordCount=0;
         for(String source:lines) {
             String line=source.trim();
             if(line.startsWith("[language:")) {
@@ -115,22 +137,62 @@ public final class KrcLyricsDecoder {
             long start=Long.parseLong(row.group(1)),duration=Long.parseLong(row.group(2));
             if(start>86400000 || duration>86400000 || start+duration>86400000)throw new Invalid("ROW_TIME");
             String payload=row.group(3); Matcher word=WORD.matcher(payload); StringBuilder plain=new StringBuilder();
-            int cursor=0; long previous=-1;
+            // A tag starts a segment that runs to the next tag or the payload end;
+            // its timing is relative to the row start.
+            List<int[]> ranges=new ArrayList<>(); List<long[]> clock=new ArrayList<>();
+            int cursor=0; long previous=-1; boolean wordOverflow=false;
             while(word.find()) {
                 String between=payload.substring(cursor,word.start());
                 if(between.indexOf('<')>=0 || between.indexOf('>')>=0)throw new Invalid("WORD_TAG");
                 plain.append(between);
                 long at=Long.parseLong(word.group(1)),length=Long.parseLong(word.group(2));
                 if(at<previous || at>86400000 || length>86400000)throw new Invalid("WORD_TIME");
+                // Keep validating past the per-row cap; overflowing rows lose only their timings.
+                if(clock.size()<MAX_WORDS_PER_ROW)clock.add(new long[]{at,length,plain.length()});
+                else wordOverflow=true;
                 previous=at;cursor=word.end();
             }
             String tail=payload.substring(cursor);
             if(tail.indexOf('<')>=0 || tail.indexOf('>')>=0)throw new Invalid("WORD_TAIL");
-            plain.append(tail);String original=plain.toString().trim();
+            plain.append(tail);
+            for(int i=0;i<clock.size();i++)
+                ranges.add(new int[]{(int)clock.get(i)[2],
+                    i+1<clock.size()?(int)clock.get(i+1)[2]:plain.length()});
+            String raw=plain.toString();
+            int begin=0,finish=raw.length();
+            while(begin<finish && raw.charAt(begin)<=' ')begin++;
+            while(finish>begin && raw.charAt(finish-1)<=' ')finish--;
+            String original=raw.substring(begin,finish);
             if(original.codePointCount(0,original.length())>4096)throw new Exception();
             originalBytes+=original.getBytes(StandardCharsets.UTF_8).length;
             if(originalBytes>512*1024 || rows.size()>=10000)throw new Exception();
+            // Word ranges index the trimmed text; a broken coverage or an out-of-row
+            // timing drops only the timings and never the original/translation.
+            List<Span> timed=null;
+            if(!ranges.isEmpty() && !wordOverflow) {
+                List<Span> clipped=new ArrayList<>(ranges.size());
+                boolean cover=true,inRow=true,pairs=true;
+                int atEnd=begin;
+                for(int i=0;i<ranges.size();i++) {
+                    int from=Math.max(ranges.get(i)[0],begin),to=Math.min(ranges.get(i)[1],finish);
+                    long at=clock.get(i)[0],length=clock.get(i)[1];
+                    if(at+length>duration)inRow=false;
+                    if(to<=from)continue; // Empty segment between adjacent tags.
+                    if(from!=atEnd)cover=false;
+                    atEnd=to;
+                    // A tag inside a surrogate pair cannot bound a valid UTF-16 range.
+                    if(splitsPair(original,from-begin) || splitsPair(original,to-begin))pairs=false;
+                    clipped.add(new Span(from-begin,to-begin,at,length));
+                }
+                // A gap before the first tag or after the last one leaves text untimed.
+                if(cover && atEnd-begin!=original.length())cover=false;
+                if(cover && inRow && pairs && !clipped.isEmpty()) {
+                    wordCount+=clipped.size();
+                    if(wordCount<=MAX_WORDS)timed=clipped;
+                }
+            }
             rows.add(new Row(start,original,null));
+            timings.add(timed);
         }
         List<String> translations;
         try { translations=language==null?null:translations(language,rows.size()); }
@@ -139,9 +201,34 @@ public final class KrcLyricsDecoder {
         List<Row> result=new ArrayList<>();
         for(int i=0;i<rows.size();i++) {
             Row row=rows.get(i);
-            result.add(new Row(row.timeMs+offset,row.text,translations==null?null:translations.get(i)));
+            long base=row.timeMs+offset;
+            List<Word> words=Collections.emptyList(); List<Span> timed=timings.get(i);
+            if(timed!=null) {
+                words=new ArrayList<>(timed.size());
+                boolean fits=true;
+                for(Span span:timed) {
+                    long from=Math.max(0,base+span.start),to=Math.max(0,base+span.start+span.duration);
+                    // A positive document offset can push word times past the row limit;
+                    // that drops only the timings and keeps the row and its translation.
+                    if(from>86400000 || to>86400000)fits=false;
+                    words.add(new Word(span.textStart,span.textEnd,from,to));
+                }
+                if(!fits)words=Collections.emptyList();
+            }
+            result.add(new Row(base,row.text,translations==null?null:translations.get(i),words));
         }
         return new Document(result,translations==null?Status.ABSENT:Status.PRESENT);
+    }
+    private static boolean splitsPair(String text,int index) {
+        return index>0 && index<text.length() &&
+            Character.isHighSurrogate(text.charAt(index-1)) && Character.isLowSurrogate(text.charAt(index));
+    }
+    /** Word timing relative to the row start, before the document offset is known. */
+    private static final class Span {
+        final int textStart,textEnd; final long start,duration;
+        Span(int textStart,int textEnd,long start,long duration) {
+            this.textStart=textStart; this.textEnd=textEnd; this.start=start; this.duration=duration;
+        }
     }
     private static List<String> translations(String encoded,int count) throws Exception {
         String json=utf8(base64(encoded,256*1024));validateText(json,256*1024);

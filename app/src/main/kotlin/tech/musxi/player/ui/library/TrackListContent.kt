@@ -1,5 +1,8 @@
 package tech.musxi.player.ui.library
 
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.material.icons.outlined.Search
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -22,6 +25,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -32,6 +36,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -45,12 +53,21 @@ import tech.musxi.core.library.PlaylistSummary
 import tech.musxi.core.library.SongSummary
 import tech.musxi.player.ui.components.Cover
 import tech.musxi.player.ui.components.LoadMorePill
+import tech.musxi.player.ui.components.PlayingBars
 import tech.musxi.player.ui.components.PlainRow
 import tech.musxi.player.ui.components.PlatformTag
 import tech.musxi.player.ui.components.RowSpec
+import tech.musxi.player.ui.components.SongActionsMenu
+import tech.musxi.player.ui.components.SongActionsUi
 import tech.musxi.player.ui.components.listLines
 import tech.musxi.player.ui.components.songSubtitle
 import tech.musxi.player.ui.model.formatDuration
+import tech.musxi.player.ui.shell.PageTopBar
+import tech.musxi.player.ui.shell.TitleProbe
+import tech.musxi.player.ui.shell.TopBarHeight
+import tech.musxi.player.ui.shell.hasShellTopBar
+import tech.musxi.player.ui.shell.largeTitle
+import tech.musxi.player.ui.shell.rememberTitleProbe
 import tech.musxi.player.ui.theme.Space
 import tech.musxi.player.ui.theme.nowPlayingAccent
 import tech.musxi.player.ui.theme.tabular
@@ -131,22 +148,105 @@ fun TrackListContent(
     bottomInset: Dp = 0.dp,
     rowStyle: TrackRowStyle = TrackRowStyle.NUMBERED,
     numberStyle: NumberStyle = NumberStyle.FLUSH_SMALL,
+    /** The same song menu search has. A row gets its "more" button when any action below is given. */
+    songActions: (SongSummary) -> SongActionsUi = { SongActionsUi() },
+    onPlayNext: ((SongSummary) -> Unit)? = null,
+    onAddToQueue: ((SongSummary) -> Unit)? = null,
+    onToggleFavorite: ((SongSummary) -> Unit)? = null,
+    onManagePlaylists: ((SongSummary) -> Unit)? = null,
+    /** Search inside this playlist. Without [onSearch] the page has no search button. */
+    search: PlaylistSearchUi = PlaylistSearchUi(),
+    onOpenSearch: () -> Unit = {},
+    onSearch: ((String) -> Unit)? = null,
+    onCloseSearch: () -> Unit = {},
+    /** Reads the rest of the playlist so the search covers it all; null offers nothing. */
+    onFillForSearch: (() -> Unit)? = null,
+    onCancelFill: () -> Unit = {},
 ) {
     val playlist = state.playlist ?: return
     // Every number in the list pads to the same width, decided once from the playlist's own count.
     val digits = maxOf(2, playlist.trackCount.toString().length)
+    val canMore = onPlayNext != null || onAddToQueue != null || onToggleFavorite != null || onManagePlaylists != null
+    // Stable id of the row whose menu is open, if any.
+    var menuFor by remember { mutableStateOf<String?>(null) }
+    val trackList = androidx.compose.foundation.lazy.rememberLazyListState()
+    val searching = search.open && onSearch != null
+    // Under the shell the back and search buttons sit on its glass top bar, and the list runs
+    // beneath it; the playlist's name moves onto the bar once the header's has gone under it.
+    val shellBar = hasShellTopBar() && !searching
+    val titleProbe = rememberTitleProbe()
+    titleProbe.away = { trackList.firstVisibleItemIndex > 0 }
+    val searchButton: (@Composable () -> Unit)? = if (onSearch != null) {
+        { SearchButton(onOpenSearch) }
+    } else {
+        null
+    }
+    if (shellBar) {
+        PageTopBar(
+            title = playlist.title,
+            probe = titleProbe,
+            scrolled = {
+                if (trackList.firstVisibleItemIndex > 0) Float.MAX_VALUE
+                else trackList.firstVisibleItemScrollOffset.toFloat()
+            },
+            leading = { BackButton(onBack) },
+            trailing = searchButton,
+        )
+    }
     Column(Modifier.fillMaxSize().padding(horizontal = Space.page)) {
-        TopBar(onBack)
+        if (searching) {
+            PlaylistSearchBar(query = search.query, onChange = onSearch, onClose = onCloseSearch)
+        } else if (!shellBar) {
+            TopBar(onBack, onSearch = if (onSearch != null) onOpenSearch else null)
+        }
+        val pull = androidx.compose.material3.pulltorefresh.rememberPullToRefreshState()
         PullToRefreshBox(
             isRefreshing = state.refreshing,
             onRefresh = onPullRefresh,
             modifier = Modifier.fillMaxSize(),
+            state = pull,
+            // Under the shell's bar the spinner comes out below it, not behind the back button.
+            indicator = {
+                androidx.compose.material3.pulltorefresh.PullToRefreshDefaults.Indicator(
+                    state = pull,
+                    isRefreshing = state.refreshing,
+                    modifier = Modifier.align(Alignment.TopCenter).padding(top = if (shellBar) TopBarHeight else 0.dp),
+                )
+            },
         ) {
+            // As on the library page: the next page loads by itself near the end; the footer pill
+            // is the retry after a failure.
+            tech.musxi.player.ui.components.AutoLoadMore(
+                listState = trackList,
+                canLoadMore = state.canLoadMore,
+                failed = state.error != null,
+                onLoadMore = onLoadMore,
+            )
             LazyColumn(
                 Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(bottom = bottomInset),
+                state = trackList,
+                contentPadding = PaddingValues(top = if (shellBar) TopBarHeight else 0.dp, bottom = bottomInset),
             ) {
-                item { Header(state, playlist, dark) }
+                if (search.active) {
+                    item { SearchNote(search, onFillForSearch, onCancelFill) }
+                    // Row numbers stay the song's place in the playlist, so a result still says
+                    // where it sits.
+                    val positions = state.items.withIndex().associate { (i, s) -> s.key.stableId to i }
+                    itemsIndexed(search.results, key = { _, song -> "found-" + song.key.stableId }) { _, song ->
+                        TrackLine(
+                            index = positions[song.key.stableId] ?: 0,
+                            song = song,
+                            style = rowStyle,
+                            numberStyle = numberStyle,
+                            digits = digits,
+                            playing = song.key.stableId == nowPlayingId,
+                            preparing = song.key.stableId == pendingSongId,
+                            onClick = { onSongClick(song) },
+                        )
+                    }
+                    return@LazyColumn
+                }
+                item { Header(state, playlist, dark, titleProbe) }
                 item { ActionRow(state, onPlayAll) }
                 when {
                     state.items.isEmpty() && state.loading -> item { LoadingBlock() }
@@ -164,6 +264,18 @@ fun TrackListContent(
                             playing = song.key.stableId == nowPlayingId,
                             preparing = song.key.stableId == pendingSongId,
                             onClick = { onSongClick(song) },
+                            onMore = if (canMore) ({ menuFor = song.key.stableId }) else null,
+                            menu = if (canMore) ({
+                                SongActionsMenu(
+                                    expanded = menuFor == song.key.stableId,
+                                    onDismiss = { menuFor = null },
+                                    ui = songActions(song),
+                                    onPlayNext = onPlayNext?.let { act -> { act(song) } },
+                                    onAddToQueue = onAddToQueue?.let { act -> { act(song) } },
+                                    onToggleFavorite = onToggleFavorite?.let { act -> { act(song) } },
+                                    onManagePlaylists = onManagePlaylists?.let { act -> { act(song) } },
+                                )
+                            }) else null,
                         )
                     }
                 }
@@ -175,15 +287,134 @@ fun TrackListContent(
 
 /** 56dp. Back is the only thing here; the playlist name takes over once it scrolls out. */
 @Composable
-private fun TopBar(onBack: () -> Unit) {
+private fun TopBar(onBack: () -> Unit, onSearch: (() -> Unit)? = null) {
     Row(
         Modifier.fillMaxWidth().height(56.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        IconButton(onClick = onBack) {
-            Icon(
-                Icons.AutoMirrored.Filled.ArrowBack, "返回",
-                tint = MaterialTheme.colorScheme.onSurface, modifier = Modifier.size(24.dp),
+        BackButton(onBack)
+        Spacer(Modifier.weight(1f))
+        if (onSearch != null) SearchButton(onSearch)
+    }
+}
+
+@Composable
+private fun BackButton(onBack: () -> Unit) {
+    IconButton(onClick = onBack) {
+        Icon(
+            Icons.AutoMirrored.Filled.ArrowBack, "返回",
+            tint = MaterialTheme.colorScheme.onSurface, modifier = Modifier.size(24.dp),
+        )
+    }
+}
+
+@Composable
+private fun SearchButton(onSearch: () -> Unit) {
+    IconButton(onClick = onSearch) {
+        Icon(
+            Icons.Outlined.Search, "在歌单中搜索",
+            tint = MaterialTheme.colorScheme.onSurface, modifier = Modifier.size(24.dp),
+        )
+    }
+}
+
+/**
+ * The search box that takes the top bar's place while searching this playlist. It opens focused
+ * with the keyboard up; "取消" closes it and brings the whole playlist back.
+ */
+@Composable
+private fun PlaylistSearchBar(query: String, onChange: (String) -> Unit, onClose: () -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    val focus = remember { androidx.compose.ui.focus.FocusRequester() }
+    LaunchedEffect(Unit) { focus.requestFocus() }
+    androidx.activity.compose.BackHandler(onBack = onClose)
+    Row(
+        Modifier.fillMaxWidth().height(56.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        androidx.compose.foundation.text.BasicTextField(
+            value = query,
+            onValueChange = onChange,
+            modifier = Modifier
+                .weight(1f)
+                .height(40.dp)
+                .clip(CircleShape)
+                .background(cs.surfaceContainerHigh)
+                .focusRequester(focus),
+            singleLine = true,
+            textStyle = MaterialTheme.typography.bodyLarge.copy(color = cs.onSurface),
+            cursorBrush = androidx.compose.ui.graphics.SolidColor(cs.primary),
+            decorationBox = { inner ->
+                Row(
+                    Modifier.fillMaxSize().padding(horizontal = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(Icons.Outlined.Search, null, tint = cs.onSurfaceVariant, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
+                        if (query.isEmpty()) {
+                            Text(
+                                "在歌单中搜索歌名、歌手或专辑",
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = cs.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                        inner()
+                    }
+                }
+            },
+        )
+        Text(
+            "取消",
+            style = MaterialTheme.typography.bodyLarge,
+            color = cs.primary,
+            modifier = Modifier
+                .clip(MaterialTheme.shapes.small)
+                .clickable(role = androidx.compose.ui.semantics.Role.Button, onClick = onClose)
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+        )
+    }
+}
+
+/** One quiet line above the results: what was searched, so "nothing found" is never misread. */
+@Composable
+private fun SearchNote(search: PlaylistSearchUi, onFill: (() -> Unit)?, onCancelFill: () -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    // The line always takes its height, even before the first answer, so the results never jump
+    // up or down when it appears; its text only changes when an answer lands.
+    Row(
+        Modifier.fillMaxWidth().heightIn(min = 40.dp).padding(top = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(
+                playlistSearchNote(search).orEmpty(),
+                style = MaterialTheme.typography.bodySmall.tabular,
+                color = cs.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            search.fillError?.let {
+                Text(it, style = MaterialTheme.typography.bodySmall, color = cs.error, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+        }
+        // A partly read playlist offers to read the rest; while that runs, it can be stopped.
+        val action = when {
+            search.filling -> "停止" to onCancelFill
+            search.canFill && onFill != null -> "载入全部再搜" to onFill
+            else -> null
+        }
+        if (action != null) {
+            Text(
+                action.first,
+                style = MaterialTheme.typography.labelLarge,
+                color = cs.primary,
+                modifier = Modifier
+                    .clip(MaterialTheme.shapes.small)
+                    .clickable(role = androidx.compose.ui.semantics.Role.Button, onClick = action.second)
+                    .padding(horizontal = 10.dp, vertical = 8.dp),
             )
         }
     }
@@ -201,7 +432,7 @@ private fun TopBar(onBack: () -> Unit) {
  * so printing "2 hours 18 minutes" would describe 40 of 746 tracks.
  */
 @Composable
-private fun Header(state: TrackListUiState, playlist: PlaylistSummary, dark: Boolean) {
+private fun Header(state: TrackListUiState, playlist: PlaylistSummary, dark: Boolean, titleProbe: TitleProbe? = null) {
     val cs = MaterialTheme.colorScheme
     Row(
         Modifier.fillMaxWidth().padding(top = Space.section),
@@ -221,6 +452,7 @@ private fun Header(state: TrackListUiState, playlist: PlaylistSummary, dark: Boo
                 color = cs.onSurface,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
+                modifier = if (titleProbe != null) Modifier.largeTitle(titleProbe) else Modifier,
             )
             Spacer(Modifier.height(12.dp))
             Text(
@@ -298,6 +530,8 @@ private fun TrackLine(
     playing: Boolean,
     preparing: Boolean = false,
     onClick: () -> Unit,
+    onMore: (() -> Unit)? = null,
+    menu: (@Composable () -> Unit)? = null,
 ) {
     val cs = MaterialTheme.colorScheme
     val slot = numberStyle.slot(digits)
@@ -375,15 +609,17 @@ private fun TrackLine(
             style = MaterialTheme.typography.bodySmall.tabular,
             color = cs.onSurfaceVariant,
         )
-    }
-}
-
-/** Three bars in the accent: the playing signal, sized to the index slot it replaces. */
-@Composable
-private fun PlayingBars(accent: androidx.compose.ui.graphics.Color) {
-    Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-        listOf(9.dp, 14.dp, 7.dp).forEach { barHeight ->
-            Box(Modifier.width(3.dp).height(barHeight).clip(CircleShape).background(accent))
+        if (onMore != null) {
+            // Same button as a search row; the menu is its sibling so it anchors to the button.
+            Box {
+                IconButton(onClick = onMore, modifier = Modifier.size(40.dp)) {
+                    Icon(
+                        Icons.Filled.MoreVert, contentDescription = "更多操作",
+                        tint = cs.onSurfaceVariant, modifier = Modifier.size(20.dp),
+                    )
+                }
+                menu?.invoke()
+            }
         }
     }
 }

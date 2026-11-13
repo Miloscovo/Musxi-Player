@@ -29,14 +29,20 @@ import kotlinx.coroutines.delay
 import tech.musxi.player.ui.components.GlassStyle
 import tech.musxi.player.ui.components.LocalGlass
 import tech.musxi.player.ui.components.glass
+import tech.musxi.player.ui.theme.Haptic
 import tech.musxi.player.ui.theme.Motion
+import tech.musxi.player.ui.theme.rememberHaptics
 import tech.musxi.player.ui.theme.isDarkSurface
 
 /** How long a notice stays on screen before it dismisses itself. */
 internal const val NoticeDurationMillis = 4_000L
 
-/** One notice on screen. [id] is new for every [NoticeState.show] call, even when the text repeats. */
-data class Notice(val id: Long, val text: String)
+/**
+ * One notice on screen. [id] is new for every [NoticeState.show] call, even when the text repeats.
+ * [haptic] is played once when the notice appears (spec section 5: CONFIRM for a success the user
+ * asked for, REJECT for a refusal); null for a notice that only informs.
+ */
+data class Notice(val id: Long, val text: String, val haptic: Haptic? = null)
 
 /**
  * Holds the single notice that is on screen. A new notice replaces the old one instead of queuing
@@ -48,9 +54,24 @@ class NoticeState {
 
     private var lastId = 0L
 
-    fun show(text: String) {
+    /** Id of the last notice whose haptic was handed out, so it is played once per notice. */
+    private var hapticPlayedFor = 0L
+
+    fun show(text: String, haptic: Haptic? = null) {
         lastId += 1
-        current = Notice(id = lastId, text = text)
+        current = Notice(id = lastId, text = text, haptic = haptic)
+    }
+
+    /**
+     * The haptic for notice [id], the first time it is asked for and only while that notice is the
+     * one on screen; null afterwards. Lives here rather than in the pill so a pill that leaves and
+     * re-enters composition does not play it again.
+     */
+    fun takeHaptic(id: Long): Haptic? {
+        val notice = current ?: return null
+        if (notice.id != id || id <= hapticPlayedFor) return null
+        hapticPlayedFor = id
+        return notice.haptic
     }
 
     /** Clears the notice only when [id] is the one on screen. A stale timer or tap is a no-op. */
@@ -74,10 +95,12 @@ fun NoticePill(state: NoticeState, modifier: Modifier = Modifier) {
     val notice = state.current
     // Keeps the last notice on screen while its exit animation runs after current becomes null.
     val lastNotice = remember { mutableStateOf(notice) }
+    val haptic = rememberHaptics()
     LaunchedEffect(notice) { if (notice != null) lastNotice.value = notice }
     // Each notice gets its own effect run, keyed on its id, so a repeated text restarts the timer.
     LaunchedEffect(notice?.id) {
         val id = notice?.id ?: return@LaunchedEffect
+        state.takeHaptic(id)?.let(haptic)
         delay(NoticeDurationMillis)
         state.dismiss(id)
     }

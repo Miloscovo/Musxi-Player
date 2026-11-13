@@ -1,36 +1,10 @@
 package tech.musxi.player.ui.account
 
-import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import tech.musxi.core.update.UpdateCheckResult
 
 class AboutSectionTest {
-    @Test
-    fun mapsEveryUpdateResult() {
-        assertEquals(UpdateStatusUi.UpToDate, updateStatusOf(UpdateCheckResult.NoUpdate))
-        assertEquals(UpdateStatusUi.Failed, updateStatusOf(UpdateCheckResult.Failed))
-        assertEquals(
-            UpdateStatusUi.RateLimited(123L),
-            updateStatusOf(UpdateCheckResult.RateLimited(123L)),
-        )
-        assertEquals(
-            UpdateStatusUi.Available(
-                version = "v0.2.0",
-                notes = "notes",
-                releasePage = "https://github.com/qwt1011/Musxi-Player-Android/releases/tag/v0.2.0",
-            ),
-            updateStatusOf(
-                UpdateCheckResult.UpdateAvailable(
-                    version = "v0.2.0",
-                    notes = "notes",
-                    releasePage = "https://github.com/qwt1011/Musxi-Player-Android/releases/tag/v0.2.0",
-                ),
-            ),
-        )
-    }
-
     @Test
     fun acceptsRepositoryReleasePages() {
         assertTrue(

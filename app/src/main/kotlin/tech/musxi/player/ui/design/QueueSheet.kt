@@ -1,20 +1,13 @@
 package tech.musxi.player.ui.design
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import tech.musxi.player.ui.player.FullPlayer
 import tech.musxi.player.ui.player.PlayerUi
-import tech.musxi.player.ui.player.QueuePanel
 import tech.musxi.player.ui.player.QueueRowUi
 import tech.musxi.player.ui.player.QueueUi
 import tech.musxi.player.ui.theme.Accent
@@ -22,11 +15,10 @@ import tech.musxi.player.ui.theme.MusxiTheme
 import tech.musxi.player.ui.theme.ThemeMode
 
 /**
- * Queue sheet: the panel over the player page, with the same scrim the source panel uses.
+ * Queue sheet: the real player page with the real queue sheet over it, at the height it opens at.
  *
- * The panel is real ([QueuePanel]) and the page behind it is the real player, so the sheet shows
- * what the user will actually see when the sheet is open — including how much of the page the panel
- * covers.
+ * Both are the production composables, so the sheet shows what the user will actually see when the
+ * queue is open, including how much of the page stays visible above it.
  */
 @Composable
 fun QueueSheet(
@@ -41,13 +33,13 @@ fun QueueSheet(
         Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
             Box(Modifier.fillMaxSize()) {
                 FullPlayer(ui = player, dark = mode != ThemeMode.LIGHT)
-                Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.32f)))
-                Column(
-                    Modifier.fillMaxSize(),
-                    verticalArrangement = Arrangement.Bottom,
-                ) {
-                    QueuePanel(ui, showCover = showCover)
-                }
+                tech.musxi.player.ui.player.QueueSheet(
+                    visible = true,
+                    ui = ui,
+                    onDismiss = {},
+                    showCover = showCover,
+                    actions = tech.musxi.player.ui.player.QueueRowActions(onPlayNext = {}, onAddToPlaylist = {}),
+                )
             }
         }
     }

@@ -6,9 +6,6 @@ import androidx.activity.compose.setContent
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.collectAsState
 import androidx.compose.foundation.isSystemInDarkTheme
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.setValue
-import androidx.lifecycle.ProcessLifecycleOwner
 import tech.musxi.player.ui.MainShell
 import tech.musxi.player.ui.theme.Accent
 import tech.musxi.player.ui.theme.MusxiTheme
@@ -20,18 +17,9 @@ import tech.musxi.player.ui.theme.ThemeMode
  */
 class MainActivity : ComponentActivity() {
 
-    private var accent by mutableStateOf(Accent.MIST)
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val app = application as MusxiApplication
-        // One owner for the foreground flag. Screens must not each set it.
-        ProcessLifecycleOwner.get().lifecycle.addObserver(
-            object : androidx.lifecycle.DefaultLifecycleObserver {
-                override fun onStart(owner: androidx.lifecycle.LifecycleOwner) = app.accounts.setForeground(true)
-                override fun onStop(owner: androidx.lifecycle.LifecycleOwner) = app.accounts.setForeground(false)
-            },
-        )
         setContent {
             val settings by app.settings.collectAsState()
             val dark = when (settings.themeMode) {
@@ -40,8 +28,14 @@ class MainActivity : ComponentActivity() {
                 tech.musxi.core.settings.ThemeMode.DARK -> true
             }
             val mode = if (dark) ThemeMode.DARK else ThemeMode.LIGHT
-            MusxiTheme(accent = accent, mode = mode) {
-                MainShell(app, dark = dark)
+            // Saved by name; a name this build does not know falls back to the default.
+            MusxiTheme(accent = Accent.fromName(settings.accent), mode = mode) {
+                // On a phone, spinners turn; tests and design sheets leave them still (see ProgressArc).
+                androidx.compose.runtime.CompositionLocalProvider(
+                    tech.musxi.player.ui.components.LocalLiveIndicators provides true,
+                ) {
+                    MainShell(app, dark = dark)
+                }
             }
         }
     }

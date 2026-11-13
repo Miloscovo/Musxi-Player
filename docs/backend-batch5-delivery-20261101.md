@@ -1,5 +1,7 @@
 # 第五批后端交付 · 2026-11-01
 
+> **状态：日期交付记录（2026-11-01，第五批）。** 1599 项 JVM、Lint 0 错误/119 警告和真机结果对应本批指定开发包；本轮未复验，也不代表正式包全账号验收。当前状态见 [当前开发接续](next-session-handoff.md)。
+
 对应 [第五批需求单](backend-requests-20261101-5.md)。本批修改 accounts、core、platform-* 及设备测试，沿用 CC 的头像界面；没有修改 `app/src/main/kotlin/tech/musxi/player/ui/`。当前工作区含 CC 的 Kotlin 2.3.21 / Backdrop 2.0.0-alpha03 与前端改动，未提交、推送或发布。
 
 ## 三平台头像

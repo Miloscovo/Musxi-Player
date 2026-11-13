@@ -21,6 +21,7 @@ store password 与 key password 使用同一个密码。不要把密码写入
 不能再把该密钥当作一次性材料删除。私钥库、别名和密码应另作安全离线备份，不能加入 Git 或 Release 附件。
 
 v0.2 是 `tech.musxi.player` 的首次正式签名发布，版本为 `0.2.0` / code 5。
+v0.3 沿用相同签名及包名，版本为 `0.3.0` / code 6，支持覆盖更新。
 旧 v0.1 的 `tech.musxi.player.dev` 使用开发签名，两种包各自保存数据，可以并存；不能用正式包自动迁移开发包账号或队列。
 
 ## 构建与安装
@@ -73,4 +74,4 @@ $env:ANDROID_HOME = 'C:\path\to\android-sdk'
 - `-Release -Install` 安装并启动 `tech.musxi.player`，不会启动 debug 的
   `tech.musxi.player.dev`。
 
-应用内更新与安装接口见 [安卓更新接口](android-app-updates.md)。构建锁由调用方统一管理；脚本不内置第二层锁。
+应用内更新见 [安卓更新接口](android-app-updates.md)，公钥证书与私钥的区别见 [签名说明](signing-security.md)。`build.ps1` 已内置主目录/辅助工作树共享文件锁，进程结束自动释放；不再使用按时间删除锁的旧包装器。完整验证入口见 [验证工作流](validation-workflow.md)。

@@ -22,7 +22,6 @@ import tech.musxi.core.settings.AppSettings
 import tech.musxi.core.settings.LyricsTranslationPreference
 import tech.musxi.core.settings.ThemeMode as StoredThemeMode
 import tech.musxi.player.ui.account.AboutUpdateUi
-import tech.musxi.player.ui.me.DarkModePage
 import tech.musxi.player.ui.me.MeAccountsGroup
 import tech.musxi.player.ui.me.MeActions
 import tech.musxi.player.ui.me.MeScreen
@@ -69,16 +68,6 @@ fun MeAccountsSheet(accent: Accent, mode: ThemeMode, common: Boolean = false) {
                 val states = if (common) meCommonAccountStates() else meMixedAccountStates()
                 SampleAvatars { MeAccountsGroup(states.map(::meAccountRowOf)) {} }
             }
-        }
-    }
-}
-
-/** The single-choice sub-page that serves as the model for the other pickers. */
-@Composable
-fun MeDarkModeSheet(accent: Accent, mode: ThemeMode, selected: StoredThemeMode = StoredThemeMode.SYSTEM) {
-    MusxiTheme(accent = accent, mode = mode) {
-        Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-            DarkModePage(selected = selected, onSelect = {}, onBack = {})
         }
     }
 }

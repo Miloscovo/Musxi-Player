@@ -3,10 +3,11 @@ package tech.musxi.playback
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -16,6 +17,7 @@ import tech.musxi.core.library.SongSummary
 import tech.musxi.core.playback.SourceCandidate
 import tech.musxi.core.playback.PlaybackFailure
 
+@OptIn(ExperimentalCoroutinesApi::class)
 class AutomaticSourcePreparationTest {
     private fun candidate(platform: Platform, id: String) = SourceCandidate(
         song = SongSummary(MediaKey(platform, id), id, emptyList(), "", 1_000),
@@ -23,7 +25,7 @@ class AutomaticSourcePreparationTest {
     )
 
     @Test
-    fun recordingFailureTriesTheNextCandidateWithoutLosingTheOtherPlatform() = runBlocking {
+    fun recordingFailureTriesTheNextCandidateWithoutLosingTheOtherPlatform() = runTest {
         val candidates = listOf(
             candidate(Platform.NETEASE, "denied"),
             candidate(Platform.NETEASE, "available"),
@@ -41,7 +43,7 @@ class AutomaticSourcePreparationTest {
     }
 
     @Test
-    fun retriesRespectTheSharedBudgetAndNeverRetryAccountFailures() = runBlocking {
+    fun retriesRespectTheSharedBudgetAndNeverRetryAccountFailures() = runTest {
         val candidates = listOf(
             candidate(Platform.NETEASE, "rate-limited"),
             candidate(Platform.NETEASE, "must-not-request"),
@@ -59,7 +61,7 @@ class AutomaticSourcePreparationTest {
     }
 
     @Test
-    fun preparesFirstCandidateFromOnlyTwoPlatformsConcurrently() = runBlocking {
+    fun preparesFirstCandidateFromOnlyTwoPlatformsConcurrently() = runTest {
         val candidates = listOf(
             candidate(Platform.NETEASE, "netease-1"),
             candidate(Platform.NETEASE, "netease-2"),
@@ -84,7 +86,7 @@ class AutomaticSourcePreparationTest {
     }
 
     @Test
-    fun onePlatformFailureDoesNotHideTheOtherResult() = runBlocking {
+    fun onePlatformFailureDoesNotHideTheOtherResult() = runTest {
         val candidates = listOf(
             candidate(Platform.NETEASE, "netease-1"),
             candidate(Platform.NETEASE, "netease-2"),
@@ -105,7 +107,7 @@ class AutomaticSourcePreparationTest {
     }
 
     @Test
-    fun candidateCancellationIsIsolatedUnlessTheCallerWasCancelled() = runBlocking {
+    fun candidateCancellationIsIsolatedUnlessTheCallerWasCancelled() = runTest {
         val candidates = listOf(
             candidate(Platform.NETEASE, "netease-1"),
             candidate(Platform.QQ, "qq-1"),
@@ -123,7 +125,7 @@ class AutomaticSourcePreparationTest {
     }
 
     @Test
-    fun graceWindowKeepsInputOrderWhenLaterCandidateFinishesFirst() = runBlocking {
+    fun graceWindowKeepsInputOrderWhenLaterCandidateFinishesFirst() = runTest {
         val candidates = listOf(
             candidate(Platform.NETEASE, "netease-1"),
             candidate(Platform.QQ, "qq-1"),
@@ -141,13 +143,13 @@ class AutomaticSourcePreparationTest {
     }
 
     @Test
-    fun overallTimeoutReturnsCompletedWorkAndCancelsSlowCandidate() = runBlocking {
+    fun overallTimeoutReturnsCompletedWorkAndCancelsSlowCandidate() = runTest {
         var slowCancelled = false
         val candidates = listOf(
             candidate(Platform.NETEASE, "netease-fast"),
             candidate(Platform.QQ, "qq-slow"),
         )
-        val startedAt = System.nanoTime()
+        val startedAt = testScheduler.currentTime
 
         val prepared = prepareAutomaticAlternatives(
             candidates,
@@ -167,15 +169,15 @@ class AutomaticSourcePreparationTest {
             }
         }
 
-        val elapsedMs = (System.nanoTime() - startedAt) / 1_000_000
+        val elapsedMs = testScheduler.currentTime - startedAt
         assertEquals(setOf(MediaKey(Platform.NETEASE, "netease-fast")), prepared.keys)
         assertEquals("fast-result", prepared.getValue(MediaKey(Platform.NETEASE, "netease-fast")))
-        assertTrue("helper must stop at its overall deadline", elapsedMs < 500)
+        assertEquals("helper must stop at its overall deadline", 80L, elapsedMs)
         assertTrue("unfinished preparation must be cancelled", slowCancelled)
     }
 
     @Test
-    fun parentCancellationCancelsPreparationAndIsNotSwallowed() = runBlocking {
+    fun parentCancellationCancelsPreparationAndIsNotSwallowed() = runTest {
         val started = CompletableDeferred<Unit>()
         var helperObservedCancellation = false
         var preparationCancelled = false

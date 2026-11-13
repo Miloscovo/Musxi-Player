@@ -82,6 +82,9 @@ class PlayerProbe internal constructor() {
     /** The page's cover slot in window pixels, null until the page has been laid out once. */
     internal var cover by mutableStateOf<Rect?>(null)
 
+    /** The cover tile in the lyrics page's title bar, null until the lyrics page has been laid out. */
+    internal var tile by mutableStateOf<Rect?>(null)
+
     /** The progress bar's touch area; a vertical drag that starts there scrubs instead of collapsing. */
     internal var scrub by mutableStateOf<Rect?>(null)
 }
@@ -95,4 +98,6 @@ class PlayerSurfaceLink internal constructor(
     val palette: PlayerPalette,
     internal val probe: PlayerProbe,
     internal val pull: NestedScrollConnection,
+    /** Task 2: the cover ⇄ lyrics value the surface's cover layer runs; the page follows the same one. */
+    internal val lyricsT: androidx.compose.runtime.State<Float>? = null,
 )

@@ -4,6 +4,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
+import tech.musxi.player.ui.theme.Haptic
 
 class NoticeHostTest {
 
@@ -62,5 +63,44 @@ class NoticeHostTest {
         state.dismiss(staleId)
 
         assertEquals("已复制", state.current?.text)
+    }
+
+    @Test
+    fun noticeWithoutHapticPlaysNone() {
+        val state = NoticeState()
+        state.show("已复制")
+
+        assertNull(state.takeHaptic(state.current!!.id))
+    }
+
+    @Test
+    fun hapticIsHandedOutOncePerNotice() {
+        val state = NoticeState()
+        state.show("已加入播放队列", Haptic.CONFIRM)
+        val id = state.current!!.id
+
+        assertEquals(Haptic.CONFIRM, state.takeHaptic(id))
+        assertNull(state.takeHaptic(id))
+    }
+
+    @Test
+    fun repeatedTextGetsItsOwnHaptic() {
+        val state = NoticeState()
+        state.show("当前账号不能修改收藏", Haptic.REJECT)
+        state.takeHaptic(state.current!!.id)
+        state.show("当前账号不能修改收藏", Haptic.REJECT)
+
+        assertEquals(Haptic.REJECT, state.takeHaptic(state.current!!.id))
+    }
+
+    @Test
+    fun replacedNoticeNoLongerPlays() {
+        val state = NoticeState()
+        state.show("first", Haptic.REJECT)
+        val oldId = state.current!!.id
+        state.show("second", Haptic.CONFIRM)
+
+        assertNull(state.takeHaptic(oldId))
+        assertEquals(Haptic.CONFIRM, state.takeHaptic(state.current!!.id))
     }
 }

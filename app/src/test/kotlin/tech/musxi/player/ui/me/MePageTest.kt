@@ -10,13 +10,17 @@ import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertHasNoClickAction
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertHeightIsAtLeast
 import androidx.compose.ui.test.assertIsNotSelected
 import androidx.compose.ui.test.assertIsSelected
+import androidx.compose.ui.test.hasAnyAncestor
+import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.isPopup
 import androidx.compose.ui.test.junit4.v2.createComposeRule
-import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import org.junit.Assert.assertEquals
@@ -37,7 +41,7 @@ import tech.musxi.player.ui.theme.MusxiTheme
 /**
  * What the "我的" page does when touched: which callback fires with which value, that the page
  * keeps no copy of any setting, and that rows grow with the font scale. The window is tall enough
- * to hold the whole page, so no test needs to scroll.
+ * to hold the whole page, so no test needs to scroll. The picker menus themselves are MePickerTest's.
  */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -80,6 +84,13 @@ class MePageTest {
         assertEquals(listOf(true), seen)
     }
 
+    @Test fun mediaCardLyricsIsOffByDefaultAndReportsOn() {
+        val seen = mutableListOf<Boolean>()
+        setPage(MeActions(onSetMediaCardLyrics = { seen += it }))
+        compose.onNodeWithText("媒体卡片显示歌词").performScrollTo().assert(hasState("已关闭")).performClick()
+        assertEquals(listOf(true), seen)
+    }
+
     @Test fun theSwitchFollowsTheCallersNewValue() {
         setPage(MeActions(onSetRelaxDuration = { on ->
             ui = ui.copy(playback = ui.playback.copy(relaxDuration = on))
@@ -99,22 +110,43 @@ class MePageTest {
 
     // --- rows that open something ---------------------------------------------------------------
 
-    @Test fun rowsThatOpenAPageReportIt() {
+    @Test fun accountRowsReportTheirPlatform() {
         val opened = mutableListOf<String>()
-        setPage(
-            MeActions(
-                onOpenAccount = { opened += it.name },
-                onOpenQuality = { opened += "quality" },
-                onOpenFontSize = { opened += "font" },
-                onOpenDarkMode = { opened += "dark" },
-                onOpenAccent = { opened += "accent" },
-            ),
-        )
+        setPage(MeActions(onOpenAccount = { opened += it.name }))
         // An account row is found by its first line: the nickname, or the platform when nobody is known.
-        for (title in listOf("云村用户 8842", "酷狗", "默认音质", "字号", "深色模式", "主题色")) {
+        for (title in listOf("云村用户 8842", "酷狗")) {
             compose.onNodeWithText(title).performClick()
         }
-        assertEquals(listOf("NETEASE", "KUGOU", "quality", "font", "dark", "accent"), opened)
+        assertEquals(listOf("NETEASE", "KUGOU"), opened)
+    }
+
+    @Test fun pickerRowsOpenAMenuInsteadOfReportingAnything() {
+        val seen = mutableListOf<Any>()
+        setPage(
+            MeActions(
+                onOpenAccount = { seen += it },
+                onSelectQuality = { seen += it },
+                onSelectFontSize = { seen += it },
+                onSelectThemeMode = { seen += it },
+                onSelectAccent = { seen += it },
+            ),
+        )
+        for (title in listOf("默认音质", "字号", "深色模式", "主题色")) {
+            compose.onNodeWithText(title).performClick()
+            compose.waitForIdle()
+            // Each row replaces the menu before it: never more than one on screen.
+            compose.onAllNodes(isPopup()).assertCountEquals(1)
+        }
+        assertTrue("opening a menu is not a choice: $seen", seen.isEmpty())
+    }
+
+    @Test fun pickerRowsShowTheCurrentValueAndAreButtons() {
+        setPage()
+        // Sample values; with no menu open, the rows are the only place they appear.
+        for (value in listOf("标准", "中", "跟随系统", "雾蓝")) compose.onNodeWithText(value).assertExists()
+        for (title in listOf("默认音质", "字号", "深色模式", "主题色")) {
+            compose.onNodeWithText(title).assert(SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Button))
+        }
     }
 
     @Test fun onlyRowsThatNeedTheUserSpeakAtTheRightEdge() {
@@ -147,11 +179,11 @@ class MePageTest {
     @Test fun theCacheRowClearsOnlyWhenThereIsSomethingToClear() {
         var cleared = 0
         setPage(MeActions(onClearCache = { cleared++ }))
-        compose.onNodeWithText("缓存").performClick()
+        compose.onNodeWithText("缓存").performScrollTo().performClick()
         assertEquals(1, cleared)
 
         compose.runOnIdle { ui = ui.copy(storage = MeStorageUi("0 KB", clearable = false)) }
-        compose.onNodeWithText("缓存").assertHasNoClickAction().performClick()
+        compose.onNodeWithText("缓存").performScrollTo().assertHasNoClickAction().performClick()
         assertEquals("an empty cache must not start a clear", 1, cleared)
     }
 
@@ -184,25 +216,28 @@ class MePageTest {
         compose.onNodeWithText("0.2.0-alpha01").assertExists()
     }
 
-    // --- dark mode sub-page --------------------------------------------------------------------
+    // --- dark mode menu ------------------------------------------------------------------------
 
-    @Test fun darkModePageReportsOnlyARealChange() {
+    /** What the old dark-mode page did, now in its menu: one report per real change, and each pick closes it. */
+    @Test fun darkModeMenuReportsOnlyARealChange() {
         val picked = mutableListOf<ThemeMode>()
-        var backs = 0
-        compose.setContent {
-            MusxiTheme {
-                DarkModePage(
-                    selected = ThemeMode.SYSTEM,
-                    onSelect = { picked += it },
-                    onBack = { backs++ },
-                )
-            }
+        setPage(MeActions(onSelectThemeMode = { picked += it }))
+        fun choice(label: String) = compose.onNode(hasText(label) and hasAnyAncestor(isPopup()))
+        fun open() {
+            compose.onNodeWithText("深色模式").performClick()
+            compose.waitForIdle()
         }
-        compose.onNodeWithText("跟随系统").assertIsSelected().performClick()
-        compose.onNodeWithText("深色").assertIsNotSelected().performClick()
-        compose.onNodeWithText("浅色").performClick()
-        compose.onNodeWithContentDescription("返回").performClick()
+
+        open()
+        choice("跟随系统").assertIsSelected().performClick()
+        compose.waitForIdle()
+        open()
+        choice("深色").assertIsNotSelected().performClick()
+        compose.waitForIdle()
+        open()
+        choice("浅色").performClick()
+        compose.waitForIdle()
+        compose.onAllNodes(isPopup()).assertCountEquals(0)
         assertEquals(listOf(ThemeMode.DARK, ThemeMode.LIGHT), picked)
-        assertEquals(1, backs)
     }
 }

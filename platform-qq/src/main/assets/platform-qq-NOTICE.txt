@@ -48,3 +48,44 @@ JSON-java 20240303 is a Public Domain host-test dependency, not in the APK.
 models/user.py from the same pinned QQMusicApi 0.8.1 commit. Only the fixed
 VipLogin.VipLoginInter/vip_login_base query is used; no entitlement mutation
 or additional runtime dependency is included. Existing GPL-3.0-or-later applies.
+
+2026-11-06 owned-playlist removal and empty playlist creation additionally adapt del_songs/create in modules/songlist.py and CreateDeleteSonglistResp in models/songlist.py from the same pinned QQMusicApi 0.8.1 source. No new dependency or license change.
+
+Same-day whole-playlist subscription uses independently implemented compatibility
+requests researched from official public y.qq.com/ryqq/js/common.chunk.5b378f933e2203b7da48.js
+and playlist_edit.chunk.2725441057c73cad7c10.js (retrieved 2026-11-06).
+Official application scripts are not bundled. No additional runtime dependency.
+
+Same-day owned-playlist rename independently implements the same official scripts'
+uniform_get_Dissinfo read and complete EditPlaylist request (fixed mask 95), preserving
+all original non-title metadata. No official scripts are bundled, no bit-mask semantics
+are inferred, and no runtime dependency or existing license is changed.
+
+2026-11-07 optional online QRC additionally adapts modules/lyric.py,
+models/lyric.py and algorithms/__init__.py at the same pinned QQMusicApi revision.
+QrcCipher.java ports algorithms/tripledes.py, which carries this separate notice:
+SPDX-FileCopyrightText: Copyright (c) 2024 沉默の金 <cmzj@cmzj.org>
+SPDX-License-Identifier: GPL-3.0-only
+The source cites WXRIW/QQMusicDecoder DESHelper.cs and Decrypter.cs at
+0837a3a1281e58f6db3e3e1dcb1d5441fb0ac268. That file's GPL-3.0-only notice
+is preserved; the GPLv3 text is included in licenses/QQMusicApi-GPL-3.0.txt.
+Online QRC is independently bounded, decoded and verified against ordinary
+LRC before optional word attachment. No upstream Python runtime or dependency
+is bundled. Previous dated descriptions above describe their earlier stages.
+
+2026-11-11 personal recommendations additionally adapt
+recommend.get_guess_recommend in modules/recommend.py and
+GuessRecommendResponse in models/recommend.py from the same pinned QQMusicApi
+0.8.1 commit: music.radioProxy.MbTrackRadioSvr/get_radio_track with
+{id:99, num:30, from:0, scene:0, song_ids:[]} and the response
+data.tracks[] song objects. The pinned source exposes no separate
+daily-recommendation method, so the adapter reports a credentialed personal
+radio read and makes no daily-cadence claim; the anonymous homepage feed,
+chart and hot-recommendation endpoints are not substituted. No new runtime
+dependency and no license change; GPL-3.0-or-later still applies.
+
+2026-11-13 whole-playlist deletion additionally adapts songlist.delete in
+modules/songlist.py from the same QQMusicApi 0.8.1 commit
+3fc57f02e4eddb68a069bba4e0e12a7893f2a814: PlaylistBaseWrite/DelPlaylist
+with one dirId. Ownership and post-write confirmation are implemented locally.
+No additional runtime dependency; the original GPL-3.0-or-later license remains.

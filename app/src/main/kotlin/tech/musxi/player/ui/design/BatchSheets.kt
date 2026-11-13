@@ -27,7 +27,11 @@ import tech.musxi.core.playback.FailureReason
 import tech.musxi.core.playback.SourceSelectionPhase
 import tech.musxi.core.playback.SourceSelectionState
 import tech.musxi.player.ui.account.AboutSection
-import tech.musxi.player.ui.account.UpdateStatusUi
+import tech.musxi.player.ui.account.AboutUpdateUi
+import tech.musxi.player.ui.account.DownloadUi
+import tech.musxi.player.ui.account.ReleaseUi
+import tech.musxi.player.ui.account.UpdateActions
+import tech.musxi.player.ui.account.noteLines
 import tech.musxi.player.ui.library.LibraryFilter
 import tech.musxi.player.ui.library.PlaylistUiState
 import tech.musxi.player.ui.player.LyricsMatchSheet
@@ -54,17 +58,11 @@ import tech.musxi.player.ui.theme.ThemeMode
 
 /** Account page with only the About section, on the page background. */
 @Composable
-fun AboutBatchSheet(accent: Accent, mode: ThemeMode, status: UpdateStatusUi) {
+fun AboutBatchSheet(accent: Accent, mode: ThemeMode, ui: AboutUpdateUi) {
     MusxiTheme(accent = accent, mode = mode) {
         Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
             Column(Modifier.fillMaxWidth().padding(horizontal = Space.page, vertical = 16.dp)) {
-                AboutSection(
-                    version = "v0.2.0",
-                    status = status,
-                    onCheck = {},
-                    onOpenRelease = {},
-                    onIgnore = {},
-                )
+                AboutSection(version = "v0.2.0", ui = ui, actions = UpdateActions())
             }
         }
     }
@@ -211,11 +209,25 @@ fun batchSourceFailedPanel() = sourcePanelUiOf(
     BATCH_NOW,
 )
 
-/** Update check result with four lines of notes, which the About section cuts to three. */
-fun batchAvailable() = UpdateStatusUi.Available(
-    version = "v0.2.1",
-    notes = "修复歌单缓存刷新后不更新的问题\n换源面板显示每个平台的失败原因\n队列在随机播放时不再显示拖动把手\n歌词匹配支持预览后再绑定",
-    releasePage = "https://github.com/qwt1011/Musxi-Player-Android/releases/tag/v0.2.1",
+/** The About group of a release build: [checking] shows the arc, [note] the check row's text. */
+fun batchAbout(checking: Boolean = false, note: String? = null, release: ReleaseUi? = null) = AboutUpdateUi(
+    developmentBuild = false, checking = checking, checkNote = note, release = release,
+    autoCheck = true, badge = release != null,
+)
+
+/** A newer release with four lines of notes; the About group shows it as one row. */
+fun batchAvailable() = batchAbout(
+    release = ReleaseUi(
+        version = "0.2.1",
+        title = "发现新版本 v0.2.1",
+        meta = "2026年10月28日 · 18.1 MB",
+        notes = noteLines("修复歌单缓存刷新后不更新的问题\n换源面板显示每个平台的失败原因\n队列在随机播放时不再显示拖动把手\n歌词匹配支持预览后再绑定"),
+        releasePage = "https://github.com/qwt1011/Musxi-Player-Android/releases/tag/v0.2.1",
+        ignored = false,
+        metered = false,
+        confirmText = "正在使用移动数据，约 18 MB，继续下载？",
+        download = DownloadUi.Idle(canDownload = true),
+    ),
 )
 
 /** Dock notice for a failed source, with a reason. */

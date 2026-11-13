@@ -1,5 +1,7 @@
 # 安卓应用内更新接口
 
+> **状态：现行应用内更新接口合同。** 检查、下载、校验、安装和开发包限制以本文为准；发布身份见 [Android v0.2](android-v0.2-release.md)，构建细节见 [正式构建](release-build.md)，当前待办见 [当前开发接续](next-session-handoff.md)。
+
 第三批后端接口，供 CC 接线。`MusxiApplication.updates.state` 是只读 `StateFlow<UpdateState>`，类型位于 `core/update/UpdateState.kt`。现有 `check { UpdateCheckResult }` 暂时兼容；开发包的旧回调返回 `NoUpdate`，完整信息请读新状态。
 
 `current` 含 `versionName/versionCode`；`developmentBuild` 在 `.dev`、其他包名和所有非 release 构建为 true。开发包只允许手动查看官方发布版本，`latest.newer/canDownload` 均为 false，不启动自动检查、不下载、不安装。手动结果显示“开发版本”，同时显示 `latest.version`。

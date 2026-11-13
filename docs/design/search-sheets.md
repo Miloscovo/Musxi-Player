@@ -1,5 +1,7 @@
 # 搜索页样张与实现（2026-10-21）
 
+> **状态：日期设计样张（2026-10-21）。** 样张为 JVM 渲染，不代表当前真机视觉验收；当前状态见 [当前开发接续](../next-session-handoff.md)，设计资料见 [文档入口](../README.md)。
+
 搜索页。样张生成自 `SearchSheetTest`（Robolectric + Roborazzi，JVM 渲染，未上真机），九张覆盖九个状态。
 
 实现：`ui/search/SearchViewModel.kt`（累积与状态折叠）、`ui/search/SearchScreen.kt`（页面）、`ui/design/SearchSheet.kt`（样张，直接复用 `SearchScreen`）。

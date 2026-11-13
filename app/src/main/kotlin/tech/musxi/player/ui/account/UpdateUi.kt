@@ -33,16 +33,16 @@ data class ReleaseUi(
     val title: String,
     val meta: String,
     val notes: List<NoteLine>,
-    /** Null when the page is not on this repository, which hides the "查看" button. */
+    /** Null when the page is not on this repository, which hides the "在 GitHub 查看" action. */
     val releasePage: String?,
     val ignored: Boolean,
-    /** True on a metered connection: the download needs the inline confirmation first. */
+    /** True on a metered connection: the download asks [confirmText] first. */
     val metered: Boolean,
     val confirmText: String,
     val download: DownloadUi,
 )
 
-/** What sits under the release text. Each state replaces the action row of the one before it. */
+/** The step at the bottom of [UpdateSheet]. Each state replaces the one before it. */
 sealed interface DownloadUi {
     /** Nothing is transferring. [failure] is why the last attempt ended, [unavailableNote] why there is no button. */
     data class Idle(
@@ -51,7 +51,8 @@ sealed interface DownloadUi {
         val unavailableNote: String? = null,
     ) : DownloadUi
 
-    data class Downloading(val fraction: Float, val text: String) : DownloadUi
+    /** [percent] is null while the total size is unknown, so the entry row never claims "0%" for it. */
+    data class Downloading(val fraction: Float, val text: String, val percent: Int? = null) : DownloadUi
 
     data object Verifying : DownloadUi
 
@@ -73,7 +74,36 @@ class UpdateActions(
     val onInstall: () -> Unit = {},
     val onOpenInstallSettings: () -> Unit = {},
     val onSetAutoCheck: (Boolean) -> Unit = {},
+    /** The "关于" entry row was tapped: the host opens [UpdateSheet]. */
+    val onShowRelease: () -> Unit = {},
 )
+
+/** The one row the "关于" card keeps for a newer release; [UpdateSheet] holds the rest. */
+data class ReleaseEntryUi(
+    val title: String,
+    /** Null leaves the row with its title only. */
+    val note: String?,
+    /** True when [note] is why the last attempt failed, drawn in the error colour. */
+    val warning: Boolean = false,
+)
+
+/**
+ * Second line of the entry row: what the download is doing right now, so the card answers "is it
+ * done yet" without opening the sheet; with nothing running, the release's date and size.
+ */
+fun releaseEntryOf(release: ReleaseUi): ReleaseEntryUi {
+    val title = "新版本 ${displayVersion(release.version)}"
+    return when (val download = release.download) {
+        is DownloadUi.Idle ->
+            if (download.failure != null) ReleaseEntryUi(title, download.failure, warning = true)
+            else ReleaseEntryUi(title, release.meta.ifEmpty { null })
+        is DownloadUi.Downloading -> ReleaseEntryUi(title, download.percent?.let { "正在下载 $it%" } ?: "正在下载")
+        DownloadUi.Verifying -> ReleaseEntryUi(title, "正在校验")
+        DownloadUi.Ready -> ReleaseEntryUi(title, "可以安装")
+        DownloadUi.NeedsPermission -> ReleaseEntryUi(title, "需要安装权限")
+        DownloadUi.Installing -> ReleaseEntryUi(title, "正在打开系统安装")
+    }
+}
 
 /** Release tags may or may not carry a leading "v"; the label always shows one. */
 internal fun displayVersion(tag: String): String =
@@ -108,7 +138,7 @@ private fun checkNoteOf(state: UpdateState): String? = when (state.check.phase) 
             state.developmentBuild ->
                 if (latest != null) "官方最新 ${displayVersion(latest.version)}" else "未找到官方发布"
             latest == null -> "未找到官方发布"
-            // A newer release is described by its own block below, so the row stays quiet.
+            // A newer release has its own row below, so this one stays quiet.
             latest.newer -> null
             else -> "已是最新"
         }
@@ -148,10 +178,15 @@ private fun downloadUiOf(state: UpdateState, latest: LatestUpdate): DownloadUi {
     return when (download.phase) {
         UpdateDownloadPhase.NONE -> idleOf(latest)
         UpdateDownloadPhase.DOWNLOADING -> {
-            val fraction = if (download.totalBytes > 0) {
+            val known = download.totalBytes > 0
+            val fraction = if (known) {
                 (download.receivedBytes.toFloat() / download.totalBytes).coerceIn(0f, 1f)
             } else 0f
-            DownloadUi.Downloading(fraction, transferText(download.receivedBytes, download.totalBytes))
+            // Rounded down in whole-number maths: "100%" only once every byte is in.
+            val percent = if (known) {
+                (download.receivedBytes.coerceAtLeast(0L) * 100 / download.totalBytes).coerceAtMost(100L).toInt()
+            } else null
+            DownloadUi.Downloading(fraction, transferText(download.receivedBytes, download.totalBytes), percent)
         }
         UpdateDownloadPhase.VERIFYING -> DownloadUi.Verifying
         UpdateDownloadPhase.READY -> DownloadUi.Ready
@@ -215,7 +250,7 @@ fun transferText(received: Long, total: Long): String = when {
 
 private fun kilobytes(bytes: Long): Long = maxOf(1L, (bytes / 1024.0).roundToLong())
 
-/** The question asked inline before a download on a metered connection. Whole megabytes: "约 18 MB". */
+/** The question the update sheet asks before a download on a metered connection. Whole megabytes: "约 18 MB". */
 private fun meteredConfirmText(bytes: Long?): String {
     val size = when {
         bytes == null || bytes <= 0 -> null
@@ -279,11 +314,6 @@ fun noteLines(notes: String): List<NoteLine> {
     while (out.isNotEmpty() && out.last().kind == NoteKind.GAP) out.removeAt(out.lastIndex)
     return out
 }
-
-/** The collapsed view: one string, so a single Text can cut it at three lines. */
-fun notePreview(lines: List<NoteLine>): String = lines
-    .filter { it.kind != NoteKind.GAP }
-    .joinToString("\n") { if (it.kind == NoteKind.ITEM) "• ${it.text}" else it.text }
 
 private fun inlineText(line: String): String = line
     .replace(ImageMark, "")

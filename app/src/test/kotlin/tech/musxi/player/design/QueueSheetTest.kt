@@ -51,6 +51,7 @@ class QueueSheetTest {
         "queue_normal_largefont_light", ThemeMode.LIGHT, queueSample(), largeFont = true,
     )
 
+    @OptIn(com.github.takahirom.roborazzi.ExperimentalRoborazziApi::class)
     private fun capture(
         name: String,
         mode: ThemeMode,
@@ -59,7 +60,7 @@ class QueueSheetTest {
         largeFont: Boolean = false,
     ) {
         val out = File("build/design/$name.png")
-        captureRoboImage(out.path) {
+        captureRoboImage(out.path, com.github.takahirom.roborazzi.RoborazziOptions(taskType = com.github.takahirom.roborazzi.RoborazziTaskType.Record)) {
             if (largeFont) {
                 LargeFontBatch { QueueSheet(Accent.MIST, mode, ui, showCover = showCover) }
             } else {

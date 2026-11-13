@@ -91,10 +91,17 @@ public final class NeteaseLibraryApi {
         public final String original;
         public final String translation;
         public final TranslationStatus translationStatus;
+        public final YrcLyricsDecoder.Document wordTimings;
+        public final int timingRevision;
         LyricsDocument(String original, String translation, TranslationStatus translationStatus) {
+            this(original,translation,translationStatus,YrcLyricsDecoder.unavailable(YrcLyricsDecoder.Status.ABSENT),0);
+        }
+        LyricsDocument(String original, String translation, TranslationStatus translationStatus,
+                YrcLyricsDecoder.Document words,int revision) {
             this.original = original;
             this.translation = translation;
             this.translationStatus = translationStatus;
+            this.wordTimings=words;this.timingRevision=revision;
         }
         @Override public String toString() { return "LyricsDocument{redacted}"; }
     }
@@ -152,6 +159,205 @@ public final class NeteaseLibraryApi {
         JSONArray tracks = new JSONArray().put(songId);
         api.authenticatedCall(NeteaseApi.PLAYLIST_TRACKS,
                 json("op", "add", "pid", playlistId, "trackIds", tracks.toString(), "imme", "true"), session);
+    }
+
+    /** Remove one Netease song from an owned playlist. Ownership is rechecked on the server
+     * response before the write, the account is rechecked again, and the liked-songs list
+     * is routed to the pinned like endpoint with like=false. */
+    public void removeFromPlaylist(NeteaseApi.Session session, String playlistId, String songId)
+            throws IOException {
+        if (session == null) throw error("credentials");
+        id(playlistId); id(songId);
+        requireCurrent();
+        JSONObject detail = api.authenticatedCall(NeteaseApi.PLAYLIST_DETAIL,
+                json("id", playlistId, "n", 0, "s", 0), session);
+        JSONObject playlist = requireOwnedPlaylist(detail, playlistId, session.userId);
+        requireCurrent();
+        if (nonNegative(playlist.opt("specialType"), 1_000_000) == 5) {
+            setLiked(session, songId, false);
+            return;
+        }
+        JSONArray tracks = new JSONArray().put(songId);
+        api.authenticatedCall(NeteaseApi.PLAYLIST_TRACKS,
+                json("op", "del", "pid", playlistId, "trackIds", tracks.toString(), "imme", "true"), session);
+    }
+
+    /** Create one normal playlist for the current account. Pinned module/playlist_create.js
+     * uses the WEAPI profile with privacy=0 and type=NORMAL. The new id must come from the
+     * response and is then re-read through detail so the server confirms the owner; no
+     * name-based lookup is used. */
+    public String createPlaylist(NeteaseApi.Session session, String name) throws IOException {
+        if (session == null) throw error("credentials");
+        JSONObject payload = createPlaylistPayload(name);
+        requireCurrent();
+        JSONObject created = api.authenticatedCall(NeteaseApi.PLAYLIST_CREATE, payload, session);
+        String playlistId = createdPlaylistId(created);
+        requireCurrent();
+        JSONObject detail = api.authenticatedCall(NeteaseApi.PLAYLIST_DETAIL,
+                json("id", playlistId, "n", 0, "s", 0), session);
+        requireOwnedPlaylist(detail, playlistId, session.userId);
+        // Never hand back an id that was confirmed for an account that is already replaced.
+        requireCurrent();
+        return playlistId;
+    }
+
+    /** Rename one owned normal playlist. Pinned module/playlist_name_update.js passes no
+     * explicit profile, and an empty crypto resolves to EAPI while APP_CONF.encrypt stays
+     * true, so this write is EAPI. The liked-songs list is rejected, and the new name is
+     * confirmed by re-reading detail after the write. */
+    public void renamePlaylist(NeteaseApi.Session session, String playlistId, String name)
+            throws IOException {
+        if (session == null) throw error("credentials");
+        id(playlistId);
+        JSONObject payload = renamePlaylistPayload(playlistId, name);
+        String title = payload.optString("name");
+        requireCurrent();
+        JSONObject detail = api.authenticatedCall(NeteaseApi.PLAYLIST_DETAIL,
+                json("id", playlistId, "n", 0, "s", 0), session);
+        JSONObject playlist = requireOwnedPlaylist(detail, playlistId, session.userId);
+        if (ownedSpecialType(playlist) != 0) throw error("permission");
+        requireCurrent();
+        api.authenticatedCall(NeteaseApi.PLAYLIST_RENAME, payload, session);
+        requireCurrent();
+        JSONObject confirm = api.authenticatedCall(NeteaseApi.PLAYLIST_DETAIL,
+                json("id", playlistId, "n", 0, "s", 0), session);
+        JSONObject renamed = requireOwnedPlaylist(confirm, playlistId, session.userId);
+        if (!title.equals(renamed.opt("name"))) throw error("protocol");
+    }
+
+    public static final class Subscription {
+        public final Playlist playlist;
+        public final boolean followed;
+        Subscription(Playlist playlist,boolean followed) { this.playlist=playlist;this.followed=followed; }
+    }
+
+    /** Resolve one own normal playlist for deletion from a complete, fresh account listing.
+     * Returns null only when the whole paged listing was read and the id is genuinely absent;
+     * a truncated read, a missing creator field, or a lost liked-songs sentinel is an error,
+     * never "not found". Owned non-normal and foreign targets are rejected as permission. */
+    public Playlist deletablePlaylist(NeteaseApi.Session session, String playlistId) throws IOException {
+        if (session == null) throw error("credentials");
+        String target = id(playlistId);
+        requireCurrent();
+        List<JSONObject> rows = accountPlaylistRows(session);
+        JSONObject match = null;
+        boolean foundLiked = false;
+        for (JSONObject row : rows) {
+            String rowId = id(row.opt("id"));
+            JSONObject creator = row.optJSONObject("creator");
+            if (creator != null && session.userId.equals(optionalOwnerId(creator))
+                    && ownedSpecialType(row) == 5)
+                foundLiked = true;
+            if (target.equals(rowId)) match = row;
+        }
+        // Every account listing carries its liked-songs list; without it the read is incomplete.
+        if (!foundLiked) throw error("incomplete");
+        requireCurrent();
+        if (match == null) return null;
+        if (!session.userId.equals(requiredCreatorId(match))) throw error("permission");
+        // specialType 5 is the liked-songs list and every other non-zero value is a
+        // system-managed list; only a plain specialType 0 playlist may be deleted.
+        if (ownedSpecialType(match) != 0) throw error("permission");
+        return new Playlist(id(match.opt("id")), name(match.opt("name"), "未命名歌单"),
+                image(match.opt("coverImgUrl")), (int) nonNegative(match.opt("trackCount"), 1_000_000),
+                false, true, Playlist.Kind.CREATED);
+    }
+
+    /** Delete one own normal playlist. The target is re-verified against a fresh complete
+     * listing immediately before the single pinned WEAPI write; an absent id writes nothing.
+     * There is no retry and no post-write read-back, because the caller reconciles afterwards. */
+    public void deletePlaylist(NeteaseApi.Session session, String playlistId) throws IOException {
+        if (session == null) throw error("credentials");
+        String target = id(playlistId);
+        JSONObject payload = deletePlaylistPayload(target);
+        requireCurrent();
+        if (deletablePlaylist(session, target) == null) return;
+        requireCurrent();
+        api.authenticatedCall(NeteaseApi.PLAYLIST_DELETE, payload, session);
+    }
+
+    /** Complete account listing by server paging. Any non-terminal, duplicated or oversized
+     * page set is rejected instead of being treated as a shorter account. */
+    private List<JSONObject> accountPlaylistRows(NeteaseApi.Session session) throws IOException {
+        List<JSONObject> rows = new ArrayList<>();
+        java.util.HashSet<String> seen = new java.util.HashSet<>();
+        int offset = 0;
+        while (true) {
+            requireCurrent();
+            JSONObject body = api.authenticatedCall(NeteaseApi.USER_PLAYLIST,
+                    json("uid", session.userId, "limit", 100, "offset", offset, "includeVideo", true), session);
+            JSONArray page = body.optJSONArray("playlist");
+            if (page == null || page.length() > 100 || !(body.opt("more") instanceof Boolean))
+                throw error("protocol");
+            for (int i = 0; i < page.length(); i++) {
+                JSONObject row = page.optJSONObject(i);
+                if (row == null) throw error("protocol");
+                if (!seen.add(id(row.opt("id")))) throw error("protocol");
+                rows.add(row);
+                if (rows.size() > 20_000) throw error("limit");
+            }
+            if (!body.optBoolean("more")) break;
+            if (page.length() == 0) throw error("protocol");
+            offset += page.length();
+            if (offset > 100_000) throw error("limit");
+        }
+        requireCurrent();
+        return rows;
+    }
+
+    private static String requiredCreatorId(JSONObject row) throws IOException {
+        JSONObject creator = row.optJSONObject("creator");
+        if (creator == null) throw error("incomplete");
+        String owner = optionalOwnerId(creator);
+        // An unreadable creator on the target cannot prove ownership either way.
+        if (owner == null) throw error("incomplete");
+        return owner;
+    }
+
+    private static String optionalOwnerId(JSONObject creator) {
+        try {
+            return id(creator.opt("userId"));
+        } catch (IOException unknownOwner) {
+            return null;
+        }
+    }
+
+    /** An owned row's system-list marker; a missing marker cannot prove a normal playlist. */
+    private static int ownedSpecialType(JSONObject row) throws IOException {
+        Object value = row.opt("specialType");
+        if (value == null || value == JSONObject.NULL) throw error("incomplete");
+        // A malformed or out-of-range marker is a protocol error, never a plain playlist.
+        return (int) nonNegative(value, 1_000_000);
+    }
+
+    /** Pinned module/playlist_delete.js body: one bracketed id string, no checkToken. */
+    static JSONObject deletePlaylistPayload(String playlistId) throws IOException {
+        return json("ids", "[" + id(playlistId) + "]");
+    }
+
+    /** Read the current session's subscription flag, never infer it from one page or a failed read. */
+    public Subscription playlistSubscription(NeteaseApi.Session session,String playlistId) throws IOException {
+        if(session==null)throw error("credentials");
+        id(playlistId); requireCurrent();
+        JSONObject detail=api.authenticatedCall(NeteaseApi.PLAYLIST_DETAIL,json("id",playlistId,"n",0,"s",0),session);
+        JSONObject row=detail.optJSONObject("playlist");
+        if(row==null || !playlistId.equals(id(row.opt("id"))))throw error("identity");
+        JSONObject creator=row.optJSONObject("creator");
+        if(creator==null)throw error("incomplete");
+        if(session.userId.equals(id(creator.opt("userId"))) || nonNegative(row.opt("specialType"),1_000_000)!=0)throw error("permission");
+        if(!(row.opt("subscribed") instanceof Boolean))throw error("incomplete");
+        int count=(int)nonNegative(row.opt("trackCount"),1_000_000);
+        requireCurrent();
+        return new Subscription(new Playlist(playlistId,name(row.opt("name"),"未命名歌单"),image(row.opt("coverImgUrl")),
+            count,false,false,Playlist.Kind.COLLECTED),row.optBoolean("subscribed"));
+    }
+    /** Explicit desired subscription. The facade performs a further read even after a lost response. */
+    public void setPlaylistFollowed(NeteaseApi.Session session,String playlistId,boolean followed) throws IOException {
+        Subscription before=playlistSubscription(session,playlistId);
+        if(before.followed==followed)return;
+        requireCurrent();
+        api.setPlaylistFollowed(session,playlistId,followed,current);
+        requireCurrent();
     }
 
     public Page<Track> tracks(NeteaseApi.Session session, String playlistId, int offset, int limit) throws IOException {
@@ -339,6 +545,50 @@ public final class NeteaseLibraryApi {
         return parseLyricsDocument(body);
     }
 
+    /** Native YRC and its matching ytlrc timeline, with ordinary LRC retained as a fallback. */
+    public LyricsDocument lyricsTimedDocument(NeteaseApi.Session session,String trackId) throws IOException {
+        id(trackId);requireCurrent();
+        try {
+            JSONObject body=api.authenticatedCall(NeteaseApi.LYRIC_NEW,
+                json("id",trackId,"cp",false,"tv",0,"lv",0,"rv",0,"kv",0,"yv",0,"ytv",0,"yrv",0),session);
+            requireCurrent();
+            return parseTimedLyricsDocument(body);
+        }catch(NeteaseApi.ApiException failure){
+            if(java.util.Arrays.asList("credentials","expired","identity","account_changed").contains(failure.code))throw failure;
+            requireCurrent();
+            LyricsDocument fallback=lyricsDocument(session,trackId);
+            return withTimings(fallback,YrcLyricsDecoder.unavailable("network".equals(failure.code)?
+                YrcLyricsDecoder.Status.NETWORK:YrcLyricsDecoder.Status.PLATFORM_ERROR),0);
+        }catch(IOException failure){
+            requireCurrent();
+            return withTimings(lyricsDocument(session,trackId),YrcLyricsDecoder.unavailable(YrcLyricsDecoder.Status.NETWORK),0);
+        }
+    }
+
+    static LyricsDocument parseTimedLyricsDocument(JSONObject body) throws IOException {
+        if(body==null || NeteaseApi.responseCode(body)!=200)throw error("protocol");
+        for(String flag:new String[]{"nolyric","uncollected"})
+            if(body.has(flag) && !(body.opt(flag) instanceof Boolean))throw error("protocol");
+        if(Boolean.TRUE.equals(body.opt("nolyric")) || Boolean.TRUE.equals(body.opt("uncollected")))
+            return withTimings(new LyricsDocument("",null,TranslationStatus.ABSENT),
+                YrcLyricsDecoder.unavailable(YrcLyricsDecoder.Status.ABSENT),1);
+        Object raw=body.opt("yrc");
+        YrcLyricsDecoder.Document words;
+        if(raw==null || raw==JSONObject.NULL)words=YrcLyricsDecoder.unavailable(YrcLyricsDecoder.Status.ABSENT);
+        else if(!(raw instanceof JSONObject))words=YrcLyricsDecoder.unavailable(YrcLyricsDecoder.Status.INVALID);
+        else {
+            Object lyric=((JSONObject)raw).opt("lyric");
+            words=lyric==null || lyric==JSONObject.NULL?YrcLyricsDecoder.unavailable(YrcLyricsDecoder.Status.ABSENT):
+                lyric instanceof String?YrcLyricsDecoder.decode((String)lyric):YrcLyricsDecoder.unavailable(YrcLyricsDecoder.Status.INVALID);
+        }
+        if(words.status==YrcLyricsDecoder.Status.PRESENT)
+            return withTimings(parseTranslation(words.original,body,"ytlrc"),words,1);
+        return withTimings(parseLyricsDocument(body),words,words.status==YrcLyricsDecoder.Status.ABSENT?1:0);
+    }
+    private static LyricsDocument withTimings(LyricsDocument doc,YrcLyricsDecoder.Document words,int revision){
+        return new LyricsDocument(doc.original,doc.translation,doc.translationStatus,words,revision);
+    }
+
     /** Read the pinned module/likelist.js EAPI snapshot for the current session account. */
     public List<String> likedIds(NeteaseApi.Session session) throws IOException {
         if (session == null) throw error("credentials");
@@ -351,6 +601,37 @@ public final class NeteaseLibraryApi {
         id(songId);
         api.authenticatedCall(NeteaseApi.SET_LIKE,
                 json("alg", "itembased", "trackId", songId, "like", liked, "time", "3"), session);
+    }
+
+    /** Read the pinned module/recommend_songs.js daily snapshot for the current session account.
+     * One read-only WEAPI request; no refresh flag, no dislike or other platform write. */
+    public List<Track> dailyRecommendations(NeteaseApi.Session session) throws IOException {
+        if (session == null) throw error("credentials");
+        requireCurrent();
+        // Upstream sends only afresh, which JSON.stringify drops when unset, so no key is sent here.
+        JSONObject body = api.authenticatedCall(NeteaseApi.DAILY_RECOMMENDATIONS, new JSONObject(), session);
+        requireCurrent();
+        return parseDailyRecommendations(body);
+    }
+
+    /** data.dailySongs rows carry the same ar/al/dt shape as song_detail rows. */
+    static List<Track> parseDailyRecommendations(JSONObject body) throws IOException {
+        JSONObject data = body.optJSONObject("data");
+        if (data == null) throw error("protocol");
+        JSONArray rows = data.optJSONArray("dailySongs");
+        if (rows == null) throw error("protocol");
+        if (rows.length() > 200) throw error("limit");
+        List<String> selected = new ArrayList<>();
+        java.util.HashSet<String> seen = new java.util.HashSet<>();
+        for (int i = 0; i < rows.length(); i++) {
+            JSONObject row = rows.optJSONObject(i);
+            if (row == null) throw error("protocol");
+            String key = id(row.opt("id"));
+            if (!seen.add(key)) throw error("identity");
+            selected.add(key);
+        }
+        // Reuse the song_detail row parser by presenting the same songs array shape.
+        return Collections.unmodifiableList(parseTracks(json("songs", rows), selected));
     }
 
     static Page<Playlist> parsePlaylists(JSONObject body, int offset, int limit) throws IOException {
@@ -426,6 +707,48 @@ public final class NeteaseLibraryApi {
         if (creator == null || !ownerId.equals(id(creator.opt("userId")))) throw error("permission");
         nonNegative(playlist.opt("specialType"), 1_000_000);
         return playlist;
+    }
+
+    /** New playlist id from the pinned create response shape {id} or {playlist:{id}}.
+     * The caller still re-reads detail, so a bad id can never stand in for the real list. */
+    static String createdPlaylistId(JSONObject body) throws IOException {
+        Object value = body.opt("id");
+        if (value == null || value == JSONObject.NULL) {
+            JSONObject playlist = body.optJSONObject("playlist");
+            value = playlist == null ? null : playlist.opt("id");
+        }
+        if (value == null || value == JSONObject.NULL) throw error("protocol");
+        return id(value);
+    }
+
+    /** 1..100 code points, no control characters, and never blank after trimming. */
+    static String playlistName(String value) throws IOException {
+        if (value == null) throw error("request");
+        String trimmed = value.trim();
+        int codePoints = trimmed.codePointCount(0, trimmed.length());
+        if (codePoints < 1 || codePoints > 100) throw error("request");
+        for (int i = 0; i < trimmed.length();) {
+            int codePoint = trimmed.codePointAt(i);
+            if (Character.isISOControl(codePoint)) throw error("request");
+            if (Character.isHighSurrogate(trimmed.charAt(i))
+                    && (i + 1 >= trimmed.length() || !Character.isLowSurrogate(trimmed.charAt(i + 1))))
+                throw error("request");
+            if (Character.isLowSurrogate(trimmed.charAt(i))
+                    && (i == 0 || !Character.isHighSurrogate(trimmed.charAt(i - 1))))
+                throw error("request");
+            i += Character.charCount(codePoint);
+        }
+        return trimmed;
+    }
+
+    /** Pinned module/playlist_create.js body: privacy=0 normal list, type=NORMAL. */
+    static JSONObject createPlaylistPayload(String name) throws IOException {
+        return json("name", playlistName(name), "privacy", "0", "type", "NORMAL");
+    }
+
+    /** Pinned module/playlist_name_update.js body: only id and name. */
+    static JSONObject renamePlaylistPayload(String playlistId, String name) throws IOException {
+        return json("id", id(playlistId), "name", playlistName(name));
     }
 
     static List<String> parseTrackIds(JSONObject body, String playlistId) throws IOException {
@@ -636,10 +959,14 @@ public final class NeteaseLibraryApi {
 
     static LyricsDocument parseLyricsDocument(JSONObject body) throws IOException {
         String original = parseLyrics(body);
+        return parseTranslation(original,body,"tlyric");
+    }
+
+    private static LyricsDocument parseTranslation(String original,JSONObject body,String field) throws IOException {
         if (original.isEmpty()) return new LyricsDocument(original, null, TranslationStatus.ABSENT);
-        if (!body.has("tlyric") || body.isNull("tlyric"))
+        if (!body.has(field) || body.isNull(field))
             return new LyricsDocument(original, null, TranslationStatus.ABSENT);
-        JSONObject translated = body.optJSONObject("tlyric");
+        JSONObject translated = body.optJSONObject(field);
         if (translated == null) return new LyricsDocument(original, null, TranslationStatus.INVALID);
         if (!translated.has("lyric") || translated.isNull("lyric"))
             return new LyricsDocument(original, null, TranslationStatus.ABSENT);

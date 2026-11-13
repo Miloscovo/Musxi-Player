@@ -197,7 +197,7 @@ class FileLyricsCacheStore(
         val header = ByteArrayOutputStream(HEADER_BYTES)
         DataOutputStream(header).use { output ->
             output.writeInt(MAGIC)
-            output.writeInt(VERSION)
+            output.writeInt(CURRENT_VERSION)
             output.writeInt(payload.size)
             output.writeInt(crc)
         }
@@ -211,7 +211,9 @@ class FileLyricsCacheStore(
         return try {
             val input = ByteArrayInputStream(bytes)
             val header = DataInputStream(input)
-            if (header.readInt() != MAGIC || header.readInt() != VERSION) return null
+            if (header.readInt() != MAGIC) return null
+            val version = header.readInt()
+            if (version !in MIN_VERSION..CURRENT_VERSION) return null
             val payloadLength = header.readInt()
             val expectedCrc = header.readInt()
             if (payloadLength < 0 || payloadLength != bytes.size - HEADER_BYTES) return null
@@ -231,7 +233,7 @@ class FileLyricsCacheStore(
             val accessedAt = data.readLong()
             val ttlMs = data.readLong()
             val binding = readBinding(data)
-            val lyrics = readLyrics(data)
+            val lyrics = readLyrics(data, version)
             if (data.available() != 0) return null
 
             StoredEntry(owner, key, cachedAt, accessedAt, ttlMs, binding, lyrics)
@@ -256,23 +258,38 @@ class FileLyricsCacheStore(
             writeString(output, line.text, MAX_LINE_BYTES)
             output.writeBoolean(line.translation != null)
             line.translation?.let { writeString(output, it, MAX_LINE_BYTES) }
+            output.writeInt(line.words.size)
+            line.words.forEach { word ->
+                output.writeInt(word.textStart)
+                output.writeInt(word.textEnd)
+                output.writeLong(word.startTimeMs)
+                output.writeLong(word.endTimeMs)
+            }
         }
         writeString(output, lyrics.plainText, MAX_PLAIN_TEXT_BYTES)
         output.writeByte(lyrics.translation.availability.ordinal)
         output.writeByte(lyrics.translation.lookup.status.ordinal)
         output.writeBoolean(lyrics.translation.lookup.reason != null)
         lyrics.translation.lookup.reason?.let { output.writeByte(it.ordinal) }
+        output.writeInt(lyrics.timingRevision)
     }
 
-    private fun readLyrics(input: DataInputStream): ParsedLyrics {
+    private fun readLyrics(input: DataInputStream, version: Int): ParsedLyrics {
         val lineCount = input.readInt()
         if (lineCount !in 0..MAX_LINES) invalidData()
         val lines = ArrayList<LyricLine>(lineCount)
+        var remainingWords = LyricsWordTimeline.MAX_WORDS_PER_DOCUMENT
         repeat(lineCount) {
             val timeMs = input.readLong()
             val text = readString(input, MAX_LINE_BYTES)
             val translation = if (input.readBoolean()) readString(input, MAX_LINE_BYTES) else null
-            lines.add(LyricLine(timeMs, text, translation))
+            val words = if (version >= WORDS_VERSION) {
+                readWords(input, text, remainingWords)
+            } else {
+                emptyList()
+            }
+            remainingWords -= words.size
+            lines.add(LyricLine(timeMs, text, translation, words))
         }
         val plainText = readString(input, MAX_PLAIN_TEXT_BYTES)
         val availability = TranslationAvailability.entries.getOrNull(input.readUnsignedByte())
@@ -284,11 +301,44 @@ class FileLyricsCacheStore(
         } else {
             null
         }
+        val timingRevision = if (version >= TIMING_REVISION_VERSION) {
+            val stored = input.readInt()
+            if (stored !in 0..MAX_TIMING_REVISION) invalidData()
+            stored
+        } else {
+            0
+        }
         return ParsedLyrics(
             lines = immutableList(lines),
             plainText = plainText,
             translation = LyricsTranslation(availability, TranslationLookup(lookupStatus, reason)),
+            timingRevision = timingRevision,
         )
+    }
+
+    /**
+     * Reads per-line word timings within [remainingBudget] so an oversized count is rejected before
+     * any list or array is allocated for it.
+     */
+    private fun readWords(input: DataInputStream, text: String, remainingBudget: Int): List<LyricWord> {
+        val wordCount = input.readInt()
+        if (wordCount !in 0..LyricsWordTimeline.MAX_WORDS_PER_LINE) invalidData()
+        if (wordCount > remainingBudget) invalidData()
+        if (wordCount > input.available() / WORD_BYTES) invalidData()
+        val words = ArrayList<LyricWord>(wordCount)
+        repeat(wordCount) {
+            words.add(
+                LyricWord(
+                    textStart = input.readInt(),
+                    textEnd = input.readInt(),
+                    startTimeMs = input.readLong(),
+                    endTimeMs = input.readLong(),
+                )
+            )
+        }
+        val immutable = immutableList(words)
+        if (!LyricsWordTimeline.valid(text, immutable)) invalidData()
+        return immutable
     }
 
     private fun writeBinding(output: DataOutputStream, binding: LyricsCacheBinding?) {
@@ -327,8 +377,34 @@ class FileLyricsCacheStore(
     }
 
     private fun copyLyrics(lyrics: ParsedLyrics): ParsedLyrics {
+        // Bound the input before copying so an oversized document is rejected without allocating
+        // a full duplicate of every line and word list first.
+        if (lyrics.lines.size > MAX_LINES) throw IllegalArgumentException("Invalid lyrics cache entry")
+        var totalWords = 0L
+        lyrics.lines.forEach { line ->
+            if (line.words.size > LyricsWordTimeline.MAX_WORDS_PER_LINE) {
+                throw IllegalArgumentException("Invalid lyrics cache entry")
+            }
+            totalWords += line.words.size
+            if (totalWords > LyricsWordTimeline.MAX_WORDS_PER_DOCUMENT) {
+                throw IllegalArgumentException("Invalid lyrics cache entry")
+            }
+        }
         val copied = ParsedLyrics(
-            lines = immutableList(lyrics.lines.map { LyricLine(it.timeMs, it.text, it.translation) }),
+            lines = immutableList(
+                lyrics.lines.map { line ->
+                    LyricLine(
+                        timeMs = line.timeMs,
+                        text = line.text,
+                        translation = line.translation,
+                        words = immutableList(
+                            line.words.map {
+                                LyricWord(it.textStart, it.textEnd, it.startTimeMs, it.endTimeMs)
+                            }
+                        ),
+                    )
+                }
+            ),
             plainText = lyrics.plainText,
             translation = LyricsTranslation(
                 availability = lyrics.translation.availability,
@@ -337,11 +413,14 @@ class FileLyricsCacheStore(
                     reason = lyrics.translation.lookup.reason,
                 ),
             ),
+            timingRevision = lyrics.timingRevision,
         )
         try {
             validateLyrics(copied)
         } catch (_: EntryTooLarge) {
             throw IllegalArgumentException("Lyrics cache entry exceeds capacity")
+        } catch (_: InvalidData) {
+            throw IllegalArgumentException("Invalid lyrics cache entry")
         }
         return copied
     }
@@ -386,12 +465,17 @@ class FileLyricsCacheStore(
 
     private fun validateLyrics(lyrics: ParsedLyrics) {
         if (lyrics.lines.size > MAX_LINES) invalidData()
+        var totalWords = 0L
         lyrics.lines.forEach {
             if (it.timeMs !in 0L..MAX_TIME_MS) invalidData()
             validateText(it.text, MAX_LINE_BYTES)
             it.translation?.let { translation -> validateText(translation, MAX_LINE_BYTES) }
+            totalWords += it.words.size
+            if (totalWords > LyricsWordTimeline.MAX_WORDS_PER_DOCUMENT) invalidData()
+            if (!LyricsWordTimeline.valid(it.text, it.words)) invalidData()
         }
         validateText(lyrics.plainText, MAX_PLAIN_TEXT_BYTES)
+        if (lyrics.timingRevision !in 0..MAX_TIMING_REVISION) invalidData()
     }
 
     private fun validateText(value: String, maxBytes: Int) {
@@ -528,9 +612,14 @@ class FileLyricsCacheStore(
         if (!Files.exists(ownerDirectory, LinkOption.NOFOLLOW_LINKS)) {
             Files.createDirectory(ownerDirectory)
         }
-        val expected = root.resolve(owner).normalize()
-        val actual = ownerDirectory.toRealPath(LinkOption.NOFOLLOW_LINKS).normalize()
-        if (actual.parent != root.toRealPath() || actual != expected || expected.parent != root) {
+        // Parent and child must use the same canonicalization. Android's NOFOLLOW
+        // path can retain a parent alias that the real root has already expanded.
+        // Reject the child link both before and after resolving, and still require
+        // the canonical child to be exactly the expected direct descendant.
+        val realRoot = root.toRealPath()
+        val expected = realRoot.resolve(owner).normalize()
+        val actual = ownerDirectory.toRealPath().normalize()
+        if (actual.parent != realRoot || actual != expected || expected.parent != realRoot) {
             throw IOException(UNAVAILABLE)
         }
         if (Files.isSymbolicLink(ownerDirectory) ||
@@ -701,8 +790,17 @@ class FileLyricsCacheStore(
 
     companion object {
         private const val MAGIC = 0x4d584c31
-        private const val VERSION = 1
+        /**
+         * Schema 1 stored line-level timings only; schema 2 appends per-line word spans; schema 3
+         * appends the provider normalization generation.
+         */
+        private const val MIN_VERSION = 1
+        private const val WORDS_VERSION = 2
+        private const val TIMING_REVISION_VERSION = 3
+        private const val CURRENT_VERSION = TIMING_REVISION_VERSION
         private const val HEADER_BYTES = 16
+        private const val WORD_BYTES = 24
+        private const val MAX_TIMING_REVISION = 1_000_000
         private const val MIN_FILE_BYTES = 256L
         private const val MAX_LINES = 20_000
         private const val MAX_BINDING_CANDIDATES = 32

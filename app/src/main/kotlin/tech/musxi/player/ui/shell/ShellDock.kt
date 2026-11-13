@@ -1,15 +1,32 @@
 package tech.musxi.player.ui.shell
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandHorizontally
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkHorizontally
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.indication
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material3.Icon
+import androidx.compose.material3.ripple
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
@@ -28,6 +45,7 @@ import tech.musxi.player.ui.player.MiniPlayer
 import tech.musxi.player.ui.player.MiniPlayerUi
 import tech.musxi.player.ui.player.MiniRowHeight
 import tech.musxi.player.ui.player.unclippedBoundsInRoot
+import tech.musxi.player.ui.theme.Motion
 import tech.musxi.player.ui.theme.isDarkSurface
 
 /**
@@ -58,6 +76,13 @@ fun ShellDock(
      * here and its bounds (root pixels) are reported instead.
      */
     onMiniBounds: ((Rect) -> Unit)? = null,
+    /**
+     * Folded by scrolling (spec section 10): one row, the current tab's icon beside the mini player.
+     * Only with a mini player; without one there is nothing to make room for.
+     */
+    collapsed: Boolean = false,
+    /** A tap on the folded row's tab icon: the tabs come back. */
+    onExpandTabs: () -> Unit = {},
 ) {
     val cs = MaterialTheme.colorScheme
     // Keeps the last notice on screen while its exit animation runs after notice becomes null.
@@ -72,8 +97,8 @@ fun ShellDock(
     Column(container) {
         AnimatedVisibility(
             visible = notice != null,
-            enter = fadeIn() + expandVertically(),
-            exit = fadeOut() + shrinkVertically(),
+            enter = fadeIn(Motion.enter()) + expandVertically(Motion.standard()),
+            exit = fadeOut(Motion.exit()) + shrinkVertically(Motion.standard()),
         ) {
             val ui = notice ?: lastNotice.value ?: return@AnimatedVisibility
             Column {
@@ -84,35 +109,91 @@ fun ShellDock(
                 )
             }
         }
+        val folded = collapsed && mini.visible
         if (mini.visible) {
-            if (onMiniBounds != null) {
-                Spacer(
-                    Modifier.fillMaxWidth().height(MiniRowHeight)
-                        .onGloballyPositioned { onMiniBounds(it.unclippedBoundsInRoot()) },
-                )
-            } else {
-                // The player sits inside the dock, so it must not draw its own container.
-                MiniPlayer(
-                    ui = mini,
-                    onExpand = onExpand,
-                    onPlayPause = onPlayPause,
-                    onPrevious = onPrevious,
-                    onNext = onNext,
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                AnimatedVisibility(
+                    visible = folded,
+                    enter = fadeIn(Motion.enter()) + expandHorizontally(Motion.release()),
+                    exit = fadeOut(Motion.exit()) + shrinkHorizontally(Motion.release()),
+                ) {
+                    FoldedTab(selected, selected in badges, onExpandTabs)
+                }
+                Box(Modifier.weight(1f)) {
+                    if (onMiniBounds != null) {
+                        Spacer(
+                            Modifier.fillMaxWidth().height(MiniRowHeight)
+                                .onGloballyPositioned { onMiniBounds(it.unclippedBoundsInRoot()) },
+                        )
+                    } else {
+                        // The player sits inside the dock, so it must not draw its own container.
+                        MiniPlayer(
+                            ui = mini,
+                            onExpand = onExpand,
+                            onPlayPause = onPlayPause,
+                            onPrevious = onPrevious,
+                            onNext = onNext,
+                            embedded = true,
+                            compact = folded,
+                        )
+                    }
+                }
+            }
+        }
+        AnimatedVisibility(
+            visible = !folded,
+            enter = fadeIn(Motion.enter()) + expandVertically(Motion.release()),
+            exit = fadeOut(Motion.exit()) + shrinkVertically(Motion.release()),
+        ) {
+            Column {
+                if (mini.visible) {
+                    HorizontalDivider(
+                        modifier = Modifier.padding(horizontal = 16.dp),
+                        color = cs.outlineVariant.copy(alpha = if (dark) 0.5f else 0.35f),
+                    )
+                }
+                ShellBottomBar(
+                    selected = selected,
+                    onSelect = onSelect,
+                    shape = BarShape.FULL_WIDTH,
                     embedded = true,
+                    badges = badges,
                 )
             }
-            HorizontalDivider(
-                modifier = Modifier.padding(horizontal = 16.dp),
-                color = cs.outlineVariant.copy(alpha = if (dark) 0.5f else 0.35f),
-            )
         }
-        ShellBottomBar(
-            selected = selected,
-            onSelect = onSelect,
-            shape = BarShape.FULL_WIDTH,
-            embedded = true,
-            badges = badges,
-        )
+    }
+}
+
+/**
+ * The folded dock's tab: the current tab's icon in its selected capsule, as on the full bar, so it
+ * reads as the same control. A tap brings the three tabs back.
+ */
+@Composable
+private fun FoldedTab(tab: ShellTab, badge: Boolean, onExpand: () -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    val interaction = remember { MutableInteractionSource() }
+    Box(
+        Modifier
+            .padding(start = 6.dp)
+            .size(width = 56.dp, height = MiniRowHeight)
+            .clickable(interactionSource = interaction, indication = null, role = Role.Button, onClick = onExpand)
+            .semantics { contentDescription = "${tab.label}，展开标签栏" },
+        contentAlignment = Alignment.Center,
+    ) {
+        Box(
+            Modifier.size(width = 48.dp, height = 32.dp).clip(CircleShape)
+                .background(cs.primary.copy(alpha = 0.12f))
+                .indication(interaction, ripple()),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(tab.selectedIcon, null, tint = cs.primary, modifier = Modifier.size(24.dp))
+            if (badge) {
+                Box(
+                    Modifier.align(Alignment.TopEnd).padding(top = 3.dp, end = 8.dp)
+                        .size(8.dp).clip(CircleShape).background(cs.error),
+                )
+            }
+        }
     }
 }
 

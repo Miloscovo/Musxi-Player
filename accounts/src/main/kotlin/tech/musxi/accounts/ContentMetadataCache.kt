@@ -15,13 +15,19 @@ internal class ContentMetadataCache(noBackupDirectory: File) {
         Platform.QQ to File(noBackupDirectory, "qq-library-pages-v1"),
     )
     val libraryPages = pageDirectories.mapValues { (platform, directory) -> FileLibraryPageStore(directory, platform) }
+    private val recommendationDirectories = Platform.entries.associateWith {
+        File(noBackupDirectory, "recommendations-${it.name.lowercase()}-v1")
+    }
+    val recommendations = recommendationDirectories.mapValues { (platform, directory) ->
+        tech.musxi.core.recommendation.FileRecommendationStore(directory, platform)
+    }
     private val lyricsDirectory = File(noBackupDirectory, "lyrics-cache-v1")
     val lyrics = FileLyricsCacheStore(lyricsDirectory)
 
     // AccountRepository serializes all calls with normal store access on its disk queue.
     fun sizeBytes(kind: CacheKind): Long = when (kind) {
         CacheKind.LYRICS -> CacheFileSize.bytes(lyricsDirectory)
-        CacheKind.LIBRARY_PAGES -> pageDirectories.values.fold(0L) { sum, directory ->
+        CacheKind.LIBRARY_PAGES -> (pageDirectories.values + recommendationDirectories.values).fold(0L) { sum, directory ->
             val next = CacheFileSize.bytes(directory)
             if (next > Long.MAX_VALUE - sum) Long.MAX_VALUE else sum + next
         }
@@ -35,6 +41,9 @@ internal class ContentMetadataCache(noBackupDirectory: File) {
                 // A damaged platform cache must not prevent the other platforms from clearing.
                 var failed = false
                 libraryPages.values.forEach { store ->
+                    try { store.clear() } catch (_: Exception) { failed = true }
+                }
+                recommendations.values.forEach { store ->
                     try { store.clear() } catch (_: Exception) { failed = true }
                 }
                 check(!failed) { "Library cache unavailable" }

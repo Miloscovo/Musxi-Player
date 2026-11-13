@@ -8,8 +8,20 @@ import tech.musxi.core.account.Platform
  * the main play button, played progress, the current track, the selected tab,
  * the active lyric line and one primary action per page. Cover colours belong
  * to the now-playing page; platform colours are identity dots, never fills.
+ *
+ * The choosable accents, in the order the picker lists them (round the hue wheel). All share one
+ * lightness and a low chroma, so they are equally quiet; the red sector is left empty because the
+ * liked heart owns it. Stored by name, never by position. A neutral graphite was tried and left out:
+ * with it a selected row or a link could only be told apart by shape.
  */
-enum class Accent(val label: String) { MIST("雾蓝"), TEAL("松石青"), AMBER("暖琥珀") }
+enum class Accent(val label: String) {
+    MIST("雾蓝"), TEAL("松石青"), MOSS("苔绿"), AMBER("暖琥珀"), DUSK("暮紫");
+
+    companion object {
+        /** The saved name, or the default for a name this build does not know. */
+        fun fromName(name: String?): Accent = entries.firstOrNull { it.name == name } ?: MIST
+    }
+}
 
 enum class ThemeMode { LIGHT, DARK, BLACK }
 
@@ -30,6 +42,12 @@ internal fun Accent.tones(dark: Boolean): AccentTones = when (this) {
         else AccentTones(Color(0xFF8DCFC5), Color(0xFF00352F), Color(0xFF1E5952), Color(0xFFCFE8E3))
     Accent.AMBER -> if (!dark) AccentTones(Color(0xFF9C6229), Color.White, Color(0xFFF4E2CF), Color(0xFF452708))
         else AccentTones(Color(0xFFE6B988), Color(0xFF452708), Color(0xFF684420), Color(0xFFF4E2CF))
+    // OKLCH hue 122°, the same lightness and chroma as the three above.
+    Accent.MOSS -> if (!dark) AccentTones(Color(0xFF627234), Color.White, Color(0xFFE0E8D0), Color(0xFF2B350F))
+        else AccentTones(Color(0xFFB5C68E), Color(0xFF27300B), Color(0xFF445025), Color(0xFFE0E8D0))
+    // Hue 315°: pushed away from 雾蓝 so the two light tints stay apart in dark mode, half the heart's chroma.
+    Accent.DUSK -> if (!dark) AccentTones(Color(0xFF805892), Color.White, Color(0xFFECDEF2), Color(0xFF3C2646))
+        else AccentTones(Color(0xFFD2ABE4), Color(0xFF362140), Color(0xFF593E64), Color(0xFFECDEF2))
 }
 
 /**

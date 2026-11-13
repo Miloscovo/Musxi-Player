@@ -35,6 +35,10 @@ class ThemeSheetTest {
     @Test fun amberLight() = capture(Accent.AMBER, ThemeMode.LIGHT, "#FAFAFA", "#9C6229")
     @Test fun amberDark() = capture(Accent.AMBER, ThemeMode.DARK, "#121212", "#E6B988")
     @Test fun amberBlack() = capture(Accent.AMBER, ThemeMode.BLACK, "#000000", "#E6B988")
+    @Test fun mossLight() = capture(Accent.MOSS, ThemeMode.LIGHT, "#FAFAFA", "#627234")
+    @Test fun mossDark() = capture(Accent.MOSS, ThemeMode.DARK, "#121212", "#B5C68E")
+    @Test fun duskLight() = capture(Accent.DUSK, ThemeMode.LIGHT, "#FAFAFA", "#805892")
+    @Test fun duskDark() = capture(Accent.DUSK, ThemeMode.DARK, "#121212", "#D2ABE4")
 
     private fun capture(accent: Accent, mode: ThemeMode, background: String, accentRgb: String) {
         val name = "theme_${accent.name.lowercase()}_${mode.name.lowercase()}.png"

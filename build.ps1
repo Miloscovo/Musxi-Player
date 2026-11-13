@@ -2,12 +2,15 @@ param(
     [switch]$Release,
     [switch]$Test,
     [switch]$Lint,
-    [switch]$Install
+    [switch]$Install,
+    [switch]$Verify,
+    # Used by scripts/verify.ps1 to collect evidence before releasing the build lock.
+    [scriptblock]$AfterBuild
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
-if ($Release -and ($Test -or $Lint)) {
+if ($Release -and ($Test -or $Lint -or $Verify)) {
     throw '-Release cannot be combined with -Test or -Lint; release verification runs automatically.'
 }
 
@@ -226,34 +229,41 @@ if (!(Test-Path -LiteralPath $java)) { throw 'JAVA_HOME does not contain bin/jav
 
 $androidSdk = if ($Release -or $Install) { Get-AndroidSdk } else { $null }
 $androidTools = if ($Release) { Get-AndroidBuildTools $androidSdk } else { $null }
-[string[]]$tasks = @(if ($Release) { ':app:assembleRelease' } else { ':app:assembleDebug' })
+[string[]]$tasks = @(if ($Release) { ':app:assembleRelease' } elseif ($Verify -or ($Test -and $Lint)) { ':verifyAndroid' } else { ':app:assembleDebug' })
 if ($Release) { $tasks += '--no-configuration-cache' }
-if (!$Release -and $Test) {
-    $tasks += @(
-        ':app:testDebugUnitTest',
-        ':accounts:testDebugUnitTest',
-        ':core:test',
-        ':platform-kugou:testDebugUnitTest',
-        ':platform-qq:testDebugUnitTest',
-        ':platform-netease:testDebugUnitTest',
-        ':playback:testDebugUnitTest'
-    )
+if ($Verify) { $tasks += '-Pmusxi.verify.fresh=true' }
+if (!$Release -and !$Verify -and $Test -and !$Lint) {
+    $tasks += ':verifyUnitTests'
 }
-if (!$Release -and $Lint) {
-    $tasks += @(
-        ':app:lintDebug',
-        ':accounts:lintDebug',
-        ':platform-kugou:lintDebug',
-        ':platform-qq:lintDebug',
-        ':platform-netease:lintDebug',
-        ':playback:lintDebug'
-    )
+if (!$Release -and !$Verify -and $Lint -and !$Test) {
+    $tasks += ':verifyLint'
 }
 
 $originalReleasePassword = $env:MUSXI_RELEASE_STORE_PASSWORD
 $setReleasePassword = $false
+$buildLock = $null
 Push-Location $PSScriptRoot
 try {
+    # File locks are released by the OS on process exit. Never expire a live build by its age.
+    # Relative Git paths avoid decoding the Chinese workspace name through a shell's
+    # native output encoding; different encodings previously produced different locks.
+    $commonGitDirectory = & git rev-parse --path-format=relative --git-common-dir 2>$null
+    $lockRoot = if ($LASTEXITCODE -eq 0) {
+        Split-Path -Parent ([IO.Path]::GetFullPath($commonGitDirectory, $PSScriptRoot))
+    } else { $PSScriptRoot }
+    $lockDirectory = Join-Path $lockRoot '.local/tmp'
+    New-Item -ItemType Directory -Path $lockDirectory -Force | Out-Null
+    $lockPath = Join-Path $lockDirectory 'gradle-build.lock'
+    $lockDeadline = [DateTime]::UtcNow.AddMinutes(20)
+    $lockReported = $false
+    while ($null -eq $buildLock) {
+        try { $buildLock = [IO.File]::Open($lockPath, [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None) }
+        catch [IO.IOException] {
+            if ([DateTime]::UtcNow -ge $lockDeadline) { throw 'Timed out waiting for the shared Gradle build lock.' }
+            if (!$lockReported) { Write-Host 'Waiting for another Musxi build to finish...'; $lockReported = $true }
+            Start-Sleep -Seconds 2
+        }
+    }
     if ($Release -and [string]::IsNullOrEmpty($env:MUSXI_RELEASE_STORE_PASSWORD)) {
         $securePassword = Read-Host 'Release keystore password' -AsSecureString
         if ($securePassword.Length -eq 0) {
@@ -289,6 +299,8 @@ try {
         $launchPackage = 'tech.musxi.player.dev'
     }
 
+    if ($null -ne $AfterBuild) { & $AfterBuild }
+
     if ($Install) {
         $adb = Join-Path $androidSdk 'platform-tools/adb.exe'
         if (!(Test-Path -LiteralPath $adb)) { throw 'Android SDK platform-tools/adb.exe was not found.' }
@@ -298,6 +310,7 @@ try {
         if ($LASTEXITCODE -ne 0) { throw 'Could not open MainActivity.' }
     }
 } finally {
+    if ($null -ne $buildLock) { $buildLock.Dispose() }
     if ($setReleasePassword) {
         if ($null -eq $originalReleasePassword) {
             [Environment]::SetEnvironmentVariable('MUSXI_RELEASE_STORE_PASSWORD', $null, 'Process')

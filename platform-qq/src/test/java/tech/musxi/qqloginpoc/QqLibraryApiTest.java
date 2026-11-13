@@ -7,6 +7,36 @@ import java.nio.charset.StandardCharsets;
 import java.util.*;
 
 public class QqLibraryApiTest {
+    @Test public void optionalQrcUsesIndependentRequestAndDoesNotReplaceOrdinaryLyrics() throws Exception {
+        Fixture f=new Fixture();
+        f.data.add(new JSONObject().put("lyric","[00:01.00]Hi").put("trans","[00:01.00]你好"));
+        f.data.add(new JSONObject().put("lyric","[1000,500]H(1000,200)i(1200,300)"));
+        QqLibraryApi api=new QqLibraryApi(f.api);
+        QqLibraryApi.LyricsDocument original=api.lyricsDocument(session(),MID);
+        QrcLyricsDecoder.Document words=api.lyricsWords(session(),MID);
+        assertEquals("[00:01.00]Hi",original.original);
+        assertEquals(QqLibraryApi.TranslationStatus.PRESENT,original.translationStatus);
+        assertEquals(QrcLyricsDecoder.Status.PRESENT,words.status);
+        assertEquals(0,f.param(0).getInt("qrc"));assertEquals(0,f.param(0).getInt("crypt"));
+        assertEquals(1,f.param(1).getInt("qrc"));assertEquals(1,f.param(1).getInt("crypt"));
+        assertEquals(0,f.param(1).getInt("trans"));assertEquals(MID,f.param(1).getString("songMid"));
+    }
+    @Test public void optionalQrcDistinguishesInvalidAbsentAndTransportFailure() throws Exception {
+        for(Object value:new Object[]{42,"bad ciphertext",JSONObject.NULL,""}) {
+            Fixture f=new Fixture();f.data.add(new JSONObject().put("lyric",value));
+            QrcLyricsDecoder.Status expected=value==JSONObject.NULL || "".equals(value)?
+                QrcLyricsDecoder.Status.ABSENT:QrcLyricsDecoder.Status.INVALID;
+            assertEquals(expected,new QqLibraryApi(f.api).lyricsWords(session(),MID).status);
+        }
+        QqMusicApi api=new QqMusicApi(request->{throw new java.net.SocketTimeoutException();});
+        // The existing transport normalizes socket IO failures into the safe network category.
+        assertEquals(QrcLyricsDecoder.Status.NETWORK,new QqLibraryApi(api).lyricsWords(session(),MID).status);
+        QqMusicApi network=new QqMusicApi(request->{throw new IOException();});
+        assertEquals(QrcLyricsDecoder.Status.NETWORK,new QqLibraryApi(network).lyricsWords(session(),MID).status);
+        Fixture cancelled=new Fixture();
+        rejects("account_changed",()->new QqLibraryApi(cancelled.api,()->false).lyricsWords(session(),MID));
+        assertTrue(cancelled.requests.isEmpty());
+    }
     @Test public void favoriteReadsAcceptOwnAliasAndWritesOnly201WithResolvedNumericSong() throws Exception {
         Fixture f=new Fixture();
         JSONObject page=tracks(1,false);page.getJSONObject("dirinfo").put("dirid",201);
@@ -75,6 +105,14 @@ public class QqLibraryApiTest {
     }
     private static JSONObject song() throws Exception{return json("{\"mid\":\""+MID+"\",\"name\":\"Song\",\"interval\":123,\"type\":0,\"singer\":[{\"name\":\"Artist\"}],\"album\":{\"name\":\"Album\"},\"file\":{\"media_mid\":\""+MEDIA+"\"}}");}
     private static JSONObject tracks(int total,boolean more) throws Exception{return new JSONObject().put("dirinfo",json("{\"tid\":9,\"dirid\":0}")).put("songlist",new JSONArray().put(song())).put("total_song_num",total).put("hasmore",more?1:0).put("songlist_size",1);}
+    private static String trackMid(int index){return String.format("001%011d",index);}
+    private static JSONObject song(String mid) throws Exception{return song().put("mid",mid);}
+    private static JSONObject pageOf(int tid,int dirid,int total,boolean more,int count,int start) throws Exception{
+        JSONArray rows=new JSONArray();
+        for(int i=0;i<count;i++)rows.put(song(trackMid(start+i)));
+        return new JSONObject().put("dirinfo",new JSONObject().put("tid",tid).put("dirid",dirid))
+            .put("songlist",rows).put("total_song_num",total).put("hasmore",more?1:0).put("songlist_size",count);
+    }
     private static JSONObject search(int count) throws Exception{
         JSONArray rows=new JSONArray();for(int i=0;i<count;i++)rows.put(song());
         return new JSONObject().put("body",new JSONObject().put("item_song",rows)).put("meta",
@@ -160,9 +198,192 @@ public class QqLibraryApiTest {
         JSONObject missing=tracks(1,false);missing.getJSONArray("songlist").getJSONObject(0).remove("mid");
         rejects("identity",()->QqLibraryApi.parseTracks(missing,"9_0",0,30));
     }
+    @Test public void removeFromLikedUsesDelSonglist201AndOwnedCustomUsesVerifiedDel() throws Exception {
+        Fixture liked=new Fixture();
+        liked.data.add(new JSONObject().put("track_info",song().put("id",99)));
+        liked.data.add(new JSONObject().put("retCode",0));
+        new QqLibraryApi(liked.api).removeFromPlaylist(session(),"0_201",MID);
+        assertEquals(2,liked.requests.size());
+        assertEquals(201,liked.param(1).getInt("dirId"));assertEquals(0,liked.param(1).getLong("tid"));
+        assertTrue(liked.param(1).getBoolean("bFmtUtf8"));
+        assertEquals("DelSonglist",new JSONObject(liked.requests.get(1).body).getJSONObject("req_0").getString("method"));
+        assertEquals("11",new JSONObject(liked.requests.get(1).body).getJSONObject("comm").getString("ct"));
+
+        Fixture custom=new Fixture();
+        custom.data.add(json("{\"bFinish\":1,\"v_playlist\":[{\"tid\":9,\"dirId\":0,\"dirName\":\"Mine\",\"songNum\":1,\"invalid\":0}]}"));
+        custom.data.add(new JSONObject().put("track_info",song().put("id",99)));
+        custom.data.add(new JSONObject().put("retCode",0));
+        new QqLibraryApi(custom.api).removeFromPlaylist(session(),"9_0",MID);
+        assertEquals(3,custom.requests.size());
+        assertEquals(12345,custom.param(0).getLong("uin"));
+        JSONObject params=custom.param(2);
+        assertEquals(0,params.getInt("dirId"));assertEquals(9,params.getLong("tid"));
+        assertTrue(params.getBoolean("bFmtUtf8"));
+        assertEquals("DelSonglist",new JSONObject(custom.requests.get(2).body).getJSONObject("req_0").getString("method"));
+        JSONObject info=params.getJSONArray("v_songInfo").getJSONObject(0);
+        assertEquals(2,info.length());assertEquals(99,info.getInt("songId"));assertEquals(0,info.getInt("songType"));
+    }
+    @Test public void removeRejectsNonOwnedListsAndBadMidsBeforeAnyWrite() throws Exception {
+        for(String id:new String[]{"9_201","9_205","9_209"}){
+            Fixture f=new Fixture();
+            rejects("permission",()->new QqLibraryApi(f.api).removeFromPlaylist(session(),id,MID));
+            assertTrue(id+" must stop before transport: "+f.requests.size(),f.requests.isEmpty());
+        }
+        Fixture alias=new Fixture();
+        rejects("identity",()->new QqLibraryApi(alias.api).removeFromPlaylist(session(),"0_0",MID));
+        assertTrue(alias.requests.isEmpty());
+        Fixture collected=new Fixture();
+        collected.data.add(json("{\"bFinish\":1,\"v_playlist\":[{\"tid\":11,\"dirId\":0,\"dirName\":\"Hidden\",\"songNum\":1,\"invalid\":1}]}"));
+        rejects("permission",()->new QqLibraryApi(collected.api).removeFromPlaylist(session(),"11_0",MID));
+        assertEquals(1,collected.requests.size());
+        Fixture absent=new Fixture();
+        absent.data.add(json("{\"bFinish\":1,\"v_playlist\":[]}"));
+        rejects("permission",()->new QqLibraryApi(absent.api).removeFromPlaylist(session(),"9_0",MID));
+        assertEquals(1,absent.requests.size());
+        Fixture unfinished=new Fixture();
+        unfinished.data.add(json("{\"bFinish\":0,\"v_playlist\":[]}"));
+        rejects("incomplete",()->new QqLibraryApi(unfinished.api).removeFromPlaylist(session(),"9_0",MID));
+        assertEquals(1,unfinished.requests.size());
+        Fixture badMid=new Fixture();
+        badMid.data.add(json("{\"bFinish\":1,\"v_playlist\":[{\"tid\":9,\"dirId\":0,\"dirName\":\"Mine\",\"songNum\":1,\"invalid\":0}]}"));
+        rejects("identity",()->new QqLibraryApi(badMid.api).removeFromPlaylist(session(),"9_0","not-a-mid"));
+        assertEquals(1,badMid.requests.size());
+        Fixture noNumericId=new Fixture();
+        noNumericId.data.add(json("{\"bFinish\":1,\"v_playlist\":[{\"tid\":9,\"dirId\":0,\"dirName\":\"Mine\",\"songNum\":1,\"invalid\":0}]}"));
+        noNumericId.data.add(new JSONObject().put("track_info",song()));
+        rejects("identity",()->new QqLibraryApi(noNumericId.api).removeFromPlaylist(session(),"9_0",MID));
+        assertEquals(2,noNumericId.requests.size());
+        Fixture denied=new Fixture();
+        denied.data.add(json("{\"bFinish\":1,\"v_playlist\":[{\"tid\":9,\"dirId\":0,\"dirName\":\"Mine\",\"songNum\":1,\"invalid\":0}]}"));
+        denied.data.add(new JSONObject().put("track_info",song().put("id",99)));
+        denied.data.add(new JSONObject().put("retCode",80092));
+        rejects("permission",()->new QqLibraryApi(denied.api).removeFromPlaylist(session(),"9_0",MID));
+        assertEquals(3,denied.requests.size());
+    }
+    @Test public void playlistTrackIdsReturnsCompleteOrderedSnapshotAcrossPages() throws Exception {
+        Fixture f=new Fixture();
+        f.data.add(pageOf(9,0,150,true,100,0));
+        f.data.add(pageOf(9,0,150,false,50,100));
+        List<String> ids=new QqLibraryApi(f.api).playlistTrackIds(session(),"9_0");
+        assertEquals(150,ids.size());
+        assertEquals(trackMid(0),ids.get(0));assertEquals(trackMid(99),ids.get(99));
+        assertEquals(trackMid(100),ids.get(100));assertEquals(trackMid(149),ids.get(149));
+        assertEquals(100,f.param(0).getInt("song_num"));assertEquals(0,f.param(0).getInt("song_begin"));
+        assertEquals(100,f.param(1).getInt("song_begin"));assertEquals(9,f.param(0).getLong("disstid"));
+        try{ids.clear();fail("Snapshot must be read-only");}catch(UnsupportedOperationException expected){}
+
+        Fixture liked=new Fixture();liked.data.add(pageOf(0,201,0,false,0,0));
+        assertTrue(new QqLibraryApi(liked.api).playlistTrackIds(session(),"0_201").isEmpty());
+        assertEquals("fixture-euin",liked.param(0).getString("enc_host_uin"));
+        Fixture empty=new Fixture();empty.data.add(pageOf(9,0,0,false,0,0));
+        assertTrue(new QqLibraryApi(empty.api).playlistTrackIds(session(),"9_0").isEmpty());
+    }
+    @Test public void playlistTrackIdsFailsClosedOnDriftDuplicatesAndBounds() throws Exception {
+        Fixture drift=new Fixture();
+        drift.data.add(pageOf(9,0,200,true,100,0));
+        drift.data.add(pageOf(9,0,201,true,100,100));
+        rejects("incomplete",()->new QqLibraryApi(drift.api).playlistTrackIds(session(),"9_0"));
+
+        Fixture duplicate=new Fixture();
+        duplicate.data.add(pageOf(9,0,200,true,100,0));
+        duplicate.data.add(pageOf(9,0,200,false,100,0));
+        rejects("incomplete",()->new QqLibraryApi(duplicate.api).playlistTrackIds(session(),"9_0"));
+
+        Fixture shortPage=new Fixture();
+        shortPage.data.add(pageOf(9,0,200,true,100,0));
+        shortPage.data.add(pageOf(9,0,200,false,50,100));
+        rejects("incomplete",()->new QqLibraryApi(shortPage.api).playlistTrackIds(session(),"9_0"));
+
+        Fixture oversized=new Fixture();oversized.data.add(pageOf(9,0,20_001,true,100,0));
+        rejects("limit",()->new QqLibraryApi(oversized.api).playlistTrackIds(session(),"9_0"));
+
+        Fixture holes=new Fixture();holes.data.add(pageOf(9,0,1,false,0,0));
+        rejects("incomplete",()->new QqLibraryApi(holes.api).playlistTrackIds(session(),"9_0"));
+
+        Fixture identity=new Fixture();identity.data.add(pageOf(10,0,0,false,0,0));
+        rejects("identity",()->new QqLibraryApi(identity.api).playlistTrackIds(session(),"9_0"));
+
+        Fixture f=new Fixture();
+        rejects("identity",()->new QqLibraryApi(f.api).playlistTrackIds(session(),"9_0_1"));
+        rejects("identity",()->new QqLibraryApi(f.api).playlistTrackIds(null,"9_0"));
+        assertTrue(f.requests.isEmpty());
+    }
+    @Test public void createPlaylistUsesPinnedAddPlaylistAndRelocatesByReturnedTid() throws Exception {
+        Fixture f=new Fixture();
+        f.data.add(json("{\"retCode\":0,\"result\":{\"tid\":9,\"dirId\":0,\"dirName\":\"Mine\"}}"));
+        f.data.add(json("{\"bFinish\":1,\"v_playlist\":[{\"tid\":9,\"dirId\":0,\"dirName\":\"Mine 20261106\",\"songNum\":0,\"invalid\":0}]}"));
+        f.data.add(pageOf(0,201,0,false,0,0));
+        QqLibraryApi.Playlist created=new QqLibraryApi(f.api).createPlaylist(session(),"  Mine  ");
+        assertEquals("9_0",created.id);assertEquals("Mine 20261106",created.name);
+        assertEquals(QqLibraryApi.Playlist.Kind.CREATED,created.kind);assertFalse(created.liked);assertTrue(created.writable);
+        JSONObject request=json(f.requests.get(0).body).getJSONObject("req_0");
+        assertEquals("music.musicasset.PlaylistBaseWrite",request.getString("module"));
+        assertEquals("AddPlaylist",request.getString("method"));
+        assertEquals("{\"dirName\":\"Mine\"}",request.getJSONObject("param").toString());
+        assertEquals("24",json(f.requests.get(0).body).getJSONObject("comm").getString("ct"));
+
+        Fixture empty=new Fixture();
+        for(String invalid:new String[]{null,"","   ","line\nbreak",String.join("",Collections.nCopies(81,"x"))})
+            rejects("request",()->new QqLibraryApi(empty.api).createPlaylist(session(),invalid));
+        rejects("identity",()->new QqLibraryApi(empty.api).createPlaylist(null,"Mine"));
+        assertTrue(empty.requests.isEmpty());
+    }
+    @Test public void createPlaylistFailsClosedOnDeniedOrUnlocatableResults() throws Exception {
+        Fixture denied=new Fixture();denied.data.add(json("{\"retCode\":80092}"));
+        rejects("permission",()->new QqLibraryApi(denied.api).createPlaylist(session(),"Mine"));
+        Fixture noResult=new Fixture();noResult.data.add(json("{\"retCode\":0}"));
+        rejects("protocol",()->new QqLibraryApi(noResult.api).createPlaylist(session(),"Mine"));
+        Fixture badDir=new Fixture();badDir.data.add(json("{\"retCode\":0,\"result\":{\"tid\":9,\"dirId\":201}}"));
+        rejects("protocol",()->new QqLibraryApi(badDir.api).createPlaylist(session(),"Mine"));
+        Fixture badTid=new Fixture();badTid.data.add(json("{\"retCode\":0,\"result\":{\"tid\":0,\"dirId\":0}}"));
+        rejects("identity",()->new QqLibraryApi(badTid.api).createPlaylist(session(),"Mine"));
+        Fixture missing=new Fixture();
+        missing.data.add(json("{\"retCode\":0,\"result\":{\"tid\":9,\"dirId\":0}}"));
+        missing.data.add(json("{\"bFinish\":1,\"v_playlist\":[{\"tid\":10,\"dirId\":0,\"dirName\":\"Other\",\"songNum\":0,\"invalid\":0}]}"));
+        missing.data.add(pageOf(0,201,0,false,0,0));
+        rejects("incomplete",()->new QqLibraryApi(missing.api).createPlaylist(session(),"Mine"));
+        assertEquals(3,missing.requests.size());
+        Fixture bad=new Fixture();
+        rejects("endpoint",()->bad.api.library(session(),"music.musicasset.PlaylistBaseWrite","AddPlaylist",
+            json("{\"dirName\":\"Mine\",\"dirId\":1}")));
+        rejects("endpoint",()->bad.api.library(session(),"music.musicasset.PlaylistBaseWrite","AddPlaylist",
+            json("{\"dirName\":\"  \"}")));
+        rejects("endpoint",()->bad.api.library(session(),"music.musicasset.PlaylistBaseWrite","DelPlaylist",
+            json("{\"dirId\":9}")));
+        rejects("endpoint",()->bad.api.library(session(),"music.musicasset.PlaylistBaseWrite","AddPlaylist",
+            json("{\"dirName\":\"Mine\\u0001\"}")));
+        assertTrue(bad.requests.isEmpty());
+    }
+    @Test public void protectedSurfaceAllowsOnlyPinnedOneSongWriteShapes() throws Exception {
+        Fixture f=new Fixture();
+        JSONObject owned=json("{\"dirId\":0,\"tid\":9,\"bFmtUtf8\":true,\"v_songInfo\":[{\"songId\":99,\"songType\":0}]}");
+        f.data.add(new JSONObject().put("retCode",0));
+        f.api.library(session(),"music.musicasset.PlaylistDetailWrite","DelSonglist",owned);
+        assertEquals("DelSonglist",new JSONObject(f.requests.get(0).body).getJSONObject("req_0").getString("method"));
+        rejects("endpoint",()->f.api.library(session(),"music.musicasset.PlaylistDetailWrite","DelSonglist",
+            json("{\"dirId\":0,\"tid\":0,\"bFmtUtf8\":true,\"v_songInfo\":[{\"songId\":99,\"songType\":0}]}")));
+        rejects("endpoint",()->f.api.library(session(),"music.musicasset.PlaylistDetailWrite","DelSonglist",
+            json("{\"dirId\":201,\"tid\":9,\"bFmtUtf8\":true,\"v_songInfo\":[{\"songId\":99,\"songType\":0}]}")));
+        rejects("endpoint",()->f.api.library(session(),"music.musicasset.PlaylistDetailWrite","DelSonglist",
+            json("{\"dirId\":205,\"tid\":9,\"bFmtUtf8\":true,\"v_songInfo\":[{\"songId\":99,\"songType\":0}]}")));
+        rejects("endpoint",()->f.api.library(session(),"music.musicasset.PlaylistDetailWrite","DelSonglist",
+            json("{\"dirId\":209,\"tid\":9,\"bFmtUtf8\":true,\"v_songInfo\":[{\"songId\":99,\"songType\":0}]}")));
+        rejects("endpoint",()->f.api.library(session(),"music.musicasset.PlaylistDetailWrite","DelSonglist",
+            json("{\"dirId\":1000001,\"tid\":9,\"bFmtUtf8\":true,\"v_songInfo\":[{\"songId\":99,\"songType\":0}]}")));
+        f.data.add(new JSONObject().put("retCode",0));
+        f.api.library(session(),"music.musicasset.PlaylistDetailWrite","DelSonglist",
+            json("{\"dirId\":5,\"tid\":9,\"bFmtUtf8\":true,\"v_songInfo\":[{\"songId\":99,\"songType\":0}]}"));
+        rejects("endpoint",()->f.api.library(session(),"music.musicasset.PlaylistDetailWrite","DelSonglist",
+            json("{\"dirId\":0,\"tid\":9,\"bFmtUtf8\":false,\"v_songInfo\":[{\"songId\":99,\"songType\":0}]}")));
+        rejects("endpoint",()->f.api.library(session(),"music.musicasset.PlaylistDetailWrite","DelSonglist",
+            json("{\"dirId\":0,\"tid\":9,\"bFmtUtf8\":true,\"v_songInfo\":[{\"songId\":99,\"songType\":0},{\"songId\":98,\"songType\":0}]}")));
+        rejects("endpoint",()->f.api.library(session(),"music.musicasset.PlaylistDetailWrite","DelSonglist",
+            json("{\"dirId\":0,\"tid\":9,\"bFmtUtf8\":true,\"v_songInfo\":[{\"songId\":99,\"songType\":0,\"extra\":1}]}")));
+        assertEquals(2,f.requests.size());
+    }
     @Test public void protectedApiSurfaceRejectsWritesAndCancellationBeforeRequests() throws Exception {
         Fixture f=new Fixture();
-        rejects("endpoint",()->f.api.library(session(),"music.musicasset.PlaylistBaseWrite","AddPlaylist",new JSONObject()));
+        rejects("endpoint",()->f.api.library(session(),"music.musicasset.PlaylistBaseWrite","MovePlaylist",new JSONObject()));
         rejects("account_changed",()->new QqLibraryApi(f.api,()->false).playlists(session(),0,30));
         assertTrue(f.requests.isEmpty());
     }

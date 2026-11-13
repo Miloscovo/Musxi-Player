@@ -4,6 +4,7 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.fail
 import org.junit.Test
@@ -74,6 +75,67 @@ class AppSettingsRepositoryTest {
         futures.forEach { it.get(1, TimeUnit.SECONDS) }
 
         assertEquals(repository.settings.value, persistence.saved)
+    }
+
+    @Test
+    fun accentPersistsWithoutTouchingOtherSettings() {
+        val persistence = MemoryPersistence()
+        val repository = AppSettingsRepository(persistence)
+
+        val updated = repository.setAccent("AMBER")
+
+        assertEquals("AMBER", updated.accent)
+        assertEquals(AppSettings(accent = "AMBER"), repository.settings.value)
+        assertEquals(AppSettings(accent = "AMBER"), persistence.saved)
+        assertEquals(ThemeMode.SYSTEM, updated.themeMode)
+        assertEquals(true, updated.autoSwitchSource)
+        assertEquals(false, updated.relaxSourceDuration)
+        assertEquals(true, updated.transparencyEnabled)
+        assertEquals(PreferredAudioQuality.STANDARD, updated.defaultQuality)
+        assertEquals(LyricsFontSize.MEDIUM, updated.lyricsFontSize)
+        assertEquals(LyricsColorMode.COVER, updated.lyricsColorMode)
+        assertEquals(LyricsTranslationPreference.AUTO, updated.lyricsTranslationPreference)
+    }
+
+    @Test
+    fun accentKeepsUnknownNamesAndReloadsThem() {
+        val persistence = MemoryPersistence()
+        val repository = AppSettingsRepository(persistence)
+
+        repository.setAccent("LILAC")
+
+        assertEquals("LILAC", AppSettingsRepository(persistence).settings.value.accent)
+    }
+
+    @Test
+    fun invalidAccentNamesAreRejectedWithoutSaving() {
+        val persistence = MemoryPersistence()
+        val repository = AppSettingsRepository(persistence)
+
+        listOf("", "mist", "MIST-2", "MIST 2", "MIST2!", "A".repeat(33)).forEach { invalid ->
+            try {
+                repository.setAccent(invalid)
+                fail("Expected rejection for: $invalid")
+            } catch (expected: IllegalArgumentException) {
+                // expected
+            }
+        }
+
+        assertEquals("MIST", repository.settings.value.accent)
+        assertNull(persistence.saved)
+    }
+
+    @Test
+    fun accentAcceptsThirtyTwoCharsAndMixedAllowedCharacters() {
+        val persistence = MemoryPersistence()
+        val repository = AppSettingsRepository(persistence)
+
+        val longest = "A".repeat(32)
+        assertEquals(longest, repository.setAccent(longest).accent)
+        assertEquals(longest, persistence.saved?.accent)
+
+        assertEquals("V2_DARK_1", repository.setAccent("V2_DARK_1").accent)
+        assertEquals("V2_DARK_1", persistence.saved?.accent)
     }
 
     @Test

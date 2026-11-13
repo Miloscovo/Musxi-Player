@@ -21,6 +21,7 @@ object KrcTranslationAligner {
         val timeMs: Long,
         val text: String,
         val translation: String? = null,
+        val words: List<LyricWord> = emptyList(),
     ) {
         override fun toString() = "KrcRow(redacted)"
     }
@@ -57,12 +58,22 @@ object KrcTranslationAligner {
         }
 
         var hasTranslation = false
+        var remainingWords = LyricsWordTimeline.MAX_WORDS_PER_DOCUMENT
         val result = parsed.lines.toMutableList()
         alignedRows.indices.forEach { index ->
             val row = alignedRows[index].row
             val originalIndex = originalIndices[index]
             val originalText = parsed.lines[originalIndex].text
             val translation = row.translation?.trim()
+            // Whitespace folding is safe for translation, but not for UTF-16 word ranges.
+            // Keep the provider's real clock; never spread words across a guessed line duration.
+            if (row.text == originalText && row.words.size <= remainingWords &&
+                LyricsWordTimeline.valid(originalText, row.words)) {
+                result[originalIndex] = result[originalIndex].copy(
+                    words = Collections.unmodifiableList(ArrayList(row.words)),
+                )
+                remainingWords -= row.words.size
+            }
             val normalizedTranslation = translation?.let(::normalizeText)
             if (!translation.isNullOrEmpty() &&
                 normalizedTranslation != "//" &&
@@ -74,7 +85,7 @@ object KrcTranslationAligner {
         }
 
         if (!hasTranslation) {
-            return parsed.copy(translation = LyricsTranslation(
+            return parsed.copy(lines = Collections.unmodifiableList(result), translation = LyricsTranslation(
                 TranslationAvailability.NONE,
                 TranslationLookup(TranslationLookupStatus.SUCCEEDED, TranslationReason.NOT_PROVIDED),
             ))

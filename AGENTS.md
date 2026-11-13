@@ -2,7 +2,7 @@
 
 ## 当前入口
 
-当前源码版本为 `0.2.0`（versionCode 5），对应 Android v0.2 发布；仍在持续完善，发布范围与限制见 docs/android-v0.2-release.md。后续更新递增 versionCode，并沿用同一正式包名与发布签名；不要使用一次性测试密钥替换已发布的签名。开工先读 README.md 与 docs/next-session-handoff.md，再按需读 docs/v0.1-foundation.md、docs/android-0.1-acceptance.md。带日期文档记录历史包，不能当作最新结论。
+当前源码版本为 `0.3.0`（versionCode 6），对应 Android v0.3；仍在持续完善，发布范围与限制见 docs/android-v0.3-release.md。后续更新递增 versionCode，并沿用同一正式包名与发布签名；不要使用一次性测试密钥替换已发布的签名。开工先读 README.md、docs/README.md 与 docs/next-session-handoff.md，再按任务读取合同或历史证据。现状只维护一个入口，旧交接全文在 docs/history/；历史版本、临时权限和队列快照不能作为当前指令。
 
 安卓独立仓库为 https://github.com/qwt1011/Musxi-Player-Android ，默认分支 main；PC 来源为 https://github.com/Miloscovo/Musxi-Player 。向 PC 上游提交安卓代码时目标是 android/development，遵守 fork 网络和上次已合并 PR 的基线，不直接合并 PC 根目录到安卓工程。
 
@@ -13,7 +13,7 @@
 - 队列点击使用 jumpToQueueIndex 与 expectedRevision，不用 Replace 重建队列。拖动固定开始 revision，外部变化取消；后端仍验证账号代次、索引和 revision。
 - 换源保持原队列身份，候选必须通过标题/完整歌手/时长/版本保守匹配；有限重试，网络错误不可视为焦点错误。先取得前台资格，再请求音频焦点；后台受限需明确重试。
 - 歌词与译文跟随实际来源。中文主体默认关闭译文，外语主体默认开启，当前来源的手动选择优先；无译文和获取失败分开表达。短歌词整组居中，长歌词按实测行组跟随；浏览时不夺回滚动。
-- 使用 JDK 17 / SDK 36 和 build.ps1 -Test -Lint。Windows 中文路径不要强制 Gradle daemon UTF-8。按改动运行必要检查，不用离线 fixture、模拟错误或旧包听音代替本包实机结果。
+- 使用 JDK 17 / SDK 36；交付前在 PowerShell 7 运行 scripts/verify.ps1，本地/CI 共用 :verifyAndroid，详见 docs/validation-workflow.md。小改可先用 build.ps1 -Test 或 -Lint。所有 build.ps1 共享文件锁，不并发直接运行 Gradle，不按锁年龄删除活跃构建。Windows 中文路径不要强制 Gradle daemon UTF-8。按改动运行必要检查，不用离线 fixture、模拟错误或旧包听音代替本包实机结果。
 - 设备检查优先使用正式页面语义和固定 debug 入口，不操作其他应用；验证码、官方登录确认和真实听音由设备使用者完成。覆盖安装保留数据，未经明确要求不退出、换号、清数据或写平台收藏。
 - 不覆盖他人改动。修改未跟踪文件前也要检查是否存在；快照与恢复先比较，禁止用 reset/clean 丢弃成果。子代理任务限定文件归属，主代理审查并验证交付。
 

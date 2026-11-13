@@ -2,6 +2,7 @@
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
@@ -50,13 +51,16 @@ import tech.musxi.player.ui.components.Cover
 import tech.musxi.player.ui.components.CoverOutline
 import tech.musxi.player.ui.components.LoadMorePill
 import tech.musxi.player.ui.components.PlainRow
-import tech.musxi.player.ui.components.PlatformSegmented
+import tech.musxi.player.ui.components.SegmentedTabs
 import tech.musxi.player.ui.components.RowDivider
 import tech.musxi.player.ui.components.RowSpec
 import tech.musxi.player.ui.components.RowText
 import tech.musxi.player.ui.components.SectionCard
 import tech.musxi.player.ui.components.SectionTitle
 import tech.musxi.player.ui.components.pressableRow
+import tech.musxi.player.ui.shell.PageTopBar
+import tech.musxi.player.ui.shell.largeTitle
+import tech.musxi.player.ui.shell.rememberTitleProbe
 import tech.musxi.player.ui.theme.Space
 import tech.musxi.player.ui.theme.displayName
 import tech.musxi.player.ui.theme.tabular
@@ -99,64 +103,107 @@ fun LibraryContent(
     onRemoveRecent: (SongSummary) -> Unit = {},
     /** Starting density. Null reads the saved choice; tests pass a value to skip the preferences. */
     initialDensity: LibraryDensity? = null,
+    /** The 本地音频 segment is the one showing. The host clears it when a platform is picked. */
+    localSelected: Boolean = false,
+    /**
+     * Picks the 本地音频 segment. Null keeps the control at its three platforms, so the design
+     * sheets and any host that has not wired local audio look exactly as before.
+     */
+    onSelectLocal: (() -> Unit)? = null,
+    /**
+     * The local home, drawn in place of the playlists while [localSelected]. It is handed the page's
+     * header (title, status, segments) to put first in its own list, so the header scrolls away there too.
+     */
+    localContent: (@Composable (header: @Composable () -> Unit) -> Unit)? = null,
+    /** The line under the title for local audio, such as "3 个文件夹 · 21 条". */
+    localStatus: String? = null,
+    /** The recommendation row: open the list, play it all, retry a first read that failed. */
+    onOpenRecommendation: () -> Unit = {},
+    onPlayRecommendation: () -> Unit = {},
+    onRetryRecommendation: () -> Unit = {},
 ) {
     val cs = MaterialTheme.colorScheme
     val pageInset = Modifier.padding(horizontal = Space.page)
     val context = LocalContext.current
     val densityStore = remember(context) { LibraryDensityStore(libraryDensityPrefs(context)) }
     var density by remember { mutableStateOf(initialDensity ?: densityStore.load()) }
-    Column(Modifier.fillMaxSize()) {
-        Spacer(Modifier.height(Space.section))
-        Row(
-            pageInset.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
+    // Local is only shown when the host can draw it; a stale flag without content falls back.
+    val showLocal = localSelected && onSelectLocal != null && localContent != null
+    // The title, status line and segments scroll away with the page (spec section 10); once the
+    // title is under the shell's top bar, the bar takes over its name.
+    val titleProbe = rememberTitleProbe()
+    titleProbe.away = { !showLocal && listState.firstVisibleItemIndex > 0 }
+    PageTopBar("曲库", titleProbe)
+    val header: @Composable () -> Unit = {
+        Column(Modifier.fillMaxWidth()) {
+            Spacer(Modifier.height(Space.section))
+            Row(
+                pageInset.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    "曲库", style = MaterialTheme.typography.headlineSmall, color = cs.onSurface,
+                    modifier = Modifier.weight(1f).largeTitle(titleProbe),
+                )
+                // Density is a playlist layout; folders of recordings have none, so the button would
+                // switch something that is not on screen.
+                if (!showLocal) IconButton(onClick = {
+                    density = density.next()
+                    densityStore.save(density)
+                }) {
+                    Icon(
+                        density.icon(),
+                        contentDescription = "歌单显示：${density.label}，点按切换",
+                        tint = cs.onSurfaceVariant,
+                    )
+                }
+            }
+            val status = statusLine(state, System.currentTimeMillis())
             Text(
-                "曲库", style = MaterialTheme.typography.headlineSmall, color = cs.onSurface,
-                modifier = Modifier.weight(1f),
+                when {
+                    showLocal -> localStatus.orEmpty()
+                    home.accountName != null -> "${home.accountName} · $status"
+                    else -> status
+                },
+                style = MaterialTheme.typography.bodySmall.tabular,
+                color = cs.onSurfaceVariant,
+                modifier = pageInset,
             )
-            // Tapping walks list, compact grid, large grid. The label names the current layout.
-            IconButton(onClick = {
-                density = density.next()
-                densityStore.save(density)
-            }) {
-                Icon(
-                    density.icon(),
-                    contentDescription = "歌单显示：${density.label}，点按切换",
-                    tint = cs.onSurfaceVariant,
+            Spacer(Modifier.height(12.dp))
+
+            // Only real platforms: `ALL` has no platform and can never load a page, so it used to
+            // render as a permanently disabled chip that read as a broken option.
+            val platformFilters = LibraryFilter.entries.filter { it.platform != null }
+            val labels = platformFilters.mapNotNull { it.platform?.displayName } +
+                if (onSelectLocal != null) listOf(LOCAL_SEGMENT) else emptyList()
+            val platformIndex = platformFilters.indexOfFirst { it.platform == (state.filter.platform ?: Platform.NETEASE) }
+            SegmentedTabs(
+                labels = labels,
+                selectedIndex = if (showLocal) platformFilters.size else platformIndex,
+                onSelect = { index ->
+                    if (index < platformFilters.size) onSelectFilter(platformFilters[index]) else onSelectLocal?.invoke()
+                },
+                modifier = pageInset,
+            )
+            // Room for the first heading below, the same gap the headings have above them.
+            Spacer(Modifier.height(Space.sibling))
+            // A failed refresh with nothing cached says it once, inside the empty state.
+            if (!showLocal && state.error != null && state.items.isNotEmpty() && !isAccountError(state.error)) {
+                Text(
+                    "刷新失败：${state.error}",
+                    style = MaterialTheme.typography.bodySmall, color = cs.error,
+                    modifier = pageInset,
                 )
             }
         }
-        val status = statusLine(state, System.currentTimeMillis())
-        Text(
-            if (home.accountName != null) "${home.accountName} · $status" else status,
-            style = MaterialTheme.typography.bodySmall.tabular,
-            color = cs.onSurfaceVariant,
-            modifier = pageInset,
-        )
-        Spacer(Modifier.height(12.dp))
-
-        // Only real platforms: `ALL` has no platform and can never load a page, so it used to
-        // render as a permanently disabled chip that read as a broken option.
-        val platformFilters = LibraryFilter.entries.filter { it.platform != null }
-        PlatformSegmented(
-            platforms = platformFilters.mapNotNull { it.platform },
-            selected = state.filter.platform ?: Platform.NETEASE,
-            onSelect = { platform ->
-                platformFilters.firstOrNull { it.platform == platform }?.let(onSelectFilter)
-            },
-            modifier = pageInset,
-        )
-        // Room for the first heading below, the same gap the headings have above them.
-        Spacer(Modifier.height(Space.sibling))
-        // A failed refresh with nothing cached says it once, inside the empty state.
-        if (state.error != null && state.items.isNotEmpty() && !isAccountError(state.error)) {
-            Text(
-                "刷新失败：${state.error}",
-                style = MaterialTheme.typography.bodySmall, color = cs.error,
-                modifier = pageInset,
-            )
-        }
+    }
+    if (showLocal) {
+        // The local pages own their list, insets and refresh; nothing of the platform list
+        // (its error line, pull-to-refresh) applies to files on the phone. They put the header first.
+        Box(Modifier.fillMaxSize()) { localContent(header) }
+        return
+    }
+    Box(Modifier.fillMaxSize()) {
         // Pull down anywhere on the list, including the empty state, to re-read from the platform.
         PullToRefreshBox(
             isRefreshing = state.refreshing,
@@ -171,6 +218,7 @@ fun LibraryContent(
                     onOpenAccount = onOpenAccount,
                     onRefresh = onRefresh,
                     bottomInset = bottomInset,
+                    header = header,
                 )
             } else {
                 // The liked list is a module of its own above the playlists; the rest is the list.
@@ -179,15 +227,25 @@ fun LibraryContent(
                     if (featured == null) state.items else state.items.filter { it.key != featured.key }
                 }
                 val sections = remember(rest) { groupPlaylists(rest) }
-                val hasModules = home.resume != null || featured != null || home.recent.isNotEmpty()
+                val hasModules = home.resume != null || home.recommendation != null || featured != null ||
+                    home.recent.isNotEmpty()
                 // With nothing above it the page is already clear: a heading would only label the one
                 // list there is. A titled section names itself.
                 val playlistsTitle = hasModules && rest.isNotEmpty() && sections.firstOrNull()?.title == null
+                // Scrolling near the end loads the next page by itself; the pill stays for a
+                // failed page (its manual retry) and for anyone who reaches the end first.
+                tech.musxi.player.ui.components.AutoLoadMore(
+                    listState = listState,
+                    canLoadMore = state.canLoadMore,
+                    failed = state.error != null,
+                    onLoadMore = onLoadMore,
+                )
                 LazyColumn(
                     Modifier.fillMaxSize(),
                     state = listState,
                     contentPadding = PaddingValues(bottom = bottomInset),
                 ) {
+                    item(key = "header") { header() }
                     // One item that is always present, empty or not. Its fixed key stays the list's
                     // first item, so when the journal arrives after the playlists the new rows grow
                     // inside it instead of being inserted above a playlist the list is anchored to,
@@ -197,6 +255,11 @@ fun LibraryContent(
                             // Modules that belong together sit in cards, each under its own heading.
                             home.resume?.let { resume ->
                                 HomeModule("继续播放") { ResumeRow(resume, onResume) }
+                            }
+                            home.recommendation?.let { rec ->
+                                HomeModule(rec.heading) {
+                                    RecommendationRow(rec, onOpenRecommendation, onPlayRecommendation, onRetryRecommendation)
+                                }
                             }
                             featured?.let { liked ->
                                 HomeModule(LIKED_HEADING) { LikedPlaylistRow(liked) { onOpenPlaylist(liked) } }
@@ -267,11 +330,26 @@ private fun LibraryEmpty(
     onOpenAccount: () -> Unit,
     onRefresh: () -> Unit,
     bottomInset: Dp,
+    header: @Composable () -> Unit = {},
 ) {
     val cs = MaterialTheme.colorScheme
-    Column(
-        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = Space.page),
-    ) {
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+        header()
+        LibraryEmptyBody(failed, connected, platformName, onOpenAccount, onRefresh, bottomInset)
+    }
+}
+
+@Composable
+private fun LibraryEmptyBody(
+    failed: Boolean,
+    connected: Boolean,
+    platformName: String,
+    onOpenAccount: () -> Unit,
+    onRefresh: () -> Unit,
+    bottomInset: Dp,
+) {
+    val cs = MaterialTheme.colorScheme
+    Column(Modifier.fillMaxWidth().padding(horizontal = Space.page)) {
         if (!failed && !connected) {
             Spacer(Modifier.height(8.dp))
             ConnectCard(platformName, onOpenAccount)
@@ -414,6 +492,9 @@ private fun HomeModule(title: String, padded: Boolean = true, content: @Composab
     SectionCard(padded = padded, content = content)
     Spacer(Modifier.height(Space.section))
 }
+
+/** The library's fourth segment, next to the three platforms. */
+internal const val LOCAL_SEGMENT = "本地音频"
 
 internal fun statusLine(state: PlaylistUiState, nowEpochMs: Long): String {
     // A failed read means the count is unknown, so it must not claim "0 playlists".

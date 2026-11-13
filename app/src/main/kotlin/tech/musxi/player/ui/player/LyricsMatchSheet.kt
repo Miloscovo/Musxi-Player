@@ -288,6 +288,8 @@ fun LyricsMatchSheet(
                         }
                     },
                     modifier = Modifier.padding(horizontal = Space.page),
+                    // No switching while a choice is being saved; disabled, so no tick either.
+                    enabled = !ui.saving,
                 )
                 Spacer(Modifier.height(6.dp))
             }

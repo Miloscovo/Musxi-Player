@@ -1,7 +1,6 @@
 package tech.musxi.player.ui.nav
 
 import androidx.activity.compose.PredictiveBackHandler
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -22,6 +21,7 @@ import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.unit.dp
+import tech.musxi.player.ui.components.pageBackground
 import tech.musxi.player.ui.theme.rememberReducedMotion
 
 /**
@@ -49,10 +49,22 @@ import tech.musxi.player.ui.theme.rememberReducedMotion
  * @param backStyle Which pose the top page takes under the system back gesture.
  * @param backEnabled False hands back to whatever is registered below this host, e.g. while the
  * full player covers the tabs. Hosts of tabs that are not showing should not be composed at all.
- * @param pageColor Opaque colour behind each page, so the page below never shows through.
+ * @param pageColor Opaque colour behind each page, so the page below never shows through. The
+ * shell's 界面壁纸 ([tech.musxi.player.ui.components.LocalPageBackdrop]) is drawn over it.
  * @param content Draws the page for a route key. It runs once per composed page and must call
  * nothing on [stack] for its own sake; a back button inside a page calls [NavStackState.pop].
  */
+/**
+ * False for the page under the top one, which is still composed while it can be uncovered. Pages
+ * that announce something to the shell (their top bar title) do it only while this is true.
+ */
+val LocalNavPageOnTop = androidx.compose.runtime.compositionLocalOf { true }
+
+/** The top page's exit (0 at rest, 1 gone), read in draw blocks: what the page puts in the shell leaves with it. */
+val LocalNavPageExit = androidx.compose.runtime.staticCompositionLocalOf<() -> Float> { NoExit }
+
+private val NoExit: () -> Float = { 0f }
+
 // NoCollectCallFound is a false positive here: the back events are handed to
 // NavStackState.handleBack, which collects them (Lint only looks inside the lambda).
 @android.annotation.SuppressLint("NoCollectCallFound")
@@ -73,14 +85,19 @@ fun NavStackHost(
         stack.handleBack(events, currentStyle)
     }
 
-    Box(modifier.fillMaxSize().background(pageColor)) {
+    Box(modifier.fillMaxSize().pageBackground(pageColor)) {
         val keys = stack.stack.keys
         val last = keys.lastIndex
         for (i in maxOf(0, last - 1)..last) {
             val pageKey = keys[i]
             key(pageKey) {
                 NavPageLayer(stack, top = i == last, reduced = reduced, pageColor = pageColor) {
-                    stack.pageState.SaveableStateProvider(pageKey) { content(pageKey) }
+                    androidx.compose.runtime.CompositionLocalProvider(
+                        LocalNavPageOnTop provides (i == last),
+                        LocalNavPageExit provides if (i == last) stack::exit else NoExit,
+                    ) {
+                        stack.pageState.SaveableStateProvider(pageKey) { content(pageKey) }
+                    }
                 }
             }
         }
@@ -101,7 +118,7 @@ private fun NavPageLayer(
     content: @Composable () -> Unit,
 ) {
     val pose = if (top) topPose(state) else belowPose(state, reduced)
-    Box(Modifier.fillMaxSize().then(pose).background(pageColor)) { content() }
+    Box(Modifier.fillMaxSize().then(pose).pageBackground(pageColor)) { content() }
 }
 
 private fun topPose(state: NavStackState): Modifier = Modifier

@@ -1,5 +1,7 @@
 # AUDIO 调度隔离与晚间第二阶段补验
 
+> **状态：日期专项验收（2026-10-22）。** 测试数、包和调度场景均为当次证据；当前状态见 [当前开发接续](next-session-handoff.md)，文档分类见 [文档入口](README.md)。
+
 > 历史专项记录：以下只对应文中日期、包和测试范围；当前状态以 [0.1 验收](android-0.1-acceptance.md) 为准。本机证据路径仅用于本地复查，不随仓库分发。
 
 日期：2026-10-22，北京时间。设备：OPPO PJF110 / Android 16。主工程 `<project-root>`，隔离后端 `<project-root>/.local/worktrees/Musxi-Player-android-backend-next`。前阶段结果见[晚间验收](backend-evening-acceptance-20261022.md)，总览与后续优先级见[后端现状](backend-status-20261022.md)。

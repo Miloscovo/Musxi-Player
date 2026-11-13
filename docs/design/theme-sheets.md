@@ -1,5 +1,7 @@
 # 主题样张（2026-10-21）
 
+> **状态：日期设计样张（2026-10-21）。** 样张为 JVM 渲染，不代表当前真机验收；当前状态见 [当前开发接续](../next-session-handoff.md)，设计资料见 [文档入口](../README.md)。
+
 三个强调色方向 × 三种亮度，共九张。生成自 `ThemeSheetTest`（Robolectric + Roborazzi，JVM 渲染，未上真机）。
 
 ## 怎么看

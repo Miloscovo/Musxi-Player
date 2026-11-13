@@ -3,6 +3,7 @@ package tech.musxi.player.ui.player
 import androidx.compose.ui.graphics.Color
 import tech.musxi.core.account.Platform
 import tech.musxi.core.library.SongSummary
+import tech.musxi.core.localaudio.LocalAudioError
 import tech.musxi.core.playback.FailureReason
 import tech.musxi.playback.PlaybackRepeatMode
 import tech.musxi.playback.PlaybackState
@@ -67,18 +68,36 @@ data class PlayerUi(
      * supplying the audio is not the queue's own song; the title and artist above stay the original.
      */
     val actualSourceLine: String? = null,
+    /**
+     * A recording from the local library is playing. It has no platform, source or quality, so the
+     * page hides those controls and words its lines about the file instead.
+     */
+    val local: Boolean = false,
+    /** The local recording is a video played for its sound: the cover says so. */
+    val localVideo: Boolean = false,
+    /** Why the local file did not play; only read beside [PlayerStatus.FAILED] while [local]. */
+    val localError: LocalAudioError? = null,
+    /** Normal third line while [local]: the folder the queue came from, or "本地音频". */
+    val localSourceLine: String? = null,
 ) {
-    /** 0..1, clamped; the thumb and the filled part both read this. */
-    val progress: Float get() = if (durationMs > 0) {
-        (positionMs.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f)
-    } else 0f
+    /**
+     * 0..1, clamped; the thumb and the filled part read this unless the shell hands the page a live
+     * position (see `FullPlayer(liveProgress = …)`), in which case [positionMs] is not used.
+     */
+    val progress: Float get() = progressFraction(positionMs, durationMs)
 }
 
 /**
  * Collapses the playback state. Priority is fixed so two simultaneous problems never fight over one
  * line: no output > failure > interruption > ended > platform.
  */
-fun playerUiOf(state: PlaybackState, swapSearching: Boolean = false): PlayerUi {
+fun playerUiOf(
+    state: PlaybackState,
+    swapSearching: Boolean = false,
+    /** Name of the local folder the queue came from; ignored for platform songs. */
+    localFolderName: String? = null,
+): PlayerUi {
+    val local = isLocalPlayback(state)
     val status = when {
         state.suppression == PlaybackSuppression.OUTPUT -> PlayerStatus.NO_OUTPUT
         state.failure != null || state.error != null -> PlayerStatus.FAILED
@@ -108,12 +127,18 @@ fun playerUiOf(state: PlaybackState, swapSearching: Boolean = false): PlayerUi {
         queueIndex = state.queueIndex,
         queueSize = state.queueSize,
         status = status,
-        swapSearching = swapSearching,
+        // The service never swaps a local file for a platform song; a stale search must not
+        // reword the failure or spin the play button.
+        swapSearching = swapSearching && !local,
         hasPrevious = state.hasPrevious,
         hasNext = state.hasNext,
         qualityName = state.qualityName,
         failureReason = state.failureReason?.reason,
         actualSourceLine = actual?.let(::actualSourceLineOf),
+        local = local,
+        localVideo = local && state.localAudio?.kind == tech.musxi.core.localaudio.LocalMediaKind.VIDEO,
+        localError = state.localError.takeIf { local },
+        localSourceLine = if (local) localSourceLineOf(localFolderName) else null,
     )
 }
 
@@ -151,11 +176,19 @@ fun thirdLineOf(ui: PlayerUi): String = when (ui.status) {
     // a live play button sends two opposite signals, so this wording stays neutral.
     // The settled failure names its reason when the service reported one; the searching line does
     // not, because the swap under way is the news and the reason is for the panel to explain.
-    PlayerStatus.FAILED ->
-        if (ui.swapSearching) "当前音源不可用 · 正在换源" else withFailureReason("暂无可用音源", ui.failureReason)
+    // A local file is about the file: no source, account or platform wording.
+    PlayerStatus.FAILED -> when {
+        ui.local -> localAudioErrorText(ui.localError)
+        ui.swapSearching -> "当前音源不可用 · 正在换源"
+        else -> withFailureReason("暂无可用音源", ui.failureReason)
+    }
     PlayerStatus.INTERRUPTED -> "已被其他应用暂停"
     PlayerStatus.ENDED -> if (ui.repeat == PlaybackRepeatMode.OFF && !ui.hasNext) "队列已播完" else "已播完"
-    PlayerStatus.NORMAL -> listOfNotNull(platformLine(ui).takeIf(String::isNotBlank), ui.qualityName).joinToString(" · ")
+    PlayerStatus.NORMAL ->
+        // A video says it plays sound only, so the missing picture reads as a choice, not a fault.
+        if (ui.local) listOfNotNull("视频 · 仅播放声音".takeIf { ui.localVideo }, ui.localSourceLine ?: localSourceLineOf(null))
+            .joinToString(" · ")
+        else listOfNotNull(platformLine(ui).takeIf(String::isNotBlank), ui.qualityName).joinToString(" · ")
 }
 
 /**

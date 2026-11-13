@@ -1,6 +1,5 @@
 package tech.musxi.player
 
-import androidx.test.platform.app.InstrumentationRegistry
 import java.io.File
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.TimeUnit
@@ -12,10 +11,13 @@ import tech.musxi.core.account.*
 import tech.musxi.core.library.*
 
 class CatalogDeviceTest {
-    private val app get() = InstrumentationRegistry.getInstrumentation().targetContext.applicationContext as MusxiApplication
+    // Keep a resumed product Activity: OEM background freezing can otherwise suspend
+    // the main-thread delivery while the instrumentation thread waits for a callback.
+    private val phone by lazy { BackendBatch5DeviceTest.PhoneDriver() }
+    private val app get() = phone.activity.application as MusxiApplication
     private fun <T> await(block: ((Result<T>) -> Unit) -> Unit): Result<T> {
         val promise = CompletableFuture<Result<T>>()
-        android.os.Handler(android.os.Looper.getMainLooper()).post { block { promise.complete(it) } }
+        phone.runOnIdle { block { promise.complete(it) } }
         return promise.get(70, TimeUnit.SECONDS)
     }
     @Test fun readRealCatalogPages() {
@@ -39,7 +41,7 @@ class CatalogDeviceTest {
                 songs.first { it.artists == listOf("周杰伦") && it.title == "晴天" }
             } else loaded.getOrThrow()
             val row = JSONObject().put("platform", platform.name).put("songSuccess", true)
-                .put("artistIds", song?.artistIds?.size ?: 0).put("albumId", song?.albumId != null)
+                .put("artistIds", song.artistIds.size).put("albumId", song.albumId != null)
             for (kind in CatalogKind.entries) {
                 val id = if (kind == CatalogKind.ARTIST) song.artistIds.firstOrNull() else song.albumId
                 if (id == null) { row.put(kind.name, "missing_id"); continue }

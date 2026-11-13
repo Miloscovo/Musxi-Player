@@ -59,7 +59,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import tech.musxi.core.account.Platform
-import tech.musxi.core.library.EditablePlaylist
 import tech.musxi.core.library.SongSummary
 import tech.musxi.player.ui.components.Cover
 import tech.musxi.player.ui.components.LoadMorePill
@@ -76,6 +75,11 @@ import tech.musxi.player.ui.components.SongRow
 import tech.musxi.player.ui.components.listLines
 import tech.musxi.player.ui.components.songSubtitle
 import tech.musxi.player.ui.model.formatDuration
+import tech.musxi.player.ui.theme.Motion
+import tech.musxi.player.ui.shell.PageTopBar
+import tech.musxi.player.ui.shell.TitleProbe
+import tech.musxi.player.ui.shell.largeTitle
+import tech.musxi.player.ui.shell.rememberTitleProbe
 import tech.musxi.player.ui.theme.Space
 import tech.musxi.player.ui.theme.displayName
 import tech.musxi.player.ui.theme.tabular
@@ -109,25 +113,56 @@ fun SearchScreen(
     /** What the menu can do for this song right now: liked or not, and whether favouriting works. */
     songActions: (SongSummary) -> SongActionsUi = { SongActionsUi() },
     onToggleFavorite: ((SongSummary) -> Unit)? = null,
-    /** Reads the platform's writable playlists; the page that lists them is the menu's second page. */
-    loadPlaylists: ((Platform, (Result<List<EditablePlaylist>>) -> Unit) -> Unit)? = null,
-    onAddToPlaylist: ((SongSummary, EditablePlaylist) -> Unit)? = null,
+    /** Opens the shell's playlist sheet for a song; null hides "加入歌单". */
+    onManagePlaylists: ((SongSummary) -> Unit)? = null,
 ) {
     val cs = MaterialTheme.colorScheme
+    // With results on screen the title, field and platforms are the list's first item and scroll
+    // away with it (spec section 10); the shell's top bar then says "搜索".
+    val titleProbe = rememberTitleProbe()
+    PageTopBar("搜索", titleProbe)
+    val header: @Composable () -> Unit = {
+        Column(Modifier.fillMaxWidth()) {
+            Spacer(Modifier.height(Space.section))
+            // Same size as the library title; the one-line note that used to sit under it now lives in
+            // the idle state, where it is read once instead of on every result.
+            Text(
+                "搜索", style = MaterialTheme.typography.headlineSmall, color = cs.onSurface,
+                modifier = Modifier.largeTitle(titleProbe),
+            )
+            Spacer(Modifier.height(16.dp))
+            SearchField(state.keywords, onKeywordsChange, onSearch)
+            Spacer(Modifier.height(12.dp))
+            PlatformSegmented(
+                platforms = searchPlatforms,
+                selected = state.platform,
+                onSelect = onPlatformSelect,
+            )
+            Spacer(Modifier.height(8.dp))
+        }
+    }
+    if (state.phase == SearchPhase.RESULTS) {
+        Box(Modifier.fillMaxSize().padding(horizontal = Space.page)) {
+            ResultList(
+                state = state,
+                onLoadMore = onLoadMore,
+                onSongClick = onSongClick,
+                bottomInset = bottomInset,
+                nowPlayingId = nowPlayingId,
+                onPlayNext = onPlayNext,
+                onAddToQueue = onAddToQueue,
+                songActions = songActions,
+                onToggleFavorite = onToggleFavorite,
+                onManagePlaylists = onManagePlaylists,
+                header = header,
+                titleProbe = titleProbe,
+            )
+        }
+        return
+    }
+    titleProbe.away = { false }
     Column(Modifier.fillMaxSize().padding(horizontal = Space.page)) {
-        Spacer(Modifier.height(Space.section))
-        // Same size as the library title; the one-line note that used to sit under it now lives in
-        // the idle state, where it is read once instead of on every result.
-        Text("搜索", style = MaterialTheme.typography.headlineSmall, color = cs.onSurface)
-        Spacer(Modifier.height(16.dp))
-        SearchField(state.keywords, onKeywordsChange, onSearch)
-        Spacer(Modifier.height(12.dp))
-        PlatformSegmented(
-            platforms = searchPlatforms,
-            selected = state.platform,
-            onSelect = onPlatformSelect,
-        )
-        Spacer(Modifier.height(8.dp))
+        header()
         // The state area owns the remaining height; each state fills it on its own terms.
         Box(Modifier.fillMaxWidth().weight(1f)) {
             when (state.phase) {
@@ -145,19 +180,7 @@ fun SearchScreen(
                     onPlatformSelect = onPlatformSelect,
                 )
                 SearchPhase.ERROR -> Failure(state.errorText.orEmpty(), onRetry)
-                SearchPhase.RESULTS -> ResultList(
-                    state = state,
-                    onLoadMore = onLoadMore,
-                    onSongClick = onSongClick,
-                    bottomInset = bottomInset,
-                    nowPlayingId = nowPlayingId,
-                    onPlayNext = onPlayNext,
-                    onAddToQueue = onAddToQueue,
-                    songActions = songActions,
-                    onToggleFavorite = onToggleFavorite,
-                    loadPlaylists = loadPlaylists,
-                    onAddToPlaylist = onAddToPlaylist,
-                )
+                SearchPhase.RESULTS -> Unit
             }
         }
     }
@@ -170,11 +193,13 @@ private fun SearchField(keywords: String, onChange: (String) -> Unit, onSearch: 
     var focused by remember { mutableStateOf(false) }
     val background by animateColorAsState(
         targetValue = if (focused) cs.surfaceContainerHighest else cs.surfaceContainerHigh,
+        animationSpec = Motion.enter(),
         label = "searchFieldBackground",
     )
     // Fade the same hue in and out; animating from `Color.Transparent` would pass through grey.
     val outline by animateColorAsState(
         targetValue = cs.primary.copy(alpha = if (focused) 0.35f else 0f),
+        animationSpec = Motion.enter(),
         label = "searchFieldOutline",
     )
     BasicTextField(
@@ -249,8 +274,9 @@ private fun ResultList(
     onAddToQueue: ((SongSummary) -> Unit)?,
     songActions: (SongSummary) -> SongActionsUi,
     onToggleFavorite: ((SongSummary) -> Unit)?,
-    loadPlaylists: ((Platform, (Result<List<EditablePlaylist>>) -> Unit) -> Unit)?,
-    onAddToPlaylist: ((SongSummary, EditablePlaylist) -> Unit)?,
+    onManagePlaylists: ((SongSummary) -> Unit)?,
+    header: @Composable () -> Unit = {},
+    titleProbe: TitleProbe? = null,
 ) {
     val cs = MaterialTheme.colorScheme
     val keyboard = LocalSoftwareKeyboardController.current
@@ -259,6 +285,7 @@ private fun ResultList(
     val best = state.items.firstOrNull()
     val rest = remember(state.items) { state.items.drop(1) }
     val listState = rememberLazyListState()
+    titleProbe?.away = { listState.firstVisibleItemIndex > 0 }
     // Dragging the list means the user is reading results, so the keyboard gets out of the way.
     LaunchedEffect(listState.isScrollInProgress) {
         if (listState.isScrollInProgress) keyboard?.hide()
@@ -268,6 +295,7 @@ private fun ResultList(
         state = listState,
         contentPadding = PaddingValues(bottom = bottomInset),
     ) {
+        item(key = "header") { header() }
         if (best != null) {
             item(key = "best:${best.key.stableId}") {
                 Column {
@@ -298,7 +326,7 @@ private fun ResultList(
             // The button is there when the menu has anything to offer; each entry appears only if its
             // callback was given, so a screen that gives none (the design sheets) shows no button.
             val canMore = onPlayNext != null || onAddToQueue != null || onToggleFavorite != null ||
-                (loadPlaylists != null && onAddToPlaylist != null)
+                onManagePlaylists != null
             SongRow(
                 song = song,
                 highlight = state.keywords,
@@ -312,12 +340,7 @@ private fun ResultList(
                         onPlayNext = if (onPlayNext != null) ({ onPlayNext(song) }) else null,
                         onAddToQueue = if (onAddToQueue != null) ({ onAddToQueue(song) }) else null,
                         onToggleFavorite = if (onToggleFavorite != null) ({ onToggleFavorite(song) }) else null,
-                        loadPlaylists = if (loadPlaylists != null) {
-                            { done -> loadPlaylists(song.key.platform, done) }
-                        } else null,
-                        onAddToPlaylist = if (onAddToPlaylist != null) {
-                            { target -> onAddToPlaylist(song, target) }
-                        } else null,
+                        onManagePlaylists = if (onManagePlaylists != null) ({ onManagePlaylists(song) }) else null,
                     )
                 }) else null,
             ) {

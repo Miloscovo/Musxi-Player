@@ -3,16 +3,12 @@ package tech.musxi.player.ui.player
 import android.os.SystemClock
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.LinearOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.spring
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.selection.toggleable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.outlined.FavoriteBorder
@@ -33,6 +29,9 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.toggleableState
+import androidx.compose.ui.state.ToggleableState
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.util.lerp
 import kotlin.math.PI
@@ -40,7 +39,10 @@ import kotlin.math.cos
 import kotlin.math.sin
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
+import tech.musxi.player.ui.theme.Haptic
 import tech.musxi.player.ui.theme.LocalMusxi
+import tech.musxi.player.ui.theme.Motion
+import tech.musxi.player.ui.theme.rememberHaptics
 import tech.musxi.player.ui.theme.likedHeartColor
 
 /** A liked change counts as caused by the user's tap when it follows the tap within this window. */
@@ -57,12 +59,19 @@ private const val TapWindowMs = 1_000L
  * tap likes the song, dips slightly when it un-likes, and shakes sideways when the request fails.
  * The button stays tappable when [FavoriteUi.enabled] is false so the shell can say why it will not
  * work, and nothing here runs an infinite animation, so a screenshot test can always settle.
+ *
+ * Haptics (spec section 5) follow the same rule as the burst: only the user's own tap plays one.
+ * A tap that will write plays [Haptic.LIKE] or [Haptic.UNLIKE] at once; a tap on a read-only heart
+ * ([FavoriteUi.enabled] false) plays [Haptic.REJECT]. A heart changing from outside plays nothing,
+ * and neither does a background request failing later (the notice that explains it is enough).
  */
 @Composable
 internal fun FavoriteButton(
     favorite: FavoriteUi,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    /** Long press: choose where to collect the song (我喜欢, a playlist, or a new one). */
+    onLongPress: (() -> Unit)? = null,
 ) {
     val cs = MaterialTheme.colorScheme
     val likedColor = likedHeartColor(LocalMusxi.current.dark)
@@ -70,25 +79,26 @@ internal fun FavoriteButton(
     val pressed by source.collectIsPressedAsState()
     val pressScale by animateFloatAsState(
         targetValue = if (pressed) 0.88f else 1f,
-        animationSpec = spring(stiffness = 900f),
+        animationSpec = Motion.Heart.press(),
         label = "heartPress",
     )
     val tint by animateColorAsState(
         targetValue = (if (favorite.liked) likedColor else cs.onSurfaceVariant)
             .copy(alpha = if (favorite.enabled) 1f else 0.35f),
-        animationSpec = tween(180),
+        animationSpec = Motion.enter(),
         label = "heartTint",
     )
     val dotColor = cs.onSurfaceVariant
     val dotAlpha by animateFloatAsState(
         targetValue = if (favorite.syncing) 0.5f else 0f,
-        animationSpec = tween(200),
+        animationSpec = Motion.enter(),
         label = "heartSyncDot",
     )
 
     val pop = remember { Animatable(1f) }
     val burst = remember { Animatable(0f) }
     val shake = remember { Animatable(0f) }
+    val haptic = rememberHaptics()
     var lastTapAt by remember { mutableLongStateOf(-1L) }
     var previousLiked by remember { mutableStateOf(favorite.liked) }
     var seenFailures by remember { mutableIntStateOf(favorite.failures) }
@@ -105,16 +115,16 @@ internal fun FavoriteButton(
         if (!fromTap) return@LaunchedEffect
         if (favorite.liked) {
             coroutineScope {
-                launch { burst.animateTo(1f, tween(380, easing = LinearEasing)) }
+                launch { burst.animateTo(1f, Motion.Heart.burst()) }
                 launch {
-                    pop.animateTo(1.22f, tween(90))
-                    pop.animateTo(1f, spring(dampingRatio = 0.45f, stiffness = 400f))
+                    pop.animateTo(1.22f, Motion.Heart.popUp())
+                    pop.animateTo(1f, Motion.pop())
                 }
             }
             burst.snapTo(0f)
         } else {
-            pop.animateTo(0.9f, tween(80))
-            pop.animateTo(1f, tween(120))
+            pop.animateTo(0.9f, Motion.Heart.dip())
+            pop.animateTo(1f, Motion.exit())
         }
     }
 
@@ -124,7 +134,7 @@ internal fun FavoriteButton(
         shake.snapTo(0f)
         if (!increased) return@LaunchedEffect
         for (x in floatArrayOf(-5f, 5f, -3f, 3f, 0f)) {
-            shake.animateTo(x, tween(60, easing = LinearEasing))
+            shake.animateTo(x, Motion.Heart.shakeStep())
         }
     }
 
@@ -135,7 +145,7 @@ internal fun FavoriteButton(
             .drawBehind {
                 val p = burst.value
                 if (p > 0f) {
-                    val eased = LinearOutSlowInEasing.transform(p)
+                    val eased = Motion.Heart.BurstTravel.transform(p)
                     drawCircle(
                         color = likedColor,
                         radius = lerp(12.dp.toPx(), 22.dp.toPx(), eased),
@@ -168,13 +178,24 @@ internal fun FavoriteButton(
                 }
             }
             // The enabled flag is deliberately not passed on: a read-only account still gets the tap.
-            .toggleable(
-                value = favorite.liked,
+            // A toggle in semantics, but clickable underneath so a long press can ask "收藏到哪里".
+            .semantics { toggleableState = ToggleableState(favorite.liked) }
+            .combinedClickable(
                 interactionSource = source,
                 indication = null,
                 role = Role.Checkbox,
-                onValueChange = {
+                // The long press plays Haptic.LONG_PRESS itself; the default buzz would double it.
+                hapticFeedbackEnabled = false,
+                onLongClickLabel = if (onLongPress != null) "收藏到…" else null,
+                onLongClick = onLongPress?.let { open ->
+                    {
+                        haptic(Haptic.LONG_PRESS)
+                        open()
+                    }
+                },
+                onClick = {
                     lastTapAt = SystemClock.elapsedRealtime()
+                    haptic(tapHaptic(enabled = favorite.enabled, wantLiked = !favorite.liked))
                     onClick()
                 },
             ),
@@ -191,4 +212,14 @@ internal fun FavoriteButton(
             },
         )
     }
+}
+
+/**
+ * The one haptic a tap on the heart plays: [Haptic.REJECT] when the account cannot write (the shell
+ * then says why), otherwise the toggle the tap asks for.
+ */
+internal fun tapHaptic(enabled: Boolean, wantLiked: Boolean): Haptic = when {
+    !enabled -> Haptic.REJECT
+    wantLiked -> Haptic.LIKE
+    else -> Haptic.UNLIKE
 }

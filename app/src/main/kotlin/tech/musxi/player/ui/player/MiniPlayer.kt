@@ -28,6 +28,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.SideEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -37,6 +38,7 @@ import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
@@ -60,6 +62,9 @@ private val MiniSubtitleBox = 14.sp
 /** CJK ink sits low in its line box; measured on the sheet, this lifts the block back to the cover's centre. */
 private val MiniTextLift = 1.dp
 
+/** The filled part of the linear styles; tests read its width. */
+internal const val MiniProgressFillTag = "mini-progress-fill"
+
 /**
  * Everything the bar shows. `subtitle` is one line with a strict priority order, because the bar
  * is short and a second line would push the whole chrome around.
@@ -70,7 +75,11 @@ data class MiniPlayerUi(
     val subtitle: String = "",
     val playing: Boolean = false,
     val buffering: Boolean = false,
-    /** 0..1, already clamped; drives whichever progress style the bar uses. */
+    /**
+     * 0..1, already clamped; drives whichever progress style the bar uses. The live shell builds
+     * this model from a state with the position taken out and hands the moving value to
+     * [MiniPlayer] as a provider instead; the design sheets set it here.
+     */
     val progress: Float = 0f,
     val coverUrl: String? = null,
     val hasPrevious: Boolean = false,
@@ -88,9 +97,7 @@ data class MiniPlayerUi(
  */
 fun miniPlayerUi(state: tech.musxi.playback.PlaybackState): MiniPlayerUi {
     val hasTrack = state.mediaId != null || state.title.isNotBlank()
-    val progress = if (state.durationMs > 0) {
-        (state.positionMs.toFloat() / state.durationMs.toFloat()).coerceIn(0f, 1f)
-    } else 0f
+    val progress = progressFraction(state.positionMs, state.durationMs)
     return MiniPlayerUi(
         visible = hasTrack,
         title = state.title,
@@ -114,14 +121,18 @@ fun miniPlayerUi(state: tech.musxi.playback.PlaybackState): MiniPlayerUi {
  * when there is nothing to explain.
  */
 internal fun subtitleOf(state: tech.musxi.playback.PlaybackState): String {
-    val artist = state.artist.ifBlank { "未知歌手" }
+    val local = isLocalPlayback(state)
+    // A recording without an author is not an unknown singer's song.
+    val artist = state.artist.ifBlank { if (local) "本地音频" else "未知歌手" }
     val reason = when {
         state.suppression == tech.musxi.playback.PlaybackSuppression.AUDIO_FOCUS -> "被其他音频暂时打断"
         state.suppression == tech.musxi.playback.PlaybackSuppression.OUTPUT -> "没有可用的音频输出"
         state.suppression == tech.musxi.playback.PlaybackSuppression.OTHER -> "播放暂时被暂停"
         state.buffering -> "缓冲中"
         // Names the reason when the service reported one; "check the network" was wrong for most.
-        state.failure != null || state.error != null -> playbackFailedText(state.failureReason?.reason)
+        // A local file says what is wrong with the file, never a platform or account reason.
+        state.failure != null || state.error != null ->
+            if (local) localAudioErrorText(state.localError) else playbackFailedText(state.failureReason?.reason)
         state.ended -> "已播完"
         else -> null
     }
@@ -183,8 +194,22 @@ fun MiniPlayer(
      * full page, so it must not be drawn twice (see PlayerSurface).
      */
     hideCover: Boolean = false,
+    /**
+     * The live position as a 0..1 fraction, read only where the progress is drawn: a playback tick
+     * then redraws the ring and recomposes nothing (spec section 12). Null uses [MiniPlayerUi.progress].
+     */
+    liveProgress: (() -> Float)? = null,
+    /**
+     * Test hook: runs after every composition of this row's own body (not of the progress leaf), so
+     * a test can prove a playback tick leaves the row alone. Production passes null.
+     */
+    onRowRecompose: (() -> Unit)? = null,
+    /** The folded dock's row: no previous and next, so the title keeps its room beside the tab. */
+    compact: Boolean = false,
 ) {
     if (!ui.visible) return
+    if (onRowRecompose != null) SideEffect(onRowRecompose)
+    val progress: () -> Float = liveProgress ?: { ui.progress }
     val cs = MaterialTheme.colorScheme
     val band = style == ProgressStyle.BAND
     Box(
@@ -236,17 +261,17 @@ fun MiniPlayer(
                 )
             }
             Spacer(Modifier.width(4.dp))
-            MiniControls(ui, style, tonalButton, onPlayPause, onPrevious, onNext)
+            MiniControls(ui, progress, style, tonalButton, onPlayPause, onPrevious, onNext, compact)
         }
         when (style) {
             ProgressStyle.BAND -> MiniProgress(
-                ui.progress,
+                progress,
                 modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 6.dp),
             )
             // Flush with the edge: the corner clip shapes the line into the card itself, so it
             // reads as the card filling rather than as a rule sitting on top of it.
             ProgressStyle.FLUSH -> MiniProgress(
-                ui.progress,
+                progress,
                 modifier = Modifier.align(Alignment.BottomCenter),
                 inset = 0.dp,
             )
@@ -258,11 +283,13 @@ fun MiniPlayer(
 @Composable
 private fun MiniControls(
     ui: MiniPlayerUi,
+    progress: () -> Float,
     style: ProgressStyle,
     tonalButton: Boolean,
     onPlayPause: () -> Unit,
     onPrevious: () -> Unit,
     onNext: () -> Unit,
+    compact: Boolean = false,
 ) {
     val cs = MaterialTheme.colorScheme
     // With a ring around it, a solid accent button would put two accent marks in the same spot and
@@ -270,7 +297,7 @@ private fun MiniControls(
     val buttonColor = if (tonalButton) cs.primaryContainer else cs.primary
     val iconColor = if (tonalButton) cs.onPrimaryContainer else cs.onPrimary
     Row(verticalAlignment = Alignment.CenterVertically) {
-        IconButton(onClick = onPrevious, enabled = ui.hasPrevious, modifier = Modifier.size(32.dp)) {
+        if (!compact) IconButton(onClick = onPrevious, enabled = ui.hasPrevious, modifier = Modifier.size(32.dp)) {
             Icon(
                 Icons.Outlined.SkipPrevious, "上一首",
                 tint = if (ui.hasPrevious) cs.onSurfaceVariant else cs.onSurfaceVariant.copy(alpha = 0.38f),
@@ -279,7 +306,7 @@ private fun MiniControls(
         }
         Box(Modifier.size(40.dp), contentAlignment = Alignment.Center) {
             // The ring lives outside the button so the accent never fights the button's own fill.
-            if (style == ProgressStyle.RING) RingProgress(ui.progress)
+            if (style == ProgressStyle.RING) RingProgress(progress)
             Box(
                 Modifier.size(36.dp).clip(CircleShape).background(buttonColor)
                     .clickable(onClick = onPlayPause)
@@ -298,7 +325,7 @@ private fun MiniControls(
                 }
             }
         }
-        IconButton(onClick = onNext, enabled = ui.hasNext, modifier = Modifier.size(32.dp)) {
+        if (!compact) IconButton(onClick = onNext, enabled = ui.hasNext, modifier = Modifier.size(32.dp)) {
             Icon(
                 Icons.Outlined.SkipNext, "下一首",
                 tint = if (ui.hasNext) cs.onSurfaceVariant else cs.onSurfaceVariant.copy(alpha = 0.38f),
@@ -317,11 +344,13 @@ private fun MiniControls(
  * looked like a stray arc with no track at all.
  */
 @Composable
-private fun RingProgress(progress: Float) {
+private fun RingProgress(progress: () -> Float) {
     val cs = MaterialTheme.colorScheme
     // Hoisted: a @Composable call is not allowed inside the draw scope below.
     val accent = nowPlayingAccent()
     Canvas(Modifier.size(40.dp)) {
+        // Read here, in draw: a new position redraws the ring without recomposing anything.
+        val fraction = progress().coerceIn(0f, 1f)
         val stroke = 2.5.dp.toPx()
         val inset = stroke / 2
         val arcSize = Size(size.width - stroke, size.height - stroke)
@@ -331,10 +360,10 @@ private fun RingProgress(progress: Float) {
             topLeft = Offset(inset, inset), size = arcSize,
             style = Stroke(width = stroke),
         )
-        if (progress > 0f) {
+        if (fraction > 0f) {
             drawArc(
                 color = accent,
-                startAngle = -90f, sweepAngle = 360f * progress.coerceIn(0f, 1f), useCenter = false,
+                startAngle = -90f, sweepAngle = 360f * fraction, useCenter = false,
                 topLeft = Offset(inset, inset), size = arcSize,
                 style = Stroke(width = stroke, cap = StrokeCap.Round),
             )
@@ -346,8 +375,10 @@ private fun RingProgress(progress: Float) {
  * Linear progress. Two layers so the unplayed part still reads as a track rather than as empty card.
  */
 @Composable
-private fun MiniProgress(progress: Float, modifier: Modifier = Modifier, inset: Dp = 16.dp) {
+private fun MiniProgress(progress: () -> Float, modifier: Modifier = Modifier, inset: Dp = 16.dp) {
     val cs = MaterialTheme.colorScheme
+    // Read in this leaf only, so a tick recomposes the rule and not the row around it.
+    val fraction = progress().coerceIn(0f, 1f)
     val accent = nowPlayingAccent()
     Box(modifier.fillMaxWidth().padding(horizontal = inset).height(2.dp)) {
         Box(
@@ -355,8 +386,8 @@ private fun MiniProgress(progress: Float, modifier: Modifier = Modifier, inset: 
                 .background(cs.onSurface.copy(alpha = 0.10f)),
         )
         Box(
-            Modifier.fillMaxWidth(progress.coerceIn(0f, 1f)).height(2.dp).clip(CircleShape)
-                .background(accent),
+            Modifier.fillMaxWidth(fraction).height(2.dp).clip(CircleShape)
+                .background(accent).testTag(MiniProgressFillTag),
         )
     }
 }

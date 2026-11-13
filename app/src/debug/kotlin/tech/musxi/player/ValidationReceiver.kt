@@ -28,6 +28,9 @@ class ValidationReceiver : BroadcastReceiver() {
             "qq_web_close" -> { QqWebLoginValidationActivity.close(); return }
             "qq_web_restart_check" -> { QqWebLoginValidationActivity.restartCheck(app); return }
         }
+        if (tech.musxi.playback.LockScreenLyricsProbeValidation.run(app, step)) return
+        if (LockScreenPageProbeValidation.run(app, step)) return
+        if (LocalAudioBackgroundValidationRunner.run(app, step)) return
         if (BackendLiveValidationRunner.run(app, step)) return
         if (BackendToolsAcceptanceRunner.run(app, step) || OutputAcceptanceValidationRunner.run(app, step)) return
         if (PlaybackToolsValidationRunner.run(app, step) || OutputTraceValidationRunner.run(app, step)) return

@@ -34,3 +34,35 @@ private files are included in this source or APK.
 Matching source and build recipe: android/netease-login-poc/ in the
 accompanying Musxi Player checkout. Local debug APK, not a public release.
 JSON-java 20240303 is a Public Domain host-test dependency, not in the APK.
+
+2026-11-06 ordinary playlist removal, creation and renaming adapt module/playlist_tracks.js, playlist_create.js and playlist_name_update.js from the same pinned MIT source.
+Whole-playlist subscription additionally adapts module/playlist_subscribe.js,
+register_checktoken_v3.js and util/request.js from that pinned source. The Android
+adapter uses a fresh HTTPS v3 token; the upstream subscription module selects v2,
+so real-account acceptance of the v3 substitution remains unverified. No remote
+JavaScript, browser verification SDK or new runtime dependency is bundled.
+
+Later on 2026-11-06, the incompatible v3 default was removed after platform rejection
+and review of the same pinned playlist_subscribe.js, register_checktoken_v2.js and
+util/request.js. Writes now require a compatible SDK-v2 provider, currently unavailable.
+No Watchman SDK, browser fingerprint emulation, remote script or dependency was added.
+
+2026-11-07 optional native YRC additionally adapts module/lyric_new.js at the
+same pinned MIT revision: /api/song/lyric/v1 via the existing phone-local EAPI
+transport. Valid YRC uses its own primary line/word timeline and matching ytlrc;
+ordinary lrc/tlyric and the earlier lyric.js request remain safe fallbacks.
+YrcLyricsDecoder is independently implemented with bounded UTF-16 word ranges.
+MeiloX's fixed bc038c9e9a01f37484a13295b2c3a8c3e44d8804 YRC parser/tests were
+design references only; no source, resource or dependency was copied from them.
+Existing Binaryify MIT license and Musxi GPL notice remain; no runtime dependency.
+The earlier v3 paragraph records the previous implementation, not the current default.
+
+2026-11-11 read-only daily song recommendations additionally adapt module/recommend_songs.js
+at the same pinned MIT revision: /api/v3/discovery/recommend/songs through its explicit WEAPI
+profile, reusing the existing track row parser. No afresh refresh flag, dislike endpoint or
+other platform write is implemented; no new runtime dependency or license change is included.
+
+2026-11-13 own-playlist deletion additionally adapts module/playlist_delete.js
+at MIT revision 2aab9957dfd5231e5b192aecdb177f93ace4c92e: its explicit
+WEAPI /api/playlist/remove profile and single-ID JSON-array-string ids field.
+The original copyright and complete MIT license remain; no runtime dependency.

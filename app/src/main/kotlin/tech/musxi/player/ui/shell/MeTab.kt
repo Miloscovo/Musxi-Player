@@ -13,23 +13,24 @@ import androidx.compose.ui.unit.Dp
 import tech.musxi.core.account.Platform
 import tech.musxi.core.cache.CacheKind
 import tech.musxi.core.cache.CacheOperationResult
+import tech.musxi.core.playback.PreferredAudioQuality
+import tech.musxi.core.settings.LyricsFontSize
 import tech.musxi.core.settings.ThemeMode
 import tech.musxi.player.ui.account.AboutUpdateUi
 import tech.musxi.player.ui.account.AccountDetailPage
 import tech.musxi.player.ui.account.AccountPageActions
 import tech.musxi.player.ui.account.AccountRowUi
 import tech.musxi.player.ui.account.UpdateActions
-import tech.musxi.player.ui.me.DarkModePage
 import tech.musxi.player.ui.me.MeActions
 import tech.musxi.player.ui.me.MeScreen
 import tech.musxi.player.ui.me.MeUi
 import tech.musxi.player.ui.me.cacheSizeText
 import tech.musxi.player.ui.nav.NavStackHost
 import tech.musxi.player.ui.nav.NavStackState
+import tech.musxi.player.ui.theme.Accent
 
-/** Page keys of the "我的" tab's stack: the page itself, the dark-mode picker, one page per platform. */
+/** Page keys of the "我的" tab's stack: the page itself and one page per platform. */
 internal const val MeRootKey = "me"
-internal const val MeDarkModeKey = "me/dark-mode"
 private const val MeAccountPrefix = "me/account/"
 
 internal fun meAccountKey(platform: Platform): String = MeAccountPrefix + platform.name
@@ -46,20 +47,28 @@ internal fun meAccountPlatform(key: String): Platform? =
 class MeTabActions(
     val onSetAutoSwitchSource: (Boolean) -> Unit = {},
     val onSetRelaxDuration: (Boolean) -> Unit = {},
+    val onSetRecommendations: (Boolean) -> Unit = {},
+    val onSelectLibraryLock: (tech.musxi.player.ui.library.LibraryLock) -> Unit = {},
     val onSetFollowCover: (Boolean) -> Unit = {},
     val onSetShowTranslation: (Boolean) -> Unit = {},
+    val onSetMediaCardLyrics: (Boolean) -> Unit = {},
     val onSetTransparency: (Boolean) -> Unit = {},
     val onSetThemeMode: (ThemeMode) -> Unit = {},
+    val onSetDefaultQuality: (PreferredAudioQuality) -> Unit = {},
+    /** The lyrics page's text size only; the rest of the app follows the system font size. */
+    val onSetLyricsFontSize: (LyricsFontSize) -> Unit = {},
+    val onSetAccent: (Accent) -> Unit = {},
+    val onSetLocalArtwork: (Boolean) -> Unit = {},
+    val onFillLocalArtwork: (() -> Unit)? = null,
     /** Runs after the user has confirmed; asking first is [MeTab]'s job. */
     val onClearCache: () -> Unit = {},
-    /** The rows whose sub-page is not built yet (默认音质, 字号, 主题色). */
-    val onComingSoon: () -> Unit = {},
 )
 
 /**
- * The "我的" tab: its page stack and everything a row opens. 深色模式 and an account row push a
- * page onto [nav]; the cache row asks first, because clearing it cannot be undone. State lives in
- * the caller (the stack, [ui], the account rows), so the host only decides which page is drawn.
+ * The "我的" tab: its page stack and everything a row opens. An account row pushes a page onto
+ * [nav]; 默认音质, 字号, 深色模式 and 主题色 are picked in a menu on the page itself and go straight
+ * to [actions]; the cache row asks first, because clearing it cannot be undone. State lives in the
+ * caller (the stack, [ui], the account rows), so the host only decides which page is drawn.
  */
 @Composable
 fun MeTab(
@@ -83,24 +92,23 @@ fun MeTab(
         onOpenAccount = { platform -> nav.push(meAccountKey(platform)) },
         onSetAutoSwitchSource = actions.onSetAutoSwitchSource,
         onSetRelaxDuration = actions.onSetRelaxDuration,
-        onOpenQuality = actions.onComingSoon,
+        onSetRecommendations = actions.onSetRecommendations,
+        onSelectLibraryLock = actions.onSelectLibraryLock,
+        onSelectQuality = actions.onSetDefaultQuality,
         onSetFollowCover = actions.onSetFollowCover,
         onSetShowTranslation = actions.onSetShowTranslation,
-        onOpenFontSize = actions.onComingSoon,
-        onOpenDarkMode = { nav.push(MeDarkModeKey) },
+        onSelectFontSize = actions.onSetLyricsFontSize,
+        onSetMediaCardLyrics = actions.onSetMediaCardLyrics,
+        onSelectThemeMode = actions.onSetThemeMode,
         onSetTransparency = actions.onSetTransparency,
-        onOpenAccent = actions.onComingSoon,
+        onSelectAccent = actions.onSetAccent,
+        onSetLocalArtwork = actions.onSetLocalArtwork,
+        onFillLocalArtwork = actions.onFillLocalArtwork,
         onClearCache = { askClear = true },
     )
     NavStackHost(nav, backEnabled = backEnabled) { key ->
         val platform = meAccountPlatform(key)
         when {
-            key == MeDarkModeKey -> DarkModePage(
-                selected = ui.appearance.themeMode,
-                onSelect = actions.onSetThemeMode,
-                onBack = { nav.pop() },
-                bottomInset = bottomInset,
-            )
             platform != null -> AccountDetailPage(
                 platform = platform,
                 row = accountRows.firstOrNull { it.platform == platform },
