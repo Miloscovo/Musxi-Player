@@ -9,6 +9,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Stable
+import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
@@ -197,9 +198,10 @@ internal fun PlayerCoverStack(
     probe: PlayerProbe,
     index: Int,
     current: CoverRef,
-    shown: Boolean,
+    /** Task 2: 0 on the cover page, 1 on the lyrics page, where the cover is the title bar's tile. */
+    lyricsT: State<Float>,
 ) {
-    val fade by animateFloatAsState(if (shown) 1f else 0f, Motion.enter(), label = "coverShown")
+    val fade = { lyricsT.value }
     val showNeighbours = progress.covering
     // Centred on the playing song, not on the anchor: the anchor trails the queue by one frame.
     for (i in index - 1..index + 1) {
@@ -210,7 +212,7 @@ internal fun PlayerCoverStack(
             else -> null
         } ?: continue
         if (i != index && !showNeighbours) continue
-        key(i) { CoverLayer(i, i == index, ref, progress, swipe, frame, probe) { fade } }
+        key(i) { CoverLayer(i, i == index, ref, progress, swipe, frame, probe, fade) }
     }
 }
 
@@ -223,7 +225,7 @@ private fun CoverLayer(
     swipe: CoverSwipe,
     frame: PlayerFrame,
     probe: PlayerProbe,
-    shownFade: () -> Float,
+    lyricsT: () -> Float,
 ) {
     val density = LocalDensity.current
     val miniRadius = MaterialTheme.shapes.medium.radiusPx(density)
@@ -238,7 +240,11 @@ private fun CoverLayer(
             .graphicsLayer {
                 val big = probe.coverOr(frame)
                 val pp = progress.p.value.coerceIn(0f, 1f)
-                val target = Rect(big.left, big.top, big.left + big.width, big.top + big.width)
+                val square = Rect(big.left, big.top, big.left + big.width, big.top + big.width)
+                // On the lyrics page the cover is not hidden: it flies into the title bar's tile.
+                val t = lyricsT().coerceIn(0f, 1f)
+                val tile = probe.tile ?: LyricsTransition.fallbackTile(square, LyricsTransition.TileSize.toPx())
+                val target = if (t > 0f) PlayerMotion.lerpRect(square, tile, t) else square
                 val rect = PlayerMotion.lerpRect(frame.miniCover, target, pp)
                 val scale = rect.width / big.width
                 transformOrigin = TransformOrigin(0f, 0f)
@@ -247,10 +253,11 @@ private fun CoverLayer(
                 val rel = if (isCurrent && !swipe.following()) 0 else i - swipe.anchor
                 translationX = rect.left + (rel * frame.slot + swipe.offset) * scale
                 translationY = rect.top
-                // Neighbours only show once the big cover is at rest size.
-                val own = PlayerMotion.coverAlpha(pp, shownFade())
-                alpha = if (isCurrent) own else own * ((pp - 0.9f) / 0.1f).coerceIn(0f, 1f)
-                shape = RoundedCornerShape(lerp(miniRadius, fullRadius, pp) / scale.coerceAtLeast(0.01f))
+                // Neighbours only show once the big cover is at rest size, and never beside the tile.
+                alpha = if (isCurrent) 1f
+                else ((pp - 0.9f) / 0.1f).coerceIn(0f, 1f) * LyricsTransition.neighbourAlpha(t)
+                val restRadius = lerp(fullRadius, miniRadius, t)
+                shape = RoundedCornerShape(lerp(miniRadius, restRadius, pp) / scale.coerceAtLeast(0.01f))
                 clip = true
             },
     ) {

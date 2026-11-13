@@ -33,6 +33,7 @@ import javax.net.ssl.HttpsURLConnection;
 public final class KugouApi {
     private static final String WEB_SALT = "NVPh5oo715z5DIWAeQlhMDsWXXQV4hwt";
     private static final String LITE_SALT = "LnT6xpN3khm36zse0QzvmgTZ3waWdRSA";
+    private static final String STANDARD_SALT = "OIlwieks28dk2k092lksi2UIkp";
     // Public protocol RSA key from util/crypto.js, not a private credential.
     private static final BigInteger RSA_MODULUS = new BigInteger(
         "c40a2d0da76511f3bb1cc2bbd3afbd8bea83b4d6b05b6c13eb8920c53f1af7679b32ba0d0edb843240ef1b836efed3ee240734c14c1399fd6594d16af22f52525d14d72e0155c6dcc8638d4f7bb94f3a0b1f4c29f991972f2a160a25eb0a9e724336be7f69bbd319ffab1c6dd8470b021dc434f3faba89f4a2a01b33bdbdd08b", 16);
@@ -122,11 +123,22 @@ public final class KugouApi {
     static final class Request {
         final String endpoint, body;
         final Map<String, String> params, headers;
+        final byte[] wireBody;
+        final KugouCloudProtocol cloud;
         Request(String endpoint, Map<String, String> params, String body, Map<String, String> headers) {
+            this(endpoint, params, body, headers, null, null);
+        }
+        Request(String endpoint, Map<String, String> params, String body, Map<String, String> headers,
+                byte[] wireBody, KugouCloudProtocol cloud) {
             this.endpoint = endpoint;
             this.params = Collections.unmodifiableMap(new LinkedHashMap<>(params));
             this.body = body;
             this.headers = Collections.unmodifiableMap(new LinkedHashMap<>(headers));
+            this.wireBody = wireBody == null ? null : wireBody.clone();
+            this.cloud = cloud;
+        }
+        String contentType() {
+            return cloud != null && wireBody == null ? "text/plain; charset=utf-8" : "application/json; charset=utf-8";
         }
     }
 
@@ -230,7 +242,7 @@ public final class KugouApi {
 
     JSONObject libraryCall(String path, Session session, Map<String, String> extra, String body, boolean audio) throws IOException {
         if (!java.util.Arrays.asList("/v7/get_all_list", "/v4/get_list_all_file", "/pubsongs/v2/get_other_list_file_nofilt",
-            "/v5/url", "/v3/search/song", "/cloudlist.service/v6/add_song", "/v4/delete_songs").contains(path)
+            "/v5/url", "/v3/search/song", "/cloudlist.service/v6/add_song", "/cloudlist.service/v5/add_list", "/v4/delete_songs").contains(path)
             || audio != "/v5/url".equals(path))
             throw error("endpoint", "Unsupported library endpoint");
         long time = now();
@@ -242,9 +254,67 @@ public final class KugouApi {
         Map<String, String> requestHeaders = headers(device, time);
         // This endpoint carries the gateway route in its path, as in the pinned upstream.
         // An x-router override sends the prefixed path to the service and returns HTTP 404.
-        if (!"/cloudlist.service/v6/add_song".equals(path) && !"/pubsongs/v2/get_other_list_file_nofilt".equals(path))
+        if (!"/cloudlist.service/v6/add_song".equals(path) && !"/cloudlist.service/v5/add_list".equals(path)
+            && !"/pubsongs/v2/get_other_list_file_nofilt".equals(path))
             requestHeaders.put("x-router", audio ? "trackercdn.kugou.com" : "/v3/search/song".equals(path) ? "complexsearch.kugou.com" : "cloudlist.service.kugou.com");
         return transport.execute(new Request("https://gateway.kugou.com" + path, params, body, requestHeaders));
+    }
+
+    /** Fixed cloudlist mutation profile, adapted from KuGouMusicApi 7ac64e1 util/request.js.
+     * Uses the same lite app identity as this account adapter, with PKCS1 portrait and binary CBC body. */
+    JSONObject renamePlaylist(Session session, JSONObject data) throws IOException {
+        if (session == null || data == null || data.length() != 7 ||
+            !data.has("listid") || !data.has("total_ver") || !data.has("sort") ||
+            !data.has("tags") || !data.has("intro") || !data.has("name") ||
+            !Integer.valueOf(0).equals(data.opt("type"))) throw error("request", "Invalid playlist edit");
+        if (!cloudInteger(data.opt("listid"), false) || !cloudInteger(data.opt("total_ver"), true) ||
+            !cloudInteger(data.opt("sort"), true) || !(data.opt("name") instanceof String) ||
+            !(data.opt("tags") instanceof String) || !(data.opt("intro") instanceof String))
+            throw error("request", "Invalid playlist edit");
+        String name = (String)data.opt("name");
+        if (name.trim().isEmpty() || name.codePointCount(0, name.length()) > 80 ||
+            name.codePoints().anyMatch(cp -> Character.isISOControl(cp) || (cp >= 0xD800 && cp <= 0xDFFF)) ||
+            ((String)data.opt("tags")).length() > 4096 || ((String)data.opt("intro")).length() > 16384)
+            throw error("request", "Invalid playlist edit");
+        long time = now();
+        KugouCloudProtocol cloud = KugouCloudProtocol.create();
+        Map<String,String> params = new LinkedHashMap<>();
+        params.put("appid", "3116"); params.put("clientver", "11440"); params.put("mid", device.mid);
+        params.put("dfid", "-"); params.put("clienttime", String.valueOf(time));
+        params.put("key", KugouCloudProtocol.signature(time)); params.put("p", cloud.portrait(session));
+        Map<String,String> requestHeaders = headers(device, time);
+        requestHeaders.put("x-router", "cloudlist.service.kugou.com");
+        return transport.execute(new Request("https://gateway.kugou.com/v1/modify_list", params, null,
+            requestHeaders, cloud.encrypt(data.toString()), cloud));
+    }
+
+    private static boolean cloudInteger(Object value, boolean allowZero) {
+        if (!(value instanceof Integer) && !(value instanceof Long)) return false;
+        long number = ((Number)value).longValue();
+        return number >= (allowZero ? 0 : 1) && number <= 9_007_199_254_740_991L;
+    }
+
+    /** Fixed playlist_del.js profile, confirmed on an owned non-empty list on 2026-11-13.
+     * The Base64 text participates in the Android signature; rename's binary profile is separate.
+     * The caller must prove current ownership. No retries or configurable type/version/endpoint. */
+    JSONObject deletePlaylist(Session session, long playlistId, java.util.function.BooleanSupplier current) throws IOException {
+        if (session == null || current == null) throw error("credentials", "请先完成官方登录确认");
+        if (!cloudInteger(playlistId, false)) throw error("request", "Invalid playlist deletion");
+        long time = now();
+        KugouCloudProtocol cloud = KugouCloudProtocol.createForDeletion();
+        String clear = "{\"listid\":" + playlistId + ",\"total_ver\":0,\"type\":1}";
+        String body = java.util.Base64.getEncoder().encodeToString(cloud.encrypt(clear));
+        Map<String,String> params = defaults(device, time);
+        params.put("userid", session.userId); params.put("token", session.token);
+        params.put("last_area", "gztx"); params.put("last_time", String.valueOf(time));
+        params.put("key", KugouCloudProtocol.signature(time)); params.put("p", cloud.portrait(session));
+        params.put("signature", androidSignature(params, body));
+        Map<String,String> requestHeaders = headers(device, time);
+        requestHeaders.put("x-router", "cloudlist.service.kugou.com");
+        if (!current.getAsBoolean() || Thread.currentThread().isInterrupted())
+            throw error("account_changed", "账号已变化，请刷新后重试");
+        return transport.execute(new Request("https://gateway.kugou.com/v2/delete_list", params, body,
+            requestHeaders, null, cloud));
     }
 
     JSONObject collectionCall(Session session, boolean artist, String id, int page, int limit) throws IOException {
@@ -318,6 +388,36 @@ public final class KugouApi {
         StringBuilder text = new StringBuilder(LITE_SALT);
         for (String key : keys) text.append(key).append('=').append(params.get(key));
         return md5(text.append(body == null ? "" : body).append(LITE_SALT).toString());
+    }
+
+    /** Standard (non-lite) Android signature salt, as in util/helper.js#signatureAndroidParams. */
+    static String standardSignature(Map<String, String> params, String body) {
+        List<String> keys = new ArrayList<>(params.keySet());
+        Collections.sort(keys);
+        StringBuilder text = new StringBuilder(STANDARD_SALT);
+        for (String key : keys) text.append(key).append('=').append(params.get(key));
+        return md5(text.append(body == null ? "" : body).append(STANDARD_SALT).toString());
+    }
+
+    /**
+     * Fixed standard-app daily recommendation profile, adapted from KuGouMusicApi a5a98013
+     * module/recommend_songs.js (POST /everyday_song_recommend, standard appid/clientver,
+     * x-router everydayrec.service.kugou.com). Read-only; the body carries no new data.
+     */
+    JSONObject dailyRecommendCall(Session session) throws IOException {
+        if (session == null) throw error("credentials", "请先完成官方登录确认");
+        long time = now();
+        Map<String, String> params = new LinkedHashMap<>();
+        params.put("dfid", "-"); params.put("mid", device.mid); params.put("uuid", "-");
+        params.put("appid", "1005"); params.put("clientver", "20489");
+        params.put("clienttime", String.valueOf(time));
+        params.put("userid", session.userId); params.put("token", session.token);
+        String body = "{\"platform\":\"android\",\"userid\":" + JSONObject.quote(session.userId) + "}";
+        params.put("signature", standardSignature(params, body));
+        Map<String, String> requestHeaders = headers(device, time);
+        requestHeaders.put("x-router", "everydayrec.service.kugou.com");
+        return transport.execute(new Request("https://gateway.kugou.com/everyday_song_recommend",
+            params, body, requestHeaders));
     }
 
     static Request createRequest(Device device, long time) {
@@ -576,11 +676,11 @@ public final class KugouApi {
             connection.setRequestProperty("Accept-Encoding", "identity");
             for (Map.Entry<String, String> header : request.headers.entrySet())
                 connection.setRequestProperty(header.getKey(), header.getValue());
-            if (request.body != null) {
+            if (request.body != null || request.wireBody != null) {
                 connection.setRequestMethod("POST");
                 connection.setDoOutput(true);
-                connection.setRequestProperty("Content-Type", "application/json; charset=utf-8");
-                byte[] body = request.body.getBytes(StandardCharsets.UTF_8);
+                connection.setRequestProperty("Content-Type", request.contentType());
+                byte[] body = request.wireBody != null ? request.wireBody : request.body.getBytes(StandardCharsets.UTF_8);
                 connection.setFixedLengthStreamingMode(body.length);
                 try (OutputStream out = connection.getOutputStream()) { out.write(body); }
             }
@@ -612,7 +712,8 @@ public final class KugouApi {
                     if (count > responseLimit - out.size()) throw new ApiException("protocol", "酷狗响应超过验证程序限制", lyricsRequest ? "lyrics_transport_limit" : null);
                     out.write(chunk, 0, count);
                 }
-                body = new String(out.toByteArray(), StandardCharsets.UTF_8);
+                body = request.cloud == null ? new String(out.toByteArray(), StandardCharsets.UTF_8)
+                    : request.cloud.decode(out.toByteArray());
             }
             try { return new JSONObject(body); }
             catch (JSONException malformed) {
@@ -640,14 +741,16 @@ public final class KugouApi {
         boolean profile = "gateway.kugou.com".equals(url.getHost()) && "/v3/get_my_info".equals(url.getPath());
         boolean library = "gateway.kugou.com".equals(url.getHost()) && java.util.Arrays.asList(
             "/v7/get_all_list", "/v4/get_list_all_file", "/pubsongs/v2/get_other_list_file_nofilt",
-            "/v5/url", "/v3/search/song", "/cloudlist.service/v6/add_song", "/v4/delete_songs").contains(url.getPath());
+            "/v5/url", "/v3/search/song", "/cloudlist.service/v6/add_song", "/cloudlist.service/v5/add_list",
+            "/v4/delete_songs", "/v1/modify_list", "/v2/delete_list").contains(url.getPath());
         boolean membership = "kugouvip.kugou.com".equals(url.getHost())
             && "/v1/get_union_vip".equals(url.getPath());
         boolean collection = ("openapi.kugou.com".equals(url.getHost()) && "/kmr/v1/audio_group/author".equals(url.getPath())) ||
             ("gateway.kugou.com".equals(url.getHost()) && "/v1/album_audio/lite".equals(url.getPath()));
+        boolean everyday = "gateway.kugou.com".equals(url.getHost()) && "/everyday_song_recommend".equals(url.getPath());
         boolean lyrics = "lyrics.kugou.com".equals(url.getHost()) &&
             java.util.Arrays.asList("/search", "/download").contains(url.getPath());
-        if (!"https".equals(url.getProtocol()) || (!login && !profile && !library && !membership && !lyrics && !collection)
+        if (!"https".equals(url.getProtocol()) || (!login && !profile && !library && !membership && !lyrics && !collection && !everyday)
             || url.getUserInfo() != null || (url.getPort() != -1 && url.getPort() != 443) || url.getRef() != null)
             throw error("endpoint", "请求目标不在允许的酷狗官方接口范围内");
     }

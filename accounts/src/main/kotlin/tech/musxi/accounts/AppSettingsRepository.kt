@@ -23,6 +23,12 @@ class AppSettingsRepository(
     context: Context,
     settingsPreferencesName: String = "musxi-settings-v1",
     legacyPreferencesName: String = "playback-preferences-v1",
+    /**
+     * Synchronous notification for the recommendation master switch. Called inside
+     * [commandLock] only after the write was persisted and only when the value changed, so
+     * listeners see every transition (including fast off/on) without relying on Flow delivery.
+     */
+    private val onRecommendationsEnabledChanged: (Boolean) -> Unit = {},
 ) {
     private val commandLock = Any()
     private val preferences = context.applicationContext.getSharedPreferences(
@@ -39,8 +45,12 @@ class AppSettingsRepository(
 
     val settings: StateFlow<AppSettings> = core.settings
 
-    fun update(transform: (AppSettings) -> AppSettings): AppSettings =
-        synchronized(commandLock) { core.update(transform) }
+    fun update(transform: (AppSettings) -> AppSettings): AppSettings = synchronized(commandLock) {
+        val previous = core.settings.value.recommendationsEnabled
+        val updated = core.update(transform)
+        notifyRecommendationsEnabledChange(previous, updated)
+        updated
+    }
 
     fun setThemeMode(value: ThemeMode): AppSettings =
         synchronized(commandLock) { core.setThemeMode(value) }
@@ -66,6 +76,28 @@ class AppSettingsRepository(
     fun setLyricsTranslationPreference(value: LyricsTranslationPreference): AppSettings =
         synchronized(commandLock) { core.setLyricsTranslationPreference(value) }
 
+    /** Stores the accent name; see [CoreAppSettingsRepository.setAccent] for the accepted shape. */
+    fun setAccent(value: String): AppSettings =
+        synchronized(commandLock) { core.setAccent(value) }
+
+    fun setMediaCardLyrics(value: Boolean): AppSettings =
+        synchronized(commandLock) { core.setMediaCardLyrics(value) }
+
+    fun setLockScreenLyricsMode(value: tech.musxi.core.settings.LockScreenLyricsMode): AppSettings =
+        synchronized(commandLock) { core.setLockScreenLyricsMode(value) }
+
+    /** Stores the local artwork policy; see [CoreAppSettingsRepository.setLocalArtworkMode]. */
+    fun setLocalArtworkMode(value: String): AppSettings =
+        synchronized(commandLock) { core.setLocalArtworkMode(value) }
+
+    fun setRecommendationsEnabled(value: Boolean): AppSettings =
+        synchronized(commandLock) {
+            val previous = core.settings.value.recommendationsEnabled
+            val updated = core.setRecommendationsEnabled(value)
+            notifyRecommendationsEnabledChange(previous, updated)
+            updated
+        }
+
     /**
      * Copies AccountRepository's former quality.default into the unified snapshot once.
      * The current state already falls back to this value before migration is invoked.
@@ -87,7 +119,13 @@ class AppSettingsRepository(
     ) : AppSettingsPersistence {
         override fun load(): AppSettings? {
             val values = preferences.all.mapNotNull { (key, value) ->
-                if (key in AppSettingsPersistenceFormat.keys && value is String) key to value else null
+                when {
+                    key !in AppSettingsPersistenceFormat.keys -> null
+                    value is String -> key to value
+                    // A present but malformed new mode must not revive the legacy card flag.
+                    key == AppSettingsPersistenceFormat.LOCK_SCREEN_LYRICS_MODE -> key to ""
+                    else -> null
+                }
             }.toMap()
             val legacyQuality = legacyPreferences.getString(LEGACY_DEFAULT_QUALITY, null)
             if (values.isEmpty() && legacyQuality == null) return null
@@ -104,5 +142,11 @@ class AppSettingsRepository(
 
     private companion object {
         const val LEGACY_DEFAULT_QUALITY = "quality.default"
+    }
+
+    private fun notifyRecommendationsEnabledChange(previous: Boolean, updated: AppSettings) {
+        if (updated.recommendationsEnabled != previous) {
+            onRecommendationsEnabledChanged(updated.recommendationsEnabled)
+        }
     }
 }

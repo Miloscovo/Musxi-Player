@@ -2,10 +2,16 @@ package tech.musxi.player.ui.shell
 
 import androidx.activity.OnBackPressedDispatcher
 import androidx.activity.compose.LocalOnBackPressedDispatcherOwner
+import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.hasAnyAncestor
+import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.isPopup
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.unit.dp
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -20,6 +26,8 @@ import tech.musxi.core.account.Platform
 import tech.musxi.core.cache.CacheKind
 import tech.musxi.core.cache.CacheOperationResult
 import tech.musxi.core.cache.CacheUsage
+import tech.musxi.core.playback.PreferredAudioQuality
+import tech.musxi.core.settings.LyricsFontSize
 import tech.musxi.core.settings.ThemeMode
 import tech.musxi.player.design.DesignTestApplication
 import tech.musxi.player.ui.account.AboutUpdateUi
@@ -30,12 +38,14 @@ import tech.musxi.player.ui.design.meCommonAccountStates
 import tech.musxi.player.ui.design.meSampleUi
 import tech.musxi.player.ui.nav.NavStackState
 import tech.musxi.player.ui.nav.rememberNavStackState
+import tech.musxi.player.ui.theme.Accent
 import tech.musxi.player.ui.theme.MusxiTheme
 
 /**
  * What the "我的" tab does when touched: which rows push a page onto its stack, which callback each
- * switch reaches, that clearing the cache asks first, and that the three rows whose page is not
- * built yet only say so. The window is tall enough to hold the whole page, so nothing scrolls.
+ * switch and picker reaches, and that clearing the cache asks first. The four pickers open a menu
+ * on the page, never a page of their own. The window is tall enough to hold the whole page, so
+ * nothing scrolls.
  */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -82,32 +92,60 @@ class MeTabTest {
         compose.waitForIdle()
     }
 
-    // --- rows that open a page ------------------------------------------------------------------
+    private fun click(matcher: SemanticsMatcher) {
+        compose.onNode(matcher).performClick()
+        compose.waitForIdle()
+    }
 
-    @Test fun theDarkModeRowPushesThePickerAndReportsTheChoice() {
+    // --- picker menus --------------------------------------------------------------------------
+
+    /** A choice in the open menu; the row on the page shows the chosen word too, so it is matched by its popup. */
+    private fun pick(label: String) = click(hasText(label) and hasAnyAncestor(isPopup()))
+
+    @Test fun theDarkModeRowOpensAMenuAndReportsTheChoice() {
         val picked = mutableListOf<ThemeMode>()
         setTab(MeTabActions(onSetThemeMode = { picked += it }))
         assertEquals(1, nav.depth)
 
-        click("深色模式")
-        assertEquals(listOf(MeRootKey, MeDarkModeKey), nav.stack.keys)
-
         // The sample is on "跟随系统": picking it again is not a change, picking the others is.
-        click("跟随系统")
-        click("深色")
-        click("浅色")
+        for (label in listOf("跟随系统", "深色", "浅色")) {
+            click("深色模式")
+            pick(label)
+            compose.onAllNodes(isPopup()).assertCountEquals(0)
+        }
         assertEquals(listOf(ThemeMode.DARK, ThemeMode.LIGHT), picked)
-        assertEquals("choosing must not close the picker", 2, nav.depth)
+        assertEquals("no page is pushed for a picker", listOf(MeRootKey), nav.stack.keys)
     }
 
-    @Test fun backFromAPickerReturnsToThePage() {
+    @Test fun qualityFontSizeAndAccentReachTheirCallbacks() {
+        val seen = mutableListOf<Any>()
+        setTab(
+            MeTabActions(
+                onSetDefaultQuality = { seen += it },
+                onSetLyricsFontSize = { seen += it },
+                onSetAccent = { seen += it },
+            ),
+        )
+        click("默认音质")
+        pick("最高")
+        click("字号")
+        pick("大")
+        click("主题色")
+        pick(Accent.TEAL.label)
+        assertEquals(listOf(PreferredAudioQuality.BEST, LyricsFontSize.LARGE, Accent.TEAL), seen)
+        assertEquals("no page is pushed for a picker", 1, nav.depth)
+    }
+
+    // --- rows that open a page ------------------------------------------------------------------
+
+    @Test fun backFromAnAccountPageReturnsToThePage() {
         setTab()
-        click("深色模式")
+        click("酷狗")
         compose.onNodeWithContentDescription("返回").performClick()
         compose.waitForIdle()
         assertEquals(1, nav.depth)
 
-        click("深色模式")
+        click("酷狗")
         compose.runOnIdle { dispatcher!!.onBackPressed() }
         compose.waitForIdle()
         assertEquals("system back pops the sub-page", 1, nav.depth)
@@ -177,22 +215,13 @@ class MeTabTest {
         )
     }
 
-    // --- rows whose page is not built yet -------------------------------------------------------
-
-    @Test fun qualityFontSizeAndAccentOnlySayComingSoon() {
-        var soon = 0
-        setTab(MeTabActions(onComingSoon = { soon++ }))
-        for (title in listOf("默认音质", "字号", "主题色")) click(title)
-        assertEquals(3, soon)
-        assertEquals("no page is pushed for them", 1, nav.depth)
-    }
-
     // --- cache ----------------------------------------------------------------------------------
 
     @Test fun clearingTheCacheAsksFirstAndCancelLeavesItAlone() {
         var cleared = 0
         setTab(MeTabActions(onClearCache = { cleared++ }))
 
+        compose.onNodeWithText("缓存").performScrollTo()
         click("缓存")
         compose.onNodeWithText("清除缓存？").assertExists()
         assertEquals("tapping the row only asks", 0, cleared)
@@ -201,6 +230,7 @@ class MeTabTest {
         compose.onNodeWithText("清除缓存？").assertDoesNotExist()
         assertEquals(0, cleared)
 
+        compose.onNodeWithText("缓存").performScrollTo()
         click("缓存")
         click("清除")
         compose.onNodeWithText("清除缓存？").assertDoesNotExist()
@@ -214,7 +244,6 @@ class MeTabTest {
             assertEquals(platform, meAccountPlatform(meAccountKey(platform)))
         }
         assertNull(meAccountPlatform(MeRootKey))
-        assertNull(meAccountPlatform(MeDarkModeKey))
         assertNull(meAccountPlatform("me/account/WEIBO"))
     }
 

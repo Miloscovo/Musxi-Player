@@ -8,6 +8,9 @@ enum class QueueInsertAt { HEAD, TAIL }
 /** One in-process payload, never a large Binder bundle. Latest intent wins before dispatch. */
 internal class QueueCommandMailbox {
     sealed interface Action {
+        class LocalReplace(val queue: LocalAudioPlaybackQueue, val playWhenReady: Boolean = true) : Action
+        class LocalJump(val index: Int, val expectedRevision: Long, val fromStart: Boolean = false) : Action
+        class LocalEdit(val expectedRevision: Long, val edit: tech.musxi.core.playback.QueueEdit) : Action
         class Replace(val queue: PlaybackQueue, val positionMs: Long = 0, val playWhenReady: Boolean = true,
             val repeatMode: String? = null, val shuffleEnabled: Boolean? = null) : Action
         data object Clear : Action

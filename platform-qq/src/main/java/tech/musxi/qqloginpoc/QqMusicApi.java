@@ -328,11 +328,18 @@ public final class QqMusicApi {
         return new Membership(-1, null, null);
     }
 
-    // Package-private bounded music surface. Writes are one-song AddSonglist plus favorite add/delete.
+    // Package-private bounded music surface. Writes are one-song AddSonglist/DelSonglist for
+    // owned lists, favorite add/delete on the 201 alias, empty playlists, and bounded metadata edits.
+    // Whole-directory deletion is deliberately not part of this generic surface; it has its own
+    // typed entry point below so no caller can assemble a DelPlaylist payload by hand.
     JSONObject library(Session session, String module, String method, JSONObject param) throws IOException {
         String endpoint = module + ":" + method;
         boolean favoriteWrite = favoriteWrite(module, method, param);
-        if (session == null || (!favoriteWrite && !java.util.Arrays.asList(
+        boolean createWrite = playlistCreate(module, method, param);
+        boolean followWrite = playlistFollow(session, module, method, param);
+        boolean renameWrite = playlistRename(module, method, param);
+        boolean editRead = playlistEditRead(module, method, param);
+        if (session == null || (!favoriteWrite && !createWrite && !followWrite && !renameWrite && !editRead && !java.util.Arrays.asList(
             "music.musicasset.PlaylistBaseRead:GetPlaylistByUin",
             "music.musicasset.PlaylistFavRead:CgiGetPlaylistFavInfo",
             "music.srfDissInfo.DissInfo:CgiGetDiss",
@@ -340,11 +347,58 @@ public final class QqMusicApi {
             "music.musichallAlbum.AlbumSongList:GetAlbumSongList",
             "music.search.SearchCgiService:DoSearchForQQMusicMobile",
             "music.pf_song_detail_svr:get_song_detail_yqq",
+            "music.radioProxy.MbTrackRadioSvr:get_radio_track",
             "music.musichallSong.PlayLyricInfo:GetPlayLyricInfo",
             "music.vkey.GetVkey:UrlGetVkey",
             "music.audioCdnDispatch.cdnDispatch:GetCdnDispatch").contains(endpoint)))
             throw error("endpoint", "Unsupported music operation");
         return cgi(module, method, param, session, 4 * 1024 * 1024);
+    }
+    /** Official playlist_edit/common scripts: own-directory metadata, not a public tid lookup. */
+    private static boolean playlistEditRead(String module, String method, JSONObject param) {
+        return "music.srfDissInfo.aiDissInfo".equals(module) && "uniform_get_Dissinfo".equals(method) &&
+            param != null && param.length() == 5 && ordinaryDirectory(param.opt("dirid")) &&
+            integer(param.opt("optype"),3,3) && integer(param.opt("tag"),1,1) &&
+            integer(param.opt("userinfo"),0,0) && integer(param.opt("pic_dpi"),300,300);
+    }
+    /** Keep the official complete edit shape and constant mask; no inferred name-only bit mask. */
+    private static boolean playlistRename(String module, String method, JSONObject param) {
+        if (!"music.musicasset.PlaylistBaseWrite".equals(module) || !"EditPlaylist".equals(method) ||
+            param == null || param.length() != 8 || !ordinaryDirectory(param.opt("dirId")) ||
+            !integer(param.opt("mask"),95,95) || !integer(param.opt("dirShow"),0,2)) return false;
+        Object name = param.opt("dirNewName"), desc = param.opt("dirNewDesc"),
+            cover = param.opt("dirNewPicUrl"), cover2 = param.opt("dirNewPicUrl2"), tags = param.opt("dirNewtaglist");
+        return name instanceof String && !((String)name).trim().isEmpty() &&
+            ((String)name).length() <= 20 &&
+            ((String)name).codePoints().noneMatch(cp -> Character.isISOControl(cp) || (cp>=0xD800 && cp<=0xDFFF)) &&
+            desc instanceof String && ((String)desc).length() <= 2000 &&
+            cover instanceof String && ((String)cover).length() <= 8192 &&
+            cover2 instanceof String && ((String)cover2).length() <= 8192 &&
+            tags instanceof String && ((String)tags).length() <= 4096 &&
+            ((String)tags).matches("(?:[0-9]{1,7}(?:,[0-9]{1,7})*)?");
+    }
+    private static boolean ordinaryDirectory(Object value) {
+        // The official editor treats directory 0 as the create branch, never an edit target.
+        return integer(value,1,1_000_000) && !systemDir(value);
+    }
+    /** Pinned songlist.create: exactly one non-blank dirName and nothing else. */
+    private static boolean playlistCreate(String module, String method, JSONObject param) {
+        if (!"music.musicasset.PlaylistBaseWrite".equals(module) || !"AddPlaylist".equals(method) ||
+            param == null || param.length() != 1) return false;
+        Object name = param.opt("dirName");
+        if (!(name instanceof String)) return false;
+        String trimmed = ((String)name).trim();
+        return !trimmed.isEmpty() && trimmed.codePointCount(0, trimmed.length()) <= 80 &&
+            ((String)name).codePoints().noneMatch(cp -> Character.isISOControl(cp) || (cp>=0xD800 && cp<=0xDFFF));
+    }
+    /** Pinned songlist.delete (QQMusicApi 0.8.1 modules/songlist.py): DelPlaylist on
+     * PlaylistBaseWrite with exactly one ordinary numeric dirId and the normal authenticated web
+     * envelope. The payload is built here instead of being accepted from callers, DelSonglist is a
+     * different method that only removes songs, and the 201..209 account directories never pass. */
+    JSONObject deletePlaylist(Session session, int dirId) throws IOException {
+        if (session == null || dirId < 1 || dirId > 1_000_000 || systemDir(dirId))
+            throw error("endpoint", "Unsupported music operation");
+        return cgi("music.musicasset.PlaylistBaseWrite", "DelPlaylist", object("dirId", dirId), session);
     }
     private static boolean favoriteWrite(String module, String method, JSONObject param) {
         if (!"music.musicasset.PlaylistDetailWrite".equals(module) ||
@@ -354,13 +408,19 @@ public final class QqMusicApi {
         JSONArray songs = param.optJSONArray("v_songInfo");
         if (!Boolean.TRUE.equals(utf8) || songs == null || songs.length() != 1) return false;
         boolean favorite = integer(dirId, 201, 201) && integer(tid, 0, 0);
-        boolean ownedAdd = "AddSonglist".equals(method) &&
-            integer(dirId, 0, 0) && integer(tid, 1, 9_007_199_254_740_991L);
-        if (!favorite && !ownedAdd) return false;
+        // The server assigns a created list's directory; device evidence shows ordinary lists at
+        // dirId 1 and 2, so any non-system directory is accepted. 201..209 stay reserved for the
+        // account system directories (liked/Qzone/uploads) and never reach an ordinary write.
+        boolean ownedWrite = integer(dirId, 0, 1_000_000) && !systemDir(dirId) &&
+            integer(tid, 1, 9_007_199_254_740_991L);
+        if (!favorite && !ownedWrite) return false;
         JSONObject song = songs.optJSONObject(0);
         if (song == null || song.length() != 2) return false;
         Object songId = song.opt("songId"), songType = song.opt("songType");
         return integer(songId, 1, 9_007_199_254_740_991L) && integer(songType, 0, 1_000_000);
+    }
+    private static boolean systemDir(Object dirId) {
+        return integer(dirId, 201, 209);
     }
     private static boolean integer(Object value, long minimum, long maximum) {
         if (!(value instanceof Number)) return false;
@@ -369,6 +429,21 @@ public final class QqMusicApi {
         long number;
         try { number = Long.parseLong(raw); } catch (NumberFormatException invalid) { return false; }
         return number >= minimum && number <= maximum;
+    }
+    /** Official y.qq.com module music.musicasset.PlaylistFavWrite keeps exactly one numeric playlist
+     * id and the session's own numeric uin (common.js reads cookie "uin", not the encrypted uin):
+     * param {uin:<own uin>, v_playlistId:[<tid>]}. Only that shape is forwarded; nothing else about
+     * the payload, and no other method of the module, is accepted. */
+    private static boolean playlistFollow(Session session, String module, String method, JSONObject param) {
+        if (session == null || !"music.musicasset.PlaylistFavWrite".equals(module) ||
+            !("FavPlaylist".equals(method) || "CancelFavPlaylist".equals(method)) ||
+            param == null || param.length() != 2) return false;
+        Object uin = param.opt("uin");
+        if (!(uin instanceof String) || !session.musicId.equals(uin)) return false;
+        Object raw = param.opt("v_playlistId");
+        if (!(raw instanceof JSONArray)) return false;
+        JSONArray ids = (JSONArray) raw;
+        return ids.length() == 1 && integer(ids.opt(0), 1, 9_007_199_254_740_991L);
     }
     String encryptedUin(Session session) { return scalar(session.credential, "encryptUin"); }
     private JSONObject cgi(String module, String method, JSONObject param, Session session) throws IOException {
@@ -387,9 +462,9 @@ public final class QqMusicApi {
             String type = scalar(session.credential, "loginType");
             if (!type.isEmpty()) put(comm, "tmeLoginType", type);
         }
-        // Upstream song detail explicitly selects WEB; favorites write uses the
-        // default Android profile. Keep this change confined to the single-song
-        // 201 write exception rather than changing already-verified read calls.
+        // Upstream song detail explicitly selects WEB; one-song playlist writes use
+        // the default Android profile. Keep this change confined to the fixed
+        // PlaylistDetailWrite exceptions rather than changing verified read calls.
         if (favoriteWrite(module, method, param)) {
             comm = object("ct", "11", "cv", "20090008", "v", "20090008", "chid", "10003505",
                 "qq", session.musicId, "authst", key, "tmeAppID", "qqmusic",

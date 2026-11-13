@@ -9,17 +9,20 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
+import tech.musxi.core.playback.PreferredAudioQuality
+import tech.musxi.core.settings.LyricsFontSize
+import tech.musxi.core.settings.ThemeMode as StoredThemeMode
 import tech.musxi.player.ui.design.LargeFontBatch
 import tech.musxi.player.ui.design.MeAccountsSheet
-import tech.musxi.player.ui.design.MeDarkModeSheet
 import tech.musxi.player.ui.design.MeSheet
+import tech.musxi.player.ui.design.meSampleUi
 import tech.musxi.player.ui.theme.Accent
 import tech.musxi.player.ui.theme.ThemeMode
 import java.io.File
 
 /**
  * The "我的" page on fake data: the whole page in both brightnesses, the account card with three
- * different states, the dark-mode sub-page and the page at font scale 2.0. The page is a long
+ * different states, the picker rows with chosen values and the page at font scale 2.0. The page is a long
  * scroll, so the window is made tall enough to hold all of it; rows have no fixed height, which the
  * 200% sheet is there to prove.
  */
@@ -54,9 +57,22 @@ class MeSheetTest {
         MeAccountsSheet(Accent.MIST, ThemeMode.LIGHT, common = true)
     }
 
-    @Test @Config(qualifiers = "w360dp-h800dp-xhdpi")
-    fun darkModePage() = capture("me_dark_mode_page_light", dark = false, minCard = 0.08f) {
-        MeDarkModeSheet(Accent.MIST, ThemeMode.LIGHT)
+    /**
+     * The four picker rows with values other than the defaults, in place of the old dark-mode page:
+     * each row shows its value without a chevron, and the 主题色 dot takes the chosen accent. Their
+     * menus are a popup window, which only a screen capture includes (MePickerTest).
+     */
+    @Test
+    fun pickerValues() = capture("me_page_picker_values_light", dark = false) {
+        val sample = meSampleUi(Accent.TEAL)
+        MeSheet(
+            Accent.TEAL, ThemeMode.LIGHT,
+            sample.copy(
+                playback = sample.playback.copy(quality = PreferredAudioQuality.LOSSLESS),
+                lyrics = sample.lyrics.copy(fontSize = LyricsFontSize.LARGE),
+                appearance = sample.appearance.copy(themeMode = StoredThemeMode.LIGHT),
+            ),
+        )
     }
 
     @Test @Config(qualifiers = "w360dp-h2200dp-xhdpi")

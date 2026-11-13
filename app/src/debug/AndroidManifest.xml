@@ -1,9 +1,13 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android" xmlns:tools="http://schemas.android.com/tools">
     <application android:name="tech.musxi.player.DebugMusxiApplication" tools:replace="android:name">
+        <activity android:name="tech.musxi.player.LockScreenPageProbeActivity" android:exported="false"
+            android:launchMode="singleTask" android:taskAffinity="${applicationId}.lockscreen"
+            android:excludeFromRecents="true" android:showWhenLocked="true" />
         <!-- Fixed-step developer page. Debug only: the release manifest must carry no validation entry. -->
         <activity android:name="tech.musxi.player.DeveloperActivity" android:exported="false" android:launchMode="singleTask"
             android:windowSoftInputMode="adjustResize" />
         <activity android:name="tech.musxi.player.ValidationFocusActivity" android:exported="false" />
+        <activity android:name="tech.musxi.player.LocalAudioPickerValidationActivity" android:exported="false" />
         <activity android:name="tech.musxi.player.QqWebLoginValidationActivity" android:exported="false" />
         <activity android:name="tech.musxi.player.KugouWebLoginValidationActivity" android:exported="false" />
         <activity android:name="tech.musxi.player.GlassPreviewActivity" android:exported="false"

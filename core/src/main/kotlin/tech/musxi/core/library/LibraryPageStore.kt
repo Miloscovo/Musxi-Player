@@ -27,6 +27,12 @@ interface LibraryPageStore {
         return pages
     }
     fun writeTracks(owner: String, playlist: MediaKey, offset: Int, value: SavedLibraryPage<SongSummary>)
+    /** Filling must not evict earlier pages just to fit a new page. False leaves this collection intact. */
+    fun writeTracksRetainingPages(owner: String, playlist: MediaKey, offset: Int,
+        value: SavedLibraryPage<SongSummary>): Boolean {
+        writeTracks(owner, playlist, offset, value)
+        return true
+    }
     /** Erase all metadata, including other owners. Failure must be observable to disconnect. */
     fun clear()
 }

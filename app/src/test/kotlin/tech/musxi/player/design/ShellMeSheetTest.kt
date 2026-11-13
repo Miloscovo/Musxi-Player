@@ -1,11 +1,20 @@
 package tech.musxi.player.design
 
 import android.graphics.BitmapFactory
+import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.hasAnyAncestor
+import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.isPopup
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
+import androidx.compose.ui.test.performClick
+import com.github.takahirom.roborazzi.ExperimentalRoborazziApi
+import com.github.takahirom.roborazzi.RoborazziOptions
+import com.github.takahirom.roborazzi.RoborazziTaskType
 import com.github.takahirom.roborazzi.captureRoboImage
+import com.github.takahirom.roborazzi.captureScreenRoboImage
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -25,8 +34,8 @@ import tech.musxi.player.ui.theme.ThemeMode
 import java.io.File
 
 /**
- * The "我的" tab inside the shell: the real page, the dark-mode picker after it has been pushed, and a
- * platform's account page, each over the dock. Every shot first asserts through the semantics tree
+ * The "我的" tab inside the shell: the real page, the dark-mode menu opened on it, and a platform's
+ * account page, each over the dock. Every shot first asserts through the semantics tree
  * that the page it names is the one on screen, so a picture of the wrong state fails instead of
  * being filed as evidence. Under Robolectric the glass draws its solid fallback, which is expected.
  */
@@ -49,15 +58,18 @@ class ShellMeSheetTest {
         compose.onNodeWithText("关于").assertExists()
     }
 
-    // --- 深色模式 pushed -------------------------------------------------------------------------
+    // --- 深色模式 menu --------------------------------------------------------------------------
 
-    @Test fun darkModePushed() = shot("shell_me_dark_mode_light", ThemeMode.LIGHT, ShellMePage.DARK_MODE) {
-        onDarkModePage()
-    }
+    /** Tall window, so the 外观 card sits above the dock and the menu opens beside its row on the page. */
+    @Test @Config(qualifiers = "w360dp-h1500dp-xhdpi")
+    fun darkModeMenu() = shot(
+        "shell_me_dark_mode_menu_light", ThemeMode.LIGHT, ShellMePage.ROOT, openRow = "深色模式",
+    ) { onDarkModeMenu() }
 
-    @Test fun darkModePushedDark() = shot("shell_me_dark_mode_dark", ThemeMode.DARK, ShellMePage.DARK_MODE) {
-        onDarkModePage()
-    }
+    @Test @Config(qualifiers = "w360dp-h1500dp-xhdpi")
+    fun darkModeMenuDark() = shot(
+        "shell_me_dark_mode_menu_dark", ThemeMode.DARK, ShellMePage.ROOT, openRow = "深色模式",
+    ) { onDarkModeMenu() }
 
     // --- a platform's page ----------------------------------------------------------------------
 
@@ -97,17 +109,19 @@ class ShellMeSheetTest {
         compose.onNodeWithText("曲库").assertExists()
     }
 
-    private fun onDarkModePage() {
-        compose.onNodeWithContentDescription("返回").assertExists()
-        compose.onNodeWithText("浅色").assertExists()
-        // The page it was pushed over is out of the accessibility tree, so none of its rows answer.
-        compose.onNodeWithText("放宽时长匹配").assertDoesNotExist()
+    private fun onDarkModeMenu() {
+        compose.onAllNodes(isPopup()).assertCountEquals(1)
+        compose.onNode(hasText("浅色") and hasAnyAncestor(isPopup())).assertExists()
+        // Nothing was pushed: the page is still the one on screen, with no back button.
+        compose.onNodeWithText("放宽时长匹配").assertExists()
+        compose.onNodeWithContentDescription("返回").assertDoesNotExist()
     }
 
     /**
      * [dockBand] checks the bottom 14% of the picture for dock pixels: anything that is not the page
      * colour there is the dock, so a dock squeezed out of the layout fails.
      */
+    @OptIn(ExperimentalRoborazziApi::class)
     private fun shot(
         name: String,
         mode: ThemeMode,
@@ -115,14 +129,24 @@ class ShellMeSheetTest {
         platform: Platform = Platform.NETEASE,
         accounts: List<AccountState> = meCommonAccountStates(),
         dockBand: Boolean = true,
+        /** A picker row to tap first; its menu is a popup window, so the whole screen is captured. */
+        openRow: String? = null,
         shows: () -> Unit,
     ) {
         compose.setContent { ShellMeSheet(Accent.MIST, mode, miniPlayingSwapped(), page, platform, accounts) }
         compose.waitForIdle()
+        if (openRow != null) {
+            compose.onNodeWithText(openRow).performClick()
+            compose.waitForIdle()
+        }
         shows()
 
         val out = File("build/design/$name.png")
-        compose.onRoot().captureRoboImage(out.path)
+        if (openRow != null) {
+            captureScreenRoboImage(out.path, RoborazziOptions(taskType = RoborazziTaskType.Record))
+        } else {
+            compose.onRoot().captureRoboImage(out.path)
+        }
         // Without -Proborazzi.test.record=true nothing is written; the full test run must still pass.
         if (!out.exists()) return
         val bitmap = BitmapFactory.decodeFile(out.path)

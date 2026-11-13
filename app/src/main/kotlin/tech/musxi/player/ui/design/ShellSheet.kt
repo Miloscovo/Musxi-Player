@@ -33,7 +33,6 @@ import tech.musxi.player.ui.library.LibraryContent
 import tech.musxi.player.ui.me.meAccountRowOf
 import tech.musxi.player.ui.nav.NavStackState
 import tech.musxi.player.ui.nav.PageStack
-import tech.musxi.player.ui.shell.MeDarkModeKey
 import tech.musxi.player.ui.shell.MeRootKey
 import tech.musxi.player.ui.shell.MeTab
 import tech.musxi.player.ui.shell.MeTabActions
@@ -122,8 +121,11 @@ private fun PinnedDock(mini: MiniPlayerUi, tab: ShellTab, page: @Composable (Dp)
     ) { page(inset) }
 }
 
-/** Where the "我的" tab sheet rests: its page, or a sub-page already pushed onto it. */
-enum class ShellMePage { ROOT, DARK_MODE, ACCOUNT }
+/**
+ * Where the "我的" tab sheet rests: its page, or a platform's page already pushed onto it. The
+ * pickers (深色模式 and the rest) are menus on the page itself, so a test opens them by tapping.
+ */
+enum class ShellMePage { ROOT, ACCOUNT }
 
 /**
  * The "我的" tab under the real dock: the same [MeTab] the shell draws, on fake data, with the stack
@@ -149,7 +151,6 @@ fun ShellMeSheet(
                     scope, holder,
                     when (page) {
                         ShellMePage.ROOT -> root
-                        ShellMePage.DARK_MODE -> root.push(MeDarkModeKey)
                         ShellMePage.ACCOUNT -> root.push(meAccountKey(platform))
                     },
                 )

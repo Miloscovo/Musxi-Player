@@ -14,7 +14,6 @@ import tech.musxi.player.ui.design.updateDevelopmentState
 import tech.musxi.player.ui.design.updateDownloadingState
 import tech.musxi.player.ui.design.updateFailedState
 import tech.musxi.player.ui.design.updateFoundState
-import tech.musxi.player.ui.design.updateMeteredState
 import tech.musxi.player.ui.design.updatePermissionState
 import tech.musxi.player.ui.design.updateReadyState
 import tech.musxi.player.ui.theme.Accent
@@ -23,8 +22,9 @@ import java.io.File
 
 /**
  * The "关于" group in every update state, light, plus the found state in dark and the tab bar with
- * its red dot. The page is mostly paper, so the checks are loose: it decoded, it has content, and
- * the two states that use the error colour really draw it.
+ * its red dot. A newer release is one row here; the steps behind it are in the update sheet, captured
+ * by ui/account/UpdateSheetFlowTest. The page is mostly paper, so the checks are loose: it decoded,
+ * it has content, and the two states that use the error colour really draw it.
  */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -33,8 +33,6 @@ class UpdateSheetTest {
 
     @Test fun development() = capture("update_development_light", updateDevelopmentState())
     @Test fun found() = capture("update_found_light", updateFoundState())
-    @Test fun foundExpanded() = capture("update_found_expanded_light", updateFoundState(), expanded = true)
-    @Test fun metered() = capture("update_metered_light", updateMeteredState(), confirming = true)
     @Test fun downloading() = capture("update_downloading_light", updateDownloadingState())
     @Test fun ready() = capture("update_ready_light", updateReadyState())
     @Test fun permission() = capture("update_permission_light", updatePermissionState())
@@ -46,13 +44,11 @@ class UpdateSheetTest {
         name: String,
         state: UpdateState,
         mode: ThemeMode = ThemeMode.LIGHT,
-        expanded: Boolean = false,
-        confirming: Boolean = false,
         dock: Boolean = false,
         expectRed: Boolean = false,
     ) {
         val out = File("build/design/$name.png")
-        captureRoboImage(out.path) { UpdateSheet(Accent.MIST, mode, state, expanded, confirming, dock) }
+        captureRoboImage(out.path) { UpdateSheet(Accent.MIST, mode, state, dock = dock) }
         // Without -Proborazzi.test.record=true nothing is written; the full test run must still pass.
         if (!out.exists()) return
         val bitmap = BitmapFactory.decodeFile(out.path)

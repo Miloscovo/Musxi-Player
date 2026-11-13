@@ -98,6 +98,233 @@ class FileLyricsCacheStoreTest {
     }
 
     @Test
+    fun wordTimingsRoundTripAndStayImmutableAcrossCopies() {
+        val directory = temporary.newFolder("words")
+        val key = mediaKey(1)
+        val mutableWords = arrayListOf(
+            LyricWord(0, 5, 1_000, 1_400),
+            LyricWord(5, 6, 1_400, 1_600),
+        )
+        val expectedWords = mutableWords.toList()
+        val lyrics = ParsedLyrics(
+            lines = listOf(LyricLine(1_000, "Hello!", "translated", mutableWords)),
+            plainText = "Hello!",
+            translation = LyricsTranslation(
+                TranslationAvailability.AVAILABLE,
+                TranslationLookup(TranslationLookupStatus.SUCCEEDED),
+            ),
+        )
+        val store = FileLyricsCacheStore(directory, ::clock)
+        store.write(ownerA, key, lyrics)
+        mutableWords.clear()
+
+        val restored = FileLyricsCacheStore(directory, ::clock).read(ownerA, key)
+
+        assertNotNull(restored)
+        assertEquals(
+            listOf(LyricLine(1_000, "Hello!", "translated", expectedWords)),
+            restored!!.lyrics.lines,
+        )
+        assertEquals(expectedWords, restored.lyrics.lines.single().words)
+        assertImmutable { mutateWords(restored.lyrics.lines.single().words) }
+    }
+
+    @Test
+    fun schemaOneFileWithoutWordSectionStillLoadsLineLevelLyrics() {
+        val directory = temporary.newFolder("schema-one")
+        val key = mediaKey(1)
+        val store = FileLyricsCacheStore(directory, ::clock)
+        val lyrics = translatedLyrics()
+        store.write(ownerA, key, lyrics)
+        writeRawFile(directory, ownerA, key, lyrics.lines, lyrics.plainText, 1, lyrics.translation)
+
+        val restored = store.read(ownerA, key)
+
+        assertNotNull(restored)
+        assertEquals(lyrics, restored!!.lyrics)
+        assertTrue(restored.lyrics.lines.all { it.words.isEmpty() })
+        assertEquals(0, restored.lyrics.timingRevision)
+        assertTrue(Files.exists(entryFiles(directory.toPath()).single()))
+    }
+
+    @Test
+    fun schemaTwoFileWithoutTimingRevisionReadsZero() {
+        val directory = temporary.newFolder("schema-two-revision")
+        val key = mediaKey(1)
+        val store = FileLyricsCacheStore(directory, ::clock)
+        val lines = listOf(
+            LyricLine(
+                1_000,
+                "Hello!",
+                "translated",
+                listOf(LyricWord(0, 5, 1_000, 1_400), LyricWord(5, 6, 1_400, 1_600)),
+            ),
+        )
+        val lyrics = ParsedLyrics(lines, "Hello!", translatedLyrics().translation)
+        writeRawFile(directory, ownerA, key, lines, "Hello!", 2, lyrics.translation)
+
+        val restored = store.read(ownerA, key)
+
+        assertNotNull(restored)
+        assertEquals(lyrics, restored!!.lyrics)
+        assertEquals(lines, restored.lyrics.lines)
+        assertEquals(0, restored.lyrics.timingRevision)
+        assertTrue(Files.exists(entryFiles(directory.toPath()).single()))
+    }
+
+    @Test
+    fun schemaThreeRoundTripsTimingRevisionWithWordsAndTranslation() {
+        val directory = temporary.newFolder("schema-three-revision")
+        val store = FileLyricsCacheStore(directory, ::clock)
+        listOf(0, 1, 7, 1_000_000).forEachIndexed { index, revision ->
+            val key = mediaKey(index + 1)
+            val lyrics = translatedLyrics().copy(
+                lines = listOf(
+                    LyricLine(
+                        1_000,
+                        "Hello",
+                        "translated",
+                        listOf(LyricWord(0, 5, 1_000, 1_400)),
+                    ),
+                    LyricLine(2_000, "Bye.", "translated too"),
+                ),
+                plainText = "Hello\nBye.",
+                timingRevision = revision,
+            )
+            store.write(ownerA, key, lyrics)
+
+            val restored = FileLyricsCacheStore(directory, ::clock).read(ownerA, key)
+
+            assertNotNull(restored)
+            assertEquals(lyrics, restored!!.lyrics)
+            assertEquals(revision, restored.lyrics.timingRevision)
+            assertEquals(3, storedVersion(directory, ownerA, key))
+        }
+    }
+
+    @Test
+    fun writeRejectsOutOfRangeTimingRevisionBeforeStoring() {
+        val directory = temporary.newFolder("bad-revision")
+        val store = FileLyricsCacheStore(directory, ::clock)
+
+        assertRejectedData {
+            store.write(ownerA, mediaKey(1), parsedLyrics("bad").copy(timingRevision = -1))
+        }
+        assertRejectedData {
+            store.write(ownerA, mediaKey(2), parsedLyrics("bad").copy(timingRevision = 1_000_001))
+        }
+
+        assertTrue(entryFiles(directory.toPath()).isEmpty())
+    }
+
+    @Test
+    fun schemaThreeFileWithInvalidTimingRevisionIsRejectedAndRemoved() {
+        listOf(-1, 1_000_001).forEachIndexed { index, revision ->
+            val directory = temporary.newFolder("schema-three-bad-$index")
+            val key = mediaKey(1)
+            val store = FileLyricsCacheStore(directory, ::clock)
+            store.write(ownerA, key, parsedLyrics("Hello"))
+            writeRawFile(
+                directory,
+                ownerA,
+                key,
+                listOf(LyricLine(1_000, "Hello")),
+                "Hello",
+                3,
+                timingRevision = revision,
+            )
+
+            assertNull(store.read(ownerA, key))
+            assertTrue(entryFiles(directory.toPath()).isEmpty())
+        }
+    }
+
+    @Test
+    fun schemaTwoFileWithInvalidWordSpansIsRejectedAndRemoved() {
+        val directory = temporary.newFolder("bad-spans")
+        val key = mediaKey(1)
+        val store = FileLyricsCacheStore(directory, ::clock)
+        store.write(ownerA, key, parsedLyrics("Hello"))
+        writeRawFile(
+            directory,
+            ownerA,
+            key,
+            listOf(LyricLine(1_000, "Hello", null, listOf(LyricWord(1, 5, 1_000, 1_200)))),
+            "Hello",
+            2,
+        )
+
+        assertNull(store.read(ownerA, key))
+        assertTrue(entryFiles(directory.toPath()).isEmpty())
+    }
+
+    @Test
+    fun schemaTwoFileWithExcessiveWordCountIsRejectedAndRemoved() {
+        val directory = temporary.newFolder("too-many-words")
+        val key = mediaKey(1)
+        val store = FileLyricsCacheStore(directory, ::clock)
+        store.write(ownerA, key, parsedLyrics("Hello"))
+        writeRawFile(
+            directory,
+            ownerA,
+            key,
+            listOf(LyricLine(1_000, "Hello")),
+            "Hello",
+            2,
+            wordCountOverride = LyricsWordTimeline.MAX_WORDS_PER_LINE + 1,
+        )
+
+        assertNull(store.read(ownerA, key))
+        assertTrue(entryFiles(directory.toPath()).isEmpty())
+    }
+
+    @Test
+    fun writeRejectsWordSpansThatBreakCoverageAndDocumentLimit() {
+        val store = FileLyricsCacheStore(temporary.newFolder("word-limits"), ::clock)
+
+        assertRejectedData {
+            store.write(
+                ownerA,
+                mediaKey(1),
+                ParsedLyrics(
+                    lines = listOf(LyricLine(1_000, "Hello", null, listOf(LyricWord(0, 4, 1_000, 1_200)))),
+                    plainText = "Hello",
+                ),
+            )
+        }
+        assertRejectedData {
+            store.write(
+                ownerA,
+                mediaKey(2),
+                ParsedLyrics(
+                    lines = listOf(
+                        LyricLine(
+                            1_000,
+                            "Hello",
+                            null,
+                            listOf(LyricWord(0, 5, 1_000, LyricsWordTimeline.MAX_TIME_MS + 1)),
+                        )
+                    ),
+                    plainText = "Hello",
+                ),
+            )
+        }
+
+        val row = "x".repeat(LyricsWordTimeline.MAX_WORDS_PER_LINE)
+        val fullLineWords = List(LyricsWordTimeline.MAX_WORDS_PER_LINE) { index ->
+            LyricWord(index, index + 1, index.toLong(), index + 1L)
+        }
+        val overflowing = ParsedLyrics(
+            lines = List(LyricsWordTimeline.MAX_WORDS_PER_DOCUMENT / LyricsWordTimeline.MAX_WORDS_PER_LINE + 1) {
+                LyricLine(it.toLong(), row, null, fullLineWords)
+            },
+            plainText = row,
+        )
+
+        assertRejectedData { store.write(ownerA, mediaKey(3), overflowing) }
+    }
+
+    @Test
     fun replacementIsAtomicAndLeavesNoTemporaryFile() {
         val directory = temporary.newFolder("replace")
         val key = mediaKey(1)
@@ -179,6 +406,124 @@ class FileLyricsCacheStoreTest {
     private fun mediaKey(index: Int) = MediaKey(Platform.NETEASE, index.toString())
 
     private fun clock(): Long = now
+
+    /**
+     * Writes a file in the exact on-disk layout so older schema versions and hand-built payloads can
+     * be exercised without a writer that would refuse them.
+     */
+    private fun writeRawFile(
+        directory: File,
+        owner: String,
+        key: MediaKey,
+        lines: List<LyricLine>,
+        plainText: String,
+        version: Int,
+        translation: LyricsTranslation = LyricsTranslation(
+            TranslationAvailability.NONE,
+            TranslationLookup(TranslationLookupStatus.SUCCEEDED),
+        ),
+        wordCountOverride: Int? = null,
+        timingRevision: Int = 0,
+    ) {
+        val payload = java.io.ByteArrayOutputStream()
+        java.io.DataOutputStream(payload).use { output ->
+            val ownerBytes = owner.toByteArray(Charsets.UTF_8)
+            output.writeInt(ownerBytes.size)
+            output.write(ownerBytes)
+            output.writeByte(key.platform.ordinal)
+            val idBytes = key.id.toByteArray(Charsets.UTF_8)
+            output.writeInt(idBytes.size)
+            output.write(idBytes)
+            output.writeLong(now)
+            output.writeLong(now)
+            output.writeLong(
+                if (lines.isEmpty() && plainText.isBlank()) {
+                    LyricsCacheStore.NO_LYRICS_TTL_MS
+                } else {
+                    LyricsCacheStore.LYRICS_TTL_MS
+                }
+            )
+            output.writeBoolean(false)
+            output.writeInt(lines.size)
+            lines.forEach { line ->
+                output.writeLong(line.timeMs)
+                val textBytes = line.text.toByteArray(Charsets.UTF_8)
+                output.writeInt(textBytes.size)
+                output.write(textBytes)
+                output.writeBoolean(line.translation != null)
+                line.translation?.let {
+                    val bytes = it.toByteArray(Charsets.UTF_8)
+                    output.writeInt(bytes.size)
+                    output.write(bytes)
+                }
+                if (version >= 2) {
+                    output.writeInt(wordCountOverride ?: line.words.size)
+                    if (wordCountOverride == null) {
+                        line.words.forEach { word ->
+                            output.writeInt(word.textStart)
+                            output.writeInt(word.textEnd)
+                            output.writeLong(word.startTimeMs)
+                            output.writeLong(word.endTimeMs)
+                        }
+                    }
+                }
+            }
+            val plainBytes = plainText.toByteArray(Charsets.UTF_8)
+            output.writeInt(plainBytes.size)
+            output.write(plainBytes)
+            output.writeByte(translation.availability.ordinal)
+            output.writeByte(translation.lookup.status.ordinal)
+            output.writeBoolean(translation.lookup.reason != null)
+            translation.lookup.reason?.let { output.writeByte(it.ordinal) }
+            if (version >= 3) output.writeInt(timingRevision)
+        }
+        val body = payload.toByteArray()
+        val header = java.io.ByteArrayOutputStream(16)
+        java.io.DataOutputStream(header).use { output ->
+            output.writeInt(0x4d584c31)
+            output.writeInt(version)
+            output.writeInt(body.size)
+            output.writeInt(java.util.zip.CRC32().apply { update(body) }.value.toInt())
+        }
+
+        val ownerDirectory = File(directory, owner)
+        ownerDirectory.mkdirs()
+        File(ownerDirectory, entryFileName(key)).writeBytes(header.toByteArray() + body)
+    }
+
+    private fun entryFileName(key: MediaKey): String {
+        val digest = java.security.MessageDigest.getInstance("SHA-256")
+            .digest("${key.platform.name}\n${key.id}".toByteArray(Charsets.UTF_8))
+        return digest.joinToString("") { "%02x".format(it.toInt() and 0xff) } + ".mxl"
+    }
+
+    private fun storedVersion(directory: File, owner: String, key: MediaKey): Int {
+        val bytes = File(File(directory, owner), entryFileName(key)).readBytes()
+        return java.nio.ByteBuffer.wrap(bytes, 4, 4).int
+    }
+
+    private inline fun assertImmutable(block: () -> Unit) {
+        try {
+            block()
+        } catch (_: UnsupportedOperationException) {
+            return
+        }
+        fail("Expected immutable collection")
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun mutateWords(words: List<LyricWord>) {
+        (words as MutableList<LyricWord>).add(LyricWord(0, 1, 0, 1))
+    }
+
+    private inline fun assertRejectedData(block: () -> Unit) {
+        try {
+            block()
+        } catch (_: RuntimeException) {
+            return
+        }
+        fail("Expected rejected lyrics data")
+    }
 
     private fun entryFiles(root: Path): List<Path> =
         ownedFiles(root).filter { it.fileName.toString().endsWith(".mxl") }

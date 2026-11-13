@@ -14,6 +14,7 @@ import tech.musxi.player.ui.design.LargeFontBatch
 import tech.musxi.player.ui.design.LyricsBatchSheet
 import tech.musxi.player.ui.design.QueueSheet
 import tech.musxi.player.ui.design.SourceFailedBatchSheet
+import tech.musxi.player.ui.design.batchAbout
 import tech.musxi.player.ui.design.batchAvailable
 import tech.musxi.player.ui.design.batchDockFailed
 import tech.musxi.player.ui.design.batchDockSearching
@@ -27,7 +28,7 @@ import tech.musxi.player.ui.design.lyricsBound
 import tech.musxi.player.ui.design.lyricsError
 import tech.musxi.player.ui.design.lyricsNoResults
 import tech.musxi.player.ui.design.lyricsPreviewing
-import tech.musxi.player.ui.account.UpdateStatusUi
+import tech.musxi.player.ui.account.AboutUpdateUi
 import tech.musxi.player.ui.design.PlayerSheet
 import tech.musxi.player.ui.theme.Accent
 import tech.musxi.player.ui.theme.ThemeMode
@@ -46,16 +47,16 @@ class BatchSheetTest {
     private val accent = Accent.MIST
 
     // 1. About section states, light and dark.
-    @Test fun aboutIdleLight() = about("batch_about_idle_light", ThemeMode.LIGHT, UpdateStatusUi.Idle)
-    @Test fun aboutIdleDark() = about("batch_about_idle_dark", ThemeMode.DARK, UpdateStatusUi.Idle)
-    @Test fun aboutCheckingLight() = about("batch_about_checking_light", ThemeMode.LIGHT, UpdateStatusUi.Checking)
-    @Test fun aboutCheckingDark() = about("batch_about_checking_dark", ThemeMode.DARK, UpdateStatusUi.Checking)
-    @Test fun aboutUpToDateLight() = about("batch_about_uptodate_light", ThemeMode.LIGHT, UpdateStatusUi.UpToDate)
-    @Test fun aboutUpToDateDark() = about("batch_about_uptodate_dark", ThemeMode.DARK, UpdateStatusUi.UpToDate)
+    @Test fun aboutIdleLight() = about("batch_about_idle_light", ThemeMode.LIGHT, batchAbout())
+    @Test fun aboutIdleDark() = about("batch_about_idle_dark", ThemeMode.DARK, batchAbout())
+    @Test fun aboutCheckingLight() = about("batch_about_checking_light", ThemeMode.LIGHT, batchAbout(checking = true))
+    @Test fun aboutCheckingDark() = about("batch_about_checking_dark", ThemeMode.DARK, batchAbout(checking = true))
+    @Test fun aboutUpToDateLight() = about("batch_about_uptodate_light", ThemeMode.LIGHT, batchAbout(note = "已是最新"))
+    @Test fun aboutUpToDateDark() = about("batch_about_uptodate_dark", ThemeMode.DARK, batchAbout(note = "已是最新"))
     @Test fun aboutAvailableLight() = about("batch_about_available_light", ThemeMode.LIGHT, batchAvailable())
     @Test fun aboutAvailableDark() = about("batch_about_available_dark", ThemeMode.DARK, batchAvailable())
-    @Test fun aboutFailedLight() = about("batch_about_failed_light", ThemeMode.LIGHT, UpdateStatusUi.Failed)
-    @Test fun aboutFailedDark() = about("batch_about_failed_dark", ThemeMode.DARK, UpdateStatusUi.Failed)
+    @Test fun aboutFailedLight() = about("batch_about_failed_light", ThemeMode.LIGHT, batchAbout(note = "检查失败，点按重试"))
+    @Test fun aboutFailedDark() = about("batch_about_failed_dark", ThemeMode.DARK, batchAbout(note = "检查失败，点按重试"))
 
     // 2. Queue: ordered (with drag handles) and shuffled (header, no handles).
     @Test fun queueOrderedLight() = queue("batch_queue_ordered_light", ThemeMode.LIGHT, batchQueueOrdered())
@@ -149,8 +150,8 @@ class BatchSheetTest {
         }
     }
 
-    private fun about(name: String, mode: ThemeMode, status: UpdateStatusUi) = capture(name) {
-        AboutBatchSheet(accent, mode, status)
+    private fun about(name: String, mode: ThemeMode, ui: AboutUpdateUi) = capture(name) {
+        AboutBatchSheet(accent, mode, ui)
     }
 
     private fun queue(name: String, mode: ThemeMode, ui: tech.musxi.player.ui.player.QueueUi) = capture(name) {

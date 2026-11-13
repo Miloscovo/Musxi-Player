@@ -13,6 +13,14 @@ import tech.musxi.core.playback.QualityOptions
 
 /** Supplied by Application; authentication and platform IO remain outside the player module. */
 interface PlaybackHost {
+    /** Already-fetched, identity-fenced lyrics; the service owns the playback clock and timers. */
+    val mediaCardLyrics: Flow<MediaCardLyricsState>
+        get() = kotlinx.coroutines.flow.flowOf(MediaCardLyricsState())
+    val localAudioPlayback: LocalAudioPlaybackHost? get() = null
+    /** A validated platform takeover invalidates an older asynchronous local preparation. */
+    fun onPlatformPlaybackRequested() = Unit
+    /** Local takeover cancels platform fetches, without invalidating a newer local preparation. */
+    fun onLocalPlaybackRequested() = onPlaybackStopRequested()
     val playbackSources: PlaybackSourceProvider
     val sourceSelection: SourceSelection
     val sourcePreferences: kotlinx.coroutines.flow.Flow<tech.musxi.core.playback.SourceSwitchPreferences>

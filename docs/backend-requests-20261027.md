@@ -1,5 +1,7 @@
 # 后端需求单（2026-10-27，前端 -> Codex）
 
+> **状态：历史需求单（2026-10-27）。** 本文保留当次需求、代码位置和提交流程，不构成当前排期或当前工作区指令；完成情况查对应交付、验收与 [当前开发接续](next-session-handoff.md)。
+
 读者：负责 accounts / playback / platform-* 的后端开发。行号以 2026-10-27 的 main 工作区为准，开工前请自行复核。通用约定见 `AGENTS.md` 与 `docs/frontend-contract.md`：队列操作带 expectedRevision，账号代次 generation 隔离迟到结果，UI 不持有 Session/Cookie/签名 URL，新增依赖先核对许可，release 不含调试入口。
 
 ## 本轮前端已完成，无需后端重复做

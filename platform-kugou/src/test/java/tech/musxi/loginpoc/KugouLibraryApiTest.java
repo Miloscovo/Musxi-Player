@@ -4,6 +4,7 @@ import org.json.JSONObject;
 import org.junit.Test;
 import java.io.IOException;
 import java.net.URL;
+import java.nio.charset.StandardCharsets;
 import java.util.*;
 import static org.junit.Assert.*;
 
@@ -902,5 +903,409 @@ public class KugouLibraryApiTest {
     @Test public void failedAndRiskResponsesNeverBecomeSuccessfulEmptyLibraries() throws Exception {
         rejects("platform",()->KugouLibraryApi.parsePlaylists(json("{status:0,error_code:1,data:{info:[]}}"),0,30));
         rejects("risk",()->KugouLibraryApi.parsePlaylists(json("{status:1,ssaCode:'fixture',data:{info:[]}}"),0,30));
+    }
+    /** Own editable list of [count] rows, newest last; row i uses fileid 500+i. */
+    private KugouLibraryApi ownList(String listRow,int count,List<KugouApi.Request> calls) {
+        KugouApi api=new KugouApi(new KugouApi.Device("b".repeat(32)),r->{ calls.add(r); try {
+            if(r.endpoint.endsWith("/get_all_list"))
+                return json("{status:1,data:{total:1,info:["+listRow+"]}}");
+            if(!r.endpoint.endsWith("/get_list_all_file"))return json("{status:1}");
+            JSONObject body=new JSONObject(r.body);
+            int size=body.getInt("pagesize"),page=body.getInt("page");
+            org.json.JSONArray rows=new org.json.JSONArray();
+            for(int i=(page-1)*size;i<Math.min(count,page*size);i++)
+                rows.put(new JSONObject().put("fileid",500+i).put("hash",String.format("%032x",i+1))
+                    .put("album_id",1).put("album_audio_id",1000+i).put("name","S"+i));
+            return new JSONObject().put("status",1).put("data",new JSONObject().put("info",rows).put("total",count));
+        } catch(org.json.JSONException malformed) { throw new IOException(malformed); } });
+        return new KugouLibraryApi(api);
+    }
+    @Test public void playlistTrackIdsIsCompleteOrderedAndRejectsPartialReads() throws Exception {
+        List<KugouApi.Request> calls=new ArrayList<>();
+        KugouLibraryApi library=ownList("{listid:10,name:'Own',is_edit:1,is_def:0,count:250}",250,calls);
+        KugouApi.Session session=new KugouApi.Session("fixture-token","123","Fixture");
+        List<String> ids=library.playlistTrackIds(session,"10",()->true);
+        assertEquals(250,ids.size());
+        for(int i=0;i<250;i++)assertEquals(String.format("%032x",i+1)+"_1_"+(1000+i),ids.get(i));
+        assertEquals(3,calls.stream().filter(r->r.endpoint.endsWith("/get_list_all_file")).count());
+        assertEquals(Collections.singletonList("10"),calls.stream()
+            .filter(r->r.endpoint.endsWith("/get_list_all_file"))
+            .map(r->{try{return new JSONObject(r.body).getString("listid");}catch(org.json.JSONException e){throw new AssertionError(e);}})
+            .distinct().collect(java.util.stream.Collectors.toList()));
+        rejects("account_changed",()->library.playlistTrackIds(session,"10",()->false));
+        rejects("unavailable",()->library.playlistTrackIds(session,"99",()->true));
+        rejects("identity",()->library.playlistTrackIds(session,"not-a-list",()->true));
+    }
+    @Test public void playlistTrackIdsRejectsATotalThatChangesMidRead() throws Exception {
+        int[] count={250};
+        KugouApi api=new KugouApi(new KugouApi.Device("b".repeat(32)),r->{ try {
+            if(r.endpoint.endsWith("/get_all_list"))
+                return json("{status:1,data:{total:1,info:[{listid:10,is_edit:1,is_def:0,count:250}]}}");
+            JSONObject body=new JSONObject(r.body);
+            int size=body.getInt("pagesize"),page=body.getInt("page");
+            int now=count[0];if(size>1)count[0]=251;
+            org.json.JSONArray rows=new org.json.JSONArray();
+            for(int i=(page-1)*size;i<Math.min(now,page*size);i++)
+                rows.put(new JSONObject().put("fileid",500+i).put("hash",String.format("%032x",i+1))
+                    .put("album_id",1).put("album_audio_id",1000+i).put("name","S"+i));
+            return new JSONObject().put("status",1).put("data",new JSONObject().put("info",rows).put("total",now));
+        } catch(org.json.JSONException malformed) { throw new IOException(malformed); } });
+        rejects("incomplete",()->new KugouLibraryApi(api)
+            .playlistTrackIds(new KugouApi.Session("fixture-token","123","Fixture"),"10",()->true));
+    }
+    /** Fixture whose middle page is short although the server keeps reporting the full total. */
+    private KugouLibraryApi shortMiddlePage(int count,List<KugouApi.Request> calls) {
+        KugouApi api=new KugouApi(new KugouApi.Device("b".repeat(32)),r->{ calls.add(r); try {
+            if(r.endpoint.endsWith("/get_all_list"))
+                return json("{status:1,data:{total:1,info:[{listid:10,name:'Own',is_edit:1,is_def:0,count:"+count+"}]}}");
+            JSONObject body=new JSONObject(r.body);
+            int size=body.getInt("pagesize"),page=body.getInt("page");
+            int end=Math.min(count,page*size);
+            if(page==2)end=(page-1)*size+1; // One row instead of the declared window.
+            org.json.JSONArray rows=new org.json.JSONArray();
+            for(int i=(page-1)*size;i<end;i++)
+                rows.put(new JSONObject().put("fileid",500+i).put("hash",String.format("%032x",i+1))
+                    .put("album_id",1).put("album_audio_id",1000+i).put("name","S"+i));
+            return new JSONObject().put("status",1).put("data",new JSONObject().put("info",rows).put("total",count));
+        } catch(org.json.JSONException malformed) { throw new IOException(malformed); } });
+        return new KugouLibraryApi(api);
+    }
+    @Test public void truncatedPagesNeverYieldAPartialIdListOrADelete() throws Exception {
+        KugouApi.Session session=new KugouApi.Session("fixture-token","123","Fixture");
+        List<KugouApi.Request> calls=new ArrayList<>();
+        rejects("incomplete",()->shortMiddlePage(250,calls).playlistTrackIds(session,"10",()->true));
+        assertTrue(calls.stream().allMatch(r->r.endpoint.endsWith("/get_all_list")||r.endpoint.endsWith("/get_list_all_file")));
+
+        calls.clear();
+        String target=String.format("%032x",250)+"_1_"+(1000+249);
+        rejects("incomplete",()->shortMiddlePage(250,calls).removeFromPlaylist(session,"10",target,()->true));
+        assertFalse(calls.stream().anyMatch(r->r.endpoint.endsWith("/delete_songs")));
+    }
+    @Test public void removeFromPlaylistRefusesARowWithoutAUsableFileId() throws Exception {
+        for(String fileId:List.of("null","0")) {
+            List<KugouApi.Request> calls=new ArrayList<>();
+            KugouApi api=new KugouApi(new KugouApi.Device("b".repeat(32)),r->{ calls.add(r);
+                if(r.endpoint.endsWith("/get_all_list"))
+                    return json("{status:1,data:{total:1,info:[{listid:10,is_edit:1,is_def:0,count:1}]}}");
+                if(r.endpoint.endsWith("/get_list_all_file"))
+                    return json("{status:1,data:{total:1,info:[{fileid:"+fileId+",hash:'"+HASH+"',album_id:1,album_audio_id:1000,name:'S0'}]}}");
+                return json("{status:1}");
+            });
+            rejects("identity",()->new KugouLibraryApi(api).removeFromPlaylist(
+                new KugouApi.Session("fixture-token","123","Fixture"),"10",HASH+"_1_1000",()->true));
+            assertFalse(calls.stream().anyMatch(r->r.endpoint.endsWith("/delete_songs")));
+        }
+    }
+    @Test public void removeFromOwnPlaylistUsesServerRevalidatedOwnershipAndRealFileId() throws Exception {
+        List<KugouApi.Request> calls=new ArrayList<>();
+        KugouLibraryApi library=ownList("{listid:10,name:'Own',is_edit:1,is_def:0,count:120}",120,calls);
+        KugouApi.Session session=new KugouApi.Session("fixture-token","123","Fixture");
+        String target=String.format("%032x",120)+"_1_"+(1000+119);
+        library.removeFromPlaylist(session,"10",target,()->true);
+
+        KugouApi.Request delete=calls.get(calls.size()-1);
+        assertEquals("https://gateway.kugou.com/v4/delete_songs",delete.endpoint);
+        assertEquals(1,calls.stream().filter(r->r.endpoint.endsWith("/delete_songs")).count());
+        assertEquals("cloudlist.service.kugou.com",delete.headers.get("x-router"));
+        JSONObject body=new JSONObject(delete.body);
+        assertEquals("10",body.getString("listid"));assertEquals("123",body.getString("userid"));
+        assertEquals(0,body.getInt("type"));assertEquals(0,body.getInt("list_ver"));
+        org.json.JSONArray data=body.getJSONArray("data");
+        assertEquals(1,data.length());
+        assertEquals(1,data.getJSONObject(0).length());
+        assertEquals(619L,data.getJSONObject(0).getLong("fileid"));
+        Map<String,String> params=new LinkedHashMap<>(delete.params);
+        String signature=params.remove("signature");
+        assertEquals(KugouApi.androidSignature(params,delete.body),signature);
+        KugouApi.requireEndpoint(new URL(delete.endpoint));
+    }
+    @Test public void removeFromPlaylistRefusesReadOnlyFavoriteAndUnknownTargets() throws Exception {
+        KugouApi.Session session=new KugouApi.Session("fixture-token","123","Fixture");
+        String song=String.format("%032x",1)+"_1_1000";
+        for(String[] fixture:new String[][]{
+            {"{listid:10,name:'Favorite',is_edit:1,is_def:2,count:1}","permission"},
+            {"{listid:10,name:'Other',is_edit:0,is_def:0,count:1}","permission"},
+            {"{listid:10,name:'Legacy',is_edit:0,is_def:0}","permission"}
+        }) {
+            List<KugouApi.Request> calls=new ArrayList<>();
+            KugouLibraryApi library=ownList(fixture[0],1,calls);
+            rejects(fixture[1],()->library.removeFromPlaylist(session,"10",song,()->true));
+            assertFalse(calls.stream().anyMatch(r->r.endpoint.endsWith("/delete_songs")));
+        }
+        List<KugouApi.Request> calls=new ArrayList<>();
+        KugouLibraryApi library=ownList("{listid:10,name:'Own',is_edit:1,is_def:0,count:1}",1,calls);
+        rejects("unavailable",()->library.removeFromPlaylist(session,"10",
+            String.format("%032x",99)+"_1_1000",()->true));
+        rejects("account_changed",()->library.removeFromPlaylist(session,"10",song,()->false));
+        rejects("identity",()->library.removeFromPlaylist(session,"10","wrong",()->true));
+        assertFalse(calls.stream().anyMatch(r->r.endpoint.endsWith("/delete_songs")));
+    }
+    /** Fake account with one playlist row; a modify_list call swaps the row to [after] for the read-back. */
+    private KugouLibraryApi renameAccount(String before,String after,List<KugouApi.Request> calls,
+        String response) {
+        String[] row={before};
+        return new KugouLibraryApi(new KugouApi(new KugouApi.Device("b".repeat(32)),r->{ calls.add(r);
+            if(r.endpoint.endsWith("/get_all_list"))
+                return json("{status:1,data:{total:1,info:["+row[0]+"]}}");
+            if(r.endpoint.endsWith("/modify_list")) { row[0]=after; return json(response); }
+            return json("{status:1}");
+        }));
+    }
+    /** The AES body of a cloud request, decrypted with the same per-request session material. */
+    private static JSONObject decrypted(KugouApi.Request request) throws Exception {
+        assertNotNull("cloud request must carry the AES profile",request.cloud);
+        assertNotNull("cloud request must use the binary wire body",request.wireBody);
+        return new JSONObject(request.cloud.decode(request.wireBody));
+    }
+    private static KugouApi.Request single(List<KugouApi.Request> calls,String suffix) {
+        List<KugouApi.Request> matches=new ArrayList<>();
+        for(KugouApi.Request r:calls)if(r.endpoint.endsWith(suffix))matches.add(r);
+        assertEquals("expected exactly one "+suffix+": "+calls.size()+" calls",1,matches.size());
+        return matches.get(0);
+    }
+    private static long writeCount(List<KugouApi.Request> calls) {
+        return calls.stream().filter(r->r.endpoint.endsWith("/modify_list")).count();
+    }
+    @Test public void renameSendsEncryptedSevenFieldBodyToModifyList() throws Exception {
+        List<KugouApi.Request> calls=new ArrayList<>();
+        KugouLibraryApi library=renameAccount(
+            "{listid:10,name:'旧名',is_edit:1,is_def:0,count:3,total_ver:979,sort:5,tags:'出行',intro:'简介'}",
+            "{listid:10,name:'新名',is_edit:1,is_def:0,count:3,total_ver:980,sort:5,tags:'出行',intro:'简介'}",
+            calls,"{status:200}");
+        library.renamePlaylist(new KugouApi.Session("fixture-token","123","Fixture"),"10","新名",()->true);
+
+        KugouApi.Request write=single(calls,"/modify_list");
+        assertEquals("https://gateway.kugou.com/v1/modify_list",write.endpoint);
+        assertEquals("cloudlist.service.kugou.com",write.headers.get("x-router"));
+        assertNull("the encrypted body must not also be sent as a JSON string",write.body);
+        assertEquals(0,write.wireBody.length%16);
+        assertFalse("plaintext title must never travel on the wire",
+            new String(write.wireBody,StandardCharsets.UTF_8).contains("新名"));
+        JSONObject payload=decrypted(write);
+        assertEquals(7,payload.length());
+        assertEquals("新名",payload.getString("name"));
+        assertEquals(0,payload.getInt("type"));
+        assertEquals(10L,payload.getLong("listid"));
+        assertEquals(979L,payload.getLong("total_ver"));
+        assertEquals(5L,payload.getLong("sort"));
+        assertEquals("出行",payload.getString("tags"));
+        assertEquals("简介",payload.getString("intro"));
+        // Fixed lite cloudlist identity; the session travels only inside the RSA portrait.
+        assertEquals("3116",write.params.get("appid"));
+        assertEquals("11440",write.params.get("clientver"));
+        assertEquals("b".repeat(32),write.params.get("mid"));
+        assertEquals("-",write.params.get("dfid"));
+        assertEquals(write.headers.get("clienttime"),write.params.get("clienttime"));
+        assertEquals(KugouCloudProtocol.signature(Long.parseLong(write.params.get("clienttime"))),
+            write.params.get("key"));
+        assertTrue(write.params.get("p"),write.params.get("p").matches("[0-9A-F]{256}"));
+        assertFalse(write.params.containsKey("token"));
+        assertFalse(write.params.containsKey("userid"));
+        KugouApi.requireEndpoint(new URL(write.endpoint));
+        // Success is reported only after a fresh account list read that carries the new name.
+        assertTrue(calls.get(calls.size()-1).endpoint.endsWith("/get_all_list"));
+        assertEquals(1,writeCount(calls));
+    }
+    @Test public void renameTrimsNameAndPreservesUnchangedMetadata() throws Exception {
+        List<KugouApi.Request> calls=new ArrayList<>();
+        KugouLibraryApi library=renameAccount(
+            "{listid:10,name:'旧名',is_edit:1,is_def:0,count:3,total_ver:979,sort:7,tags:'通勤, 夜晚',intro:'一段简介'}",
+            "{listid:10,name:'通勤歌单',is_edit:1,is_def:0,count:3,total_ver:980,sort:7,tags:'通勤, 夜晚',intro:'一段简介'}",
+            calls,"{status:1,data:{}}");
+        library.renamePlaylist(new KugouApi.Session("t","123","n"),"10","  通勤歌单  ",()->true);
+
+        JSONObject payload=decrypted(single(calls,"/modify_list"));
+        assertEquals("通勤歌单",payload.getString("name"));
+        assertEquals("通勤, 夜晚",payload.getString("tags"));
+        assertEquals("一段简介",payload.getString("intro"));
+        assertEquals(7L,payload.getLong("sort"));
+        assertEquals(979L,payload.getLong("total_ver"));
+    }
+    @Test public void renameRefusesMissingMetadataBeforeAnyWrite() throws Exception {
+        String[] rows={
+            "{listid:10,name:'旧名',is_edit:1,is_def:0,count:0,sort:1,intro:'i'}",
+            "{listid:10,name:'旧名',is_edit:1,is_def:0,count:0,sort:1,intro:'i',tags:1}",
+            "{listid:10,name:'旧名',is_edit:1,is_def:0,count:0,sort:1,intro:''}",
+            "{listid:10,name:'旧名',is_edit:1,is_def:0,count:0,total_ver:979,sort:1,tags:'t'}",
+            "{listid:10,name:'旧名',is_edit:1,is_def:0,count:0,total_ver:979,tags:'t',intro:'i'}",
+            "{listid:10,name:'旧名',is_edit:1,is_def:0,count:0,total_ver:979,sort:'x',tags:'t',intro:'i'}",
+            "{listid:10,name:'旧名',is_edit:1,is_def:0,count:0,sort:1,tags:'"+ "t".repeat(4097) +"',intro:'i'}"
+        };
+        for(String row:rows) {
+            List<KugouApi.Request> calls=new ArrayList<>();
+            KugouLibraryApi library=renameAccount(row,row,calls,"{status:1}");
+            rejects("incomplete",()->library.renamePlaylist(
+                new KugouApi.Session("t","123","n"),"10","新名",()->true));
+            assertEquals(0,writeCount(calls));
+        }
+    }
+    @Test public void renameRefusesFavoriteForeignAndSystemLists() throws Exception {
+        KugouApi.Session session=new KugouApi.Session("t","123","n");
+        String full=",total_ver:979,sort:1,tags:'t',intro:'i'";
+        String[][] fixtures={
+            {"{listid:10,name:'Favorite',is_edit:1,is_def:2,count:0"+full+"}","permission"},
+            {"{listid:10,name:'Default',is_edit:1,is_def:1,count:0"+full+"}","permission"},
+            {"{listid:10,name:'Collected',is_edit:0,is_def:0,count:0"+full+"}","permission"},
+            {"{listid:10,name:'Legacy',is_edit:0,is_def:0,count:0}","permission"}
+        };
+        for(String[] fixture:fixtures) {
+            List<KugouApi.Request> calls=new ArrayList<>();
+            KugouLibraryApi library=renameAccount(fixture[0],fixture[0],calls,"{status:1}");
+            rejects(fixture[1],()->library.renamePlaylist(session,"10","新名",()->true));
+            assertEquals(0,writeCount(calls));
+        }
+        List<KugouApi.Request> calls=new ArrayList<>();
+        KugouLibraryApi library=renameAccount("{listid:10,name:'Own',is_edit:1,is_def:0,count:0"+full+"}",
+            "{listid:10,name:'Own',is_edit:1,is_def:0,count:0"+full+"}",calls,"{status:1}");
+        // An id outside the freshly read account list is never a write target.
+        rejects("unavailable",()->library.renamePlaylist(session,"99","新名",()->true));
+        rejects("identity",()->library.renamePlaylist(session,"abc","新名",()->true));
+        assertEquals(0,writeCount(calls));
+    }
+    @Test public void renameIsIdempotentWithoutRewrite() throws Exception {
+        String row="{listid:10,name:'通勤歌单',is_edit:1,is_def:0,count:0,total_ver:979,sort:1,tags:'t',intro:'i'}";
+        List<KugouApi.Request> calls=new ArrayList<>();
+        KugouLibraryApi library=renameAccount(row,row,calls,"{status:1}");
+        KugouApi.Session session=new KugouApi.Session("t","123","n");
+        library.renamePlaylist(session,"10","通勤歌单",()->true);
+        library.renamePlaylist(session,"10","  通勤歌单  ",()->true);
+        assertEquals(0,writeCount(calls));
+        assertEquals(2,calls.size());
+        assertTrue(calls.stream().allMatch(r->r.endpoint.endsWith("/get_all_list")));
+    }
+    @Test public void renameStopsOnAccountChangeBeforeAndAfterTheWrite() throws Exception {
+        String row="{listid:10,name:'旧名',is_edit:1,is_def:0,count:0,total_ver:979,sort:1,tags:'t',intro:'i'}";
+        String renamed="{listid:10,name:'新名',is_edit:1,is_def:0,count:0,total_ver:980,sort:1,tags:'t',intro:'i'}";
+        List<KugouApi.Request> calls=new ArrayList<>();
+        KugouLibraryApi library=renameAccount(row,renamed,calls,"{status:1}");
+        rejects("account_changed",()->library.renamePlaylist(
+            new KugouApi.Session("t","123","n"),"10","新名",()->false));
+        assertTrue("no request may precede the account check",calls.isEmpty());
+
+        List<KugouApi.Request> late=new ArrayList<>();
+        KugouLibraryApi switching=renameAccount(row,renamed,late,"{status:1}");
+        rejects("account_changed",()->switching.renamePlaylist(
+            new KugouApi.Session("t","123","n"),"10","新名",()->writeCount(late)==0));
+        assertEquals("the write happened but was never reported as success",1,writeCount(late));
+    }
+    @Test public void renameNeverReportsSuccessOnFailureOrUnconfirmedReadBack() throws Exception {
+        String row="{listid:10,name:'旧名',is_edit:1,is_def:0,count:0,total_ver:979,sort:1,tags:'t',intro:'i'}";
+        KugouApi.Session session=new KugouApi.Session("t","123","n");
+        String[][] writeResponses={
+            {"{status:0}","platform"},
+            {"{status:1,error_code:20010}","platform"},
+            {"{ssaCode:1}","risk"},
+            {"{data:{}}","protocol"}
+        };
+        for(String[] response:writeResponses) {
+            List<KugouApi.Request> calls=new ArrayList<>();
+            KugouLibraryApi library=renameAccount(row,row,calls,response[0]);
+            rejects(response[1],()->library.renamePlaylist(session,"10","新名",()->true));
+            assertEquals(1,writeCount(calls));
+        }
+        String[][] unconfirmed={
+            {"{listid:10,name:'旧名',is_edit:1,is_def:0,count:0,total_ver:980,sort:1,tags:'t',intro:'i'}"},
+            {"{listid:10,name:'新名',is_edit:1,is_def:0,count:0,total_ver:980,sort:2,tags:'t',intro:'i'}"},
+            {"{listid:10,name:'新名',is_edit:1,is_def:0,count:0,total_ver:980,sort:1,tags:'changed',intro:'i'}"},
+            {"{listid:10,name:'新名',is_edit:1,is_def:0,count:0,total_ver:980,sort:1,tags:'t',intro:''}"}
+        };
+        for(String[] after:unconfirmed) {
+            List<KugouApi.Request> calls=new ArrayList<>();
+            KugouLibraryApi library=renameAccount(row,after[0],calls,"{status:1}");
+            rejects("not_confirmed",()->library.renamePlaylist(session,"10","新名",()->true));
+        }
+        List<KugouApi.Request> calls=new ArrayList<>();
+        KugouLibraryApi library=renameAccount(row,
+            "{listid:10,name:'新名',is_edit:0,is_def:0,count:0,total_ver:980,sort:1,tags:'t',intro:'i'}",
+            calls,"{status:1}");
+        rejects("permission",()->library.renamePlaylist(session,"10","新名",()->true));
+
+        // A read-back that declares more rows than it returns is not proof either.
+        String[] state={row};
+        KugouLibraryApi fragmented=new KugouLibraryApi(new KugouApi(new KugouApi.Device("b".repeat(32)),r->{
+            try {
+                if(r.endpoint.endsWith("/get_all_list")) {
+                    boolean renamed="新名".equals(new JSONObject(state[0]).getString("name"));
+                    return json("{status:1,data:{total:"+(renamed?2:1)+",info:["+state[0]+"]}}");
+                }
+                if(r.endpoint.endsWith("/modify_list")) { state[0]=
+                    "{listid:10,name:'新名',is_edit:1,is_def:0,count:0,total_ver:980,sort:1,tags:'t',intro:'i'}";
+                    return json("{status:1}"); }
+                return json("{status:1}");
+            } catch(org.json.JSONException malformed) { throw new IOException(malformed); } }));
+        rejects("incomplete",()->fragmented.renamePlaylist(session,"10","新名",()->true));
+    }
+    @Test public void renameValidatesNameBeforeListing() throws Exception {
+        List<KugouApi.Request> calls=new ArrayList<>();
+        KugouLibraryApi library=renameAccount("{listid:10,name:'旧名'}","{listid:10,name:'旧名'}",calls,"{status:1}");
+        KugouApi.Session session=new KugouApi.Session("t","123","n");
+        for(String name:new String[]{null,"","   ","\u0000名","名\n字","\uD800","字".repeat(81)}) {
+            rejects("request",()->library.renamePlaylist(session,"10",name,()->true));
+        }
+        assertTrue("name validation must precede every request",calls.isEmpty());
+        // 80 code points is the inclusive limit and survives trimming intact.
+        String longest="歌".repeat(80);
+        List<KugouApi.Request> accepted=new ArrayList<>();
+        KugouLibraryApi bounded=renameAccount(
+            "{listid:10,name:'旧名',is_edit:1,is_def:0,count:0,total_ver:979,sort:1,tags:'t',intro:'i'}",
+            "{listid:10,name:'"+longest+"',is_edit:1,is_def:0,count:0,total_ver:980,sort:1,tags:'t',intro:'i'}",
+            accepted,"{status:1}");
+        bounded.renamePlaylist(session,"10",longest,()->true);
+        assertEquals(longest,decrypted(single(accepted,"/modify_list")).getString("name"));
+    }
+    @Test public void cloudWriteRejectsMalformedPayloadBeforeTransport() throws Exception {
+        List<KugouApi.Request> calls=new ArrayList<>();
+        KugouApi api=new KugouApi(new KugouApi.Device("b".repeat(32)),r->{
+            calls.add(r); return json("{status:1}"); });
+        KugouApi.Session session=new KugouApi.Session("t","123","n");
+        JSONObject ok=editBody().put("name","新名");
+        // Confirmed sanity: the well-formed body reaches the transport exactly once.
+        assertEquals(1,api.renamePlaylist(session,ok).getInt("status"));
+        assertEquals(1,calls.size());
+        calls.clear();
+        List<JSONObject> rejected=new ArrayList<>();
+        rejected.add(without(editBody(),"tags"));
+        rejected.add(editBody().put("extra",1));
+        rejected.add(editBody().put("type","0"));
+        rejected.add(editBody().put("type",1));
+        rejected.add(without(editBody(),"type"));
+        rejected.add(editBody().put("listid","10"));
+        rejected.add(editBody().put("listid",0));
+        rejected.add(editBody().put("listid",-10));
+        rejected.add(editBody().put("listid",9_007_199_254_740_992L));
+        rejected.add(editBody().put("listid",1.0d));
+        rejected.add(editBody().put("sort",-1));
+        rejected.add(editBody().put("total_ver","979"));
+        rejected.add(editBody().put("tags",JSONObject.NULL));
+        rejected.add(editBody().put("intro",5));
+        rejected.add(editBody().put("name",7));
+        rejected.add(editBody().put("name","   "));
+        rejected.add(editBody().put("name","字".repeat(81)));
+        rejected.add(editBody().put("tags","t".repeat(4097)));
+        rejected.add(editBody().put("intro","i".repeat(16385)));
+        for(JSONObject body:rejected) {
+            rejects("request",()->api.renamePlaylist(session,body));
+        }
+        rejects("request",()->api.renamePlaylist(null,editBody()));
+        rejects("request",()->api.renamePlaylist(session,null));
+        assertTrue("no malformed payload may reach the transport",calls.isEmpty());
+        // Boundary values stay legal: zero counters and the 2^53-1 ceiling.
+        JSONObject edge=editBody().put("sort",0).put("total_ver",0)
+            .put("listid",9_007_199_254_740_991L).put("tags","").put("intro","");
+        assertEquals(1,api.renamePlaylist(session,edge).getInt("status"));
+        assertEquals(1,calls.size());
+        JSONObject payload=decrypted(calls.get(0));
+        assertEquals(0,payload.getLong("total_ver"));
+        assertEquals(9_007_199_254_740_991L,payload.getLong("listid"));
+        assertEquals("",payload.getString("tags"));
+    }
+    private static JSONObject editBody() {
+        try {
+            return new JSONObject().put("name","旧名").put("type",0).put("listid",10L)
+                .put("total_ver",979L).put("sort",3L).put("tags","t").put("intro","i");
+        } catch(org.json.JSONException impossible) { throw new AssertionError(impossible); }
+    }
+    private static JSONObject without(JSONObject body,String key) {
+        body.remove(key); return body;
     }
 }

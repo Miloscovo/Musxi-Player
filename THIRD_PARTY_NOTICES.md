@@ -14,7 +14,7 @@
 | QQ 协议、曲库、搜索、取流、收藏同步 | qqmusic-api-python 0.8.1 / L-1124/QQMusicApi，3fc57f02e4eddb68a069bba4e0e12a7893f2a814，Luren，GPL-3.0-or-later | [platform-qq-NOTICE.txt](platform-qq/src/main/assets/platform-qq-NOTICE.txt)、同目录 licenses/ |
 | 网易云协议、曲库、搜索、取流、收藏同步 | NeteaseCloudMusicApiEnhanced/api-enhanced，2aab9957dfd5231e5b192aecdb177f93ace4c92e，Copyright (c) 2013-2022 Binaryify，MIT | [platform-netease-NOTICE.txt](platform-netease/src/main/assets/platform-netease-NOTICE.txt)、同目录 licenses/ |
 | QR 生成 | Project Nayuki QR-Code-generator，3c6d0b3cefb4e049dc337e82237c9644399716a8，MIT | platform-netease 原源码头及 assets/licenses/QR-Code-generator-MIT.txt |
-| Kotlin 2.2.21、coroutines 1.10.2 | JetBrains，Apache-2.0 | app/src/main/assets/licenses/ |
+| Kotlin 2.3.21、coroutines 1.10.2 | JetBrains，Apache-2.0 | app/src/main/assets/licenses/ |
 | AndroidX / Media3 1.8.0 | Android Open Source Project，Apache-2.0 | app/src/main/assets/licenses/AndroidX-Apache-2.0.txt |
 | Coil 3 3.3.0（io.coil-kt.coil3:coil-compose / coil-network-okhttp，封面图片加载；会引入 OkHttp 与 Okio，均为 Apache-2.0） | Coil Contributors，Apache-2.0 | 许可文本复用 app/src/main/assets/licenses/AndroidX-Apache-2.0.txt；OkHttp、Okio 同为 Apache-2.0，沿用同一文本 |
 | Haze 1.6.10（dev.chrisbanes.haze:haze，用于浮卡、菜单、Sheet 等控件层的液态玻璃材质，见 ui/components/Glass.kt；不支持实时模糊时退回实色） | Chris Banes，Apache-2.0 |
@@ -31,7 +31,15 @@
 
 2026-11-01 第三批更新功能沿用 Robolectric 4.17（MIT），增加 accounts 模块的宿主 JVM 状态、持久化和主线程回调测试；仍仅为 testImplementation，不进入 APK。
 
+2026-11-08 定时停止升级在 playback 模块沿用同一 Robolectric 4.17（MIT）做宿主 Handler/监听适配测试，仅 testImplementation、不进入产品 APK。许可全文沿用现有 test-licenses，未新增运行时依赖或复制第三方业务实现。
+
 同日 P1 标准歌词继续使用同一固定来源：酷狗 module/search_lyric.js、module/lyric.js；网易云 module/lyric.js；QQ qqmusic-api-python 0.8.1 的 modules/lyric.py、models/lyric.py（通过 PyPI 原版本 wheel 只读核对，未安装或打包 Python）。标准 LRC 解析、队列元数据持久化及最近播放使用现有 Kotlin/Java/Android API，无新增生产依赖；不含 QRC/KRC 逐字解密。模块 assets NOTICE 已同步。
+
+2026-11-07 酷狗 KRC 字词增量沿用现有容器/协议来源，并参考 Musxi PC 固定提交 `824a1dfd8089f2cd9699f6da490e05727d3fe335` 的歌词解析与合成测试输入（GPL-3.0-or-later）。MeiloX `bc038c9e9a01f37484a13295b2c3a8c3e44d8804` 的时间轴、QRC/YRC解析与测试仅作设计参考，未复制源码、资源或引入依赖；主体GPLv3。新增字词模型、采样和缓存兼容由本项目实现。详见 `docs/lyrics-word-timing-20261107.md`。
+
+同日 QQ QRC 增量移植固定 QQMusicApi `3fc57f02e4eddb68a069bba4e0e12a7893f2a814` 的 `algorithms/tripledes.py` 为 `QrcCipher.java`。该文件单独标注 Copyright (c) 2024 沉默の金 <cmzj@cmzj.org>、**GPL-3.0-only**，并引用 WXRIW/QQMusicDecoder `0837a3a1281e58f6db3e3e1dcb1d5441fb0ac268`。保留文件声明及既有 GPLv3 全文，不将该文件重新许可为 GPL-3.0-or-later；未新增运行时依赖。普通LRC请求与可选QRC独立，容器/范围/对齐由本项目实现，详见 [QQ QRC接续](docs/lyrics-qq-qrc-20261107.md) 及模块NOTICE。
+
+同日网易云YRC沿用现有MIT协议来源 `NeteaseCloudMusicApiEnhanced/api-enhanced` 固定 `2aab9957dfd5231e5b192aecdb177f93ace4c92e` 的 `module/lyric_new.js` 和既有EAPI传输，保留Binaryify归属与MIT全文。YRC有界解析、时间轴归一化和缓存升级由本项目实现；MeiloX上述固定归档的解析/测试仅作设计参考，未复制代码或引入依赖。见 [网易云YRC接续](docs/lyrics-netease-yrc-20261107.md) 和模块NOTICE。
 
 同日 P2 收藏同步继续改编上述固定来源：酷狗 module/playlist_tracks_add.js、module/playlist_tracks_del.js；网易云 module/likelist.js、like.js；QQ qqmusic-api-python 0.8.1 的 qqmusic_api/modules/songlist.py 中 add_songs、del_songs、like_song、unlike_song，用于单曲收藏同步（通过 PyPI 原版本 wheel 只读核对，未安装或打包 Python）。酷狗和网易云沿用现有 MIT 许可，QQ 沿用现有 GPL-3.0-or-later 来源及许可；无新增生产依赖或许可更改。模块 assets NOTICE 已同步。
 
@@ -40,3 +48,23 @@
 2026-11-01 第二批后端继续使用上述固定来源：QQ modules/user.py、models/user.py 的只读会员查询；酷狗 module/privilege_lite.js、user_verify.js、song_auth.js、song_url_auth.js 的账号授权取流与高级档位；网易云固定会员/hires 接口。保留各模块 GPL-3.0-or-later/MIT 声明，不引入自动领取会员或新增生产依赖。
 
 酷狗歌词后续兼容修复将搜索路径从固定vendor的 `/v1/search` 改为同一官方 HTTPS 主机实测可用的 `/search`，其余来源标识、签名及标准LRC下载解码沿用；未引入新第三方代码或依赖。
+
+2026-11-06 歌单归属管理继续使用上述固定版本：酷狗 `module/playlist_tracks_del.js` 的普通歌单实际 fileid 移除；QQ 0.8.1 `songlist.py` 的 `del_songs/create` 及 `models/songlist.py` 创建结果字段；网易云 `playlist_tracks.js`、`playlist_create.js`、`playlist_name_update.js` 的增删、创建和改名。保留原 MIT/GPL 声明，没有新增运行时依赖。
+
+同日后续接入酷狗本人普通歌单改名，专用云歌单加密改编自同一 MakcRe/KuGouMusicApi 的固定提交 `7ac64e1cdd333ad9bfff644ded82a0ffeef002d1`（`module/playlist_update.js`、`util/request.js#createCloudRequest`、`util/crypto.js`）；保留 MakcRe MIT 版权及现有完整许可。网易云整单订阅和新鲜令牌获取继续改编同一固定 MIT 来源的 `module/playlist_subscribe.js`、`register_checktoken_v3.js` 和 `util/request.js`；未捆绑或执行远端 JavaScript/验证码 SDK。上游订阅模块使用 v2，安卓 v3 替代路径尚需真实账号确认。
+
+2026-11-13 酷狗普通歌单生产创建及设备测试源码 `KugouPlaylistCreationProbeDeviceTest` 适配同一固定提交 `7ac64e1cdd333ad9bfff644ded82a0ffeef002d1` 的 `module/playlist_add.js` 请求形状，复用现有Android签名；精确响应ID核实与写后读回由本项目实现。保留 MakcRe MIT 版权与已有完整许可，无新增运行时依赖，探针不进入主APK。
+
+同日曲库整单删除继续改编现有固定来源：QQMusicApi 0.8.1（GPL-3.0-or-later）`3fc57f02e4eddb68a069bba4e0e12a7893f2a814` 的 `modules/songlist.py` 中 `songlist.delete`／`PlaylistBaseWrite.DelPlaylist`；网易云 MIT `2aab9957dfd5231e5b192aecdb177f93ace4c92e` 的 `module/playlist_delete.js` 明确WEAPI形状。酷狗同一MIT固定提交的 `playlist_del.js` 仅作为未启用自建删除的调查依据。用户排序存储、权限与写后核实为本项目实现；原版权、完整许可和模块NOTICE保留，无新增依赖或远端脚本。
+
+同日酷狗删除验证探针 `KugouPlaylistDeletionProbeDeviceTest` 仅在androidTest适配上述MakcRe MIT固定提交的 `playlist_del.js`、`util/crypto.js`、`util/request.js`、`util/helper.js` 请求形状；复用现有AES／RSA实现与Android签名，未启用生产删除。原MIT完整许可与版权继续保留，无新增运行时依赖。
+
+该单次实机探针成功后，同日按用户授权把已验证的酷狗普通自建歌单删除profile接入生产 `KugouApi`／`KugouLibraryApi`，仍改编同一固定MIT来源 `playlist_del.js` 及上述工具；Base64文本正文与改名的二进制profile分开，权限、完整列表核实和不重发由本项目实现。原版权、完整MIT许可与模块NOTICE保留，无新增运行时依赖。
+
+QQ 整单收藏协议另以官方公开网页脚本 `common.chunk.5b378f933e2203b7da48.js` 和 `playlist_edit.chunk.2725441057c73cad7c10.js`（`https://y.qq.com/ryqq/js/`，2026-11-06 读取）作兼容性研究依据，Android 独立实现严格限定的请求与状态读取，不打包官方脚本。脚本快照和 SHA-256 留在本地验收参考材料中。MeiloX、Glasmio 未引入产品代码或资源；无新增运行时依赖。
+
+同日 QQ 普通歌单改名继续依据上述两份官方公开脚本，独立实现 `uniform_get_Dissinfo` 和保留原元数据的完整 `EditPlaylist` 请求；固定 `mask=95` 来自编辑页原请求，不推导字段位定义。来源散列与边界见 [接续记录](docs/backend-qq-playlist-rename-20261106.md)，不打包脚本、没有新增依赖或许可变更。
+
+同日后续按上述网易云固定 MIT 来源 `playlist_subscribe.js`、`register_checktoken_v2.js` 与 `util/request.js` 复核版本选择；移除此前不兼容的默认 v3 匿名令牌获取器，兼容 v2 提供者未接入时在写前拒绝。未移植或打包 Watchman SDK、浏览器特征模拟或远端脚本，没有新增依赖，原有版权和许可保留。
+
+2026-11-12 歌曲推荐沿用既有固定来源：网易云 `recommend_songs.js` 的WEAPI日推（MIT）；酷狗 `recommend_songs.js` 及 `util/helper.js` 的标准Android签名与每日歌曲（MIT）；QQ 0.8.1 `recommend.py`/`models/recommend.py` 的登录态猜你喜欢电台（GPL-3.0-or-later，不承诺每日更新）。保留各模块NOTICE与许可全文，新增缓存/状态及播放整合为本项目实现，没有新增运行时依赖、业务服务器或远端脚本执行。

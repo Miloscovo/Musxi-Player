@@ -10,6 +10,7 @@ import tech.musxi.core.lyrics.LyricsTranslation
 import tech.musxi.core.lyrics.TranslationAvailability
 import tech.musxi.core.lyrics.TranslationLookup
 import tech.musxi.core.lyrics.TranslationLookupStatus
+import tech.musxi.core.settings.LyricsTranslationPreference
 
 class TranslationPreferenceTest {
 
@@ -104,4 +105,27 @@ class TranslationPreferenceTest {
         status = LyricsStatus.TIMED,
         lines = lines.mapIndexed { index, text -> LyricLine(index.toLong(), text) },
     )
+
+    private val english = listOf(LyricLine(0, "We keep singing", "我们继续歌唱"))
+    private val chinese = listOf(LyricLine(0, "夜色慢慢落下", "Night is falling"))
+
+    @Test fun theSettingOffHidesTranslationsForEverySong() {
+        // The reported bug: 我的 said off, a foreign song still showed its translation.
+        assertFalse(translationShown(LyricsTranslationPreference.HIDE, null, english, ""))
+        assertFalse(translationShown(LyricsTranslationPreference.HIDE, null, chinese, ""))
+    }
+
+    @Test fun theSettingOnFollowsTheLanguageOfTheLyrics() {
+        assertTrue(translationShown(LyricsTranslationPreference.AUTO, null, english, ""))
+        assertFalse(translationShown(LyricsTranslationPreference.AUTO, null, chinese, ""))
+        assertTrue(translationShown(LyricsTranslationPreference.SHOW, null, chinese, ""))
+    }
+
+    @Test fun theChipOverridesTheCurrentSongOnly() {
+        // The chip can still show this song's translation while the setting is off; the next song
+        // has no override and starts from the setting again.
+        assertTrue(translationShown(LyricsTranslationPreference.HIDE, true, english, ""))
+        assertFalse(translationShown(LyricsTranslationPreference.AUTO, false, english, ""))
+        assertFalse(translationShown(LyricsTranslationPreference.HIDE, null, english, ""))
+    }
 }

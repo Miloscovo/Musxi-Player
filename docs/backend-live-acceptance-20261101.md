@@ -1,5 +1,7 @@
 # 2026-11-01 后端真机验收
 
+> **状态：日期真机验收（2026-11-01）。** 只对应指定开发包、单台 Android 16 和已列场景；未列项仍是未决。当前状态见 [当前开发接续](next-session-handoff.md)。
+
 本轮在已连接的 Android 16 / API 36 设备上覆盖安装 debug 包，保留账号、缓存和用户队列。仅增加 debug 固定验收入口并修正酷狗解析；未修改 `app/src/main/kotlin/tech/musxi/player/ui/`，未提交或推送。功能说明见 [后端交付](backend-delivery-20261101.md)。
 
 ## 收藏与解析修正

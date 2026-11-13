@@ -8,6 +8,37 @@ import tech.musxi.core.library.*
 import tech.musxi.playback.QueueInsertAt
 
 class NeteasePlaybackUseCaseTest {
+    @Test fun recommendationSnapshotCancelsPendingPlaylistAndRetainsOrderAndStart() {
+        val songs = listOf("1", "2", "3").map { SongSummary(MediaKey(Platform.QQ, it), "Song $it", emptyList(), "", 1000) }
+        val submitted = mutableListOf<PlaybackQueue>()
+        var stale: ((Result<PlaybackQueue>) -> Unit)? = null
+        var intents = 0
+        val useCase = NeteasePlaybackUseCase({ _, _, result -> stale = result },
+            { queue, result -> submitted += queue; result(Result.success(Unit)) }, {}, { 42 }, onNewIntent = { intents++ })
+        useCase.playPlaylist(MediaKey(Platform.QQ, "12_0"), songs.first().key)
+        var accepted = false
+        useCase.playSnapshot(PlaybackQueue(songs, 2, 42)) { accepted = it.isSuccess }
+        stale!!(Result.success(PlaybackQueue(songs, 0, 42)))
+        assertTrue(accepted)
+        assertEquals(2, intents)
+        assertEquals(1, submitted.size)
+        assertEquals(songs, submitted.single().songs)
+        assertEquals(2, submitted.single().startIndex)
+    }
+
+    @Test fun recommendationSnapshotRejectsAnotherAccountGenerationAndMixedPlatforms() {
+        val first = SongSummary(MediaKey(Platform.NETEASE, "1"), "Song", emptyList(), "", 1000)
+        var submits = 0
+        val useCase = NeteasePlaybackUseCase({ _, _, _ -> }, { _, _ -> submits++ }, {}, { 2 })
+        var failed = 0
+        useCase.playSnapshot(PlaybackQueue(listOf(first), 0, 1)) { if (it.isFailure) failed++ }
+        useCase.playSnapshot(PlaybackQueue(listOf(first, first.copy(key = MediaKey(Platform.QQ, "2"))), 0, 2)) {
+            if (it.isFailure) failed++
+        }
+        assertEquals(2, failed)
+        assertEquals(0, submits)
+    }
+
     @Test fun savedQueueUsesFreshGenerationAndRestoreSubmitWithoutOrdinaryAutoplay() {
         val song = SongSummary(MediaKey(Platform.NETEASE, "1"), "Fixture", emptyList(), "", 1000)
         val saved = tech.musxi.core.playback.SavedPlaybackQueue(listOf(song), 0, 500, "ALL", true, 10)

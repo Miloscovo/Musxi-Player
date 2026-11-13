@@ -2,8 +2,6 @@ package tech.musxi.player.ui.components
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.MutableTransitionState
-import androidx.compose.animation.core.spring
-import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
@@ -65,15 +63,16 @@ import androidx.compose.ui.unit.isSpecified
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupPositionProvider
 import androidx.compose.ui.window.PopupProperties
+import tech.musxi.player.ui.theme.Motion
 
 /** Which edge of the menu lines up with the matching edge of its anchor button. */
 enum class MenuAlign { START, END }
 
 /** Gap between the anchor and the card. */
-private val AnchorGap = 8.dp
+internal val AnchorGap = 8.dp
 
 /** The card never gets closer to a window edge than this. */
-private val WindowMargin = 12.dp
+internal val WindowMargin = 12.dp
 
 /**
  * Transparent room around the card inside the popup window. A shadow is drawn by the card itself
@@ -103,6 +102,24 @@ fun AnchoredMenu(
     maxHeight: Dp = Dp.Unspecified,
     content: @Composable ColumnScope.() -> Unit,
 ) {
+    // In a page under the shell: drawn in the shell's own layer, as glass (MenuOverlay.kt).
+    LocalMenuOverlay.current?.let { overlay ->
+        OverlayAnchoredMenu(overlay, expanded, onDismiss, align, preferAbove, maxHeight, content)
+        return
+    }
+    PopupAnchoredMenu(expanded, onDismiss, align, preferAbove, maxHeight, content)
+}
+
+/** The solid menu in a window of its own: over the player, the sheets, and outside the shell. */
+@Composable
+private fun PopupAnchoredMenu(
+    expanded: Boolean,
+    onDismiss: () -> Unit,
+    align: MenuAlign,
+    preferAbove: Boolean,
+    maxHeight: Dp,
+    content: @Composable ColumnScope.() -> Unit,
+) {
     val state = remember { MutableTransitionState(false) }
     state.targetState = expanded
     if (!(state.currentState || state.targetState)) return
@@ -129,13 +146,13 @@ fun AnchoredMenu(
     ) {
         AnimatedVisibility(
             visibleState = state,
-            enter = fadeIn(tween(120)) + scaleIn(
-                animationSpec = spring(dampingRatio = 0.8f, stiffness = 600f),
+            enter = fadeIn(Motion.enter()) + scaleIn(
+                animationSpec = Motion.menu(),
                 initialScale = 0.85f,
                 transformOrigin = origin,
             ),
-            exit = fadeOut(tween(100)) + scaleOut(
-                animationSpec = tween(100),
+            exit = fadeOut(Motion.exit()) + scaleOut(
+                animationSpec = Motion.menuDismiss(),
                 targetScale = 0.92f,
                 transformOrigin = origin,
             ),
@@ -205,33 +222,13 @@ private class AnchoredMenuPositionProvider(
         layoutDirection: LayoutDirection,
         popupContentSize: IntSize,
     ): IntOffset {
-        val cardWidth = (popupContentSize.width - 2 * room).coerceAtLeast(0)
-        val cardHeight = (popupContentSize.height - 2 * room).coerceAtLeast(0)
-
-        val leading = (align == MenuAlign.START) == (layoutDirection == LayoutDirection.Ltr)
-        val wantedX = if (leading) anchorBounds.left else anchorBounds.right - cardWidth
-        val x = wantedX.coerceIn(margin, (windowSize.width - margin - cardWidth).coerceAtLeast(margin))
-
-        val roomAbove = anchorBounds.top - gap - margin
-        val roomBelow = windowSize.height - margin - (anchorBounds.bottom + gap)
-        val above = when {
-            preferAbove && cardHeight <= roomAbove -> true
-            !preferAbove && cardHeight <= roomBelow -> false
-            // Neither fits where it was wanted: take the roomier side and let the clamp do the rest.
-            cardHeight <= roomAbove -> true
-            cardHeight <= roomBelow -> false
-            else -> roomAbove > roomBelow
-        }
-        val wantedY = if (above) anchorBounds.top - gap - cardHeight else anchorBounds.bottom + gap
-        val y = wantedY.coerceIn(margin, (windowSize.height - margin - cardHeight).coerceAtLeast(margin))
-
-        // Grow out of the card's corner that faces the button: the horizontal fraction follows where
-        // the anchor's centre falls across the card after clamping, the vertical one the side.
-        val anchorCentre = (anchorBounds.left + anchorBounds.right) / 2f
-        val fractionX = if (cardWidth > 0) ((anchorCentre - x) / cardWidth).coerceIn(0f, 1f) else 0.5f
-        onOrigin(TransformOrigin(fractionX, if (above) 1f else 0f))
-
-        return IntOffset(x - room, y - room)
+        val card = IntSize(
+            (popupContentSize.width - 2 * room).coerceAtLeast(0),
+            (popupContentSize.height - 2 * room).coerceAtLeast(0),
+        )
+        val placed = placeAnchoredMenu(anchorBounds, windowSize, card, align, preferAbove, gap, margin, layoutDirection)
+        onOrigin(placed.origin)
+        return IntOffset(placed.offset.x - room, placed.offset.y - room)
     }
 }
 

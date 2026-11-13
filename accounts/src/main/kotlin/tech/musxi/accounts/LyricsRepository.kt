@@ -14,11 +14,13 @@ import tech.musxi.core.lyrics.LyricsTranslation
 import tech.musxi.core.lyrics.TranslationLookup
 import tech.musxi.core.lyrics.TranslationLookupStatus
 import tech.musxi.core.lyrics.LyricsOrigin
+import tech.musxi.core.lyrics.LyricsWordTimeline
 import tech.musxi.core.lyrics.LyricsCacheHit
 import tech.musxi.neteaseloginpoc.NeteaseApi
 import tech.musxi.neteaseloginpoc.NeteaseLibraryApi
 import tech.musxi.qqloginpoc.QqMusicApi
 import tech.musxi.qqloginpoc.QqLibraryApi
+import tech.musxi.qqloginpoc.QrcLyricsDecoder
 import tech.musxi.loginpoc.KugouApi
 import tech.musxi.loginpoc.KugouLibraryApi
 
@@ -28,6 +30,7 @@ class LyricsRepository(private val accounts: AccountRepository) {
     private class Stage(val key: MediaKey, val owner: LibraryCacheIdentity, val raw: String,
         val parsed: ParsedLyrics, val document: Any) {
         var initial = true
+        var displayed = parsed
         override fun toString() = "LyricsStage(redacted)"
     }
     // Main-thread bounded contexts; private platform documents/handles never enter UI or disk.
@@ -115,11 +118,14 @@ class LyricsRepository(private val accounts: AccountRepository) {
                     else Result.failure(LyricsFailure("account_changed", "NONE")))
                 return@cached
             }
-            if (cached != null && !cached.stale) return@cached result(Result.success(cached.lyrics))
+            if (cached != null && !cached.stale && !NeteaseWordLyrics.needsRefresh(key.platform, cached.lyrics))
+                return@cached result(Result.success(cached.lyrics))
             fetchNetworkOriginal(key, isCurrent) network@{ fresh ->
                 if (!isCurrent()) return@network
                 val parsed = fresh.getOrNull()
-                if (parsed == null) {
+                if (parsed == null || cached != null && key.platform == Platform.NETEASE &&
+                    cached.lyrics.timingRevision >= NeteaseWordLyrics.TIMING_REVISION &&
+                    parsed.timingRevision < NeteaseWordLyrics.TIMING_REVISION) {
                     result(if (cached != null) Result.success(cached.lyrics) else fresh)
                 } else {
                     accounts.lyricsCache(key, owner, parsed) { }
@@ -139,7 +145,8 @@ class LyricsRepository(private val accounts: AccountRepository) {
                 if (parsed.lines.isNotEmpty()) TranslationLookupStatus.IDLE else TranslationLookupStatus.UNSUPPORTED,
                 if (parsed.lines.isNotEmpty()) null else if (parsed.plainText.isBlank())
                     TranslationReason.NO_LYRICS else TranslationReason.NOT_SYNCED)))
-            return Stage(key, owner, raw, original, document)
+            val timed = if (document is NeteaseLibraryApi.LyricsDocument) NeteaseWordLyrics.attach(document, original) else original
+            return Stage(key, owner, raw, timed, document)
         }
         val callback: (Result<Stage>) -> Unit = callback@{ response ->
             if (expectedCacheRevision != cacheRevision || !isCurrent()) return@callback
@@ -157,7 +164,7 @@ class LyricsRepository(private val accounts: AccountRepository) {
         when (key.platform) {
             Platform.NETEASE -> accounts.withNeteaseSession({ api, session ->
                 if (!isCurrent()) throw LibraryPageFailure("cancelled")
-                val doc = NeteaseLibraryApi(api).lyricsDocument(session, key.id)
+                val doc = NeteaseLibraryApi(api).lyricsTimedDocument(session, key.id)
                 stage(doc.original, doc)
             }, callback, RequestOperation.LYRICS)
             Platform.QQ -> accounts.withQqSession({ api, session ->
@@ -199,10 +206,11 @@ class LyricsRepository(private val accounts: AccountRepository) {
             if (!refresh && original.translation.lookup.status != TranslationLookupStatus.IDLE) {
                 result(Result.success(original)); return
             }
-            fetch(key) { response ->
-                if (expectedCacheRevision != cacheRevision || owner != accounts.playbackIdentity(key.platform)) return@fetch
-                response.getOrNull()?.let { accounts.lyricsCache(key, owner, it) { } }
-                result(response)
+            fetchWithPrevious(key, original) { response ->
+                if (expectedCacheRevision != cacheRevision || owner != accounts.playbackIdentity(key.platform)) return@fetchWithPrevious
+                val retained = response.map { LyricsWordTimeline.retainOnFailure(original, it) }
+                retained.getOrNull()?.let { accounts.lyricsCache(key, owner, it) { } }
+                result(retained)
             }
             return
         }
@@ -217,23 +225,21 @@ class LyricsRepository(private val accounts: AccountRepository) {
                 LyricsTranslationAligner.failed(original, TranslationReason.VERSION_MISMATCH)
         val callback = normalized<ParsedLyrics> { response ->
             if (expectedCacheRevision != cacheRevision || !stage.owner.sameAttempt(accounts.playbackIdentity(key.platform))) return@normalized
-            response.getOrNull()?.let { accounts.lyricsCache(key, stage.owner, it) { } }
-            result(response)
+            val retained = response.map { LyricsWordTimeline.retainOnFailure(stage.displayed, it) }
+            retained.getOrNull()?.let { stage.displayed = it; accounts.lyricsCache(key, stage.owner, it) { } }
+            result(retained)
         }
         when (key.platform) {
             Platform.NETEASE -> accounts.withNeteaseSession({ api, session ->
                 val doc = if (useInitial) stage.document as NeteaseLibraryApi.LyricsDocument
-                    else NeteaseLibraryApi(api).lyricsDocument(session, key.id)
-                align(doc.original) { if (doc.translationStatus == NeteaseLibraryApi.TranslationStatus.INVALID)
-                    LyricsTranslationAligner.failed(original, TranslationReason.INVALID_DATA)
-                    else LyricsTranslationAligner.parse(doc.original, doc.translation) }
+                    else NeteaseLibraryApi(api).lyricsTimedDocument(session, key.id)
+                align(doc.original) { NeteaseWordLyrics.parse(doc, stage.displayed) }
             }, callback, RequestOperation.LYRICS)
             Platform.QQ -> accounts.withQqSession({ api, session ->
+                val library = QqLibraryApi(api)
                 val doc = if (useInitial) stage.document as QqLibraryApi.LyricsDocument
-                    else QqLibraryApi(api).lyricsDocument(session, key.id)
-                align(doc.original) { if (doc.translationStatus == QqLibraryApi.TranslationStatus.INVALID)
-                    LyricsTranslationAligner.failed(original, TranslationReason.INVALID_DATA)
-                    else LyricsTranslationAligner.parse(doc.original, doc.translation) }
+                    else library.lyricsDocument(session, key.id)
+                align(doc.original) { alignQq(doc, library.lyricsWords(session, key.id), stage.displayed) }
             }, callback, RequestOperation.LYRICS)
             Platform.KUGOU -> accounts.withKugouSession({ api, session ->
                 val doc = KugouLibraryApi(api).lyricsTranslation(session, stage.document as KugouLibraryApi.LyricsOriginal)
@@ -246,7 +252,9 @@ class LyricsRepository(private val accounts: AccountRepository) {
         KugouLibraryApi.TranslationStatus.PRESENT, KugouLibraryApi.TranslationStatus.ABSENT ->
             if (document.original.isBlank()) LyricsTranslationAligner.parse(document.original, null)
             else KrcTranslationAligner.parse(document.original, document.rows.map {
-                KrcTranslationAligner.Row(it.timeMs, it.text, it.translation)
+                KrcTranslationAligner.Row(it.timeMs, it.text, it.translation, it.words.map { word ->
+                    tech.musxi.core.lyrics.LyricWord(word.textStart, word.textEnd, word.startTimeMs, word.endTimeMs)
+                })
             })
         else -> LyricsTranslationAligner.failed(LrcParser.parse(document.original), when (document.translationStatus) {
             KugouLibraryApi.TranslationStatus.NETWORK -> TranslationReason.NETWORK
@@ -255,6 +263,14 @@ class LyricsRepository(private val accounts: AccountRepository) {
             KugouLibraryApi.TranslationStatus.UNSUPPORTED -> TranslationReason.UNSUPPORTED_FORMAT
             else -> TranslationReason.INVALID_DATA
         })
+    }
+
+    private fun alignQq(document: QqLibraryApi.LyricsDocument, words: QrcLyricsDecoder.Document,
+        previous: ParsedLyrics? = null): ParsedLyrics {
+        val translated = if (document.translationStatus == QqLibraryApi.TranslationStatus.INVALID)
+            LyricsTranslationAligner.failed(LrcParser.parse(document.original), TranslationReason.INVALID_DATA)
+        else LyricsTranslationAligner.parse(document.original, document.translation)
+        return QqWordLyrics.attach(document.original, translated, words, previous)
     }
 
     private fun <T> normalized(result: (Result<T>) -> Unit): (Result<T>) -> Unit = { response ->
@@ -284,19 +300,20 @@ class LyricsRepository(private val accounts: AccountRepository) {
             "lyrics_download_json_null", "lyrics_download_json_bom", "lyrics_download_json_compressed", "lyrics_download_json_jsonp")
     }
     fun fetch(key: MediaKey, result: (Result<ParsedLyrics>) -> Unit) {
+        fetchWithPrevious(key, null, result)
+    }
+
+    private fun fetchWithPrevious(key: MediaKey, previous: ParsedLyrics?, result: (Result<ParsedLyrics>) -> Unit) {
         val callback = normalized(result)
         when (key.platform) {
             Platform.NETEASE -> accounts.withNeteaseSession({ api, session ->
-                val document = NeteaseLibraryApi(api).lyricsDocument(session, key.id)
-                if (document.translationStatus == NeteaseLibraryApi.TranslationStatus.INVALID)
-                    LyricsTranslationAligner.failed(LrcParser.parse(document.original), TranslationReason.INVALID_DATA)
-                else LyricsTranslationAligner.parse(document.original, document.translation)
+                val document = NeteaseLibraryApi(api).lyricsTimedDocument(session, key.id)
+                NeteaseWordLyrics.parse(document, previous)
             }, callback, RequestOperation.LYRICS)
             Platform.QQ -> accounts.withQqSession({ api, session ->
-                val document = QqLibraryApi(api).lyricsDocument(session, key.id)
-                if (document.translationStatus == QqLibraryApi.TranslationStatus.INVALID)
-                    LyricsTranslationAligner.failed(LrcParser.parse(document.original), TranslationReason.INVALID_DATA)
-                else LyricsTranslationAligner.parse(document.original, document.translation)
+                val library = QqLibraryApi(api)
+                val document = library.lyricsDocument(session, key.id)
+                alignQq(document, library.lyricsWords(session, key.id), previous)
             }, callback, RequestOperation.LYRICS)
             Platform.KUGOU -> accounts.withKugouSession({ api, session ->
                 val document = KugouLibraryApi(api).lyricsDocument(session, key.id)

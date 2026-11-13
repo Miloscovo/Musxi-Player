@@ -18,6 +18,7 @@ class AppSettingsPersistenceFormatTest {
         assertEquals(LyricsFontSize.MEDIUM, settings.lyricsFontSize)
         assertEquals(LyricsColorMode.COVER, settings.lyricsColorMode)
         assertEquals(LyricsTranslationPreference.AUTO, settings.lyricsTranslationPreference)
+        assertEquals("MIST", settings.accent)
     }
 
     @Test
@@ -31,12 +32,35 @@ class AppSettingsPersistenceFormatTest {
             lyricsFontSize = LyricsFontSize.LARGE,
             lyricsColorMode = LyricsColorMode.FIXED,
             lyricsTranslationPreference = LyricsTranslationPreference.HIDE,
+            accent = "TEAL",
         )
 
         val encoded = AppSettingsPersistenceFormat.encode(expected)
 
         assertEquals(expected, AppSettingsPersistenceFormat.decode(encoded))
         assertEquals(AppSettingsPersistenceFormat.keys, encoded.keys)
+    }
+
+    @Test
+    fun missingAccentKeyFallsBackToDefault() {
+        val legacy = AppSettingsPersistenceFormat.encode(AppSettings()) -
+            AppSettingsPersistenceFormat.ACCENT
+
+        val decoded = AppSettingsPersistenceFormat.decode(legacy)
+
+        assertEquals("MIST", decoded.accent)
+        assertEquals(AppSettings(), decoded)
+    }
+
+    @Test
+    fun unknownAccentNameIsPreservedVerbatim() {
+        val decoded = AppSettingsPersistenceFormat.decode(
+            mapOf(AppSettingsPersistenceFormat.ACCENT to "VIOLET_2027"),
+        )
+
+        assertEquals("VIOLET_2027", decoded.accent)
+        val reEncoded = AppSettingsPersistenceFormat.encode(decoded)
+        assertEquals("VIOLET_2027", reEncoded[AppSettingsPersistenceFormat.ACCENT])
     }
 
     @Test
@@ -59,5 +83,6 @@ class AppSettingsPersistenceFormatTest {
         assertEquals(false, decoded.transparencyEnabled)
         assertEquals(PreferredAudioQuality.BEST, decoded.defaultQuality)
         assertEquals(LyricsFontSize.MEDIUM, decoded.lyricsFontSize)
+        assertEquals("MIST", decoded.accent)
     }
 }

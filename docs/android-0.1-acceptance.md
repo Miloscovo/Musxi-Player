@@ -1,5 +1,7 @@
 # 安卓 v0.1 集成与验收
 
+> **状态：历史版本验收（v0.1）。** 本文记录 alpha01/alpha02 包和当时缺口，不能代表当前 v0.2 或正式包。当前状态见 [当前开发接续](next-session-handoff.md)，文档分类见 [文档入口](README.md)。
+
 更新：2026-10-23。**v0.1 非常不完善，此次公开源码仅为后续修改奠定基础。** 当前源码为 `0.1.0-alpha02`，以 [v0.1 预发布版](https://github.com/qwt1011/Musxi-Player-Android/releases/tag/v0.1) 收录相同 debug 签名 APK，仍不是正式稳定发行版。
 
 ## 当前能力与缺口

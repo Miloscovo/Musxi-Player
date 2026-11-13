@@ -1,10 +1,26 @@
 # 歌词翻译接线契约：三平台已接入（2026-10-22 本轮状态校准）
 
+> **状态：现行歌词与译文合同，含 2026-10-22 状态校准。** 三平台接入范围、结构化文档和失败语义可作接口依据；包、设备和测试数只对应文中日期。当前未决场景见 [当前开发接续](next-session-handoff.md)，其他文档见 [文档入口](README.md)。
+
+**2026-11-07 增量**：`LyricLine` 追加可选 `words`，`LyricsState` 追加字词定位字段；酷狗 KRC 和 QQ QRC 后端传递经校验的字词时间，含磁盘缓存与旧格式兼容。网易云及正式页面仍为行级。模型、时钟、参考提交及验证边界见 [逐字歌词首轮](lyrics-word-timing-20261107.md) 和 [QQ QRC接续](lyrics-qq-qrc-20261107.md)。QQ字词与译文独立校验，QRC失败可保留同份原文已有字词，不把它标为译文失败。本文历史 API 示例省略新增可选字段。
+
+**2026-11-11 增量**：`LyricsState` 末尾新增 `queueKey: MediaKey? = null`，标明原始队列身份，区别于换源后的实际 `sourceKey`；与当前目标绑定，取消后清空。默认关闭的媒体卡片标题歌词同时校验这两个身份，服务按实际播放位置调度；不改变本页面的歌名／译文／逐字状态，详情见[方案 B 接线与验证](backend-media-card-lyrics-20261111.md)。
+
+**同日网易云增量**：已接原生YRC/ytlrc时间轴，与酷狗/QQ共用上述字词模型。有效YRC的行时间可能不同于旧LRC，后端在首次展示前选择对应时间轴，刷新期间不更换已展示的原文；YRC缺失/失败回退普通歌词。`ParsedLyrics.timingRevision` 只供旧缓存升级，前端无需使用；缓存格式3仍兼容1/2。详情与实机边界见 [网易云YRC接续](lyrics-netease-yrc-20261107.md)。上段“网易云行级”属于QQ阶段，产品页面仍按行渲染。
+
 2026-10-22 B1-08 最新：前台资格门禁已实现并同步主工程，先由 Media3 建立前台服务，再单次请求音频焦点；等待最多3秒，暂停/停止/换队列使旧请求失效，系统拒绝前台启动时返回 `BACKGROUND_RESTRICTED`，须前台明确重试。隔离后端392项、主工程515项测试全通过，Lint均无错误（分别9/76条警告，范围不同）。最终后端包酷狗实际播放、受控超时/暂停取消/显式重试通过；最终包两次真实QQ→网易云换源均因NETWORK停止，未将完整闭环记为通过。前一候选包后台换源及用户听音证据保留其包归属。见[B1-08修复与验收](backend-b108-acceptance-20261022.md)。
 
 2026-10-22。网易云 `tlyric.lyric`、QQ 同响应 `trans` 和酷狗 KRC `language` 均已接入，三平台可返回行级译文。前端继续使用同一套 LyricLine.translation、translation 状态和 activeIndex。已实现原文先显示、译文随后补入及独立刷新；新增入口见下文，今晚记录见 [后端补验](backend-evening-acceptance-20261022.md)。原文接口与来源规则沿用 [P1](frontend-backend-contract-p1.md)，酷狗阶段设备及构建证据见 [酷狗阶段验收](lyrics-translation-kugou-acceptance-20261022.md)，此前见 [网易云验收](lyrics-translation-acceptance-20261022.md)及 [QQ验收](lyrics-translation-qq-acceptance-20261022.md)，后续见 [翻译计划](lyrics-translation-plan.md)。
 
 **2026-10-23 前端接线更新**：正式页面现已接行级双语、翻译开关和独立 `refreshTranslation`，沿用后端验证对齐的译文，不新增机器翻译服务。默认显示按原文脚本判断：中文主体关闭，外语主体开启；当前实际来源的手动覆盖优先，延迟译文和刷新不重置。`TranslationUi.hasText`区分失败时有无旧译文；`lookupFailed`保留查询失败事实。确认无译文与获取失败仍分别处理：前者禁用，后者可重试并保留已有译文。字标状态、短按/长按语义及视觉验证限制见[播放页设计记录](design/player-sheets.md)。2026-10-22“前端仅原文第一版”的说明已是历史阶段；文中既有真机数字保持原包归属，未据本轮JVM渲染宣告正式前端整体验收。
+
+## 逐字展示的播放时钟（2026-11-11）
+
+`PlaybackState` 末尾追加 `positionSampledAtElapsedMs: Long = 0`、`playbackSpeed: Float = 1f`，另公开计算属性 `canExtrapolatePosition: Boolean`。每次 `PlaybackConnection.update` 在主线程读取 `player.currentPosition` 后立即读取 `SystemClock.elapsedRealtime()`，再取 `player.playbackParameters.speed`，将三者在同一状态中发布。原 Media3 事件和约 500ms tick 不变，未新增逐帧后端回调或倍速设置命令。
+
+只有 `canExtrapolatePosition=true` 才向前推算：连接可用、`playing && playWhenReady && !buffering && !ended`、无 suppression、无平台/本地错误，且 speed 有限并大于零。暂停、缓冲、断线、结束及错误直接使用 `positionMs`。允许时为 `positionMs + max(0, nowElapsedMs - positionSampledAtElapsedMs) × playbackSpeed`；已知 duration 可限制上界。每次新状态均重新对齐，seek/切歌使用新样本；再减 `LyricsState.offsetMs` 传给 `LyricsWordTimeline.sample`。
+
+**`nowElapsedMs` 必须取 `SystemClock.elapsedRealtime()`。** Compose `withFrameNanos` / Choreographer 的帧时间不可直接除以百万当作同一时钟，两者在熄屏后可能有不同基准。帧回调只负责触发绘制，取样时钟与后端保持一致。断线默认样本时刻为 0、speed 为 1f、不可推算。单测验证位置/时刻成对、真实倍速读取及推算门禁，逐字页面和听音对齐须在前端接好后实机验收；见[需求交付](backend-requests-20261111.md#交付说明codex-填写)。
 
 ## 已落地 API
 

@@ -14,6 +14,7 @@ import androidx.compose.ui.unit.dp
 import tech.musxi.core.account.Platform
 import tech.musxi.core.library.MediaKey
 import tech.musxi.core.library.PlaylistSummary
+import tech.musxi.player.ui.components.pageBackground
 import tech.musxi.player.ui.library.LibraryContent
 import tech.musxi.player.ui.library.LibraryDensity
 import tech.musxi.player.ui.library.LibraryFilter
@@ -50,7 +51,8 @@ fun LibrarySheet(
 ) {
     MusxiTheme(accent = accent, mode = mode) {
         val cs = MaterialTheme.colorScheme
-        Surface(Modifier.fillMaxSize(), color = cs.background) {
+        // pageBackground, like the shipped pages: plain colour, or the 界面壁纸 when one is provided.
+        Surface(Modifier.fillMaxSize().pageBackground(cs.background), color = androidx.compose.ui.graphics.Color.Transparent) {
             Column(Modifier.fillMaxSize()) {
                 Box(Modifier.weight(1f)) {
                     LibraryContent(

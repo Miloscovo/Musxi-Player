@@ -1,5 +1,7 @@
 # P2 收藏同步与队列编辑验收（2026-10-20）
 
+> **状态：日期专项验收（2026-10-20）。** 只对应文中包和测试范围；当前状态以 [当前开发接续](next-session-handoff.md) 为准，文档分类见 [文档入口](README.md)。
+
 > 历史专项记录：以下只对应文中日期、包和测试范围；当前状态以 [0.1 验收](android-0.1-acceptance.md) 为准。本机证据路径仅用于本地复查，不随仓库分发。
 
 接口见 [frontend-backend-contract-p2.md](frontend-backend-contract-p2.md)。本文件按实际执行结果更新；未执行的真实收藏变更不计通过。

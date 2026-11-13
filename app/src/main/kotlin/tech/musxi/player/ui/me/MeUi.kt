@@ -54,18 +54,26 @@ data class MePlaybackUi(
     val autoSwitchSource: Boolean = true,
     val relaxDuration: Boolean = false,
     val quality: PreferredAudioQuality = PreferredAudioQuality.STANDARD,
+    /** 每日推荐 / 猜你喜欢 on the library home; on by default. */
+    val recommendations: Boolean = true,
 )
 
 data class MeLyricsUi(
     val followCover: Boolean = true,
     val showTranslation: Boolean = true,
     val fontSize: LyricsFontSize = LyricsFontSize.MEDIUM,
+    /** The system media card (lock screen, notification shade) shows the current lyric line as its title. */
+    val mediaCardLyrics: Boolean = false,
 )
 
 data class MeAppearanceUi(
     val themeMode: ThemeMode = ThemeMode.SYSTEM,
     val transparency: Boolean = true,
     val accent: Accent = Accent.MIST,
+    /** 本地封面: read covers from local files (on), or show only covers the user picked (off). */
+    val localArtwork: Boolean = true,
+    /** "补取中 12/40" while covers are being filled in for old recordings; null when idle. */
+    val localArtworkFill: String? = null,
 )
 
 /** [cacheText] is ready to print ("128 MB", "计算中…"); [clearable] is false while there is nothing to clear or a job runs. */
@@ -81,23 +89,32 @@ data class MeUi(
     val lyrics: MeLyricsUi = MeLyricsUi(),
     val appearance: MeAppearanceUi = MeAppearanceUi(),
     val storage: MeStorageUi = MeStorageUi(),
+    /** 锁定平台: the library's one platform for single-source users, or NONE. */
+    val libraryLock: tech.musxi.player.ui.library.LibraryLock = tech.musxi.player.ui.library.LibraryLock.NONE,
 )
 
 /**
- * Command callbacks of the page. The page keeps no copy of any setting: a switch shows [MeUi] and
- * reports the value the user asked for, so a failed save simply leaves the switch where it was.
- * The `onOpen…` callbacks push a sub-page; asking before [onClearCache] runs is the caller's job.
+ * Command callbacks of the page. The page keeps no copy of any setting: a switch or a picker shows
+ * [MeUi] and reports the value the user asked for, so a failed save simply leaves the row where it
+ * was. The `onSelect…` callbacks fire only for a value other than the current one. [onOpenAccount]
+ * pushes the platform's page; asking before [onClearCache] runs is the caller's job.
  */
 class MeActions(
     val onOpenAccount: (Platform) -> Unit = {},
     val onSetAutoSwitchSource: (Boolean) -> Unit = {},
     val onSetRelaxDuration: (Boolean) -> Unit = {},
-    val onOpenQuality: () -> Unit = {},
+    val onSetRecommendations: (Boolean) -> Unit = {},
+    val onSelectLibraryLock: (tech.musxi.player.ui.library.LibraryLock) -> Unit = {},
+    val onSelectQuality: (PreferredAudioQuality) -> Unit = {},
     val onSetFollowCover: (Boolean) -> Unit = {},
     val onSetShowTranslation: (Boolean) -> Unit = {},
-    val onOpenFontSize: () -> Unit = {},
-    val onOpenDarkMode: () -> Unit = {},
+    val onSelectFontSize: (LyricsFontSize) -> Unit = {},
+    val onSetMediaCardLyrics: (Boolean) -> Unit = {},
+    val onSelectThemeMode: (ThemeMode) -> Unit = {},
     val onSetTransparency: (Boolean) -> Unit = {},
-    val onOpenAccent: () -> Unit = {},
+    val onSelectAccent: (Accent) -> Unit = {},
+    val onSetLocalArtwork: (Boolean) -> Unit = {},
+    /** Fills in covers for recordings imported without one; null hides the row. */
+    val onFillLocalArtwork: (() -> Unit)? = null,
     val onClearCache: () -> Unit = {},
 )

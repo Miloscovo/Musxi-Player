@@ -1,5 +1,7 @@
 # 应用外壳样张（2026-10-21）
 
+> **状态：日期设计样张（2026-10-21）。** 样张为 JVM 渲染，不代表当前真机验收；当前状态见 [当前开发接续](../next-session-handoff.md)，设计资料见 [文档入口](../README.md)。
+
 内容区 + 迷你播放器 + 底部 tab 栏。样张生成自 `ShellSheetTest`（Robolectric + Roborazzi，JVM 渲染，未上真机）。
 
 实现：`ui/player/MiniPlayer.kt`（迷你播放器 + 纯映射 `miniPlayerUi`）、`ui/shell/ShellBottomBar.kt`（底栏）、`ui/MainShell.kt`（三段式布局）、`ui/design/ShellSheet.kt`（样张）。

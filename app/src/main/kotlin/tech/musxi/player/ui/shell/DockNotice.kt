@@ -51,8 +51,13 @@ internal fun dockNoticeOf(
      * itself). The mini player already says why; the notice offers the way out.
      */
     playbackFailed: Boolean = false,
+    /**
+     * A local recording is playing. Nothing here applies to it: there is no other version to search
+     * for, and the mini player already says what is wrong with the file.
+     */
+    local: Boolean = false,
 ): DockNoticeUi? {
-    if (playerOpen) return null
+    if (playerOpen || local) return null
     return when (phase) {
         SourceSelectionPhase.SEARCHING -> when (mode) {
             SourceSelectionMode.AUTO -> DockNoticeUi("当前音源不可用，正在其他平台找…", null, busy = true)

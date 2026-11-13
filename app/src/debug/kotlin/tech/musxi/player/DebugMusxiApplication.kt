@@ -6,6 +6,7 @@ import tech.musxi.core.library.*
 
 /** Fixed synthetic loader failures for device acceptance. Entire class is absent from release. */
 class DebugMusxiApplication : MusxiApplication() {
+    override fun lockScreenLyricsHostClass() = LockScreenPageProbeActivity::class.java
     var translationDelayOnce = false
     var translationFailureOnce = false
     override fun fetchLyricsTranslation(key: MediaKey, original: tech.musxi.core.lyrics.ParsedLyrics,
@@ -28,6 +29,7 @@ class DebugMusxiApplication : MusxiApplication() {
         private set
     override fun onCreate() {
         super.onCreate()
+        LockScreenPageProbeValidation.recoverAfterProcessStart(this)
         registerActivityLifecycleCallbacks(object : android.app.Application.ActivityLifecycleCallbacks {
             override fun onActivityStarted(activity: android.app.Activity) {
                 if (activity is DeveloperActivity) validationActivity = activity

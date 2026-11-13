@@ -42,13 +42,12 @@ class MoreMenuTest {
                     // The trigger: the menu anchors to the bounds of the Box it is in.
                     Box(Modifier.align(Alignment.TopEnd).padding(top = 40.dp, end = 8.dp).size(48.dp)) {
                         MoreMenu(
-                            menu = MoreMenuUi(artist = "王菲", album = "只爱陌生人", sleepRemaining = null),
+                            menu = MoreMenuUi(artist = "王菲", album = "只爱陌生人", sleepStatus = null),
                             page = MorePage.MAIN,
                             onPage = {},
                             onDismiss = {},
                             onAction = {},
-                            loadPlaylists = {},
-                            onAddToPlaylist = {},
+                            onManagePlaylists = {},
                             onMatchLyrics = {},
                             onFindSources = {},
                         )

@@ -83,3 +83,33 @@ fun RowCheck() {
         drawPath(path, color, style = Stroke(w, cap = StrokeCap.Round, join = StrokeJoin.Round))
     }
 }
+
+/**
+ * Mark of a multiple-choice row: an empty ring, or an ink disc with a check. Ink, not accent, for the
+ * same reason as [RowSwitch]; a list of ten checked playlists in the accent would be the loudest
+ * thing in the app. The fill eases in so a tap reads as one change, not a flicker.
+ */
+@Composable
+fun RowCheckbox(checked: Boolean) {
+    val cs = MaterialTheme.colorScheme
+    val dark = LocalMusxi.current.dark
+    val ring = cs.onSurface.copy(alpha = 0.32f)
+    val ink = cs.onSurface
+    val tick = if (dark) cs.surface else Color.White
+    val progress by animateFloatAsState(if (checked) 1f else 0f, Motion.standard(), label = "rowCheckbox")
+    Canvas(Modifier.size(22.dp)) {
+        val r = size.minDimension / 2
+        val c = Offset(size.width / 2, size.height / 2)
+        val w = 1.6.dp.toPx()
+        drawCircle(lerp(ring, ink, progress), r - w / 2, c, style = Stroke(w))
+        if (progress > 0f) {
+            drawCircle(ink.copy(alpha = ink.alpha * progress), r * progress, c)
+            val path = Path().apply {
+                moveTo(size.width * 0.29f, size.height * 0.52f)
+                lineTo(size.width * 0.44f, size.height * 0.67f)
+                lineTo(size.width * 0.72f, size.height * 0.37f)
+            }
+            drawPath(path, tick.copy(alpha = progress), style = Stroke(1.8.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round))
+        }
+    }
+}

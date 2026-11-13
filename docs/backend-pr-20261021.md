@@ -1,5 +1,7 @@
 # 安卓后端增量 PR 记录（2026-10-21）
 
+> **状态：历史 PR 记录（2026-10-21）。** 分支、提交和测试只对应当次 PR；当前上游合并事实见 [当前开发接续](next-session-handoff.md)，其他文档见 [文档入口](README.md)。
+
 > 历史专项记录：以下只对应文中日期、包和测试范围；当前状态以 [0.1 验收](android-0.1-acceptance.md) 为准。本机证据路径仅用于本地复查，不随仓库分发。
 
 已创建：[上游 PR #24](https://github.com/Miloscovo/Musxi-Player/pull/24)，已于 2026-10-21 合并（上游提交 c5821a7）；提交 `ac3ac80f4259244a50fb5269aa0fdf5bd1c59afd`，70 个文件，目标 `android/development`。本地开发目录继续保留未提交副本，PR 提交在隔离 worktree 中。

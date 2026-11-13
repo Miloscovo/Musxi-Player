@@ -1,5 +1,6 @@
 package tech.musxi.player.ui.components
 
+import android.provider.Settings
 import androidx.activity.OnBackPressedDispatcher
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.LocalOnBackPressedDispatcherOwner
@@ -39,6 +40,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import tech.musxi.player.design.DesignTestApplication
@@ -214,6 +216,97 @@ class SheetBehaviorTest {
         assertEquals(listOf(SheetDetent.MEDIUM), detents)
         assertEquals(listOf(HapticFeedbackType.GestureEnd), haptics.events)
         assertTop(352f, "stopped at MEDIUM")
+    }
+
+    // The flick users felt fall back: about 670dp/s up from MEDIUM, well under the hard-fling speed
+    // and too short for the sheet to be nearer FULL. It must still open FULL.
+    @Test fun aShortFlickUpOnTheHandleOpensFull() {
+        show()
+        compose.onNodeWithTag(SheetDragTag).performTouchInput {
+            swipe(Offset(width / 2f, 30.dp.toPx()), Offset(width / 2f, 30.dp.toPx() - 80.dp.toPx()), durationMillis = 120)
+        }
+        compose.waitForIdle()
+        assertEquals(0, dismissed)
+        assertEquals(listOf(SheetDetent.FULL), detents)
+        assertEquals(listOf(HapticFeedbackType.GestureEnd), haptics.events)
+        assertTop(8f, "opened FULL")
+    }
+
+    // Pulled up past FULL on the handle the sheet gives a little (rubber band) instead of hitting a
+    // wall, never rises into the strip above FULL's top, and springs back quietly on release.
+    @Test fun pullingPastFullRubberBandsAndSpringsBack() {
+        show(SheetDetent.FULL)
+        compose.onNodeWithTag(SheetDragTag).performTouchInput {
+            down(Offset(width / 2f, 20.dp.toPx()))
+            repeat(10) { moveBy(Offset(0f, -20.dp.toPx()), delayMillis = 30) }
+        }
+        compose.waitForIdle()
+        val stretched = sheetTopDp()
+        assertTrue("sheet should have risen past FULL (top $stretched dp)", stretched < 6f)
+        assertTrue("but never past the window top (top $stretched dp)", stretched >= 0f)
+        compose.onNodeWithTag(SheetDragTag).performTouchInput {
+            advanceEventTime(300)
+            up()
+        }
+        compose.waitForIdle()
+        assertTop(8f, "back at FULL")
+        assertEquals(0, dismissed)
+        assertTrue("no detent change expected: $detents", detents.isEmpty())
+        assertTrue("no haptic expected: ${haptics.events}", haptics.events.isEmpty())
+    }
+
+    // With "remove animations" on the rubber band (frame-driven) is skipped: a hard stop at FULL.
+    @Test fun reducedMotionStopsHardAtFull() {
+        val resolver = RuntimeEnvironment.getApplication().contentResolver
+        Settings.Global.putFloat(resolver, Settings.Global.ANIMATOR_DURATION_SCALE, 0f)
+        show(SheetDetent.FULL)
+        compose.onNodeWithTag(SheetDragTag).performTouchInput {
+            down(Offset(width / 2f, 20.dp.toPx()))
+            repeat(10) { moveBy(Offset(0f, -20.dp.toPx()), delayMillis = 30) }
+        }
+        compose.waitForIdle()
+        assertTop(8f, "held at FULL")
+        assertTrue("no overdrag at all: top ${sheetTopDp()} dp", sheetTopDp() > 7.5f)
+        compose.onNodeWithTag(SheetDragTag).performTouchInput { up() }
+        compose.waitForIdle()
+        assertTop(8f, "still FULL")
+        assertTrue(detents.isEmpty())
+    }
+
+    // A list at FULL scrolls on its own: swiping up on it never lifts the sheet past FULL.
+    @Test fun swipeUpOnTheListAtFullDoesNotStretchTheSheet() {
+        show(SheetDetent.FULL)
+        compose.onRoot().performTouchInput {
+            down(Offset(width / 2f, 600.dp.toPx()))
+            repeat(10) { moveBy(Offset(0f, -30.dp.toPx()), delayMillis = 30) }
+        }
+        compose.waitForIdle()
+        assertTop(8f, "list scrolls, sheet stays at FULL")
+        compose.onRoot().performTouchInput { up() }
+        compose.waitForIdle()
+        assertTop(8f, "still FULL")
+        assertTrue(detents.isEmpty())
+    }
+
+    // Showing again while the slide-out runs carries its momentum on (it eases out of the downward
+    // motion and comes back) instead of stopping dead and reversing.
+    @Test fun showingDuringTheSlideOutKeepsItsMomentum() {
+        show()
+        compose.mainClock.autoAdvance = false
+        visible = false
+        Snapshot.sendApplyNotifications()
+        compose.mainClock.advanceTimeBy(100)
+        val mid = sheetTopDp()
+        assertTrue("sheet should be sliding out (top $mid dp)", mid > 400f && mid < 830f)
+        visible = true
+        Snapshot.sendApplyNotifications()
+        compose.mainClock.advanceTimeBy(32)
+        val next = sheetTopDp()
+        assertTrue("momentum lost: top went from $mid to $next dp", next > mid - 8f)
+        compose.mainClock.autoAdvance = true
+        compose.waitForIdle()
+        assertTop(352f, "back at MEDIUM")
+        assertEquals(0, dismissed)
     }
 
     @Test fun tapOnTheScrimDismisses() {

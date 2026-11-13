@@ -319,10 +319,45 @@ class UpdateUiTest {
         assertTrue(noteLines("<!--".repeat(10_000)).size <= 201)
     }
 
+    private fun entryOf(state: UpdateState) = releaseEntryOf(ui(state).release!!)
+
     @Test
-    fun previewJoinsLinesWithoutGaps() {
-        val parsed = noteLines("## 新增\n- 一\n\n说明")
-        assertEquals("新增\n• 一\n说明", notePreview(parsed))
-        assertEquals("", notePreview(emptyList()))
+    fun entryRowShowsDateAndSizeWhileNothingRuns() {
+        assertEquals(ReleaseEntryUi("新版本 v0.2.1", "2026年10月28日 · 18.1 MB"), entryOf(state()))
+        val bare = release(bytes = null).copy(publishedAt = null)
+        assertEquals(ReleaseEntryUi("新版本 v0.2.1", null), entryOf(state(bare)))
+        // Ignoring only drops the red dot; the row stays and says so.
+        assertEquals("2026年10月28日 · 18.1 MB · 已忽略提醒", entryOf(state(release(ignored = true))).note)
+    }
+
+    @Test
+    fun entryRowFollowsTheDownload() {
+        fun entry(phase: UpdateDownloadPhase, received: Long = 0, total: Long = 19_000_000L, reason: UpdateFailure? = null) =
+            entryOf(state(download = UpdateDownloadState(phase, "0.2.1", received, total, reason)))
+        assertEquals("正在下载 42%", entry(UpdateDownloadPhase.DOWNLOADING, received = 7_980_000L).note)
+        assertEquals("正在下载 0%", entry(UpdateDownloadPhase.DOWNLOADING, received = 0).note)
+        assertEquals("正在下载", entry(UpdateDownloadPhase.DOWNLOADING, received = 100, total = 0).note)
+        assertEquals("正在校验", entry(UpdateDownloadPhase.VERIFYING).note)
+        assertEquals("可以安装", entry(UpdateDownloadPhase.READY).note)
+        assertEquals("需要安装权限", entry(UpdateDownloadPhase.NEEDS_PERMISSION, reason = UpdateFailure.PERMISSION_DENIED).note)
+        assertEquals("正在打开系统安装", entry(UpdateDownloadPhase.INSTALLING).note)
+        val failed = entry(UpdateDownloadPhase.FAILED, reason = UpdateFailure.CHECKSUM_MISMATCH)
+        assertEquals("文件校验失败", failed.note)
+        assertTrue(failed.warning)
+        // A cancel is the user's own choice: back to the date and size, nothing in red.
+        val cancelled = entry(UpdateDownloadPhase.FAILED, reason = UpdateFailure.CANCELLED)
+        assertEquals("2026年10月28日 · 18.1 MB", cancelled.note)
+        assertFalse(cancelled.warning)
+    }
+
+    @Test
+    fun percentRoundsDownAndStopsAtAHundred() {
+        fun percent(received: Long, total: Long = 19_000_000L) =
+            (downloadOf(UpdateDownloadPhase.DOWNLOADING, received = received, total = total) as DownloadUi.Downloading).percent
+        assertEquals(99, percent(18_999_999L))
+        assertEquals(100, percent(19_000_000L))
+        assertEquals(100, percent(30_000_000L))
+        assertEquals(0, percent(-5L))
+        assertNull(percent(100, total = 0))
     }
 }

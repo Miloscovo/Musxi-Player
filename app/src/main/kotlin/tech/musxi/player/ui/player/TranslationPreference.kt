@@ -2,6 +2,7 @@ package tech.musxi.player.ui.player
 
 import tech.musxi.core.lyrics.LyricLine
 import tech.musxi.core.lyrics.LyricsState
+import tech.musxi.core.settings.LyricsTranslationPreference
 
 /**
  * Chooses the initial translation visibility from the original lyric text only.
@@ -38,6 +39,24 @@ fun defaultTranslationEnabled(lines: List<LyricLine>, plainText: String): Boolea
 /** Applies a per-source manual choice before consulting the current original's default. */
 fun translationVisible(manualOverride: Boolean?, state: LyricsState): Boolean =
     manualOverride ?: defaultTranslationEnabled(state)
+
+/**
+ * What the lyrics page shows, from the 我的 setting, the lyrics and a choice made on this song.
+ *
+ * The setting decides the default for every song: HIDE keeps translations off, SHOW keeps them on,
+ * AUTO shows them for a foreign original and not for a Chinese one. The chip on the lyrics page
+ * changes the current song only ([songOverride]); the next song starts from the setting again.
+ */
+fun translationShown(
+    preference: LyricsTranslationPreference,
+    songOverride: Boolean?,
+    lines: List<LyricLine>,
+    plainText: String,
+): Boolean = songOverride ?: when (preference) {
+    LyricsTranslationPreference.HIDE -> false
+    LyricsTranslationPreference.SHOW -> true
+    LyricsTranslationPreference.AUTO -> defaultTranslationEnabled(lines, plainText)
+}
 
 private data class ScriptCounts(
     val han: Int,

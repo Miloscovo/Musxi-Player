@@ -1,8 +1,6 @@
 ﻿package tech.musxi.player.ui.player
 
-import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -41,6 +39,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -60,7 +59,14 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.IntSize
 import kotlinx.coroutines.flow.first
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.withFrameMillis
+import androidx.compose.ui.text.TextLayoutResult
+import tech.musxi.core.lyrics.LyricWordPosition
+import tech.musxi.core.lyrics.LyricsWordTimeline
 import tech.musxi.core.lyrics.LyricLine
+import tech.musxi.core.settings.LyricsFontSize
+import tech.musxi.player.ui.theme.Motion
 import tech.musxi.player.ui.theme.nowPlayingAccent
 
 /**
@@ -78,8 +84,15 @@ import tech.musxi.player.ui.theme.nowPlayingAccent
 fun LyricsBlock(
     ui: LyricsUi,
     modifier: Modifier = Modifier,
-    /** Tint the current line, or leave it plainly brightest. Off by decision. */
+    /** Tint the current line with the cover's colour ("颜色跟随封面"), or leave it plainly brightest. */
     accentCurrent: Boolean = false,
+    /** The "字号" setting of the 我的 page; it sizes the lyrics only. */
+    fontSize: LyricsFontSize = LyricsFontSize.MEDIUM,
+    /**
+     * Where the song is between playback updates. Given, a line with word timing sweeps word by
+     * word; null (design sheets, tests) leaves every line highlighted as a whole.
+     */
+    playhead: LyricsPlayhead? = null,
     onSeekLine: (Long) -> Unit = {},
     onRetry: () -> Unit = {},
     onRelogin: () -> Unit = {},
@@ -88,17 +101,28 @@ fun LyricsBlock(
     onReturnToCurrent: () -> Unit = {},
     onToggleTranslation: () -> Unit = {},
     onRefreshTranslation: () -> Unit = {},
+    /**
+     * Read-only (the lock-screen page): lines cannot be tapped to seek and the list does not scroll
+     * by hand, so a phone in a pocket cannot be talked into anything. It still follows the song.
+     */
+    readOnly: Boolean = false,
+    /** Scales every lyric size on top of [fontSize]; the lock screen reads from further away. */
+    sizeScale: Float = 1f,
 ) {
+    val sizes = lyricsTextSizes(fontSize).scaledBy(sizeScale)
     Box(modifier) {
         when (ui.phase) {
             LyricsPhase.LOADING -> Skeleton(Modifier.align(Alignment.Center))
             LyricsPhase.TIMED -> TimedLyrics(
                 ui = ui,
                 accentCurrent = accentCurrent,
+                sizes = sizes,
+                playhead = playhead,
                 onSeekLine = onSeekLine,
                 onUserScroll = onUserScroll,
+                readOnly = readOnly,
             )
-            LyricsPhase.PLAIN -> PlainLyrics(ui)
+            LyricsPhase.PLAIN -> PlainLyrics(ui, sizes)
             LyricsPhase.EMPTY -> EmptyLyrics(Modifier.align(Alignment.Center))
             LyricsPhase.ERROR -> FailedLyrics(
                 ui.errorKind,
@@ -110,7 +134,7 @@ fun LyricsBlock(
 
         // A way back without waiting out the timer. Auto-resume after three seconds exists so the
         // page never gets stuck, but someone rereading a verse should not have to race it.
-        if (ui.phase == LyricsPhase.TIMED && ui.browsing) {
+        if (ui.phase == LyricsPhase.TIMED && ui.browsing && !readOnly) {
             ReturnToCurrent(
                 onClick = onReturnToCurrent,
                 modifier = Modifier.align(Alignment.BottomStart).padding(4.dp),
@@ -146,8 +170,11 @@ private fun ReturnToCurrent(onClick: () -> Unit, modifier: Modifier = Modifier) 
 private fun TimedLyrics(
     ui: LyricsUi,
     accentCurrent: Boolean,
+    sizes: LyricsTextSizes,
+    playhead: LyricsPlayhead?,
     onSeekLine: (Long) -> Unit,
     onUserScroll: () -> Unit,
+    readOnly: Boolean = false,
 ) {
     Box(Modifier.fillMaxSize()) {
         val listState = rememberLazyListState()
@@ -158,7 +185,7 @@ private fun TimedLyrics(
         // Short documents do not scroll at all; Arrangement.Center balances the whole document.
         LaunchedEffect(
             ui.activeIndex, ui.isFollowing, ui.lines, ui.translation.showsText,
-            viewportSize, density,
+            viewportSize, density, sizes,
         ) {
             // Before the first timestamp (including a new song), show the document's beginning.
             val index = ui.activeIndex.coerceAtLeast(0)
@@ -180,6 +207,7 @@ private fun TimedLyrics(
         }
         LazyColumn(
             state = listState,
+            userScrollEnabled = !readOnly,
             modifier = Modifier.fillMaxSize()
                 .onSizeChanged { viewportSize = it }
                 .testTag("lyrics-viewport")
@@ -230,11 +258,15 @@ private fun TimedLyrics(
                     nextTimeMs = ui.lines.getOrNull(index + 1)?.timeMs,
                     active = index == ui.activeIndex,
                     accentCurrent = accentCurrent,
+                    sizes = sizes,
+                    // Only the current line sweeps; the rest keep their whole-line colour.
+                    playhead = if (index == ui.activeIndex) playhead else null,
+                    offsetMs = ui.offsetMs,
                     // Fading by distance from the current line rather than by a mask over the block:
                     // a mask has to be a colour, and the backdrop is a gradient, so any mask colour
                     // shows up as a rectangle of the wrong shade.
                     distance = if (ui.activeIndex < 0) 9 else index - ui.activeIndex,
-                    onSeek = { onSeekLine(line.timeMs) },
+                    onSeek = if (readOnly) null else ({ onSeekLine(line.timeMs) }),
                 )
             }
         }
@@ -261,8 +293,12 @@ private fun LyricRow(
     nextTimeMs: Long?,
     active: Boolean,
     accentCurrent: Boolean,
+    sizes: LyricsTextSizes,
+    playhead: LyricsPlayhead?,
+    offsetMs: Long,
     distance: Int,
-    onSeek: () -> Unit,
+    /** Null on a read-only block: the row is then not a button at all. */
+    onSeek: (() -> Unit)?,
 ) {
     val cs = MaterialTheme.colorScheme
     val blank = line.text.isBlank()
@@ -286,12 +322,12 @@ private fun LyricRow(
     }
     val scale by animateFloatAsState(
         targetValue = if (active) 1.12f else 1f,
-        animationSpec = tween(durationMillis = 220, easing = FastOutSlowInEasing),
+        animationSpec = Motion.enter(),
         label = "lyric-scale",
     )
     Box(
         Modifier.fillMaxWidth()
-            .clickable(onClick = onSeek)
+            .then(if (onSeek != null) Modifier.clickable(onClick = onSeek) else Modifier)
             // The marker's ink is only 10dp tall against a text line's ~12dp, so a full text row's
             // padding would leave it floating in its own band. Four dp instead of eight keeps the
             // gap above and below it within a couple of dp of a normal line.
@@ -307,29 +343,152 @@ private fun LyricRow(
                 // fixed size so they cannot shrink with the font.
                 InstrumentalDots(active = active, distance = distance)
             } else {
-                Text(
-                    line.text,
-                    modifier = Modifier.graphicsLayer { scaleX = scale; scaleY = scale },
-                    // Emphasis belongs to the active row, regardless of script, translation data
-                    // or whether translations are visible.
-                    style = if (active) {
-                        lyricStyle.copy(fontWeight = FontWeight.SemiBold)
-                    } else {
-                        lyricStyle
-                    },
-                    color = textColor,
-                    textAlign = TextAlign.Center,
-                )
+                // Emphasis belongs to the active row, regardless of script, translation data or
+                // whether translations are visible.
+                val style = if (active) lyricStyle(sizes).copy(fontWeight = FontWeight.SemiBold) else lyricStyle(sizes)
+                if (active && playhead != null && line.words.isNotEmpty()) {
+                    SweptLine(
+                        line = line,
+                        style = style,
+                        sungColor = currentColor,
+                        // The part still to come is the line's own colour, dimmed: the line stays
+                        // the brightest on the page while the sweep shows how far the voice is.
+                        waitingColor = currentColor.copy(alpha = currentColor.alpha * 0.42f),
+                        playhead = playhead,
+                        offsetMs = offsetMs,
+                        modifier = Modifier.graphicsLayer { scaleX = scale; scaleY = scale },
+                    )
+                } else {
+                    Text(
+                        line.text,
+                        modifier = Modifier.graphicsLayer { scaleX = scale; scaleY = scale },
+                        style = style,
+                        color = textColor,
+                        textAlign = TextAlign.Center,
+                    )
+                }
             }
             if (translation != null) {
                 Text(
                     translation,
                     modifier = Modifier.padding(top = 3.dp),
-                    style = translationStyle,
+                    style = translationStyle(sizes),
                     color = translationColor,
                     textAlign = TextAlign.Center,
                 )
             }
+        }
+    }
+}
+
+/**
+ * The current line with a soft sweep: what has been sung in the line's full colour, what is still to
+ * come dimmed, and a short feathered edge between them that moves with the voice.
+ *
+ * The text is laid out once, the same way as an ordinary line, and the colours are only painted
+ * over it, so the sweep never moves a glyph or changes the line's height. The edge follows each
+ * word's own box, so a word broken onto a second row fills that row in turn, and a centred line
+ * with different row widths still fills from the first glyph of each row.
+ *
+ * Only this row reads the playhead, inside the draw phase, so the frames redraw one line without
+ * recomposing the list.
+ */
+@Composable
+private fun SweptLine(
+    line: LyricLine,
+    style: TextStyle,
+    sungColor: Color,
+    waitingColor: Color,
+    playhead: LyricsPlayhead,
+    offsetMs: Long,
+    modifier: Modifier = Modifier,
+) {
+    var layout by remember(line) { mutableStateOf<TextLayoutResult?>(null) }
+    // The position the sweep draws. Advanced every frame only while the song plays; a paused or
+    // seeked song gets one update per playback report, so a still page does not redraw.
+    var shownMs by remember { mutableLongStateOf(playhead.positionNow()) }
+    LaunchedEffect(playhead.playing, playhead.revision) {
+        shownMs = playhead.positionNow()
+        while (playhead.playing) withFrameMillis { shownMs = playhead.positionNow() }
+    }
+    val feather = with(LocalDensity.current) { 14.dp.toPx() }
+    Text(
+        line.text,
+        modifier = modifier
+            // The glyphs are drawn once in white and then coloured in place (SrcIn), which needs a
+            // layer of their own so the colour does not reach the page behind.
+            .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+            .drawWithContent {
+                drawContent()
+                val result = layout ?: return@drawWithContent
+                val position = LyricsWordTimeline.sample(line.words, shownMs - offsetMs)
+                for (row in 0 until result.lineCount) {
+                    val left = result.getLineLeft(row)
+                    val right = result.getLineRight(row)
+                    val width = (right - left).coerceAtLeast(1f)
+                    val edge = (sweepEdgeOnRow(result, line, position, row, left, right) - left) / width
+                    val half = feather / 2f / width
+                    // The first and last rows reach the layer's edges, so no glyph is left uncoloured.
+                    val top = if (row == 0) 0f else result.getLineTop(row)
+                    val bottom = if (row == result.lineCount - 1) size.height else result.getLineBottom(row)
+                    drawRect(
+                        brush = Brush.horizontalGradient(
+                            0f to sungColor,
+                            (edge - half).coerceIn(0f, 1f) to sungColor,
+                            (edge + half).coerceIn(0f, 1f) to waitingColor,
+                            1f to waitingColor,
+                            startX = left,
+                            endX = right,
+                        ),
+                        topLeft = Offset(0f, top),
+                        size = Size(size.width, bottom - top),
+                        blendMode = BlendMode.SrcIn,
+                    )
+                }
+            },
+        style = style,
+        color = Color.White,
+        textAlign = TextAlign.Center,
+        onTextLayout = { layout = it },
+    )
+}
+
+/**
+ * Where the sung part of [row] ends, in pixels. A row before the current word's row is full, a row
+ * after it is empty; on its own row the edge stands inside the current word at its progress.
+ */
+private fun sweepEdgeOnRow(
+    layout: TextLayoutResult,
+    line: LyricLine,
+    position: LyricWordPosition,
+    row: Int,
+    rowLeft: Float,
+    rowRight: Float,
+): Float {
+    if (position.index < 0) return rowLeft
+    val word = line.words[position.index]
+    val wordRowStart = layout.getLineForOffset(word.textStart)
+    val wordRowEnd = layout.getLineForOffset((word.textEnd - 1).coerceAtLeast(word.textStart))
+    return when {
+        row < wordRowStart -> rowRight
+        row > wordRowEnd -> rowLeft
+        else -> {
+            // The part of the word on this row: from its first glyph here to its last glyph here.
+            val rowStartOffset = maxOf(word.textStart, layout.getLineStart(row))
+            val rowEndOffset = minOf(word.textEnd, layout.getLineEnd(row, visibleEnd = true))
+            if (rowEndOffset <= rowStartOffset) return if (row < wordRowEnd) rowRight else rowLeft
+            val from = layout.getBoundingBox(rowStartOffset).left
+            val to = layout.getBoundingBox(rowEndOffset - 1).right
+            // Split the word's progress across its rows by width, so a broken word fills evenly.
+            val rows = (wordRowStart..wordRowEnd).map { r ->
+                val s = maxOf(word.textStart, layout.getLineStart(r))
+                val e = minOf(word.textEnd, layout.getLineEnd(r, visibleEnd = true))
+                if (e <= s) 0f else layout.getBoundingBox(e - 1).right - layout.getBoundingBox(s).left
+            }
+            val total = rows.sum().coerceAtLeast(1f)
+            val before = rows.take(row - wordRowStart).sum()
+            val filled = (position.progress * total - before).coerceIn(0f, to - from)
+            from + filled
         }
     }
 }
@@ -372,26 +531,28 @@ private fun InstrumentalDots(active: Boolean, distance: Int) {
  * lets a normal lyric line stay on one row. The current line is scaled to ~18sp, so the hierarchy
  * is kept without spending width on every line. Translation uses 13sp/20sp for readable CJK text.
  */
-private val lyricStyle: TextStyle
-    @Composable get() = MaterialTheme.typography.bodyLarge.copy(
-        fontSize = 16.sp,
-        lineHeight = 24.sp,
+@Composable
+private fun lyricStyle(sizes: LyricsTextSizes): TextStyle =
+    MaterialTheme.typography.bodyLarge.copy(
+        fontSize = sizes.line,
+        lineHeight = sizes.lineHeight,
         fontWeight = FontWeight.Medium,
         // Balanced breaking: with centred text a single orphan word on the second row reads as a
         // stray island ("rain", "bead", "now" all did).
         lineBreak = LineBreak.Heading,
     )
 
-private val translationStyle: TextStyle
-    @Composable get() = MaterialTheme.typography.bodyMedium.copy(
-        fontSize = 13.sp,
-        lineHeight = 20.sp,
+@Composable
+private fun translationStyle(sizes: LyricsTextSizes): TextStyle =
+    MaterialTheme.typography.bodyMedium.copy(
+        fontSize = sizes.translation,
+        lineHeight = sizes.translationLineHeight,
         fontWeight = FontWeight.Normal,
     )
 
 /** Text with no timeline: readable, scrollable, no highlight, and one line saying why. */
 @Composable
-private fun PlainLyrics(ui: LyricsUi) {
+private fun PlainLyrics(ui: LyricsUi, sizes: LyricsTextSizes) {
     val cs = MaterialTheme.colorScheme
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
@@ -405,7 +566,8 @@ private fun PlainLyrics(ui: LyricsUi) {
         )
         Text(
             ui.plainText,
-            style = MaterialTheme.typography.bodyLarge.copy(fontSize = 16.sp, lineHeight = 26.sp),
+            // A little more air than timed lines: plain text is read as a page, not followed.
+            style = MaterialTheme.typography.bodyLarge.copy(fontSize = sizes.line, lineHeight = sizes.lineHeight * (26f / 24f)),
             color = cs.onSurfaceVariant,
         )
     }

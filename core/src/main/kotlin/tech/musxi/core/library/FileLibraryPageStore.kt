@@ -47,17 +47,26 @@ class FileLibraryPageStore(
         write(owner, null, offset, SavedLibraryPage(value.page.copy(items = value.page.items.map {
             it.copy(coverUrl = ArtworkPolicy.sanitize(platform, it.coverUrl))
         }), value.fetchedAtEpochMs))
+        Unit
     }
     @Synchronized override fun writeTracks(owner: String, playlist: MediaKey, offset: Int, value: SavedLibraryPage<SongSummary>) = access {
         key(playlist, song = false)
         write(owner, playlist, offset, SavedLibraryPage(value.page.copy(items = value.page.items.map {
             it.copy(coverUrl = ArtworkPolicy.sanitize(platform, it.coverUrl))
         }), value.fetchedAtEpochMs))
+        Unit
+    }
+    @Synchronized override fun writeTracksRetainingPages(owner: String, playlist: MediaKey, offset: Int,
+        value: SavedLibraryPage<SongSummary>): Boolean = access {
+        key(playlist, song = false)
+        write(owner, playlist, offset, SavedLibraryPage(value.page.copy(items = value.page.items.map {
+            it.copy(coverUrl = ArtworkPolicy.sanitize(platform, it.coverUrl))
+        }), value.fetchedAtEpochMs), retainPages = true)
     }
     @Synchronized override fun clear() = access { ensureDirectory(); ownedFiles().forEach(::erase) }
     override fun toString() = "FileLibraryPageStore(redacted)"
 
-    private fun write(owner: String, playlist: MediaKey?, offset: Int, value: SavedLibraryPage<*>) {
+    private fun write(owner: String, playlist: MediaKey?, offset: Int, value: SavedLibraryPage<*>, retainPages: Boolean = false): Boolean {
         bounds(owner, offset); validatePage(playlist, offset, value); prepare(owner)
         val target = file(owner, playlist)
         val pages = if (offset == 0) linkedMapOf() else read(target, owner, playlist)?.pages ?: throw Invalid()
@@ -66,12 +75,16 @@ class FileLibraryPageStore(
             if (first.page.total != value.page.total || pages.values.none { it.page.nextOffset == offset }) throw Invalid()
         }
         pages.remove(offset); pages[offset] = value
-        while (pages.size > MAX_PAGES) pages.keys.firstOrNull { it != 0 && it != offset }?.let(pages::remove) ?: throw Invalid()
+        if (retainPages && pages.size > maxPages(playlist)) return false
+        while (pages.size > maxPages(playlist)) pages.keys.firstOrNull { it != 0 && it != offset }?.let(pages::remove) ?: throw Invalid()
         val collection = Collection(owner, playlist, pages)
         var encoded: ByteArray
         while (true) {
             try { encoded = encode(collection); break }
-            catch (_: TooLarge) { pages.keys.firstOrNull { it != 0 && it != offset }?.let(pages::remove) ?: throw Invalid() }
+            catch (_: TooLarge) {
+                if (retainPages) return false
+                pages.keys.firstOrNull { it != 0 && it != offset }?.let(pages::remove) ?: throw Invalid()
+            }
         }
         // Evict before commit so even interrupted writes stay within the total disk budget.
         val others = ownedFiles().filter { it.name != target.name && it.name != OWNER_FILE }
@@ -81,6 +94,7 @@ class FileLibraryPageStore(
             val oldest = others.removeAt(0); size -= oldest.length(); erase(oldest)
         }
         atomic(target, encoded)
+        return true
     }
 
     private fun prepare(owner: String) {
@@ -113,7 +127,7 @@ class FileLibraryPageStore(
             if (CRC32().apply { update(payload) }.value != checksum) throw Invalid()
             val data = DataInputStream(ByteArrayInputStream(payload))
             if (data.readUTF() != owner || data.readUTF() != (playlist?.id ?: "")) throw Invalid()
-            val count = data.readInt(); if (count !in 1..MAX_PAGES) throw Invalid()
+            val count = data.readInt(); if (count !in 1..maxPages(playlist)) throw Invalid()
             val pages = linkedMapOf<Int, SavedLibraryPage<*>>()
             repeat(count) {
                 val offset = data.readInt(); bounds(owner, offset)
@@ -268,6 +282,7 @@ class FileLibraryPageStore(
         if (value.isEmpty() || value.length > 128 || value.any { it.isISOControl() }) throw Invalid()
     }
     private fun bounds(owner: String, offset: Int) { if (!owner.matches(Regex("[0-9a-f]{64}")) || (offset !in 0..20_000 || (platform == Platform.KUGOU && offset % 30 != 0))) throw Invalid() }
+    private fun maxPages(playlist: MediaKey?) = if (playlist == null) 128 else MAX_TRACK_PAGES
     private fun file(owner: String, playlist: MediaKey?): File {
         val hash = MessageDigest.getInstance("SHA-256").digest((owner + ":" + (playlist?.id ?: "playlists")).toByteArray(Charsets.UTF_8))
             .joinToString("") { "%02x".format(it.toInt() and 255) }
@@ -301,6 +316,8 @@ class FileLibraryPageStore(
         private const val MAX_FILE_BYTES = 2 * 1024 * 1024
         private const val MAX_TOTAL_BYTES = 16L * 1024 * 1024
         private const val MAX_COLLECTIONS = 128
-        private const val MAX_PAGES = 128
+        // 167 normal 30-song pages retain a 5000-song QQ/Kugou playlist without page-count eviction.
+        // Collection/file byte budgets still apply to unusually large metadata.
+        private const val MAX_TRACK_PAGES = 167
     }
 }

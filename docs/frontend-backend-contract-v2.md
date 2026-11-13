@@ -1,5 +1,7 @@
 # 安卓前端所需后端增量（2026-10-20）
 
+> **状态：现行 v2 增量合同。** 本文保留 2026-10-20 的接口定义和当时实现范围；后续变更与专门合同见 [文档入口](README.md)，当前完成度见 [当前开发接续](next-session-handoff.md)。
+
 本轮根据 cc 对话「Musxi-Player 安卓前端规划20261020」补充 P0。现有账号、歌单分页、完整队列、有限恢复和跨平台选源约定继续见 [frontend-contract.md](frontend-contract.md)。这里的图片 URL 是普通公开封面，音频 URL、Cookie、会话和 capability 仍不提供给页面。
 
 ## 1. 封面与当前播放元数据

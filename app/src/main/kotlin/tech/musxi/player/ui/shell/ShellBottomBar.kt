@@ -13,7 +13,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.indication
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.selection.selectable
@@ -41,6 +40,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import tech.musxi.player.ui.components.OpticallyCentredText
+import tech.musxi.player.ui.theme.Motion
 import tech.musxi.player.ui.theme.chromeBarColor
 
 /**
@@ -154,7 +154,7 @@ private fun TabItem(
     // so there is no rectangular press shadow over the whole tab.
     val capsule by animateColorAsState(
         if (selected) cs.primary.copy(alpha = 0.12f) else Color.Transparent,
-        animationSpec = tween(200),
+        animationSpec = Motion.enter(),
         label = "tabCapsule",
     )
     Column(

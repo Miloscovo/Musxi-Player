@@ -19,6 +19,10 @@ data class LyricsState(
     val canRefreshTranslation: Boolean = false,
     val origin: LyricsOrigin = LyricsOrigin.AUTO,
     val offsetMs: Long = 0,
+    val activeWordIndex: Int = -1,
+    val activeWordProgress: Float = 0f,
+    /** Original queue identity, independent of sourceKey after an alternative-source switch. */
+    val queueKey: MediaKey? = null,
 )
 
 /** Main-thread source/account fences. Fetch parses off-thread; no raw responses enter state. */
@@ -94,7 +98,7 @@ class LyricsBrowser(
                 translate(current, it, false)
             return
         }
-        mutable.value = LyricsState(current.source, LyricsStatus.LOADING)
+        mutable.value = LyricsState(current.source, LyricsStatus.LOADING, queueKey = current.queue)
         val delivered = java.util.concurrent.atomic.AtomicBoolean(false)
         fun isCurrent() = !delivered.get() && revision == token && target == current && authorized(current)
         val callback: (Result<ParsedLyrics>) -> Unit = callback@{ result ->
@@ -110,7 +114,7 @@ class LyricsBrowser(
                     it in setOf("expired", "network", "risk", "rate", "protocol", "limit", "permission",
                         "unavailable", "http", "timeout", "account_changed")
                 } ?: "unavailable"
-                mutable.value = LyricsState(current.source, LyricsStatus.ERROR, error = category)
+                mutable.value = LyricsState(current.source, LyricsStatus.ERROR, error = category, queueKey = current.queue)
             }
         }
         if (fetchForOriginal != null) fetchForOriginal.invoke(current.queue, current.source, ::isCurrent, callback)
@@ -144,11 +148,17 @@ class LyricsBrowser(
                 }
             val checked = if (compatible) incoming else
                 LyricsTranslationAligner.failed(document.original, TranslationReason.VERSION_MISMATCH)
-            document.displayed = if (checked.translation.lookup.status in setOf(
+            val merged = if (checked.translation.lookup.status in setOf(
                     TranslationLookupStatus.FAILED, TranslationLookupStatus.UNSUPPORTED) &&
                 document.displayed.translation.availability == TranslationAvailability.AVAILABLE)
-                document.displayed.copy(translation = document.displayed.translation.copy(lookup = checked.translation.lookup))
+                document.displayed.copy(
+                    lines = java.util.Collections.unmodifiableList(document.displayed.lines.mapIndexed { index, line ->
+                        val newWords = checked.lines[index].words
+                        if (newWords.isNotEmpty()) line.copy(words = newWords) else line
+                    }),
+                    translation = document.displayed.translation.copy(lookup = checked.translation.lookup))
             else checked
+            document.displayed = LyricsWordTimeline.retainOnFailure(document.displayed, merged)
             publish(current.source, document.displayed)
         }
     }
@@ -157,19 +167,24 @@ class LyricsBrowser(
         value.sourceOwner == identity(value.source.platform)
 
     private fun publish(key: MediaKey, parsed: ParsedLyrics) {
+        val index = LrcParser.activeIndex(parsed.lines, position - parsed.offsetMs)
+        val word = LyricsWordTimeline.sample(parsed.lines.getOrNull(index)?.words.orEmpty(), position - parsed.offsetMs)
         mutable.value = LyricsState(key, when {
             parsed.lines.isNotEmpty() -> LyricsStatus.TIMED
             parsed.plainText.isNotBlank() -> LyricsStatus.PLAIN
             else -> LyricsStatus.EMPTY
-        }, parsed.lines, parsed.plainText, LrcParser.activeIndex(parsed.lines, position - parsed.offsetMs),
+        }, parsed.lines, parsed.plainText, index,
             translation = parsed.translation,
             canRefreshTranslation = fetchTranslation != null && parsed.lines.isNotEmpty(),
-            origin = parsed.origin, offsetMs = parsed.offsetMs)
+            origin = parsed.origin, offsetMs = parsed.offsetMs,
+            activeWordIndex = word.index, activeWordProgress = word.progress, queueKey = target?.queue)
     }
 
     private fun synchronize() {
         val value = state.value
         val index = LrcParser.activeIndex(value.lines, position - value.offsetMs)
-        if (index != value.activeIndex) mutable.value = value.copy(activeIndex = index)
+        val word = LyricsWordTimeline.sample(value.lines.getOrNull(index)?.words.orEmpty(), position - value.offsetMs)
+        if (index != value.activeIndex || word.index != value.activeWordIndex || word.progress != value.activeWordProgress)
+            mutable.value = value.copy(activeIndex = index, activeWordIndex = word.index, activeWordProgress = word.progress)
     }
 }

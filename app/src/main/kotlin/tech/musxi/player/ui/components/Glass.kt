@@ -107,7 +107,7 @@ fun GlassHost(
     }
     CompositionLocalProvider(LocalGlass provides scope) {
         Box(modifier.fillMaxSize()) {
-            Box(Modifier.fillMaxSize().then(source).background(cs.background), content = content)
+            Box(Modifier.fillMaxSize().then(source).pageBackground(cs.background), content = content)
             overlay()
         }
     }
@@ -201,6 +201,29 @@ fun Modifier.glass(scope: GlassScope?, shape: Shape, style: GlassStyle = GlassSt
         ),
         shape,
     )
+}
+
+/**
+ * Glass for a bar along a window edge (the shell's top bar): the same material as [glass] without
+ * the shadow, rim stroke or lens, which belong to a floating shape and would only draw a frame
+ * around the screen. The bar draws its own hairline.
+ */
+@OptIn(ExperimentalHazeApi::class)
+fun Modifier.glassBar(scope: GlassScope?, style: GlassStyle = GlassStyle.REGULAR): Modifier {
+    val dark = scope?.dark ?: false
+    val backdrop = scope?.backdrop
+    return when {
+        scope == null || scope.renderer == GlassRenderer.SOLID -> background(scope?.solid ?: Color.White)
+        backdrop != null && scope.renderer == GlassRenderer.REFRACTION ->
+            refractedSurface(backdrop, androidx.compose.ui.graphics.RectangleShape, style, dark)
+        else -> hazeEffect(scope.haze) {
+            blurRadius = style.blur
+            tints = listOf(HazeTint(glassTint(style, dark)))
+            noiseFactor = 0.08f
+            val depth = scope.depth
+            canDrawArea = { area -> samplesArea(area.zIndex, depth) }
+        }
+    }
 }
 
 /** Top sheen and bottom shade of the blurring renderers. Drawn behind the content, so text stays crisp. */

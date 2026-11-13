@@ -20,7 +20,8 @@ import java.util.concurrent.TimeUnit
 /** Process-owned login execution. Activities receive state, never platform credentials. */
 class AccountRepository(context: Context) {
     private val app = context.applicationContext
-    val settingsRepository = AppSettingsRepository(app)
+    val settingsRepository = AppSettingsRepository(app,
+        onRecommendationsEnabledChanged = { recommendationsBrowser.setEnabled(it) })
     private val playbackPreferences = app.getSharedPreferences("playback-preferences-v1", Context.MODE_PRIVATE)
     private val coordinator = AccountCoordinator()
     val states: StateFlow<Map<Platform, AccountState>> = coordinator.states
@@ -79,6 +80,10 @@ class AccountRepository(context: Context) {
         tech.musxi.core.playback.FilePlaybackJournalStore(java.io.File(app.noBackupFilesDir,
             "playback-journal-${platform.name.lowercase()}-v1"), platform)
     }
+    // User arrangement preferences survive metadata-cache clearing and account logout.
+    private val playlistOrders = Platform.entries.associateWith { platform ->
+        FilePlaylistOrderStore(java.io.File(app.filesDir, "playlist-order-${platform.name.lowercase()}-v1"), platform)
+    }
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private val temporaryImage = TemporaryLoginImage(app)
     private val drivers by lazy {
@@ -90,6 +95,8 @@ class AccountRepository(context: Context) {
     private val pending = mutableMapOf<Platform, Pending>() // worker queue only
     private val pollTasks = mutableMapOf<Platform, Pair<Long, java.util.concurrent.ScheduledFuture<*>>>()
     @Volatile private var foreground = false
+    // Process-owned even when the UI facade has never been opened. Construction does no HTTP.
+    private val recommendationsBrowser = buildRecommendationsBrowser()
 
     init {
         val tokens = Platform.entries.associateWith { coordinator.restore(it, null) }
@@ -488,15 +495,72 @@ class AccountRepository(context: Context) {
     /** Independent disk executor permits cached display while restore is waiting on the network. */
     fun createLibraryBrowser(fetch: LibraryPageFetch, platform: Platform = Platform.NETEASE): LibraryBrowser {
         val store = libraryCaches.getValue(platform)
+        val pages = LibraryPageRequestGate(fetch, platform,
+            { delay, task -> main.postDelayed({ task() }, delay) }, SystemClock::elapsedRealtime)
         val browser = LibraryBrowser({ libraryCacheIdentity(platform) }, { expected, action ->
             // All disk work and erasure share cacheQueue. Never hold the account/UI lock here.
             if (!expected.sameAttempt(libraryCacheIdentity(platform))) throw LibraryPageFailure("account_changed")
             action(store)
             if (!expected.sameAttempt(libraryCacheIdentity(platform))) throw LibraryPageFailure("account_changed")
-        }, fetch, { task -> cacheQueue.execute(task) }, { task -> main.post(task) }, platform = platform)
+        }, pages, { task -> cacheQueue.execute(task) }, { task -> main.post(task) }, platform = platform)
         scope.launch {
             states.map { it.getValue(platform) }.distinctUntilChanged().collect { browser.accountChanged() }
         }
+        return browser
+    }
+
+    fun createPlaylistCatalog(fetch: LibraryPageFetch, platform: Platform): PlaylistCatalog {
+        val browser = createLibraryBrowser(fetch, platform)
+        val catalog = PlaylistCatalog(platform, browser, { playbackIdentity(platform) },
+            PlaylistOrderAccess { expected, change, result -> playlistOrder(platform, expected, change, result) })
+        scope.launch { browser.state.collect { catalog.accept(it) } }
+        scope.launch {
+            states.map { it.getValue(platform) }.distinctUntilChanged().collect { catalog.accountChanged() }
+        }
+        return catalog
+    }
+
+    private fun playlistOrder(platform: Platform, expected: LibraryCacheIdentity,
+        change: ((List<MediaKey>) -> List<MediaKey>)?, result: (Result<List<MediaKey>>) -> Unit) {
+        cacheQueue.execute {
+            val response = runCatching {
+                if (expected != playbackIdentity(platform)) throw LibraryPageFailure("account_changed")
+                val store = playlistOrders.getValue(platform)
+                val saved = store.read(expected.owner)
+                val next = change?.invoke(saved)?.toList() ?: saved
+                if (expected != playbackIdentity(platform)) throw LibraryPageFailure("account_changed")
+                if (change != null) store.write(expected.owner, next)
+                next
+            }.recoverCatching { throw LibraryPageFailure((it as? LibraryPageFailure)?.category ?: "storage") }
+            main.post {
+                result(if (expected == playbackIdentity(platform)) response
+                    else Result.failure(LibraryPageFailure("account_changed")))
+            }
+        }
+    }
+
+    /** Independent disk work and account fences mirror the library browser's ownership rules. */
+    fun createRecommendationsBrowser(): tech.musxi.core.recommendation.RecommendationsBrowser = recommendationsBrowser
+
+    private fun buildRecommendationsBrowser(): tech.musxi.core.recommendation.RecommendationsBrowser {
+        val browser = tech.musxi.core.recommendation.RecommendationsBrowser(::libraryCacheIdentity,
+            { platform, expected, action ->
+                if (expected != libraryCacheIdentity(platform)) throw LibraryPageFailure("account_changed")
+                action(contentMetadataCache.recommendations.getValue(platform))
+                if (expected != libraryCacheIdentity(platform)) throw LibraryPageFailure("account_changed")
+            }, RecommendationRepository(this), { task -> cacheQueue.execute(task) },
+            { task -> main.post(task) }, elapsed = SystemClock::elapsedRealtime,
+            isEnabled = { settingsRepository.settings.value.recommendationsEnabled },
+            clearCache = {
+                // Try every platform even if one directory is damaged. Shared artwork and
+                // library/lyrics caches are deliberately outside this operation.
+                var failed = false
+                contentMetadataCache.recommendations.values.forEach { store ->
+                    try { store.clear() } catch (_: Exception) { failed = true }
+                }
+                check(!failed) { "Recommendation cache unavailable" }
+            })
+        scope.launch { states.collect { browser.accountChanged() } }
         return browser
     }
 
@@ -505,6 +569,7 @@ class AccountRepository(context: Context) {
         val store = libraryCaches[platform] ?: return
         cacheQueue.submit {
             store.clear()
+            contentMetadataCache.recommendations.getValue(platform).clear()
             playbackJournals.getValue(platform).clear()
             lyricsCacheStore.clearPlatform(platform)
             lyricsBindings.values.forEach { it.removePlatform(platform) }

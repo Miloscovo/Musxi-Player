@@ -241,6 +241,150 @@ public class KrcLyricsDecoderTest {
         assertStatus(KrcLyricsDecoder.Status.INVALID, encoded(overLimit));
     }
 
+    @Test public void keepsPcWordTimingsRelativeToTheRowStart() throws Exception {
+        // Same payload as the PC fixture tests/lyrics-parser.cpp:24-26.
+        KrcLyricsDecoder.Document document = KrcLyricsDecoder.decode(
+            encoded("[1200,2000]<0,400,0>Hel<400,600,0>lo\n[3500,900]<0,900,0>World"));
+
+        assertEquals(KrcLyricsDecoder.Status.ABSENT, document.status);
+        assertEquals(2, document.rows.size());
+        KrcLyricsDecoder.Row first = document.rows.get(0);
+        assertEquals(1200L, first.timeMs);
+        assertEquals("Hello", first.text);
+        assertEquals(2, first.words.size());
+        assertWord(first.words.get(0), 0, 3, 1200L, 1600L);
+        assertWord(first.words.get(1), 3, 5, 1600L, 2200L);
+        KrcLyricsDecoder.Row second = document.rows.get(1);
+        assertEquals(1, second.words.size());
+        assertWord(second.words.get(0), 0, 5, 3500L, 4400L);
+    }
+
+    @Test public void appliesDocumentOffsetToRowAndWordTimesWithAddition() throws Exception {
+        // Android keeps the existing addition for [offset:]; words follow the row.
+        KrcLyricsDecoder.Document ahead = KrcLyricsDecoder.decode(encoded(sourceWithOffset(
+            translationMetadata("译"), "[5000,1000]<0,200,0>Ab<200,300,0>cd")));
+        assertEquals(4900L, ahead.rows.get(0).timeMs);
+        assertEquals("译", ahead.rows.get(0).translation);
+        assertWord(ahead.rows.get(0).words.get(0), 0, 2, 4900L, 5100L);
+        assertWord(ahead.rows.get(0).words.get(1), 2, 4, 5100L, 5400L);
+
+        KrcLyricsDecoder.Document clamped = KrcLyricsDecoder.decode(encoded(
+            "[offset:-7000]\n[100,1000]<0,100,0>a<100,100,0>b"));
+        assertEquals(-6900L, clamped.rows.get(0).timeMs);
+        assertWord(clamped.rows.get(0).words.get(0), 0, 1, 0L, 0L);
+        assertWord(clamped.rows.get(0).words.get(1), 1, 2, 0L, 0L);
+    }
+
+    @Test public void trimsWordRangesAndNeverSplitsSurrogatePairs() throws Exception {
+        KrcLyricsDecoder.Document document = KrcLyricsDecoder.decode(encoded(
+            "[1000,500]  <0,100,0>\uD83D\uDE00<100,100,0>啊  "));
+
+        KrcLyricsDecoder.Row row = document.rows.get(0);
+        assertEquals("\uD83D\uDE00啊", row.text);
+        assertEquals(2, row.words.size());
+        assertWord(row.words.get(0), 0, 2, 1000L, 1100L);
+        assertWord(row.words.get(1), 2, 3, 1100L, 1200L);
+    }
+
+    @Test public void skipsEmptyWordSegmentsButRequiresFullCoverage() throws Exception {
+        KrcLyricsDecoder.Document adjacent = KrcLyricsDecoder.decode(encoded(
+            "[1000,500]<0,0,0><100,100,0>abc"));
+        assertEquals("abc", adjacent.rows.get(0).text);
+        assertEquals(1, adjacent.rows.get(0).words.size());
+        assertWord(adjacent.rows.get(0).words.get(0), 0, 3, 1100L, 1200L);
+
+        KrcLyricsDecoder.Document prefix = KrcLyricsDecoder.decode(encoded(
+            "[1000,500]pre<0,100,0>fix"));
+        assertEquals("prefix", prefix.rows.get(0).text);
+        assertTrue(prefix.rows.get(0).words.isEmpty());
+    }
+
+    @Test public void dropsOnlyWordTimingsWhenTheyLeaveTheRow() throws Exception {
+        KrcLyricsDecoder.Document document = KrcLyricsDecoder.decode(encoded(source(
+            translationMetadata("译", ""),
+            "[1000,100]<0,500,0>Hello",
+            "[2000,1000]<0,100,0>Ok")));
+
+        assertEquals(KrcLyricsDecoder.Status.PRESENT, document.status);
+        assertEquals("Hello", document.rows.get(0).text);
+        assertEquals("译", document.rows.get(0).translation);
+        assertTrue(document.rows.get(0).words.isEmpty());
+        assertEquals(1, document.rows.get(1).words.size());
+        assertWord(document.rows.get(1).words.get(0), 0, 2, 2000L, 2100L);
+
+        // Non-monotonic and malformed tags stay INVALID instead of degrading.
+        assertStatus(KrcLyricsDecoder.Status.INVALID, encoded("[0,1000]<500,1,0>a<100,1,0>b"));
+        assertStatus(KrcLyricsDecoder.Status.INVALID, encoded("[0,1000]<0,1,0>a<0,1"));
+        assertStatus(KrcLyricsDecoder.Status.INVALID, encoded("[0,1000]<a,1,0>a"));
+    }
+
+    @Test public void enforcesWordCountLimits() throws Exception {
+        KrcLyricsDecoder.Document perRow = KrcLyricsDecoder.decode(encoded(wordRow(4096)));
+        assertEquals(KrcLyricsDecoder.Status.ABSENT, perRow.status);
+        assertEquals(4096, perRow.rows.get(0).words.size());
+
+        // Overflow drops only this row's timings; text and translation survive.
+        KrcLyricsDecoder.Document overRow = KrcLyricsDecoder.decode(encoded(source(
+            translationMetadata("译", "二"), tagRow(4097), "[0,1]<0,1,0>tail")));
+        assertEquals(KrcLyricsDecoder.Status.PRESENT, overRow.status);
+        assertEquals(2, overRow.rows.size());
+        assertEquals("译", overRow.rows.get(0).translation);
+        assertEquals("x", overRow.rows.get(0).text);
+        assertTrue(overRow.rows.get(0).words.isEmpty());
+        assertEquals(1, overRow.rows.get(1).words.size());
+
+        // Repeated <0,1,0> tags keep the document under the 1 MiB container limit
+        // while exercising the document-wide count.
+        KrcLyricsDecoder.Document limited = KrcLyricsDecoder.decode(encoded(document(24, 4096, 1696)));
+        assertEquals(KrcLyricsDecoder.Status.ABSENT, limited.status);
+        assertEquals(25, limited.rows.size());
+        assertEquals(4096, limited.rows.get(0).words.size());
+        assertEquals(1696, limited.rows.get(24).words.size());
+
+        KrcLyricsDecoder.Document overDocument = KrcLyricsDecoder.decode(encoded(document(24, 4096, 1697)));
+        assertEquals(KrcLyricsDecoder.Status.ABSENT, overDocument.status);
+        assertEquals(25, overDocument.rows.size());
+        assertEquals(4096, overDocument.rows.get(0).words.size());
+        assertTrue(overDocument.rows.get(24).words.isEmpty());
+    }
+
+    @Test public void dropsOnlyWordTimingsThatExceedTheRowTimeLimit() throws Exception {
+        // A positive document offset pushes absolute word times past 24 h while the
+        // row itself stays legal, so only the timings degrade.
+        KrcLyricsDecoder.Document document = KrcLyricsDecoder.decode(encoded(source(
+            translationMetadata("译"), "[offset:1000000]\n[86000000,300000]<0,1000,0>ab")));
+
+        assertEquals(KrcLyricsDecoder.Status.PRESENT, document.status);
+        assertEquals(87000000L, document.rows.get(0).timeMs);
+        assertEquals("ab", document.rows.get(0).text);
+        assertEquals("译", document.rows.get(0).translation);
+        assertTrue(document.rows.get(0).words.isEmpty());
+    }
+
+    private static void assertWord(KrcLyricsDecoder.Word word, int start, int end,
+        long startTimeMs, long endTimeMs) {
+        assertEquals(start, word.textStart);
+        assertEquals(end, word.textEnd);
+        assertEquals(startTimeMs, word.startTimeMs);
+        assertEquals(endTimeMs, word.endTimeMs);
+    }
+
+    private static String wordRow(int count) {
+        return "[0,1]" + "<0,1,0>x".repeat(count);
+    }
+
+    /** The tag count exceeds the per-row cap without exceeding the text limit. */
+    private static String tagRow(int tags) {
+        return "[0,1]" + "<0,1,0>".repeat(tags - 1) + "<0,1,0>x";
+    }
+
+    private static String document(int repeatedRows, int perRow, int tail) {
+        StringBuilder body = new StringBuilder(repeatedRows * perRow * 8);
+        for (int i = 0; i < repeatedRows; i++) body.append(wordRow(perRow)).append('\n');
+        body.append(wordRow(tail));
+        return body.toString();
+    }
+
     private static String translationMetadata(String... translations) throws Exception {
         return metadataWithBlocks(new JSONArray().put(translationBlock(translations)));
     }

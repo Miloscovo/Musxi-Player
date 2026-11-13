@@ -9,6 +9,64 @@ import java.util.Collections;
 import static org.junit.Assert.*;
 
 public class NeteaseLibraryApiTest {
+    @Test public void timedLyricsUsesPinnedV1PayloadAndMatchingYrcTranslation() throws Exception {
+        final java.util.List<NeteaseApi.Request> requests=new java.util.ArrayList<>();
+        NeteaseApi api=new NeteaseApi(request->{requests.add(request);return new NeteaseApi.Response(jUnchecked(
+            "{code:200,lrc:{lyric:'[00:01.000]Legacy'},tlyric:{lyric:'[00:01.000]旧译文'},"
+            +"yrc:{lyric:'[1500,500](1500,500,0)Native'},ytlrc:{lyric:'[00:01.500]新译文'}}"),Collections.emptyMap());});
+        NeteaseApi.Session session=NeteaseApi.Session.fromJson(j("{userId:'7',nickname:'User',cookies:{MUSIC_U:'secret'}}"));
+        NeteaseLibraryApi.LyricsDocument doc=new NeteaseLibraryApi(api).lyricsTimedDocument(session,"12345");
+        assertEquals(1,requests.size());assertEquals(NeteaseApi.LYRIC_NEW,requests.get(0).endpoint);
+        JSONObject payload=eapiPayload(requests.get(0),"/api/song/lyric/v1");
+        assertEquals("12345",payload.getString("id"));assertFalse(payload.getBoolean("cp"));
+        for(String field:new String[]{"tv","lv","rv","kv","yv","ytv","yrv"})assertEquals(0,payload.getInt(field));
+        assertFalse(payload.has("_nmclfl"));
+        assertTrue(doc.original.contains("[00:01.500]Native"));assertEquals("[00:01.500]新译文",doc.translation);
+        assertEquals(YrcLyricsDecoder.Status.PRESENT,doc.wordTimings.status);assertEquals(1,doc.timingRevision);
+        assertEquals("LyricsDocument{redacted}",doc.toString());
+    }
+
+    @Test public void absentOrMalformedYrcUsesOrdinaryTimelineAndNeverWrongTranslation() throws Exception {
+        JSONObject base=j("{code:200,lrc:{lyric:'[00:01.000]Legacy'},tlyric:{lyric:'[00:01.000]旧译文'},ytlrc:{lyric:'[00:09.000]另一轨'}}");
+        for(Object bad:new Object[]{JSONObject.NULL,42,j("{lyric:42}"),j("{lyric:'[1000,100](0,100,0)bad'}")}){
+            JSONObject input=new JSONObject(base.toString()).put("yrc",bad);
+            NeteaseLibraryApi.LyricsDocument doc=NeteaseLibraryApi.parseTimedLyricsDocument(input);
+            assertEquals("[00:01.000]Legacy",doc.original);assertEquals("[00:01.000]旧译文",doc.translation);
+            assertEquals(bad==JSONObject.NULL?1:0,doc.timingRevision);
+        }
+        JSONObject valid=new JSONObject(base.toString()).put("yrc",j("{lyric:'[1500,500](1500,500,0)Native'}"));
+        valid.remove("ytlrc");
+        NeteaseLibraryApi.LyricsDocument doc=NeteaseLibraryApi.parseTimedLyricsDocument(valid);
+        assertEquals(NeteaseLibraryApi.TranslationStatus.ABSENT,doc.translationStatus);assertNull(doc.translation);
+        valid.put("ytlrc",j("{lyric:42}"));
+        doc=NeteaseLibraryApi.parseTimedLyricsDocument(valid);
+        assertEquals(NeteaseLibraryApi.TranslationStatus.INVALID,doc.translationStatus);
+        assertEquals(YrcLyricsDecoder.Status.PRESENT,doc.wordTimings.status);
+    }
+
+    @Test public void timedEndpointFailureFallsBackButExpiredIdentityAndCancellationDoNotRetry() throws Exception {
+        final java.util.List<NeteaseApi.Request> requests=new java.util.ArrayList<>();
+        NeteaseApi api=new NeteaseApi(request->{requests.add(request);return new NeteaseApi.Response(jUnchecked(
+            request.endpoint.equals(NeteaseApi.LYRIC_NEW)?"{code:500}":"{code:200,lrc:{lyric:'[00:01.000]Fallback'}}"),Collections.emptyMap());});
+        NeteaseApi.Session session=NeteaseApi.Session.fromJson(j("{userId:'7',nickname:'User',cookies:{MUSIC_U:'secret'}}"));
+        NeteaseLibraryApi.LyricsDocument doc=new NeteaseLibraryApi(api).lyricsTimedDocument(session,"12345");
+        assertEquals("[00:01.000]Fallback",doc.original);assertEquals(0,doc.timingRevision);
+        assertEquals(YrcLyricsDecoder.Status.PLATFORM_ERROR,doc.wordTimings.status);assertEquals(2,requests.size());
+        requests.clear();
+        NeteaseApi expired=new NeteaseApi(request->{requests.add(request);return new NeteaseApi.Response(jUnchecked("{code:301}"),Collections.emptyMap());});
+        fails("expired",()->new NeteaseLibraryApi(expired).lyricsTimedDocument(session,"12345"));
+        assertEquals(1,requests.size());requests.clear();
+        fails("account_changed",()->new NeteaseLibraryApi(expired,()->false).lyricsTimedDocument(session,"12345"));
+        assertTrue(requests.isEmpty());
+    }
+
+    @Test public void nativeYrcCanStandWithoutLegacyLrcAndNoLyricsFlagsStillWin() throws Exception {
+        JSONObject body=j("{code:200,yrc:{lyric:'[1000,100](1000,100,0)Hi'}}");
+        assertEquals(YrcLyricsDecoder.Status.PRESENT,NeteaseLibraryApi.parseTimedLyricsDocument(body).wordTimings.status);
+        body.put("nolyric",true);
+        assertEquals("",NeteaseLibraryApi.parseTimedLyricsDocument(body).original);
+        body.put("nolyric","true");fails("protocol",()->NeteaseLibraryApi.parseTimedLyricsDocument(body));
+    }
     interface Checked { void run() throws Exception; }
     private static JSONObject j(String text) throws Exception { return new JSONObject(text); }
     private static void fails(String code, Checked block) throws Exception {
@@ -113,6 +171,258 @@ public class NeteaseLibraryApiTest {
                 jUnchecked("{code:200,playlist:{id:42,specialType:0,creator:{userId:8}}}"),
                 Collections.emptyMap()));
         fails("permission", () -> new NeteaseLibraryApi(foreign).addToPlaylist(session, "42", "123"));
+    }
+
+    @Test public void removeFromPlaylistUsesLikedPathAndPinnedCustomDelete() throws Exception {
+        NeteaseApi.Session session = NeteaseApi.Session.fromJson(
+                j("{userId:'7',nickname:'User',cookies:{MUSIC_U:'secret',__csrf:'csrf'}}"));
+
+        final java.util.List<NeteaseApi.Request> requests = new java.util.ArrayList<>();
+        final int[] call = {0};
+        NeteaseApi api = new NeteaseApi(request -> {
+            requests.add(request); call[0]++;
+            if (call[0] == 1) return new NeteaseApi.Response(
+                    jUnchecked("{code:200,playlist:{id:43,specialType:5,creator:{userId:7}}}"),
+                    Collections.emptyMap());
+            return new NeteaseApi.Response(jUnchecked("{code:200}"), Collections.emptyMap());
+        });
+        new NeteaseLibraryApi(api).removeFromPlaylist(session, "43", "123");
+        assertEquals(2, requests.size());
+        assertEquals(NeteaseApi.PLAYLIST_DETAIL, requests.get(0).endpoint);
+        assertEquals(NeteaseApi.SET_LIKE, requests.get(1).endpoint);
+        NeteaseApi.requireEndpoint(new URL(requests.get(1).endpoint));
+        JSONObject unliked = eapiPayload(requests.get(1), "/api/radio/like");
+        assertEquals("123", unliked.getString("trackId"));
+        assertFalse(unliked.getBoolean("like"));
+
+        final java.util.List<NeteaseApi.Request> customRequests = new java.util.ArrayList<>();
+        final int[] detailCalls = {0};
+        NeteaseApi custom = new NeteaseApi(request -> {
+            customRequests.add(request); detailCalls[0]++;
+            return new NeteaseApi.Response(jUnchecked(detailCalls[0] == 1
+                    ? "{code:200,playlist:{id:42,specialType:0,creator:{userId:7}}}"
+                    : "{code:200}"), Collections.emptyMap());
+        });
+        new NeteaseLibraryApi(custom).removeFromPlaylist(session, "42", "123");
+        assertEquals(2, detailCalls[0]);
+        assertEquals(NeteaseApi.PLAYLIST_TRACKS, customRequests.get(1).endpoint);
+        NeteaseApi.requireEndpoint(new URL(customRequests.get(1).endpoint));
+        JSONObject delete = eapiPayload(customRequests.get(1), "/api/playlist/manipulate/tracks");
+        assertEquals("del", delete.getString("op"));
+        assertEquals("42", delete.getString("pid"));
+        assertEquals("[\"123\"]", delete.getString("trackIds"));
+        assertEquals("true", delete.getString("imme"));
+
+        NeteaseApi foreign = new NeteaseApi(request -> new NeteaseApi.Response(
+                jUnchecked("{code:200,playlist:{id:42,specialType:0,creator:{userId:8}}}"),
+                Collections.emptyMap()));
+        fails("permission", () -> new NeteaseLibraryApi(foreign).removeFromPlaylist(session, "42", "123"));
+
+        NeteaseApi missing = new NeteaseApi(request -> new NeteaseApi.Response(
+                jUnchecked("{code:200,playlist:{id:41,specialType:0,creator:{userId:7}}}"),
+                Collections.emptyMap()));
+        fails("identity", () -> new NeteaseLibraryApi(missing).removeFromPlaylist(session, "42", "123"));
+
+        for (String bad : new String[]{null, "", "0", "01", "-1", "1.5", "9223372036854775808"}) {
+            fails("protocol", () -> new NeteaseLibraryApi(foreign).removeFromPlaylist(session, bad, "123"));
+            fails("protocol", () -> new NeteaseLibraryApi(foreign).removeFromPlaylist(session, "42", bad));
+        }
+
+        NeteaseApi rejected = new NeteaseApi(request -> new NeteaseApi.Response(
+                jUnchecked("{code:500}"), Collections.emptyMap()));
+        fails("platform", () -> new NeteaseLibraryApi(rejected).removeFromPlaylist(session, "42", "123"));
+    }
+
+    @Test public void removeFromPlaylistRechecksCurrentAccountBeforeTheWrite() throws Exception {
+        NeteaseApi.Session session = NeteaseApi.Session.fromJson(
+                j("{userId:'7',nickname:'User',cookies:{MUSIC_U:'secret',__csrf:'csrf'}}"));
+        final java.util.List<NeteaseApi.Request> requests = new java.util.ArrayList<>();
+        final boolean[] current = {true};
+        NeteaseApi api = new NeteaseApi(request -> {
+            requests.add(request);
+            // The account changes while the detail response is in flight.
+            current[0] = false;
+            return new NeteaseApi.Response(
+                    jUnchecked("{code:200,playlist:{id:42,specialType:0,creator:{userId:7}}}"),
+                    Collections.emptyMap());
+        });
+        fails("account_changed", () -> new NeteaseLibraryApi(api, () -> current[0])
+                .removeFromPlaylist(session, "42", "123"));
+        assertEquals(1, requests.size());
+        assertEquals(NeteaseApi.PLAYLIST_DETAIL, requests.get(0).endpoint);
+
+        // An already-replaced account never reaches the transport at all.
+        final java.util.List<NeteaseApi.Request> untouched = new java.util.ArrayList<>();
+        NeteaseApi idle = new NeteaseApi(request -> {
+            untouched.add(request);
+            return new NeteaseApi.Response(jUnchecked("{code:200}"), Collections.emptyMap());
+        });
+        fails("account_changed", () -> new NeteaseLibraryApi(idle, () -> false)
+                .removeFromPlaylist(session, "42", "123"));
+        assertTrue(untouched.isEmpty());
+        fails("credentials", () -> new NeteaseLibraryApi(idle).removeFromPlaylist(null, "42", "123"));
+    }
+
+    @Test public void createPlaylistUsesPinnedWeapiThenReadsBackTheOwner() throws Exception {
+        NeteaseApi.Session session = NeteaseApi.Session.fromJson(
+                j("{userId:'7',nickname:'User',cookies:{MUSIC_U:'secret',__csrf:'csrf'}}"));
+        final java.util.List<NeteaseApi.Request> requests = new java.util.ArrayList<>();
+        final int[] call = {0};
+        NeteaseApi api = new NeteaseApi(request -> {
+            requests.add(request); call[0]++;
+            if (call[0] == 1) return new NeteaseApi.Response(
+                    jUnchecked("{code:200,id:99,playlist:{id:99}}"), Collections.emptyMap());
+            return new NeteaseApi.Response(
+                    jUnchecked("{code:200,playlist:{id:99,name:'N',specialType:0,creator:{userId:7}}}"),
+                    Collections.emptyMap());
+        });
+        assertEquals("99", new NeteaseLibraryApi(api).createPlaylist(session, "  我的歌单  "));
+        assertEquals(2, requests.size());
+
+        // Create itself is the pinned WEAPI profile, not EAPI. WEAPI uses a per-request random
+        // secret, so the exact body fields are asserted on the payload builder instead.
+        assertEquals(NeteaseApi.PLAYLIST_CREATE, requests.get(0).endpoint);
+        NeteaseApi.requireEndpoint(new URL(requests.get(0).endpoint));
+        assertTrue(requests.get(0).body.contains("encSecKey="));
+        JSONObject create = NeteaseLibraryApi.createPlaylistPayload("  我的歌单  ");
+        assertEquals("我的歌单", create.getString("name"));
+        assertEquals("0", create.getString("privacy"));
+        assertEquals("NORMAL", create.getString("type"));
+
+        // The owner is confirmed through detail by the returned id, never by name.
+        assertEquals(NeteaseApi.PLAYLIST_DETAIL, requests.get(1).endpoint);
+        assertEquals("99", eapiPayload(requests.get(1), "/api/v6/playlist/detail").getString("id"));
+
+        NeteaseApi foreign = new NeteaseApi(request -> new NeteaseApi.Response(
+                jUnchecked("{code:200,playlist:{id:99,specialType:0,creator:{userId:8}}}"),
+                Collections.emptyMap()));
+        fails("permission", () -> new NeteaseLibraryApi(foreign).createPlaylist(session, "N"));
+
+        NeteaseApi missingId = new NeteaseApi(request -> new NeteaseApi.Response(
+                jUnchecked("{code:200}"), Collections.emptyMap()));
+        fails("protocol", () -> new NeteaseLibraryApi(missingId).createPlaylist(session, "N"));
+
+        NeteaseLibraryApi library = new NeteaseLibraryApi(foreign);
+        fails("request", () -> library.createPlaylist(session, ""));
+        fails("request", () -> library.createPlaylist(session, "   "));
+        fails("request", () -> library.createPlaylist(session, null));
+        fails("request", () -> library.createPlaylist(session, repeat("歌", 101)));
+        fails("request", () -> library.createPlaylist(session, "bad\u0007name"));
+        fails("request", () -> library.createPlaylist(session, "bad\nname"));
+        assertEquals(repeat("歌", 100),
+                NeteaseLibraryApi.createPlaylistPayload(repeat("歌", 100)).getString("name"));
+        fails("credentials", () -> library.createPlaylist(null, "N"));
+    }
+
+    @Test public void renamePlaylistUsesEapiRejectsLikedAndReadsBackTheName() throws Exception {
+        NeteaseApi.Session session = NeteaseApi.Session.fromJson(
+                j("{userId:'7',nickname:'User',cookies:{MUSIC_U:'secret',__csrf:'csrf'}}"));
+        final java.util.List<NeteaseApi.Request> requests = new java.util.ArrayList<>();
+        final int[] call = {0};
+        NeteaseApi api = new NeteaseApi(request -> {
+            requests.add(request); call[0]++;
+            if (call[0] == 1) return new NeteaseApi.Response(
+                    jUnchecked("{code:200,playlist:{id:42,name:'Old',specialType:0,creator:{userId:7}}}"),
+                    Collections.emptyMap());
+            if (call[0] == 2) return new NeteaseApi.Response(
+                    jUnchecked("{code:200}"), Collections.emptyMap());
+            return new NeteaseApi.Response(
+                    jUnchecked("{code:200,playlist:{id:42,name:'New',specialType:0,creator:{userId:7}}}"),
+                    Collections.emptyMap());
+        });
+        new NeteaseLibraryApi(api).renamePlaylist(session, "42", "New");
+        assertEquals(3, requests.size());
+        assertEquals(NeteaseApi.PLAYLIST_DETAIL, requests.get(0).endpoint);
+
+        // The pinned rename module passes no profile, so the write is EAPI here.
+        assertEquals(NeteaseApi.PLAYLIST_RENAME, requests.get(1).endpoint);
+        NeteaseApi.requireEndpoint(new URL(requests.get(1).endpoint));
+        assertFalse(requests.get(1).body.contains("encSecKey="));
+        JSONObject rename = eapiPayload(requests.get(1), "/api/playlist/update/name");
+        assertEquals("42", rename.getString("id"));
+        assertEquals("New", rename.getString("name"));
+        assertEquals(NeteaseApi.PLAYLIST_DETAIL, requests.get(2).endpoint);
+
+        // Liked songs are never renamed.
+        NeteaseApi liked = new NeteaseApi(request -> new NeteaseApi.Response(
+                jUnchecked("{code:200,playlist:{id:43,name:'Liked',specialType:5,creator:{userId:7}}}"),
+                Collections.emptyMap()));
+        fails("permission", () -> new NeteaseLibraryApi(liked).renamePlaylist(session, "43", "New"));
+
+        NeteaseApi foreign = new NeteaseApi(request -> new NeteaseApi.Response(
+                jUnchecked("{code:200,playlist:{id:42,specialType:0,creator:{userId:8}}}"),
+                Collections.emptyMap()));
+        fails("permission", () -> new NeteaseLibraryApi(foreign).renamePlaylist(session, "42", "New"));
+
+        // A write the server does not reflect is a protocol failure, not a silent success.
+        final int[] stale = {0};
+        NeteaseApi unchanged = new NeteaseApi(request -> {
+            stale[0]++;
+            return new NeteaseApi.Response(stale[0] == 2
+                    ? jUnchecked("{code:200}")
+                    : jUnchecked("{code:200,playlist:{id:42,name:'Old',specialType:0,creator:{userId:7}}}"),
+                    Collections.emptyMap());
+        });
+        fails("protocol", () -> new NeteaseLibraryApi(unchanged).renamePlaylist(session, "42", "New"));
+
+        NeteaseLibraryApi library = new NeteaseLibraryApi(foreign);
+        fails("request", () -> library.renamePlaylist(session, "42", ""));
+        fails("request", () -> library.renamePlaylist(session, "42", repeat("歌", 101)));
+        fails("request", () -> library.renamePlaylist(session, "42", "bad\u0000name"));
+        fails("protocol", () -> library.renamePlaylist(session, "0", "New"));
+        fails("credentials", () -> library.renamePlaylist(null, "42", "New"));
+    }
+
+    @Test public void playlistWritesStopWhenTheAccountChangesMidCall() throws Exception {
+        NeteaseApi.Session session = NeteaseApi.Session.fromJson(
+                j("{userId:'7',nickname:'User',cookies:{MUSIC_U:'secret',__csrf:'csrf'}}"));
+
+        // Create: the account switches as the create response lands, so the owner read-back
+        // must not run against a replaced account.
+        final java.util.List<NeteaseApi.Request> createRequests = new java.util.ArrayList<>();
+        final boolean[] current = {true};
+        NeteaseApi createApi = new NeteaseApi(request -> {
+            createRequests.add(request);
+            current[0] = false;
+            return new NeteaseApi.Response(jUnchecked("{code:200,id:99}"), Collections.emptyMap());
+        });
+        fails("account_changed", () -> new NeteaseLibraryApi(createApi, () -> current[0])
+                .createPlaylist(session, "N"));
+        assertEquals(1, createRequests.size());
+        assertEquals(NeteaseApi.PLAYLIST_CREATE, createRequests.get(0).endpoint);
+
+        // Rename: the account switches after ownership is confirmed, before the write.
+        final java.util.List<NeteaseApi.Request> renameRequests = new java.util.ArrayList<>();
+        final boolean[] renameCurrent = {true};
+        NeteaseApi renameApi = new NeteaseApi(request -> {
+            renameRequests.add(request);
+            renameCurrent[0] = false;
+            return new NeteaseApi.Response(
+                    jUnchecked("{code:200,playlist:{id:42,name:'Old',specialType:0,creator:{userId:7}}}"),
+                    Collections.emptyMap());
+        });
+        fails("account_changed", () -> new NeteaseLibraryApi(renameApi, () -> renameCurrent[0])
+                .renamePlaylist(session, "42", "New"));
+        assertEquals(1, renameRequests.size());
+        assertEquals(NeteaseApi.PLAYLIST_DETAIL, renameRequests.get(0).endpoint);
+
+        // An already-replaced account never reaches the transport at all.
+        final java.util.List<NeteaseApi.Request> untouched = new java.util.ArrayList<>();
+        NeteaseApi idle = new NeteaseApi(request -> {
+            untouched.add(request);
+            return new NeteaseApi.Response(jUnchecked("{code:200,id:99}"), Collections.emptyMap());
+        });
+        fails("account_changed", () -> new NeteaseLibraryApi(idle, () -> false)
+                .createPlaylist(session, "N"));
+        fails("account_changed", () -> new NeteaseLibraryApi(idle, () -> false)
+                .renamePlaylist(session, "42", "New"));
+        assertTrue(untouched.isEmpty());
+    }
+
+    private static String repeat(String value, int count) {
+        StringBuilder out = new StringBuilder();
+        for (int i = 0; i < count; i++) out.append(value);
+        return out.toString();
     }
 
     @Test public void playlistIdsRequireCompleteMatchingIdentity() throws Exception {
