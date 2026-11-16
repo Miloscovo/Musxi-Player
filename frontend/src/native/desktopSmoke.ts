@@ -6,7 +6,7 @@ import { request, type CefTransport } from './transport';
 export function reportDesktopPage() {
   const host = window as unknown as CefTransport;
   // Exercise the native minimum width even when the smoke host starts wider.
-  const root = document.querySelector<HTMLElement>('.game-overlay');
+  const root = document.querySelector<HTMLElement>('.fullscreen-app-overlay');
   const controlsFit = () => {
     const width = root?.style.width ?? '';
     if (root) root.style.width = '480px';
@@ -45,14 +45,14 @@ export async function verifyDesktopWindow() {
   await native.desktopLyrics.setVisible(true);
   const view = await wait(value => value.painted && value.page?.text === '尚未播放歌曲', 'idle text');
   if (!view.noActivate || !view.toolWindow || !view.topmost || !view.transparent) throw new Error('Desktop window styles/alpha incorrect');
-  if ((await native.gameOverlay.getState()).editing) throw new Error('Lyrics unexpectedly entered manual editing');
+  if ((await native.fullscreenAppOverlay.getState()).editing) throw new Error('Lyrics unexpectedly entered manual editing');
   await native.desktopLyrics.setLocked(false);
   try {
     await native.desktopLyrics.setPanel(true);
     throw new Error('Obsolete toolbar toggle unexpectedly succeeded');
   } catch (error) { if (!(error && typeof error === 'object' && 'code' in error && error.code === 409)) throw error; }
   await native.desktopLyrics.setFontSize(40);
-  if ((await native.gameOverlay.getState()).lyricsFontSize !== 40) throw new Error('Legacy font setter did not update unified state');
+  if ((await native.fullscreenAppOverlay.getState()).lyricsFontSize !== 40) throw new Error('Legacy font setter did not update unified state');
   await native.desktopLyrics.setLocked(true);
   await wait(value => value.clickThrough && !value.page?.panel, 'lock');
   if ((await native.desktopLyrics.getState()).panel) throw new Error('Locking kept the panel open');

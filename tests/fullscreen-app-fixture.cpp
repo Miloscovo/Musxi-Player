@@ -18,11 +18,11 @@ LRESULT CALLBACK procedure(HWND window,UINT message,WPARAM wp,LPARAM lp) {
 }
 int WINAPI wWinMain(HINSTANCE instance,HINSTANCE,PWSTR,int) {
     SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
-    WNDCLASSW wc{};wc.lpfnWndProc=procedure;wc.hInstance=instance;wc.lpszClassName=L"GLFW30";wc.hbrBackground=reinterpret_cast<HBRUSH>(COLOR_WINDOW+1);
+    WNDCLASSW wc{};wc.lpfnWndProc=procedure;wc.hInstance=instance;wc.lpszClassName=L"MusxiFullscreenAppFixture";wc.hbrBackground=reinterpret_cast<HBRUSH>(COLOR_WINDOW+1);
     if(!RegisterClassW(&wc))return 1;
     MONITORINFO monitor{sizeof(monitor)};GetMonitorInfoW(MonitorFromPoint({0,0},MONITOR_DEFAULTTOPRIMARY),&monitor);
     original={monitor.rcWork.left+100,monitor.rcWork.top+100,monitor.rcWork.left+700,monitor.rcWork.top+500};
-    const auto window=CreateWindowExW(WS_EX_APPWINDOW,wc.lpszClassName,L"Minecraft compatibility fixture",style,
+    const auto window=CreateWindowExW(WS_EX_APPWINDOW,wc.lpszClassName,L"Fullscreen application compatibility fixture",style,
         original.left,original.top,600,400,nullptr,nullptr,instance,nullptr);
     if(!window)return 1;
     ShowWindow(window,SW_SHOWNOACTIVATE);

@@ -16,7 +16,7 @@ import PlaybackPlatform from './components/PlaybackPlatform';
 import LyricsView from './views/LyricsView';
 import { playbackTimes, formatPlaybackTime } from './composables/playbackTime';
 import { useDesktopLyrics } from './composables/useDesktopLyrics';
-import { useGameOverlay } from './composables/useGameOverlay';
+import { useFullscreenAppOverlay } from './composables/useFullscreenAppOverlay';
 import { bindWheelRange } from './composables/wheelRange';
 import { useAppUpdates } from './composables/useAppUpdates';
 import UpdateNotice from './components/UpdateNotice';
@@ -30,7 +30,7 @@ export default function App() {
   const shell = useWindow(); const library = useLibrary();
   const wallpaper = useWallpaper(shell);
   const desktop = useDesktopLyrics(); const updates = useAppUpdates();
-  const overlay = useGameOverlay();
+  const overlay = useFullscreenAppOverlay();
   const shortcuts = useShortcuts(overlay.state.enabled);
   const [showUpdates, setShowUpdates] = useState(0);
   const currentTrack = library.state?.now;

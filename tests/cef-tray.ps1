@@ -55,7 +55,7 @@ function Find-TestWindow([string]$class,[bool]$includeHidden=$false) {
  [void][TrayCheck]::EnumWindows({param($window,$unused)
   $owner=[uint32]0;[void][TrayCheck]::GetWindowThreadProcessId($window,[ref]$owner)
   $title=New-Object Text.StringBuilder 128;[void][TrayCheck]::GetWindowText($window,$title,128)
-  if($owner -eq $app.Id -and (Class-Name $window) -eq $class -and ($class -ne 'MusxiGameOverlay' -or $title.ToString() -eq 'Musxi Player 歌词悬浮组件') -and ($includeHidden -or [TrayCheck]::IsWindowVisible($window))) {$script:found=$window}
+  if($owner -eq $app.Id -and (Class-Name $window) -eq $class -and ($class -ne 'MusxiFullscreenAppOverlay' -or $title.ToString() -eq 'Musxi Player 歌词悬浮组件') -and ($includeHidden -or [TrayCheck]::IsWindowVisible($window))) {$script:found=$window}
   return $true
  },[IntPtr]::Zero)
  return $script:found
@@ -114,7 +114,7 @@ function Open-Menu {
 # virtualized on scaled displays and the physical-pixel menu checks fail.
 [void][TrayCheck]::SetThreadDpiAwarenessContext([IntPtr](-4))
 $hostExe=(Resolve-Path -LiteralPath $HostPath).Path
-$preferences=Join-Path $env:LOCALAPPDATA 'MusxiPlayer-Test\game-overlay.json'
+$preferences=Join-Path $env:LOCALAPPDATA 'MusxiPlayer-Test\fullscreen-app-overlay.json'
 $savedPreferences=if(Test-Path -LiteralPath $preferences){[IO.File]::ReadAllBytes($preferences)}else{$null}
 $mainPreferences=Join-Path $env:LOCALAPPDATA 'MusxiPlayer-Test\window.json'
 $savedMainPreferences=if(Test-Path -LiteralPath $mainPreferences){[IO.File]::ReadAllBytes($mainPreferences)}else{$null}
@@ -164,13 +164,13 @@ try {
   $beforeResize.right-$beforeResize.left,$beforeResize.bottom-$beforeResize.top,0x14)
  Start-Sleep -Milliseconds 400
  [void][TrayCheck]::SetCursorPos(300,300)
- if((Find-TestWindow 'MusxiGameOverlay') -ne [IntPtr]::Zero) {
+ if((Find-TestWindow 'MusxiFullscreenAppOverlay') -ne [IntPtr]::Zero) {
   $content=Open-Menu;Click-Menu $content 60
-  Wait-For { (Find-TestWindow 'MusxiGameOverlay') -eq [IntPtr]::Zero } 'Existing desktop lyrics did not close'
+  Wait-For { (Find-TestWindow 'MusxiFullscreenAppOverlay') -eq [IntPtr]::Zero } 'Existing desktop lyrics did not close'
  }
  $content=Open-Menu;Click-Menu $content 60
- Wait-For { (Find-TestWindow 'MusxiGameOverlay') -ne [IntPtr]::Zero } 'Tray desktop open failed'
- $desktop=Find-TestWindow 'MusxiGameOverlay'
+ Wait-For { (Find-TestWindow 'MusxiFullscreenAppOverlay') -ne [IntPtr]::Zero } 'Tray desktop open failed'
+ $desktop=Find-TestWindow 'MusxiFullscreenAppOverlay'
  $style=[TrayCheck]::GetWindowLongPtr($desktop,-20).ToInt64()
  if(($style -band 0x08080088) -ne 0x08080088){throw 'Desktop layered/tool/topmost/noactivate style missing'}
  $content=Open-Menu;Click-Menu $content 96
@@ -224,11 +224,11 @@ try {
  [void][TrayCheck]::PostMessage($window,0x802C,[IntPtr]::Zero,[IntPtr]0x10203)
  Wait-For { -not [TrayCheck]::IsIconic($window) } 'Tray restore left window minimized'
  [void][TrayCheck]::PostMessage($desktop,0x10,[IntPtr]::Zero,[IntPtr]::Zero)
- Wait-For { (Find-TestWindow 'MusxiGameOverlay') -eq [IntPtr]::Zero } 'Desktop-only close failed'
+ Wait-For { (Find-TestWindow 'MusxiFullscreenAppOverlay') -eq [IntPtr]::Zero } 'Desktop-only close failed'
  if($app.HasExited){throw 'Closing desktop terminated main player'}
  $content=Open-Menu;Click-Menu $content 60
- Wait-For { (Find-TestWindow 'MusxiGameOverlay') -ne [IntPtr]::Zero } 'Desktop reopen failed'
- $desktop=Find-TestWindow 'MusxiGameOverlay'
+ Wait-For { (Find-TestWindow 'MusxiFullscreenAppOverlay') -ne [IntPtr]::Zero } 'Desktop reopen failed'
+ $desktop=Find-TestWindow 'MusxiFullscreenAppOverlay'
  Wait-For { ([TrayCheck]::GetWindowLongPtr($desktop,-20).ToInt64() -band 0x20) -ne 0 } 'Desktop did not retain its lock before exit'
  $expandedBounds=New-Object TrayCheck+Rect;[void][TrayCheck]::GetWindowRect($window,[ref]$expandedBounds)
  $client=New-Object TrayCheck+Rect;[void][TrayCheck]::GetClientRect($window,[ref]$client)
@@ -256,8 +256,8 @@ try {
     $restoredBounds.bottom-$restoredBounds.top -ne $expandedBounds.bottom-$expandedBounds.top) {
   throw 'Exiting compact mode overwrote the full window startup dimensions'
  }
- Wait-For { (Find-TestWindow 'MusxiGameOverlay') -ne [IntPtr]::Zero } 'Desktop preference did not restore'
- $desktop=Find-TestWindow 'MusxiGameOverlay';$bounds=New-Object TrayCheck+Rect
+ Wait-For { (Find-TestWindow 'MusxiFullscreenAppOverlay') -ne [IntPtr]::Zero } 'Desktop preference did not restore'
+ $desktop=Find-TestWindow 'MusxiFullscreenAppOverlay';$bounds=New-Object TrayCheck+Rect
  [void][TrayCheck]::GetWindowRect($desktop,[ref]$bounds)
  $point=New-Object TrayCheck+Point;$point.x=$bounds.left;$point.y=$bounds.top
  [void][TrayCheck]::GetMonitorInfo([TrayCheck]::MonitorFromPoint($point,2),[ref]$monitor)

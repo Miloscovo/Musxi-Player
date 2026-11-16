@@ -1,12 +1,12 @@
 /* Only decoration layers use opacity; content and input regions remain unchanged. */
 :root .sidebar:has(> .liquid-glass-surface),
 :root .player:has(> .liquid-glass-surface),
-:root .game-overlay[data-widget=track]:has(> .liquid-glass-surface) { background:transparent; isolation:isolate }
+:root .fullscreen-app-overlay[data-widget=track]:has(> .liquid-glass-surface) { background:transparent; isolation:isolate }
 .sidebar:has(> .liquid-glass-surface) { position:relative; --liquid-fill:var(--side); --liquid-opacity:1; --liquid-shine:.4 }
 :root[data-theme=glass-light] .sidebar:has(> .liquid-glass-surface) { --liquid-fill:color-mix(in srgb,color-mix(in srgb,var(--opaque-side) 90%,#000) calc(var(--background-opacity,1)*100%),transparent) }
 :root[data-theme=glass] .sidebar:has(> .liquid-glass-surface) { --liquid-fill:color-mix(in srgb,color-mix(in srgb,var(--opaque-side) 25%,#000) calc(var(--background-opacity,1)*100%),transparent) }
 .player:has(> .liquid-glass-surface) { --liquid-fill:var(--dock); --liquid-opacity:1; --liquid-shine:.65 }
-.game-overlay[data-widget=track]:has(> .liquid-glass-surface) { --liquid-fill:color-mix(in srgb,var(--app-surface) calc(var(--game-track-opacity,1)*100%),transparent); --liquid-opacity:var(--game-track-opacity,1); --liquid-shine:.45; position:relative }
+.fullscreen-app-overlay[data-widget=track]:has(> .liquid-glass-surface) { --liquid-fill:color-mix(in srgb,var(--app-surface) calc(var(--fullscreen-app-track-opacity,1)*100%),transparent); --liquid-opacity:var(--fullscreen-app-track-opacity,1); --liquid-shine:.45; position:relative }
 .liquid-glass-surface { position:absolute; inset:0; z-index:-1; pointer-events:none; border-radius:inherit; overflow:hidden }
 .liquid-glass-surface,.liquid-glass-surface * { -webkit-app-region:inherit }
 .liquid-glass-defs { position:absolute; pointer-events:none }

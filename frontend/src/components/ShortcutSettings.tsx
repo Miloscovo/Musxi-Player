@@ -46,7 +46,7 @@ export default function ShortcutSettings({ shortcuts: keys, overlayEnabled = fal
     {!!failed.length && <p className="playback-settings-error" role="status">以下全局快捷键不可用，可能被其他程序占用或无法启动监听：{failed.map(id => shortcutActions.find(([action]) => action === id)?.[1]).join('、')}。可重新绑定，窗口内仍可使用。</p>}
     {!keys.loaded && !keys.error && <p className="playback-settings-loading">正在读取快捷键…</p>}
     <div className="shortcut-groups">
-      {[actions.slice(0,5), actions.slice(5,8), actions.slice(8,10), actions.slice(10)].filter(group => group.length).map((group, index) => <div className="shortcut-group" id={group[0][0].startsWith('overlay') ? 'game-overlay-shortcuts' : undefined} key={index}>
+      {[actions.slice(0,5), actions.slice(5,8), actions.slice(8,10), actions.slice(10)].filter(group => group.length).map((group, index) => <div className="shortcut-group" id={group[0][0].startsWith('overlay') ? 'fullscreen-app-overlay-shortcuts' : undefined} key={index}>
         {group.map(([id, label]) => <div className="shortcut-row" key={id}>
           <span id={`shortcut-${id}`}>{label}</span>
           <div className="shortcut-binding-actions">

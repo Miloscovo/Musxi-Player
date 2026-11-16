@@ -22,9 +22,9 @@ import { ContextMenu, ContextMenuTrigger, ContextMenuContent, ContextMenuItem,
 import AppearanceSettings from '../components/AppearanceSettings';
 import LiquidGlassSurface from '../components/LiquidGlassSurface';
 import PlaybackSettings from '../components/PlaybackSettings';
-import GameOverlaySettings from '../components/GameOverlaySettings';
+import FullscreenAppOverlaySettings from '../components/FullscreenAppOverlaySettings';
 import ExtensionsView from './ExtensionsView';
-import type { useGameOverlay } from '../composables/useGameOverlay';
+import type { useFullscreenAppOverlay } from '../composables/useFullscreenAppOverlay';
 import ShortcutSettings from '../components/ShortcutSettings';
 import LyricsSettings from '../components/LyricsSettings';
 import type { ShortcutsController } from '../composables/useShortcuts';
@@ -52,7 +52,7 @@ export default function LibraryView({ library: lib, theme, appearance, onAppeara
   transparency?: number; onTransparency?: (value: number) => void;
   updates?: AppUpdates; showUpdates?: number;
   shortcuts: ShortcutsController;
-  overlay: ReturnType<typeof useGameOverlay>;
+  overlay: ReturnType<typeof useFullscreenAppOverlay>;
   playback?: PlayerState | null; onResume?: () => void;
   wallpaper?:WallpaperController;wallpaperEnabled?:boolean;onWallpaperEnabled?:(value:boolean)=>void;
   playerTransparent?:boolean;onPlayerTransparent?:(value:boolean)=>void;
@@ -70,7 +70,7 @@ export default function LibraryView({ library: lib, theme, appearance, onAppeara
   const [skeletonPageRows, setSkeletonPageRows] = useState(8);
   const [librarySection, setLibrarySection] = useState<LibrarySection>('created');
   const [settingsSection, setSettingsSection] = useState<'appearance' | 'playback' | 'shortcuts' | 'lyrics' | 'updates'>('appearance');
-  const jumpToGameShortcuts = useRef(false);
+  const jumpToFullscreenAppShortcuts = useRef(false);
   const [removeFoldersOpen, setRemoveFoldersOpen] = useState(false);
   useEffect(() => {
     // The dock notice asks for the update details page.
@@ -164,9 +164,9 @@ export default function LibraryView({ library: lib, theme, appearance, onAppeara
     return () => transition.current?.cancel();
   }, [navigationKey, navigationRevision]);
   useLayoutEffect(() => {
-    if (view !== 'settings' || settingsSection !== 'shortcuts' || !jumpToGameShortcuts.current) return;
-    pageScroll.current?.querySelector('#game-overlay-shortcuts')?.scrollIntoView({ block: 'start' });
-    jumpToGameShortcuts.current = false;
+    if (view !== 'settings' || settingsSection !== 'shortcuts' || !jumpToFullscreenAppShortcuts.current) return;
+    pageScroll.current?.querySelector('#fullscreen-app-overlay-shortcuts')?.scrollIntoView({ block: 'start' });
+    jumpToFullscreenAppShortcuts.current = false;
   }, [view, settingsSection, navigationRevision]);
   const playSource = view === 'recent' ? 'recent' : view === 'search' ? 'search' : isLocal ? 'local' : 'library';
   const virtualSongs = useVirtualizer({
@@ -307,6 +307,11 @@ export default function LibraryView({ library: lib, theme, appearance, onAppeara
             if (view !== 'search') { resetScroll(); setPlaylistQuery(event.currentTarget.value); }
             else setQuery(event.currentTarget.value);
           }} maxLength={120} placeholder={view !== 'search' ? '搜索此列表中的歌曲、歌手或专辑…' : '搜索歌曲、歌手或专辑…'} aria-label="搜索歌曲、歌手或专辑"/>
+          {(view === 'search' ? query : playlistQuery) && <Button variant="unstyled" type="button" className="search-clear" aria-label="清除搜索内容" title="清除搜索内容" onClick={event => {
+            if (view === 'search') setQuery('');
+            else { resetScroll(); setPlaylistQuery(''); }
+            event.currentTarget.form?.querySelector('input')?.focus();
+          }}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/></svg></Button>}
         </form>}
       </div></header>}
       {view !== 'recent' && isDemoMode() && <p className="demo-notice">演示模式：播放进度与导入文件夹均为模拟，不播放真实音频、不读取真实文件、不登录真实账号；刷新页面后重置。</p>}
@@ -370,7 +375,7 @@ export default function LibraryView({ library: lib, theme, appearance, onAppeara
           </DialogContent>
         </Dialog>
       </div>}
-      {view === 'extensions' ? <ExtensionsView wallpaper={dynamicWallpaper}/> : view === 'settings' ? settingsSection === 'updates' && updates ? <UpdateSettings updates={updates}/> : settingsSection === 'shortcuts' ? <ShortcutSettings shortcuts={shortcuts} overlayEnabled={overlay.state.enabled}/> : settingsSection === 'lyrics' ? <><LyricsSettings coverUrl={state?.now?.cover}/><GameOverlaySettings overlay={overlay} onShortcutSettings={() => navigate(() => { resetScroll(); jumpToGameShortcuts.current = true; setSettingsSection('shortcuts'); })}/></> : settingsSection === 'playback' ? <PlaybackSettings/> : <AppearanceSettings appearance={appearance ?? { mode: theme === 'dark' || theme === 'glass' ? 'dark' : 'light', transparent: theme === 'glass' || theme === 'glass-light', tone: 'green' }} onAppearance={onAppearance ?? (() => {})} transparency={transparency} onTransparency={onTransparency ?? (() => {})}
+      {view === 'extensions' ? <ExtensionsView wallpaper={dynamicWallpaper}/> : view === 'settings' ? settingsSection === 'updates' && updates ? <UpdateSettings updates={updates}/> : settingsSection === 'shortcuts' ? <ShortcutSettings shortcuts={shortcuts} overlayEnabled={overlay.state.enabled}/> : settingsSection === 'lyrics' ? <><LyricsSettings coverUrl={state?.now?.cover}/><FullscreenAppOverlaySettings overlay={overlay} onShortcutSettings={() => navigate(() => { resetScroll(); jumpToFullscreenAppShortcuts.current = true; setSettingsSection('shortcuts'); })}/></> : settingsSection === 'playback' ? <PlaybackSettings/> : <AppearanceSettings appearance={appearance ?? { mode: theme === 'dark' || theme === 'glass' ? 'dark' : 'light', transparent: theme === 'glass' || theme === 'glass-light', tone: 'green' }} onAppearance={onAppearance ?? (() => {})} transparency={transparency} onTransparency={onTransparency ?? (() => {})}
         wallpaper={wallpaper} wallpaperEnabled={wallpaperEnabled} onWallpaperEnabled={onWallpaperEnabled} playerTransparent={playerTransparent} onPlayerTransparent={onPlayerTransparent} liquidGlass={liquidGlass} onLiquidGlass={onLiquidGlass}
         dynamicWallpaperEnabled={dynamicWallpaper.settings.enabled} onDynamicWallpaper={() => navigate(() => {resetScroll();setView('extensions');setShowTracks(false);dynamicWallpaper.setManager(dynamicWallpaper.settings.enabled);})}/> : view === 'library' && !showTracks ? <>
         {!isLocal && <>

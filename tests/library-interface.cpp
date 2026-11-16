@@ -30,6 +30,10 @@ public:
     std::vector<musxi::AudioEvent> takeEvents() override {std::vector<musxi::AudioEvent> result;result.swap(events);return result;}
 };
 int main() try {
+    require(!musxi::applicationHasQueuedTracks(),"Empty queue reported playable tracks");
+    cloudQueue.push_back({{"id","taskbar-queue-check"}});
+    require(musxi::applicationHasQueuedTracks(),"Queued track was not reported");
+    cloudQueue.clear();
     const auto productionData=cloud::dataDir();
     cloud::testProfile=true;
     require(cloud::dataDir()!=productionData && cloud::dataDir().filename()==L"MusxiPlayer-Test","test profile shares production storage");

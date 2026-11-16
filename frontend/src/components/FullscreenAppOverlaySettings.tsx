@@ -1,52 +1,52 @@
 import { useEffect, useState, type CSSProperties } from 'react';
-import { gameLyricsStyleKey, readGameLyricsStyle, type GameLyricsStyle } from '../composables/gameLyricsStyle';
-import { gameTrackTransparencyKey, readGameTrackTransparency } from '../composables/gameTrackTransparency';
-import type { useGameOverlay } from '../composables/useGameOverlay';
+import { fullscreenAppLyricsStyleKey, readFullscreenAppLyricsStyle, type FullscreenAppLyricsStyle } from '../composables/fullscreenAppLyricsStyle';
+import { fullscreenAppTrackTransparencyKey, readFullscreenAppTrackTransparency } from '../composables/fullscreenAppTrackTransparency';
+import type { useFullscreenAppOverlay } from '../composables/useFullscreenAppOverlay';
 import { Button } from './ui/button';
 
-export default function GameOverlaySettings({ overlay, onShortcutSettings }: { overlay: ReturnType<typeof useGameOverlay>; onShortcutSettings: () => void }) {
+export default function FullscreenAppOverlaySettings({ overlay, onShortcutSettings }: { overlay: ReturnType<typeof useFullscreenAppOverlay>; onShortcutSettings: () => void }) {
   const { state, busy, error, windows = [] } = overlay;
   const [selectedWindow, setSelectedWindow] = useState('');
   useEffect(() => { if (!windows.some(window => window.id === selectedWindow)) setSelectedWindow(''); }, [windows, selectedWindow]);
-  const [style, setStyle] = useState(() => readGameLyricsStyle(localStorage));
-  const [transparency, setTransparency] = useState(() => readGameTrackTransparency(localStorage));
+  const [style, setStyle] = useState(() => readFullscreenAppLyricsStyle(localStorage));
+  const [transparency, setTransparency] = useState(() => readFullscreenAppTrackTransparency(localStorage));
   const [transparencyError, setTransparencyError] = useState('');
   const [styleError, setStyleError] = useState('');
-  const updateStyle = (next: GameLyricsStyle) => {
+  const updateStyle = (next: FullscreenAppLyricsStyle) => {
     try {
-      localStorage.setItem(gameLyricsStyleKey, next); setStyle(next); setStyleError('');
-      window.dispatchEvent(new Event(gameLyricsStyleKey));
+      localStorage.setItem(fullscreenAppLyricsStyleKey, next); setStyle(next); setStyleError('');
+      window.dispatchEvent(new Event(fullscreenAppLyricsStyleKey));
     } catch { setStyleError('歌词样式保存失败，请重试'); }
   };
   const updateTransparency = (next: number) => {
     try {
-      localStorage.setItem(gameTrackTransparencyKey, String(next)); setTransparency(next); setTransparencyError('');
-      window.dispatchEvent(new Event(gameTrackTransparencyKey));
+      localStorage.setItem(fullscreenAppTrackTransparencyKey, String(next)); setTransparency(next); setTransparencyError('');
+      window.dispatchEvent(new Event(fullscreenAppTrackTransparencyKey));
     } catch { setTransparencyError('歌曲信息组件透明度保存失败，请重试'); }
   };
-  return <section className="settings-content game-overlay-settings" aria-label="悬浮组件设置" aria-busy={busy}>
+  return <section className="settings-content fullscreen-app-overlay-settings" aria-label="悬浮组件设置" aria-busy={busy}>
     <h2>悬浮组件</h2>
     {!state.available && <p role="status">当前窗口暂不支持悬浮组件。</p>}
     {error && <p className="playback-settings-error" role="alert">{error}</p>}
     {([
       ['floating-widgets-topmost', '组件置顶', state.topmost, overlay.setTopmost],
-      ['game-overlay-track', '歌曲信息组件', state.visible && state.trackVisible, overlay.setTrackVisible],
-      ['game-overlay-lyrics', '歌词悬浮组件', state.visible && state.lyricsVisible, overlay.setLyricsVisible],
+      ['fullscreen-app-overlay-track', '歌曲信息组件', state.visible && state.trackVisible, overlay.setTrackVisible],
+      ['fullscreen-app-overlay-lyrics', '歌词悬浮组件', state.visible && state.lyricsVisible, overlay.setLyricsVisible],
     ] as const).map(([id, label, checked, update]) => <div className="appearance-setting-row" key={id}>
       <h3 id={id}>{label}</h3>
       <Button variant="unstyled" className="appearance-switch" role="switch" aria-checked={checked} aria-labelledby={id}
         disabled={!state.available || busy} onClick={() => void update(!checked)}><span/></Button>
     </div>)}
-    <div className="game-overlay-hints">
+    <div className="fullscreen-app-overlay-hints">
       <div className="appearance-setting-row">
-        <h3 id="game-overlay-hide-on-hover">鼠标出现时隐藏组件</h3>
+        <h3 id="fullscreen-app-overlay-hide-on-hover">鼠标出现时隐藏组件</h3>
         <Button variant="unstyled" className="appearance-switch" role="switch" aria-checked={state.hideOnHover}
-          aria-labelledby="game-overlay-hide-on-hover" disabled={!state.available || busy}
+          aria-labelledby="fullscreen-app-overlay-hide-on-hover" disabled={!state.available || busy}
           onClick={() => void overlay.setHideOnHover(!state.hideOnHover)}><span/></Button>
       </div>
       <p>其他程序在前台、组件已锁定时，系统鼠标出现即隐藏歌词和歌曲信息，鼠标隐藏后恢复原先开启的组件。编辑和选歌期间保持显示。</p>
     </div>
-    <div className="game-overlay-hints">
+    <div className="fullscreen-app-overlay-hints">
       <div className="appearance-setting-row">
         <h3 id="window-compatibility-label">通用窗口兼容</h3>
         <Button variant="unstyled" className="appearance-switch" role="switch" aria-checked={state.windowCompatibility}
@@ -77,8 +77,8 @@ export default function GameOverlaySettings({ overlay, onShortcutSettings }: { o
         </p>
     </div>
     <div className="appearance-level">
-      <div className="appearance-setting-row"><label htmlFor="game-track-transparency">歌曲信息组件透明度</label><output htmlFor="game-track-transparency">{transparency}%</output></div>
-      <input id="game-track-transparency" className="appearance-slider" type="range" min="0" max="100" step="1" value={transparency}
+      <div className="appearance-setting-row"><label htmlFor="fullscreen-app-track-transparency">歌曲信息组件透明度</label><output htmlFor="fullscreen-app-track-transparency">{transparency}%</output></div>
+      <input id="fullscreen-app-track-transparency" className="appearance-slider" type="range" min="0" max="100" step="1" value={transparency}
         style={{ '--level': `${transparency}%` } as CSSProperties} aria-valuetext={`${transparency}%`}
         onChange={event => updateTransparency(Number(event.currentTarget.value))}/>
       {transparencyError && <p className="playback-settings-error" role="alert">{transparencyError}</p>}
@@ -96,8 +96,8 @@ export default function GameOverlaySettings({ overlay, onShortcutSettings }: { o
         disabled={!state.available || busy} style={{ '--level': `${((state.lyricsFontSize || 20) - 16) / 32 * 100}%` } as CSSProperties}
         onChange={event => void overlay.setLyricsFontSize(Number(event.currentTarget.value))}/>
     </div>
-    <div className="appearance-mode"><h3 id="game-lyrics-style-label">歌词样式</h3>
-      <div className="appearance-segments" role="group" aria-labelledby="game-lyrics-style-label">
+    <div className="appearance-mode"><h3 id="fullscreen-app-lyrics-style-label">歌词样式</h3>
+      <div className="appearance-segments" role="group" aria-labelledby="fullscreen-app-lyrics-style-label">
         {([['flat', '平面'], ['perspective', '斜向立体']] as const).map(([value, label]) =>
           <Button key={value} variant="unstyled" className="appearance-segment" aria-pressed={style === value}
             onClick={() => updateStyle(value)}>{label}</Button>)}
@@ -109,7 +109,7 @@ export default function GameOverlaySettings({ overlay, onShortcutSettings }: { o
         onClick={() => void overlay.setEditing(!state.editing)}>{state.editing ? '完成编辑并锁定' : '编辑组件'}</Button>
       <Button variant="secondary" onClick={onShortcutSettings}>组件快捷键设置</Button>
     </div>
-    <div className="game-overlay-hints"><p>关闭置顶后，组件可能被游戏或其他窗口遮挡。</p><p>在“快捷键”中设置组件显隐、编辑切换快捷键，并启用全局快捷键，即可在游戏中操作。</p>
-    <p>启用全局快捷键后，按键会同时传给前台程序，按键可能同时执行播放器和游戏操作。游戏以管理员权限运行时，请右键播放器并选择“以管理员身份运行”，以便接收游戏前台的快捷键。</p></div>
+    <div className="fullscreen-app-overlay-hints"><p>关闭置顶后，组件可能被全屏应用或其他窗口遮挡。</p><p>在“快捷键”中设置组件显隐、编辑切换快捷键，并启用全局快捷键，即可在全屏应用中操作。</p>
+    <p>启用全局快捷键后，按键会同时传给前台程序，按键可能同时执行播放器和全屏应用操作。全屏应用以管理员权限运行时，请右键播放器并选择“以管理员身份运行”，以便接收全屏应用前台的快捷键。</p></div>
   </section>;
 }

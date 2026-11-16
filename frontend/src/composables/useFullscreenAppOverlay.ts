@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { readLyricsDisplay } from './lyricsDisplay';
 import { native } from '../native/client';
-import { initialGameOverlayState, type GameOverlayState, type CompatibilityWindow } from '../native/gameOverlay';
+import { initialFullscreenAppOverlayState, type FullscreenAppOverlayState, type CompatibilityWindow } from '../native/fullscreenAppOverlay';
 
-export function useGameOverlay() {
-  const [state, setState] = useState(initialGameOverlayState);
+export function useFullscreenAppOverlay() {
+  const [state, setState] = useState(initialFullscreenAppOverlayState);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [windows, setWindows] = useState<CompatibilityWindow[]>([]);
@@ -14,11 +14,11 @@ export function useGameOverlay() {
     let retry: ReturnType<typeof setTimeout> | undefined; let stop = () => {};
     const connect = () => {
       stop();
-      stop = native.gameOverlay.subscribe(value => {
+      stop = native.fullscreenAppOverlay.subscribe(value => {
         if (mounted.current) { setState(value); setError(''); }
       }, e => {
         if (!mounted.current) return;
-        if (e.code === 404 || e.code === 503) setState(initialGameOverlayState);
+        if (e.code === 404 || e.code === 503) setState(initialFullscreenAppOverlayState);
         else {
           setError(e.message);
           if (e.code === 408 || e.code >= 500) retry = setTimeout(connect, 1500);
@@ -29,13 +29,13 @@ export function useGameOverlay() {
     return () => { mounted.current = false; clearTimeout(retry); stop(); };
   }, []);
   const actions = useMemo(() => {
-    async function run(action: () => Promise<GameOverlayState | void>) {
+    async function run(action: () => Promise<FullscreenAppOverlayState | void>) {
       setBusy(true);
       try { const next = await action(); if (mounted.current) { if (next) setState(next); setError(''); } }
-      catch (e) { if (mounted.current) setError(e instanceof Error ? e.message : '游戏悬浮组件操作失败'); }
+      catch (e) { if (mounted.current) setError(e instanceof Error ? e.message : '全屏应用悬浮组件操作失败'); }
       finally { if (mounted.current) setBusy(false); }
     }
-    const overlay = native.gameOverlay;
+    const overlay = native.fullscreenAppOverlay;
     async function loadWindows() {
       const next = await overlay.listCompatibilityWindows(); if (mounted.current) setWindows(next);
     }
@@ -71,4 +71,4 @@ export function useGameOverlay() {
   return { state, error, busy, windows, ...actions };
 }
 
-export type GameOverlayController = ReturnType<typeof useGameOverlay>;
+export type FullscreenAppOverlayController = ReturnType<typeof useFullscreenAppOverlay>;

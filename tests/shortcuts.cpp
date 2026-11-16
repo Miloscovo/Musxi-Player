@@ -65,7 +65,7 @@ int main() try {
     registry.overlayEnabled=true;registry.restore();require(held==std::set<int>({0,10,11}),"enabling module did not restore keys");
     registry.suspended=true;registry.restore();
     require(held==std::set<int>({10,11}),"text field disabled widget shortcut or retained playback shortcut");
-    registry.recording=true;registry.restore();require(held.empty(),"recording retained game shortcut");
+    registry.recording=true;registry.restore();require(held.empty(),"recording retained fullscreen-app shortcut");
     registry.recording=false;registry.suspended=false;registry.restore();
     require(held==std::set<int>({0,10,11}),"recording did not restore all shortcuts");
     registry.overlayEnabled=false;registry.restore();

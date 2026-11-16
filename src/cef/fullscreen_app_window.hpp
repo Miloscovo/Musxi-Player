@@ -3,7 +3,7 @@
 #include <string>
 #include <dwmapi.h>
 
-namespace musxi::game_window {
+namespace musxi::fullscreen_app_window {
 inline bool candidate(HWND window) {
     if(!IsWindowVisible(window) || !IsWindowEnabled(window) || IsIconic(window) || GetAncestor(window,GA_ROOT)!=window
         || GetWindow(window,GW_OWNER) || window==GetShellWindow() || window==GetDesktopWindow()
@@ -25,7 +25,7 @@ inline bool sameRect(const RECT& a,const RECT& b) {
     return a.left==b.left && a.top==b.top && a.right==b.right && a.bottom==b.bottom;
 }
 class Window {
-    static constexpr const wchar_t* property=L"MusxiGameWindowCompatibility";
+    static constexpr const wchar_t* property=L"MusxiFullscreenAppWindowCompatibility";
     HWND window_;DWORD pid_=0;HANDLE process_=nullptr;
     LONG_PTR style_=0,appliedStyle_=0;
     RECT bounds_{};WINDOWPLACEMENT placement_{sizeof(WINDOWPLACEMENT)},applied_{sizeof(WINDOWPLACEMENT)};

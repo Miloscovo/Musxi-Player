@@ -1,34 +1,34 @@
-html:has(.game-overlay),html:has(.game-overlay) body,html:has(.game-overlay) #app {
+html:has(.fullscreen-app-overlay),html:has(.fullscreen-app-overlay) body,html:has(.fullscreen-app-overlay) #app {
   width:100%; height:100%; min-width:0!important; margin:0; overflow:hidden; background:transparent!important;
 }
-.game-overlay {
+.fullscreen-app-overlay {
   display:flex; flex-direction:column; width:100%; height:100%; min-width:0; max-width:none; padding:12px;
   overflow:hidden; border:1px solid #68798a40; border-radius:14px; background:#ffffffb3; color:var(--ink);
   box-shadow:inset 0 0 0 1px #ffffff12; -webkit-app-region:no-drag;
 }
-:root:is([data-theme=dark],[data-theme=glass]) .game-overlay { background:#131313b3; border-color:#ffffff26 }
-:root .game-overlay[data-widget=track] { position:relative; height:auto; padding:calc(12px * var(--game-track-scale,1)); background:color-mix(in srgb,var(--app-surface) calc(var(--game-track-opacity,1)*100%),transparent) }
-.game-overlay[data-editing=true] { border-color:var(--accent); -webkit-app-region:drag }
-.game-overlay[data-widget=lyrics][data-editing=false] { background:transparent; border-color:transparent; box-shadow:none }
+:root:is([data-theme=dark],[data-theme=glass]) .fullscreen-app-overlay { background:#131313b3; border-color:#ffffff26 }
+:root .fullscreen-app-overlay[data-widget=track] { position:relative; height:auto; padding:calc(12px * var(--fullscreen-app-track-scale,1)); background:color-mix(in srgb,var(--app-surface) calc(var(--fullscreen-app-track-opacity,1)*100%),transparent) }
+.fullscreen-app-overlay[data-editing=true] { border-color:var(--accent); -webkit-app-region:drag }
+.fullscreen-app-overlay[data-widget=lyrics][data-editing=false] { background:transparent; border-color:transparent; box-shadow:none }
 .overlay-widget-header { display:flex; align-items:center; flex:none; gap:10px; min-height:34px; margin:-4px -4px 8px; padding:0 4px; -webkit-app-region:drag }
 .overlay-widget-header>span { flex:1; min-width:0; font-size:12px; font-weight:600; color:var(--muted) }
 .overlay-widget-header>div { display:flex; gap:3px; -webkit-app-region:no-drag }
-.game-overlay[data-widget=track] .overlay-widget-header { position:absolute; inset:8px 8px auto; z-index:2; margin:0 }
-.game-overlay[data-widget=track][data-editing=true] .overlay-track-content { -webkit-app-region:drag }
+.fullscreen-app-overlay[data-widget=track] .overlay-widget-header { position:absolute; inset:8px 8px auto; z-index:2; margin:0 }
+.fullscreen-app-overlay[data-widget=track][data-editing=true] .overlay-track-content { -webkit-app-region:drag }
 /* Layered windows pass zero-alpha pixels through before native drag hit testing. */
-.game-overlay[data-widget=track][data-editing=true] { box-shadow:inset 0 0 0 12px #00000001,inset 0 0 0 1px #ffffff12 }
-.game-overlay[data-widget=track][data-editing=true] .overlay-widget-header { background:#00000001; box-shadow:0 8px #00000001 }
-.game-overlay button { min-height:28px; padding:4px 8px; border-radius:7px; background:transparent; color:inherit; font:inherit; font-size:12px; -webkit-app-region:no-drag }
-.game-overlay button:hover { background:var(--hover-surface) }
-.game-overlay button:disabled { color:var(--muted); cursor:default }
-.game-overlay button:focus-visible { outline:2px solid var(--accent); outline-offset:-2px }
+.fullscreen-app-overlay[data-widget=track][data-editing=true] { box-shadow:inset 0 0 0 12px #00000001,inset 0 0 0 1px #ffffff12 }
+.fullscreen-app-overlay[data-widget=track][data-editing=true] .overlay-widget-header { background:#00000001; box-shadow:0 8px #00000001 }
+.fullscreen-app-overlay button { min-height:28px; padding:4px 8px; border-radius:7px; background:transparent; color:inherit; font:inherit; font-size:12px; -webkit-app-region:no-drag }
+.fullscreen-app-overlay button:hover { background:var(--hover-surface) }
+.fullscreen-app-overlay button:disabled { color:var(--muted); cursor:default }
+.fullscreen-app-overlay button:focus-visible { outline:2px solid var(--accent); outline-offset:-2px }
 /* CEF does not clip scrolled no-drag rectangles; keep the exclusion on a fixed viewport. */
 .overlay-lyrics-viewport { display:flex; flex:1; min-height:0; overflow:hidden; -webkit-app-region:no-drag;
   mask-image:linear-gradient(transparent,#000 18%,#000 82%,transparent) }
 .overlay-lyrics-list { position:relative; flex:1; min-height:0; margin:0; padding:22px 0; list-style:none; overflow:hidden; overscroll-behavior:contain; text-align:center; -webkit-app-region:drag }
 .overlay-lyrics-list[data-synced=true] { padding-block:0 }
 .overlay-lyrics-list[data-synced=true]::before,.overlay-lyrics-list[data-synced=true]::after { display:block; height:var(--overlay-center-padding,0px); content:"" }
-.game-overlay[data-editing=true] .overlay-lyrics-list { overflow-y:auto }
+.fullscreen-app-overlay[data-editing=true] .overlay-lyrics-list { overflow-y:auto }
 .overlay-lyrics-list[data-alignment=left] { text-align:left }
 .overlay-lyrics-viewport[data-style=perspective] .overlay-lyrics-list { transform:perspective(900px) rotateY(28deg) rotateZ(-6deg) scale(.9); transform-origin:center }
 .overlay-lyrics-list li { margin:2px 0; padding:10px 14px; color:var(--muted); font-size:var(--overlay-lyric-size,20px); font-weight:400; line-height:1.5; overflow-wrap:anywhere }
@@ -42,14 +42,14 @@ html:has(.game-overlay),html:has(.game-overlay) body,html:has(.game-overlay) #ap
 .overlay-lyrics-list::-webkit-scrollbar { width:6px }
 .overlay-lyrics-list::-webkit-scrollbar-thumb { border-radius:6px; background:#80948a66 }
 .overlay-message { display:grid; flex:1; place-items:center; min-height:0; padding:16px; text-align:center; color:var(--muted); font-size:16px; -webkit-app-region:no-drag }
-.overlay-track-content { display:flex; flex:none; flex-direction:column; justify-content:flex-start; min-height:0; gap:8px; zoom:var(--game-track-scale,1); -webkit-app-region:no-drag }
+.overlay-track-content { display:flex; flex:none; flex-direction:column; justify-content:flex-start; min-height:0; gap:8px; zoom:var(--fullscreen-app-track-scale,1); -webkit-app-region:no-drag }
 .overlay-track-details { display:flex; align-items:center; gap:12px; min-height:52px }
 .overlay-track-details>.cover { width:56px; height:56px; border-radius:10px }
 .overlay-track-details .vinyl-cover { width:56px; box-shadow:0 2px 8px #0003,0 0 6px color-mix(in srgb,var(--vinyl-ink) 48%,transparent) }
 .overlay-track-details .vinyl-disc .cover { font-size:18px; box-shadow:0 0 0 2px #100b1b99 }
 .overlay-track-title { flex:1; min-width:0 }
 .overlay-track-details h1 { margin:0 0 6px; font-size:16px; line-height:1.35; font-weight:650; overflow:hidden; white-space:nowrap; text-overflow:ellipsis }
-.game-overlay[data-widget=track][data-editing=true] .overlay-track-details h1 { padding-right:calc(96px / var(--game-track-scale,1)) }
+.fullscreen-app-overlay[data-widget=track][data-editing=true] .overlay-track-details h1 { padding-right:calc(96px / var(--fullscreen-app-track-scale,1)) }
 .overlay-track-details p { margin:0; color:var(--muted); font-size:12px; overflow:hidden; white-space:nowrap; text-overflow:ellipsis }
 .overlay-track-content progress { display:block; flex:none; width:100%; height:4px; border:0; border-radius:4px; overflow:hidden; appearance:none; accent-color:var(--accent) }
 .overlay-track-content progress::-webkit-progress-bar { background:#80948a40 }
@@ -63,11 +63,11 @@ html:has(.game-overlay),html:has(.game-overlay) body,html:has(.game-overlay) #ap
 .overlay-lyrics-viewport[data-mode=single] .overlay-lyrics-list::before,.overlay-lyrics-viewport[data-mode=single] .overlay-lyrics-list::after { display:none }
 .overlay-lyrics-viewport[data-mode=single] .overlay-single-line { display:grid }
 .overlay-single-content { grid-area:1/1; min-width:0 }
-.game-overlay[data-widget=lyrics] { position:relative; --dl-accent:var(--accent); --dl-capsule:var(--app-surface); --dl-tool:var(--ink); --dl-panel-line:var(--line) }
-.game-overlay .dl-unlock { z-index:3; min-height:28px; padding:0 12px; background:var(--app-surface); color:var(--ink) }
-.game-overlay .dl-capsule { z-index:4; max-width:calc(100% - 24px); height:auto; min-height:38px; flex-wrap:wrap; justify-content:center }
-.game-overlay .dl-tool { min-height:30px; padding:0 6px; border-radius:15px; color:var(--dl-tool) }
-.game-overlay .dl-tool:hover,.game-overlay .dl-size-step:hover { background:var(--hover-surface) }
-.game-overlay .dl-play { background:var(--accent-fill); color:#fff }
-.game-overlay .dl-play:hover { background:color-mix(in srgb,var(--accent-fill) 88%,#fff) }
-.game-overlay:has(.dl-capsule) { padding-bottom:66px }
+.fullscreen-app-overlay[data-widget=lyrics] { position:relative; --dl-accent:var(--accent); --dl-capsule:var(--app-surface); --dl-tool:var(--ink); --dl-panel-line:var(--line) }
+.fullscreen-app-overlay .dl-unlock { z-index:3; min-height:28px; padding:0 12px; background:var(--app-surface); color:var(--ink) }
+.fullscreen-app-overlay .dl-capsule { z-index:4; max-width:calc(100% - 24px); height:auto; min-height:38px; flex-wrap:wrap; justify-content:center }
+.fullscreen-app-overlay .dl-tool { min-height:30px; padding:0 6px; border-radius:15px; color:var(--dl-tool) }
+.fullscreen-app-overlay .dl-tool:hover,.fullscreen-app-overlay .dl-size-step:hover { background:var(--hover-surface) }
+.fullscreen-app-overlay .dl-play { background:var(--accent-fill); color:#fff }
+.fullscreen-app-overlay .dl-play:hover { background:color-mix(in srgb,var(--accent-fill) 88%,#fff) }
+.fullscreen-app-overlay:has(.dl-capsule) { padding-bottom:66px }

@@ -4,7 +4,7 @@ import { request } from './transport';
 import type { PlayerEvent } from './events';
 import { createElement, type ComponentProps } from 'react';
 import { useShortcuts } from '../composables/useShortcuts';
-import { useGameOverlay } from '../composables/useGameOverlay';
+import { useFullscreenAppOverlay } from '../composables/useFullscreenAppOverlay';
 import { useDynamicWallpaper } from '../composables/useDynamicWallpaper';
 import { createRoot } from 'react-dom/client';
 import LibraryView from '../views/LibraryView';
@@ -22,7 +22,7 @@ import { shortcutActions } from './shortcuts';
 import { rememberTrackLoadingCount } from '../composables/playlistLoadingCounts';
 
 function SmokeLibraryView(props: Omit<ComponentProps<typeof LibraryView>, 'shortcuts' | 'overlay' | 'dynamicWallpaper'>) {
-  const overlay = useGameOverlay();
+  const overlay = useFullscreenAppOverlay();
   const shortcuts = useShortcuts(overlay.state.enabled);
   const dynamicWallpaper = useDynamicWallpaper();
   return createElement(LibraryView, { ...props, shortcuts, overlay, dynamicWallpaper });
@@ -821,11 +821,11 @@ export async function verifyWebPage() {
   if (document.querySelector('.extension-card')) throw new Error('Floating widgets still appear as an extension');
   document.querySelector<HTMLButtonElement>('.settings-nav')!.click();
   await waitFor(() => !!settingsTab('关于与更新'), 'Settings tabs are missing');
-  if (document.querySelectorAll('.settings-sections button').length !== 5 || settingsTab('游戏内悬浮组件'))
+  if (document.querySelectorAll('.settings-sections button').length !== 5 || settingsTab('全屏应用内悬浮组件'))
     throw new Error('Independent overlay settings category remains');
   settingsTab('歌词与组件')!.click();
-  await waitFor(() => !!document.querySelector('.lyrics-settings + .game-overlay-settings'), 'Lyrics and widgets were not merged');
-  if (!(await native.gameOverlay.getState()).enabled) throw new Error('Floating widgets are not always available');
+  await waitFor(() => !!document.querySelector('.lyrics-settings + .fullscreen-app-overlay-settings'), 'Lyrics and widgets were not merged');
+  if (!(await native.fullscreenAppOverlay.getState()).enabled) throw new Error('Floating widgets are not always available');
   settingsTab('快捷键')!.click();
   await waitFor(() => document.querySelectorAll('.shortcut-binding').length === shortcutActions.length, 'Widget shortcut rows are missing');
   // Smoke disables network access for both tagged releases and development builds.

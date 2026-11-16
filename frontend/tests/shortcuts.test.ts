@@ -26,7 +26,7 @@ test('retired panel and screenshot bindings are discarded without losing other s
   assert.throws(() => parseShortcuts({ ...old, bindings: invalid }));
 });
 
-test('older ten-action settings retain every binding when game shortcuts are added', () => {
+test('older ten-action settings retain every binding when fullscreen-app shortcuts are added', () => {
   const state = emptyShortcuts();
   state.bindings.playPause = { key: 32, modifiers: 0 };
   const old = { ...state, bindings: Object.fromEntries(shortcutActions.slice(0,10).map(([id]) => [id, state.bindings[id]])) };

@@ -121,6 +121,9 @@ main.app-shell { --sidebar-width:clamp(210px,15.5vw,240px); overflow:hidden; bor
 .collection-search button { display:grid; place-items:center; flex:none; width:26px; height:32px; padding:0; background:transparent; color:var(--ink) }
 .collection-search button:disabled { opacity:1; cursor:default }
 .collection-search button .icon { width:22px; height:22px }
+.collection-search .search-clear { border-radius:6px; color:var(--muted) }
+.collection-search .search-clear:hover { background:var(--hover-surface); color:var(--ink) }
+.collection-search .search-clear svg { width:16px; height:16px }
 .collection-search input { flex:1; width:100%; min-width:0; padding:0!important; border:0!important; outline:0; background:transparent!important; color:var(--ink)!important; font-size:15px; -webkit-app-region:no-drag }
 .collection-search input::placeholder { color:var(--muted); opacity:1 }
 .welcome { display:flex; align-items:center; justify-content:space-between; gap:20px; margin:18px 0 30px; padding:24px 28px; border-radius:18px; background:var(--soft) }
@@ -211,13 +214,13 @@ main.app-shell { --sidebar-width:clamp(210px,15.5vw,240px); overflow:hidden; bor
 .discover-empty p { margin:0; color:var(--muted); opacity:1 }
 .pagination button { background:var(--soft); color:var(--ink) }
 .settings-content { max-width:560px; width:100%; padding-top:0; padding-bottom:24px }
-.game-overlay-settings { display:flex; flex-direction:column; gap:24px }
-.game-overlay-settings>p,.game-overlay-hints p { margin:0 }
-.game-overlay-settings>.appearance-level { margin-top:0 }
-.game-overlay-hints { display:flex; flex-direction:column; gap:12px }
-.game-overlay-hints .playback-setting { margin:0 }
-.game-overlay-hints .close-dialog-actions { flex-wrap:wrap }
-.game-overlay-hints p { color:var(--muted); opacity:1; font-size:13px; line-height:1.6 }
+.fullscreen-app-overlay-settings { display:flex; flex-direction:column; gap:24px }
+.fullscreen-app-overlay-settings>p,.fullscreen-app-overlay-hints p { margin:0 }
+.fullscreen-app-overlay-settings>.appearance-level { margin-top:0 }
+.fullscreen-app-overlay-hints { display:flex; flex-direction:column; gap:12px }
+.fullscreen-app-overlay-hints .playback-setting { margin:0 }
+.fullscreen-app-overlay-hints .close-dialog-actions { flex-wrap:wrap }
+.fullscreen-app-overlay-hints p { color:var(--muted); opacity:1; font-size:13px; line-height:1.6 }
 .library-sections.settings-sections { grid-template-columns:repeat(var(--settings-columns,5),minmax(0,1fr)) }
 .settings-sections .library-section { min-width:0; gap:10px; padding-inline:10px }
 .extensions-content { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:24px; width:100%; padding-bottom:24px }
@@ -863,5 +866,5 @@ html:has(.desktop-lyrics),html:has(.desktop-lyrics) body,html:has(.desktop-lyric
 .wallpaper-static-controls { min-width:0; padding:0; margin:0; border:0 }
 .wallpaper-static-controls:disabled { color:var(--muted) }
 @media(max-width:760px) { .wallpaper-manager-heading { flex-wrap:wrap }.wallpaper-manager-heading h2 { font-size:16px }.wallpaper-extension-card { padding:16px; gap:12px }.wallpaper-extension-card p { font-size:13px } }
-.lyrics-settings + .game-overlay-settings { padding-top:28px; border-top:1px solid var(--line); margin-top:28px }
-.game-overlay-settings>h2 { margin:0; font-size:18px }
+.lyrics-settings + .fullscreen-app-overlay-settings { padding-top:28px; border-top:1px solid var(--line); margin-top:28px }
+.fullscreen-app-overlay-settings>h2 { margin:0; font-size:18px }

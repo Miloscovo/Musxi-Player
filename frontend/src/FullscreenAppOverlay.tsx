@@ -8,12 +8,12 @@ import VinylCover from './components/VinylCover';
 import { Button } from './components/ui/button';
 import { resolveTheme } from './composables/appearance';
 import { readVisualSettings } from './composables/appearancePreview';
-import { gameLyricsStyleKey, readGameLyricsStyle, type GameLyricsStyle } from './composables/gameLyricsStyle';
-import { gameTrackTransparencyKey, readGameTrackTransparency } from './composables/gameTrackTransparency';
+import { fullscreenAppLyricsStyleKey, readFullscreenAppLyricsStyle, type FullscreenAppLyricsStyle } from './composables/fullscreenAppLyricsStyle';
+import { fullscreenAppTrackTransparencyKey, readFullscreenAppTrackTransparency } from './composables/fullscreenAppTrackTransparency';
 import { activeLyricLine, lyricScrollTransition } from './composables/lyrics';
 import { playbackTimes } from './composables/playbackTime';
 import { useDesktopTrack } from './composables/useDesktopTrack';
-import { useGameOverlay } from './composables/useGameOverlay';
+import { useFullscreenAppOverlay } from './composables/useFullscreenAppOverlay';
 import { usePlayerState } from './composables/usePlayerState';
 import { usePlayerStyle } from './composables/usePlayerStyle';
 import { sampleCoverColor } from './composables/vinylColor';
@@ -22,14 +22,14 @@ import { readLyricsTranslation } from './composables/lyricsTranslation';
 import { native } from './native/client';
 import type { LibraryState } from './native/library';
 import type { PlayerState } from './native/types';
-import './game-overlay.css';
+import './fullscreen-app-overlay.css';
 
 function useOverlayAppearance(kind: 'lyrics' | 'track') {
   const [display, setDisplay] = useState(() => readLyricsDisplay(localStorage));
   const [translation, setTranslation] = useState(() => readLyricsTranslation(localStorage));
-  const [style, setStyle] = useState(() => readGameLyricsStyle(localStorage));
+  const [style, setStyle] = useState(() => readFullscreenAppLyricsStyle(localStorage));
   const [liquidGlass, setLiquidGlass] = useState(() => readVisualSettings(localStorage).liquidGlass);
-  const [trackTransparency, setTrackTransparency] = useState(() => kind === 'track' ? readGameTrackTransparency(localStorage) : 0);
+  const [trackTransparency, setTrackTransparency] = useState(() => kind === 'track' ? readFullscreenAppTrackTransparency(localStorage) : 0);
   useEffect(() => {
     const system = matchMedia('(prefers-color-scheme: dark)');
     const sync = () => {
@@ -39,17 +39,17 @@ function useOverlayAppearance(kind: 'lyrics' | 'track') {
       document.documentElement.dataset.tone = appearance.tone;
       document.documentElement.style.setProperty('--background-opacity', String(appearance.transparent ? 1 - transparency / 100 : 1));
       setDisplay(readLyricsDisplay(localStorage)); setTranslation(readLyricsTranslation(localStorage));
-      setStyle(readGameLyricsStyle(localStorage));
-      if (kind === 'track') setTrackTransparency(readGameTrackTransparency(localStorage));
+      setStyle(readFullscreenAppLyricsStyle(localStorage));
+      if (kind === 'track') setTrackTransparency(readFullscreenAppTrackTransparency(localStorage));
     };
     sync(); window.addEventListener('storage', sync); window.addEventListener(lyricsDisplayKey, sync);
-    window.addEventListener(gameLyricsStyleKey, sync); window.addEventListener('musxi-lyrics-translation', sync);
-    if (kind === 'track') window.addEventListener(gameTrackTransparencyKey, sync);
+    window.addEventListener(fullscreenAppLyricsStyleKey, sync); window.addEventListener('musxi-lyrics-translation', sync);
+    if (kind === 'track') window.addEventListener(fullscreenAppTrackTransparencyKey, sync);
     system.addEventListener('change', sync);
     return () => {
       window.removeEventListener('storage', sync); window.removeEventListener(lyricsDisplayKey, sync);
-      window.removeEventListener(gameLyricsStyleKey, sync); window.removeEventListener('musxi-lyrics-translation', sync);
-      window.removeEventListener(gameTrackTransparencyKey, sync);
+      window.removeEventListener(fullscreenAppLyricsStyleKey, sync); window.removeEventListener('musxi-lyrics-translation', sync);
+      window.removeEventListener(fullscreenAppTrackTransparencyKey, sync);
       system.removeEventListener('change', sync);
     };
   }, [kind]);
@@ -59,7 +59,7 @@ function useOverlayAppearance(kind: 'lyrics' | 'track') {
 function OverlayLyrics({ trackId, positionMs, connected, editing, display, translation, following, onManualScroll, style, mode, active: visible }: {
   trackId: string; positionMs: number; connected: boolean; editing: boolean;
   display: ReturnType<typeof readLyricsDisplay>; translation: boolean; following: boolean; onManualScroll: () => void;
-  style: GameLyricsStyle; mode: 'single' | 'multi'; active: boolean;
+  style: FullscreenAppLyricsStyle; mode: 'single' | 'multi'; active: boolean;
 }) {
   const { lyrics, failed, cover } = useDesktopTrack(trackId, visible);
   const [sample, setSample] = useState({ url: '', color: '' });
@@ -165,7 +165,7 @@ function OverlayTrack({ player, connected, active }: {
   </div>;
 }
 
-export default function GameOverlay({ kind }: { kind: 'lyrics' | 'track' }) {
+export default function FullscreenAppOverlay({ kind }: { kind: 'lyrics' | 'track' }) {
   const card = useRef<HTMLElement>(null);
   useEffect(() => new URLSearchParams(location.search).has('desktopSmoke') ? reportDesktopPage() : undefined, []);
   useLayoutEffect(() => {
@@ -175,17 +175,17 @@ export default function GameOverlay({ kind }: { kind: 'lyrics' | 'track' }) {
       const width = element.getBoundingClientRect().width;
       if (width > 0 && width !== lastWidth) {
         lastWidth = width;
-        element.style.setProperty('--game-track-scale', String(width / 360));
+        element.style.setProperty('--fullscreen-app-track-scale', String(width / 360));
       }
       const height = Math.ceil(element.getBoundingClientRect().height);
       if (height === lastHeight) return;
       lastHeight = height;
-      void native.gameOverlay.reportTrackHeight(height).catch(() => { /* Older hosts keep their saved window size until restart. */ });
+      void native.fullscreenAppOverlay.reportTrackHeight(height).catch(() => { /* Older hosts keep their saved window size until restart. */ });
     };
     measure(); const resize = new ResizeObserver(measure); resize.observe(element);
     return () => resize.disconnect();
   }, [kind]);
-  const overlay = useGameOverlay();
+  const overlay = useFullscreenAppOverlay();
   const editing = kind === 'lyrics' ? overlay.state.lyricsEditing : overlay.state.trackEditing;
   const active = overlay.state.enabled && overlay.state.visible && (kind === 'lyrics' ? overlay.state.lyricsVisible : overlay.state.trackVisible);
   const player = usePlayerState(active);
@@ -196,8 +196,8 @@ export default function GameOverlay({ kind }: { kind: 'lyrics' | 'track' }) {
   useEffect(() => setFollowing(true), [trackId, editing]);
   const control = (label: string, action: () => Promise<void>, children: ReactNode = label) =>
     <Button variant="unstyled" title={label} aria-label={label} disabled={overlay.busy} onClick={() => void action()}>{children}</Button>;
-  return <main ref={card} className="game-overlay" data-widget={kind} data-editing={editing} aria-label={kind === 'lyrics' ? '歌词悬浮组件' : '歌曲信息组件'}
-    style={kind === 'track' ? { '--game-track-opacity': 1 - trackTransparency / 100 } as CSSProperties : undefined}>
+  return <main ref={card} className="fullscreen-app-overlay" data-widget={kind} data-editing={editing} aria-label={kind === 'lyrics' ? '歌词悬浮组件' : '歌曲信息组件'}
+    style={kind === 'track' ? { '--fullscreen-app-track-opacity': 1 - trackTransparency / 100 } as CSSProperties : undefined}>
     {kind === 'track' && liquidGlass && <LiquidGlassSurface refract={false}/>}
     {editing && <header className="overlay-widget-header">
       <span aria-hidden="true"/>

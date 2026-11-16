@@ -30,13 +30,13 @@ LRESULT CALLBACK observeShortcut(int code,WPARAM message,LPARAM data) {
     const auto result=CallNextHookEx(shortcutHook,code,message,data);
     for(size_t i=0;i<released.size();++i)if(released[i].key && shortcutHooked[i+11] && shortcutRegistry.registered[i+11]) {
         shortcutFocusReleased[i]=released[i];
-        // shortcut: allow 50ms for the game to process key-up; use acknowledged handoff if releases are still missed.
+        // shortcut: allow 50ms for the fullscreen-app to process key-up; use acknowledged handoff if releases are still missed.
         shortcutFocusReleaseAt[i]=GetTickCount64()+50;
     }
     return result;
 }
 bool acquireShortcut(int index,musxi::shortcuts::Binding binding) {
-    if(!gameOverlayEnabled)return RegisterHotKey(testWindow,0x5100+index,binding.modifiers|MOD_NOREPEAT,binding.key)!=FALSE;
+    if(!fullscreenAppOverlayEnabled)return RegisterHotKey(testWindow,0x5100+index,binding.modifiers|MOD_NOREPEAT,binding.key)!=FALSE;
     if(!shortcutHook) {
         for(unsigned key=0;key<256;++key)shortcutPressed.down[key]=(GetAsyncKeyState(key)&0x8000)!=0;
         shortcutPressed.down[VK_CONTROL]=shortcutPressed.down[VK_SHIFT]=shortcutPressed.down[VK_MENU]=false;
@@ -60,8 +60,8 @@ void releaseShortcut(int index) {
 bool shortcutForeground() {return GetForegroundWindow()==testWindow;}
 void refreshShortcutSuspension() {
     const bool suspended=shortcutRecording || (shortcutEditing && shortcutForeground());
-    if(suspended!=shortcutRegistry.suspended || shortcutRecording!=shortcutRegistry.recording || gameOverlayEnabled!=shortcutRegistry.overlayEnabled) {
-        shortcutRegistry.suspended=suspended;shortcutRegistry.recording=shortcutRecording;shortcutRegistry.overlayEnabled=gameOverlayEnabled;shortcutRegistry.restore();
+    if(suspended!=shortcutRegistry.suspended || shortcutRecording!=shortcutRegistry.recording || fullscreenAppOverlayEnabled!=shortcutRegistry.overlayEnabled) {
+        shortcutRegistry.suspended=suspended;shortcutRegistry.recording=shortcutRecording;shortcutRegistry.overlayEnabled=fullscreenAppOverlayEnabled;shortcutRegistry.restore();
     }
     for(size_t i=0;i<shortcutFocusReleased.size();++i)if(shortcutFocusReleased[i].key && GetTickCount64()>=shortcutFocusReleaseAt[i]) {
         const auto binding=shortcutFocusReleased[i];shortcutFocusReleased[i]={};shortcutFocusReleaseAt[i]=0;
@@ -69,7 +69,7 @@ void refreshShortcutSuspension() {
     }
 }
 void initShortcuts(const std::filesystem::path& profile) {
-    shortcutRegistry.overlayEnabled=gameOverlayEnabled;
+    shortcutRegistry.overlayEnabled=fullscreenAppOverlayEnabled;
     shortcutPath=profile/(smoke?L"shortcuts-smoke.json":L"shortcuts.json");
     shortcutRegistry.acquire=acquireShortcut;
     shortcutRegistry.release=releaseShortcut;
@@ -92,7 +92,7 @@ ShortcutJson shortcutSnapshot() {
 }
 musxi::LibraryReply executeShortcut(const std::string& action) {
     using namespace musxi;
-    if(action=="overlayVisibility" || action=="overlayEditing")return executeGameOverlayShortcut(action);
+    if(action=="overlayVisibility" || action=="overlayEditing")return executeFullscreenAppOverlayShortcut(action);
     if(action=="visibility") {
         if(!testWindow)return {409,"窗口尚未就绪",{}};
         if(!IsWindowVisible(testWindow) || IsIconic(testWindow))showFromTray(testWindow);

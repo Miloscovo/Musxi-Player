@@ -53,7 +53,7 @@ Json stateJson(const PlayerState& s) {
 class App final : public CefApp, public CefRenderProcessHandler {
 public:
     void OnBeforeCommandLineProcessing(const CefString& process,CefRefPtr<CefCommandLine> command) override {
-        // Preserve the privilege level explicitly chosen by the user for elevated games.
+        // Preserve the privilege level explicitly chosen by the user for elevated fullscreen-apps.
         if(process.empty())command->AppendSwitch("do-not-de-elevate");
     }
     CefRefPtr<CefRenderProcessHandler> GetRenderProcessHandler() override {return this;}
@@ -110,7 +110,7 @@ public:
         info.rect=convert(monitor.rcMonitor);info.available_rect=convert(monitor.rcWork);info.depth=32;info.depth_per_component=8;return true;
     }
     void OnPaint(CefRefPtr<CefBrowser>,PaintElementType type,const RectList&,const void* pixels,int width,int height) override {
-        if(overlay_) {if(type==PET_VIEW)presentGameOverlay(testWindow_,pixels,width,height);return;}
+        if(overlay_) {if(type==PET_VIEW)presentFullscreenAppOverlay(testWindow_,pixels,width,height);return;}
         if(lyrics_) {if(type==PET_VIEW)presentDesktopLyrics(pixels,width,height);return;}
         presentBrowser(type==PET_POPUP,pixels,width,height);
     }
@@ -162,7 +162,7 @@ public:
         if(!lyrics_ && !overlay_)resetShortcutInput();
         if(overlay_)overlayBrowsers.erase(testWindow_);else if(lyrics_)lyricsBrowser=nullptr;else activeBrowser=nullptr;
         if(testWindow_)RemovePropW(testWindow_,DragRegionProperty);
-        if(overlay_) {gameOverlayClosed(testWindow_);if(shuttingDown)PostMessageW(window_,WM_CLOSE,0,0);return;}
+        if(overlay_) {fullscreenAppOverlayClosed(testWindow_);if(shuttingDown)PostMessageW(window_,WM_CLOSE,0,0);return;}
         if(lyrics_) {desktopLyricsClosed();if(shuttingDown)PostMessageW(window_,WM_CLOSE,0,0);return;}
         if(closing_ || smoke_ || testWindow_) PostMessageW(window_,WM_CLOSE,0,0);
     }
@@ -215,24 +215,24 @@ public:
             }
             const auto command=q["command"].get<std::string>();
             const auto& params=q["params"];
-            if(lyrics_ && command.rfind("gameOverlay.",0)==0){callback->Failure(403,"Command unavailable in desktop lyrics");return true;}
-            if(command=="gameOverlay.reportTrackHeight" && (!overlay_ || url_.find("gameOverlay=track")==std::string::npos)) {
+            if(lyrics_ && command.rfind("fullscreenAppOverlay.",0)==0){callback->Failure(403,"Command unavailable in desktop lyrics");return true;}
+            if(command=="fullscreenAppOverlay.reportTrackHeight" && (!overlay_ || url_.find("fullscreenAppOverlay=track")==std::string::npos)) {
                 callback->Failure(403,"Only the track widget can report its height");return true;
             }
             if(overlay_) {
-                static const std::set<std::string> allowed{"gameOverlay.getState","gameOverlay.subscribe","gameOverlay.setEditing",
-                    "gameOverlay.setLyricsVisible","gameOverlay.setTrackVisible","gameOverlay.reportTrackHeight","player.subscribe","player.getState","player.pause","player.resume",
+                static const std::set<std::string> allowed{"fullscreenAppOverlay.getState","fullscreenAppOverlay.subscribe","fullscreenAppOverlay.setEditing",
+                    "fullscreenAppOverlay.setLyricsVisible","fullscreenAppOverlay.setTrackVisible","fullscreenAppOverlay.reportTrackHeight","player.subscribe","player.getState","player.pause","player.resume",
                     "library.getState","library.lyrics","library.skip","library.image"};
-                const bool lyrics=url_.find("gameOverlay=lyrics")!=std::string::npos;
+                const bool lyrics=url_.find("fullscreenAppOverlay=lyrics")!=std::string::npos;
                 const bool lyricsControl=lyrics && (command=="desktopLyrics.getState" || command=="desktopLyrics.subscribe"
                     || command=="desktopLyrics.setLocked" || command=="desktopLyrics.setPanel" || command=="desktopLyrics.setFontSize"
                     || command=="desktopLyrics.setVisible" && params.size()==1 && params.contains("visible") && params.at("visible")==false);
                 if(!allowed.count(command) && !lyricsControl && !(smoke_ && lyrics && command=="test.desktopReport")) {
-                    callback->Failure(403,"Command unavailable in game overlay");return true;
+                    callback->Failure(403,"Command unavailable in fullscreen-app overlay");return true;
                 }
-                if(command=="gameOverlay.setLyricsVisible" || command=="gameOverlay.setTrackVisible") {
+                if(command=="fullscreenAppOverlay.setLyricsVisible" || command=="fullscreenAppOverlay.setTrackVisible") {
                     const char* key=lyrics?"lyricsVisible":"trackVisible";
-                    if(command!=(lyrics?"gameOverlay.setLyricsVisible":"gameOverlay.setTrackVisible") || params.size()!=1 || !params.contains(key) || params.at(key)!=false) {
+                    if(command!=(lyrics?"fullscreenAppOverlay.setLyricsVisible":"fullscreenAppOverlay.setTrackVisible") || params.size()!=1 || !params.contains(key) || params.at(key)!=false) {
                         callback->Failure(403,"A widget can only close itself");return true;
                     }
                 }
@@ -249,14 +249,14 @@ public:
                     if(cover.empty() || params.value("url",std::string{})!=cover){callback->Failure(403,"Only the playing song cover is available");return true;}
                 }
             }
-            if(command=="gameOverlay.subscribe") {
+            if(command=="fullscreenAppOverlay.subscribe") {
                 if(!persistent || !params.empty() || overlaySubscriptions_.size()>=4){callback->Failure(400,"Invalid subscription");return true;}
                 overlaySubscriptions_[id]=callback;
-                callback->Success(Json{{"version",1},{"event","gameOverlay.changed"},{"state",Json::parse(gameOverlayState())}}.dump());return true;
+                callback->Success(Json{{"version",1},{"event","fullscreenAppOverlay.changed"},{"state",Json::parse(fullscreenAppOverlayState())}}.dump());return true;
             }
-            if(command.rfind("gameOverlay.",0)==0) {
-                if(persistent){callback->Failure(400,"Persistent game overlay command not allowed");return true;}
-                const auto reply=gameOverlayCommand(command,params.dump());
+            if(command.rfind("fullscreenAppOverlay.",0)==0) {
+                if(persistent){callback->Failure(400,"Persistent fullscreen-app overlay command not allowed");return true;}
+                const auto reply=fullscreenAppOverlayCommand(command,params.dump());
                 if(reply.code)callback->Failure(reply.code,reply.message);
                 else callback->Success(Json{{"version",1},{"result",Json::parse(reply.json)}}.dump());return true;
             }
@@ -488,8 +488,8 @@ void publishDesktopLyrics(const std::string& state) {
     const auto message=Json{{"version",1},{"event","desktopLyrics.changed"},{"state",Json::parse(state)}}.dump();
     for(auto* client:eventClients)client->deliverDesktopEvent(message);
 }
-void publishGameOverlay(const std::string& state) {
-    const auto message=Json{{"version",1},{"event","gameOverlay.changed"},{"state",Json::parse(state)}}.dump();
+void publishFullscreenAppOverlay(const std::string& state) {
+    const auto message=Json{{"version",1},{"event","fullscreenAppOverlay.changed"},{"state",Json::parse(state)}}.dump();
     for(auto* client:eventClients)client->deliverOverlayEvent(message);
 }
 CefRefPtr<CefApp> makeApp() {return new App;}
@@ -503,8 +503,8 @@ bool closeBrowsers() {
     if(activeBrowser)static_cast<Client*>(activeBrowser->GetHost()->GetClient().get())->requestClose();
     return !activeBrowser && !trayBrowser && !lyricsBrowser && overlayBrowsers.empty();
 }
-CefRefPtr<CefClient> makeGameOverlayClient(const std::string& url,void* window,void* overlayWindow) {return new Client(url,window,url.find("desktopSmoke=1")!=std::string::npos,overlayWindow,false,false,true);}
-CefRefPtr<CefBrowserHost> gameOverlayBrowserHost(void* window) {const auto found=overlayBrowsers.find(static_cast<HWND>(window));return found==overlayBrowsers.end()?nullptr:found->second->GetHost();}
+CefRefPtr<CefClient> makeFullscreenAppOverlayClient(const std::string& url,void* window,void* overlayWindow) {return new Client(url,window,url.find("desktopSmoke=1")!=std::string::npos,overlayWindow,false,false,true);}
+CefRefPtr<CefBrowserHost> fullscreenAppOverlayBrowserHost(void* window) {const auto found=overlayBrowsers.find(static_cast<HWND>(window));return found==overlayBrowsers.end()?nullptr:found->second->GetHost();}
 CefRefPtr<CefClient> makeDesktopLyricsClient(const std::string& url,void* window,void* lyricsWindow) {desktopReport=nullptr;return new Client(url,window,url.find("desktopSmoke=1")!=std::string::npos,lyricsWindow,false,true);}
 CefRefPtr<CefBrowserHost> desktopLyricsBrowserHost() {return lyricsBrowser?lyricsBrowser->GetHost():nullptr;}
 void closeDesktopLyricsBrowser() {if(lyricsBrowser)lyricsBrowser->GetHost()->CloseBrowser(true);}

@@ -753,6 +753,7 @@ void accountSync() {
 namespace musxi {
 void setHostHooks(HostHooks hooks){hostHooks=hooks;}
 PlayerState applicationPlayerState(){return playerService().state();}
+bool applicationHasQueuedTracks(){return !cloudQueue.empty();}
 PlayerResult applicationPlayerCommand(PlayerCommand command,std::uint32_t value){return playerService().invoke(command,value);}
 void setApplicationPlayerEvents(PlayerService::Events sink){playerService().setEventSink(std::move(sink));}
 #include "library_adapter.inc"
