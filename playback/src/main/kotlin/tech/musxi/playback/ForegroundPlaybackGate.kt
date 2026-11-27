@@ -9,6 +9,7 @@ internal class ForegroundPlaybackGate(
     private val ready: () -> Unit,
     private val denied: () -> Unit,
     private val timeoutMs: Long = 3_000,
+    private val invalidated: () -> Unit = {},
 ) {
     var pending = false
         private set
@@ -44,23 +45,21 @@ internal class ForegroundPlaybackGate(
             return
         }
 
+        val currentTime = now()
+        if (token != generation || !pending) return
+        if (currentTime >= deadline) {
+            finish(token, terminal = denied)
+            return
+        }
+
         val foreground = isForeground()
         if (token != generation || !pending) return
         if (foreground) {
             // Keep the session's BUFFERING/play intent until raw play has been submitted.
             // Publishing pending=false first can demote the service before ready() takes focus.
             finish(token, keepPendingUntilTerminal = true) {
-                if (isCurrent()) {
-                    if (isForeground()) ready() else denied()
-                }
+                if (!isCurrent()) invalidated() else if (isForeground()) ready() else denied()
             }
-            return
-        }
-
-        val currentTime = now()
-        if (token != generation || !pending) return
-        if (currentTime >= deadline) {
-            finish(token, terminal = denied)
             return
         }
 
@@ -85,6 +84,7 @@ internal class ForegroundPlaybackGate(
         cancelPoll()
         pending = false
         changed()
+        if (generation == token + 1) invalidated()
     }
 
     private fun finish(token: Long, keepPendingUntilTerminal: Boolean = false, terminal: () -> Unit) {

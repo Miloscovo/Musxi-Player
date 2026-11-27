@@ -229,7 +229,10 @@ class LibraryBrowser(
                     stale = mutable.value.stale || pageIsStale)
                 val verified = identity()?.verified == true
                 if (refresh && verified &&
-                    (bypassRecentSuccess || !hasRecentNetworkSuccess(expected, query))) {
+                    // A successful prefix write evicts continuation pages; eviction or a
+                    // failed cache write must not turn recent success into an empty idle page.
+                    (bypassRecentSuccess || cached == null || pageIsStale ||
+                        !hasRecentNetworkSuccess(expected, query))) {
                     fetchPage(token, expected, query, confirmEmpty = bypassRecentSuccess)
                 } else {
                     mutable.value = mutable.value.copy(
@@ -348,7 +351,8 @@ class LibraryBrowser(
 
     private fun copyPlaylists(page: Page<PlaylistSummary>) = page.copy(items = Collections.unmodifiableList(page.items.toList()))
     private fun copyTracks(page: Page<SongSummary>) = page.copy(items = Collections.unmodifiableList(page.items.map {
-        it.copy(artists = Collections.unmodifiableList(it.artists.toList()))
+        it.copy(artists = Collections.unmodifiableList(it.artists.toList()),
+            artistIds = Collections.unmodifiableList(it.artistIds.toList()))
     }))
 
     companion object {

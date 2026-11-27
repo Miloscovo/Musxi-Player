@@ -40,6 +40,7 @@ class LyricsMatchBrowser(
         (Result<LyricsBinding?>) -> Unit,
     ) -> Unit,
     private val onBindingChanged: (MediaKey, LyricsBinding?) -> Unit = { _, _ -> },
+    private val guardedSearch: ((Platform, String, Int, () -> Boolean, (Result<Page<SongSummary>>) -> Unit) -> Unit)? = null,
 ) {
     private data class Target(val key: MediaKey, val owner: LibraryCacheIdentity)
     private data class CandidateFence(val platform: Platform, val owner: LibraryCacheIdentity)
@@ -144,6 +145,7 @@ class LyricsMatchBrowser(
         }
 
         val delivered = AtomicBoolean(false)
+        fun isCurrent() = synchronized(gate) { !delivered.get() && current(token, original, candidateOwner) }
         val callback: (Result<Page<SongSummary>>) -> Unit = callback@ { response ->
             if (!delivered.compareAndSet(false, true)) return@callback
             synchronized(gate) {
@@ -151,7 +153,11 @@ class LyricsMatchBrowser(
                 response.fold(
                     onSuccess = { pageResult ->
                         val items = Collections.unmodifiableList(
-                            pageResult.items.filter { it.key.platform == platform }.toList()
+                            pageResult.items.filter { it.key.platform == platform }.map { song ->
+                                song.copy(artists = Collections.unmodifiableList(song.artists.toList()),
+                                    artistIds = Collections.unmodifiableList(song.artistIds.toList()),
+                                    coverUrl = tech.musxi.core.library.ArtworkPolicy.sanitize(platform, song.coverUrl))
+                            }
                         )
                         mutable.value = mutable.value.copy(
                             candidates = items,
@@ -169,7 +175,8 @@ class LyricsMatchBrowser(
             }
         }
         try {
-            search(platform, keywords.trim(), page, callback)
+            if (guardedSearch != null) guardedSearch.invoke(platform, keywords.trim(), page, ::isCurrent, callback)
+            else search(platform, keywords.trim(), page, callback)
         } catch (_: Throwable) {
             if (!delivered.compareAndSet(false, true)) return
             synchronized(gate) {

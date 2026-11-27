@@ -78,7 +78,8 @@ internal class FakeLocalAudioController(state: LocalAudioLibraryState = sampleLo
     override fun createFolder(name: String, result: (Result<LocalAudioFolder>) -> Unit) {
         calls += "createFolder:$name"
         val folder = LocalAudioFolder(localId(150 + library.value.folders.size), name)
-        library.value = library.value.copy(folders = library.value.folders + folder, revision = library.value.revision + 1)
+        library.value = library.value.copy(folders = library.value.folders + folder,
+            revision = library.value.revision + 1, organizationRevision = library.value.organizationRevision + 1)
         result(Result.success(folder))
     }
     override fun renameFolder(id: String, name: String, result: (Result<Unit>) -> Unit) { calls += "renameFolder:$name"; result(Result.success(Unit)) }

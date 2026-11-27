@@ -91,6 +91,16 @@ fun AccountDetailPage(
                                 AccountAction.NONE -> Unit
                             }
                         },
+                        menu = {
+                            AccountManageMenu(
+                                expanded = dialogs.managing == platform,
+                                title = identity.title,
+                                subtitle = identity.subtitle,
+                                onDismiss = dialogs::dismissMenu,
+                                onReverify = { actions.onReverify(platform) },
+                                onSignOut = { dialogs.requestSignOut(platform) },
+                            )
+                        },
                     )
                 }
                 // Netease's primary login is the web page; the scanner stays reachable, quietly, for

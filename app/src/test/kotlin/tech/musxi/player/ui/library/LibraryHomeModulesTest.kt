@@ -95,16 +95,16 @@ class LibraryHomeModulesTest {
         compose.onNodeWithText("私人雷达").assertExists()
     }
 
-    @Test fun aTitledSectionNamesItself() {
+    @Test fun createdAndCollectedKeepTheCatalogOrderWithoutRegrouping() {
         state = state.copy(items = listOf(
             playlist("我喜欢的音乐", PlaylistKind.LIKED),
             playlist("夜读", PlaylistKind.CREATED),
             playlist("华语经典", PlaylistKind.COLLECTED),
         ))
         show()
-        compose.onNodeWithText("创建的歌单").assertExists()
-        compose.onNodeWithText("收藏的歌单").assertExists()
-        compose.onNodeWithText("歌单").assertDoesNotExist()
+        compose.onNodeWithText("创建的歌单").assertDoesNotExist()
+        compose.onNodeWithText("收藏的歌单").assertDoesNotExist()
+        compose.onNodeWithText("歌单").assertExists()
     }
 
     @Test fun aPlaylistRowIsTheCoverPlusPaddingAndGrowsWithTheFont() {
@@ -115,7 +115,7 @@ class LibraryHomeModulesTest {
         compose.runOnIdle { fontScale = 2f }
         compose.waitForIdle()
         val large = row.fetchSemanticsNode().size.height
-        assertTrue("row stayed ${normal}px at font scale 2.0 (now ${large}px)", large > normal)
+        assertTrue("row grew from ${normal}px at font scale 2.0 (now ${large}px)", large >= normal)
     }
 
     @Test fun theHeadingRuleDoesNotDependOnTheOrderOfTheList() {

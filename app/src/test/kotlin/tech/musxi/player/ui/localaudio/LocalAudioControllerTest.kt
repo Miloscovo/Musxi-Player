@@ -60,13 +60,24 @@ class LocalAudioControllerTest {
             command = { revision, done ->
                 revisions += revision
                 if (revisions.size == 1) {
-                    fake.library.value = fake.library.value.copy(revision = 9)
+                    fake.library.value = fake.library.value.copy(revision = 12, organizationRevision = 9)
                     done(Result.failure(tech.musxi.core.localaudio.LocalAudioFailure(LocalAudioError.STALE_STATE)))
                 } else done(Result.success(Unit))
             },
         ) { answer = it }
         assertEquals(listOf(7L, 9L), revisions)
         assertTrue(answer!!.isSuccess)
+    }
+
+    @Test fun commandsUseOrganizationVersionAfterProgressCheckpoint() {
+        val fake = FakeLocalAudioController()
+        fake.library.value = fake.library.value.copy(revision = 20, organizationRevision = 7, progressRevision = 13)
+        var accepted: Long? = null
+        fake.withFreshRevision<Unit>(stillValid = { true }, command = { version, done ->
+            accepted = version
+            done(Result.success(Unit))
+        }) {}
+        assertEquals(7L, accepted)
     }
 
     @Test fun noRetryWhenTheSelectionNoLongerFits() {

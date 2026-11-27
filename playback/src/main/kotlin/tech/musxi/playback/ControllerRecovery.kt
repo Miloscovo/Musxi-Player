@@ -3,6 +3,7 @@ package tech.musxi.playback
 enum class PlaybackConnectionPhase { CONNECTING, CONNECTED, RETRY_WAIT, FAILED, CLOSED }
 
 internal data class ControllerConnectionState(val phase: PlaybackConnectionPhase, val attempt: Int)
+internal enum class ControllerFailure { REJECTED, TIMEOUT, DISCONNECTED }
 
 /** Single main-thread owner. No player commands or queue replay occur when a resource reconnects. */
 internal class ControllerRecovery<C : Any>(
@@ -12,6 +13,7 @@ internal class ControllerRecovery<C : Any>(
     private val now: () -> Long,
     private val attached: (C) -> Unit,
     private val changed: (ControllerConnectionState) -> Unit,
+    private val failedAttempt: (ControllerFailure, Int) -> Unit = { _, _ -> },
 ) {
     var state = ControllerConnectionState(PlaybackConnectionPhase.FAILED, 0)
         private set
@@ -32,10 +34,11 @@ internal class ControllerRecovery<C : Any>(
 
     fun disconnected(token: Long) {
         if (token != epoch || state.phase !in setOf(PlaybackConnectionPhase.CONNECTED, PlaybackConnectionPhase.CONNECTING)) return
+        val attempt = state.attempt
         if (state.phase == PlaybackConnectionPhase.CONNECTED && now() - connectedAt >= STABLE_MS) {
             state = state.copy(attempt = 0)
         }
-        failed(token)
+        failed(token, ControllerFailure.DISCONNECTED, attempt)
     }
 
     fun close() {
@@ -50,12 +53,12 @@ internal class ControllerRecovery<C : Any>(
         cleanup()
         state = ControllerConnectionState(PlaybackConnectionPhase.CONNECTING, state.attempt + 1)
         changed(state)
-        cancelTimer = schedule(CONNECT_TIMEOUT_MS) { failed(token) }
+        cancelTimer = schedule(CONNECT_TIMEOUT_MS) { failed(token, ControllerFailure.TIMEOUT) }
         try {
             val cancel = connect(token) { response -> complete(token, response) }
             if (token == epoch && state.phase == PlaybackConnectionPhase.CONNECTING) cancelConnect = cancel
             else if (token != epoch || state.phase != PlaybackConnectionPhase.CONNECTED) cancel()
-        } catch (_: Exception) { failed(token) }
+        } catch (_: Exception) { failed(token, ControllerFailure.REJECTED) }
     }
 
     private fun complete(token: Long, response: Result<C>) {
@@ -64,18 +67,19 @@ internal class ControllerRecovery<C : Any>(
             if (candidate != null && candidate !== resource) release(candidate)
             return
         }
-        if (candidate == null) { failed(token); return }
+        if (candidate == null) { failed(token, ControllerFailure.REJECTED); return }
         cancelTimer?.invoke(); cancelTimer = null
         cancelConnect = null
         resource = candidate
         connectedAt = now()
         publish(PlaybackConnectionPhase.CONNECTED)
-        try { attached(candidate) } catch (_: Exception) { failed(token) }
+        try { attached(candidate) } catch (_: Exception) { failed(token, ControllerFailure.REJECTED) }
     }
 
-    private fun failed(token: Long) {
+    private fun failed(token: Long, reason: ControllerFailure, attempt: Int = state.attempt) {
         if (token != epoch || state.phase !in setOf(PlaybackConnectionPhase.CONNECTING, PlaybackConnectionPhase.CONNECTED)) return
         val next = ++epoch
+        failedAttempt(reason, attempt)
         cleanup()
         if (state.attempt >= MAX_ATTEMPTS) {
             publish(PlaybackConnectionPhase.FAILED)

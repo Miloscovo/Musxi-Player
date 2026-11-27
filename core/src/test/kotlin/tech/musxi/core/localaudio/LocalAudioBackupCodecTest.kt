@@ -13,6 +13,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
+import org.junit.Assert.assertThrows
 import org.junit.Test
 import org.junit.Assert.assertSame
 
@@ -49,6 +50,226 @@ class LocalAudioBackupCodecTest {
         // Encoding is deterministic, so the same backup always yields the same checked bytes.
         assertEquals(output.written().toList(), serialized(backup).toList())
         assertTrue(output.written().size.toLong() < LocalAudioBackupCodec.MAX_BYTES)
+    }
+
+    @Test
+    fun versionOneStillDecodesAndLeavesSegmentsNull() {
+        val legacy = read(envelope(payloadWithItem(fileName = "legacy.flac")))
+
+        assertNull(legacy.items.single().item.segment)
+        assertEquals("legacy.flac", legacy.items.single().item.metadata.fileName)
+    }
+
+    @Test
+    fun ordinaryKeysKeepTheHistoricalCopyAndReferenceValues() {
+        val location = "b".repeat(64)
+        val copy = StoredLocalAudio(
+            LocalAudioItem(uuid(1), LocalAudioMetadata("ordinary.flac"),
+                LocalImportMode.COPY, addedAtMs = 1),
+            LocalAudioSource(LocalImportMode.COPY, location, "copy-identity"),
+        )
+        val reference = StoredLocalAudio(
+            LocalAudioItem(uuid(2), LocalAudioMetadata("ordinary.flac", sizeBytes = 1_024,
+                modifiedAtMs = 5_000), LocalImportMode.REFERENCE, addedAtMs = 1),
+            LocalAudioSource(LocalImportMode.REFERENCE,
+                "content://com.example.documents/document/ordinary", "doc-identity",
+                "content://com.example.documents/tree/root"),
+        )
+
+        assertEquals(location, LocalAudioBackupKeys.source(copy))
+        assertEquals(legacyReferenceKey("doc-identity", 1_024, 5_000),
+            LocalAudioBackupKeys.source(reference))
+    }
+
+    @Test
+    fun cueSegmentsFromOneCopySourceHaveDistinctStableKeys() {
+        val location = "c".repeat(64)
+        fun item(id: Int, startUs: Long, endUs: Long, track: Int): StoredLocalAudio {
+            val segment = LocalAudioSegment(startUs, endUs, track)
+            return StoredLocalAudio(
+                LocalAudioItem(uuid(id), LocalAudioMetadata("album.flac",
+                    durationMs = segment.durationMs), LocalImportMode.COPY,
+                    addedAtMs = 1, segment = segment),
+                LocalAudioSource(LocalImportMode.COPY, location,
+                    "cue-v1:identity-$track"),
+            )
+        }
+        val first = item(1, 0, 60_000_000, 1)
+        val second = item(2, 60_000_000, 120_000_000, 2)
+        val sameContentAgain = item(3, 0, 60_000_000, 1)
+
+        val firstKey = LocalAudioBackupKeys.source(first)
+        assertTrue(firstKey.matches(Regex("[0-9a-f]{64}")))
+        assertFalse(firstKey == location)
+        assertFalse(firstKey == LocalAudioBackupKeys.source(second))
+        assertEquals(firstKey, LocalAudioBackupKeys.source(sameContentAgain))
+        assertEquals(firstKey, LocalAudioBackupKeys.source(first.copy(
+            item = first.item.copy(id = uuid(99)),
+        )))
+    }
+
+    @Test
+    fun segmentRoundTripIsExactAndContainsNoSourceCapability() {
+        val firstSegment = LocalAudioSegment(0, 61_234_000, 1)
+        val secondSegment = LocalAudioSegment(61_234_000, 123_456_000, 2)
+        val location = "d".repeat(64)
+        val firstSource = LocalAudioSource(LocalImportMode.COPY, location, "cue-v1:album-a")
+        val secondSource = LocalAudioSource(LocalImportMode.COPY, location, "cue-v1:album-b")
+        val first = LocalAudioItem(uuid(10), LocalAudioMetadata("album.flac",
+            title = "Track 1", durationMs = firstSegment.durationMs), LocalImportMode.COPY,
+            addedAtMs = 1, segment = firstSegment)
+        val second = LocalAudioItem(uuid(11), LocalAudioMetadata("album.flac",
+            title = "Track 2", durationMs = secondSegment.durationMs), LocalImportMode.COPY,
+            addedAtMs = 2, segment = secondSegment)
+        val backup = LocalAudioBackup(uuid(1), 1,
+            listOf(
+                LocalAudioBackupItem(first, LocalAudioBackupKeys.source(
+                    StoredLocalAudio(first, firstSource))),
+                LocalAudioBackupItem(second, LocalAudioBackupKeys.source(
+                    StoredLocalAudio(second, secondSource))),
+            ),
+            emptyList(), emptyList(),
+            listOf(
+                LocalAudioProgress(first.id, 10_000, false, 1),
+                LocalAudioProgress(second.id, 20_000, false, 1),
+            ),
+            emptyList(),
+            listOf(LocalAudioBookmark(uuid(30), second.id, 30_000, "within range")),
+        )
+
+        val bytes = serialized(backup)
+        val restored = read(bytes)
+
+        assertEquals(listOf(firstSegment, secondSegment),
+            restored.items.map { it.item.segment })
+        assertEquals(backup.items.map { it.sourceKey },
+            restored.items.map { it.sourceKey })
+        val raw = String(bytes, Charsets.ISO_8859_1)
+        assertFalse(raw.contains("content://"))
+        assertFalse(raw.contains(location))
+        assertFalse(raw.contains(firstSource.identity))
+        assertFalse(raw.contains(secondSource.identity))
+    }
+
+    @Test
+    fun segmentRangesAndDurationsAreValidated() {
+        assertThrows(IllegalArgumentException::class.java) {
+            LocalAudioSegment(-1, 1_000, 1)
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            LocalAudioSegment(1_000, 1_000, 1)
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            LocalAudioSegment(0, 1_000, 0)
+        }
+
+        val segment = LocalAudioSegment(0, 2_000_000, 1)
+        val audioId = uuid(10)
+        val item = LocalAudioItem(audioId, LocalAudioMetadata("album.flac", durationMs = 1_000),
+            LocalImportMode.COPY, addedAtMs = 1, segment = segment)
+        assertThrows(IllegalArgumentException::class.java) {
+            LocalAudioBackup(uuid(1), 1,
+                listOf(LocalAudioBackupItem(item, sourceKey(1))),
+                emptyList(), emptyList(), emptyList(), emptyList(), emptyList())
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            LocalAudioBackup(uuid(1), 1,
+                listOf(LocalAudioBackupItem(item.copy(metadata = LocalAudioMetadata(
+                    "album.flac", durationMs = segment.durationMs)), sourceKey(1))),
+                emptyList(), emptyList(),
+                listOf(LocalAudioProgress(audioId, segment.durationMs + 1, false, 1)),
+                emptyList(), emptyList())
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            LocalAudioBackup(uuid(1), 1,
+                listOf(LocalAudioBackupItem(item.copy(metadata = LocalAudioMetadata(
+                    "album.flac", durationMs = segment.durationMs)), sourceKey(1))),
+                emptyList(), emptyList(), emptyList(), emptyList(),
+                listOf(LocalAudioBookmark(uuid(30), audioId, segment.durationMs + 1, "past end")))
+        }
+    }
+
+    @Test
+    fun malformedSegmentPayloadsAreInvalid() {
+        fun payloadWithSegment(startUs: Long = 0, endUs: Long = 1_001_000,
+            trackNumber: Int = 1, durationMs: Long? = 1_000,
+            progressMs: Long? = null, bookmarkMs: Long? = null,
+            onSegmentFlag: (Int) -> Unit = {}): ByteArray {
+            val audioId = uuid(10)
+            val folderId = uuid(20)
+            val builder = PayloadBuilder()
+            builder.uuid(uuid(1))
+            builder.long(1)
+            builder.int(1)
+            builder.uuid(audioId)
+            builder.text("album.flac")
+            builder.boolean(false)
+            builder.boolean(false)
+            builder.boolean(durationMs != null)
+            if (durationMs != null) builder.long(durationMs)
+            builder.boolean(false)
+            builder.boolean(false)
+            builder.text("COPY")
+            builder.boolean(false)
+            builder.text("AVAILABLE")
+            builder.long(1)
+            builder.text(sourceKey(1))
+            onSegmentFlag(builder.size())
+            builder.boolean(true)
+            builder.long(startUs)
+            builder.long(endUs)
+            builder.int(trackNumber)
+            builder.int(1)
+            builder.uuid(folderId)
+            builder.text("Folder")
+            builder.boolean(true)
+            builder.int(1)
+            builder.uuid(folderId)
+            builder.uuid(audioId)
+            builder.int(0)
+            builder.int(if (progressMs != null) 1 else 0)
+            if (progressMs != null) {
+                builder.uuid(audioId)
+                builder.long(progressMs)
+                builder.boolean(false)
+                builder.long(0)
+            }
+            builder.int(0)
+            builder.int(if (bookmarkMs != null) 1 else 0)
+            if (bookmarkMs != null) {
+                builder.uuid(uuid(30))
+                builder.uuid(audioId)
+                builder.long(bookmarkMs)
+                builder.text("Bookmark")
+            }
+            return builder.bytes()
+        }
+
+        assertFailure(LocalAudioError.INVALID_BACKUP) {
+            read(envelope(payloadWithSegment(startUs = -1), version = 2))
+        }
+        assertFailure(LocalAudioError.INVALID_BACKUP) {
+            read(envelope(payloadWithSegment(startUs = 2_000_000, endUs = 1_000_000), version = 2))
+        }
+        assertFailure(LocalAudioError.INVALID_BACKUP) {
+            read(envelope(payloadWithSegment(trackNumber = 100), version = 2))
+        }
+        assertFailure(LocalAudioError.INVALID_BACKUP) {
+            read(envelope(payloadWithSegment(durationMs = 999), version = 2))
+        }
+        assertFailure(LocalAudioError.INVALID_BACKUP) {
+            read(envelope(payloadWithSegment(endUs = 4_001_000, durationMs = 3_000,
+                progressMs = 4_000), version = 2))
+        }
+        assertFailure(LocalAudioError.INVALID_BACKUP) {
+            read(envelope(payloadWithSegment(bookmarkMs = 1_001), version = 2))
+        }
+        var segmentFlagOffset = -1
+        val complete = payloadWithSegment { segmentFlagOffset = it }
+        assertTrue(segmentFlagOffset > 0)
+        assertFailure(LocalAudioError.INVALID_BACKUP) {
+            read(envelope(complete.copyOf(segmentFlagOffset + 1 + 9), version = 2))
+        }
     }
 
     @Test
@@ -116,9 +337,9 @@ class LocalAudioBackupCodecTest {
     }
 
     @Test
-    fun onlyVersionOneIsAccepted() {
-        val versionTwo = serialized(sampleBackup()).also { it[MAGIC.size + 3] = 2 }
-        assertFailure(LocalAudioError.UNSUPPORTED_BACKUP) { read(versionTwo) }
+    fun onlyKnownVersionsAreAccepted() {
+        val versionThree = serialized(sampleBackup()).also { it[MAGIC.size + 3] = 3 }
+        assertFailure(LocalAudioError.UNSUPPORTED_BACKUP) { read(versionThree) }
 
         val versionZero = serialized(sampleBackup()).also { it.fill(0, MAGIC.size, MAGIC.size + 4) }
         assertFailure(LocalAudioError.UNSUPPORTED_BACKUP) { read(versionZero) }
@@ -366,9 +587,23 @@ class LocalAudioBackupCodecTest {
         LocalAudioBackupCodec.read(ByteArrayInputStream(bytes))
 
     /** Wraps a payload in the real header and a correct footer. */
-    private fun envelope(body: ByteArray): ByteArray {
-        val head = MAGIC + int(1) + body
+    private fun envelope(body: ByteArray, version: Int = 1): ByteArray {
+        val head = MAGIC + int(version) + body
         return head + sha256(head)
+    }
+
+    private fun legacyReferenceKey(identity: String, sizeBytes: Long?, modifiedAtMs: Long?): String {
+        val bytes = ByteArrayOutputStream()
+        DataOutputStream(bytes).use { out ->
+            out.writeUTF("musxi-local-reference-v1")
+            val encoded = identity.toByteArray(Charsets.UTF_8)
+            out.writeInt(encoded.size)
+            out.write(encoded)
+            out.writeLong(sizeBytes ?: -1)
+            out.writeLong(modifiedAtMs ?: -1)
+        }
+        return MessageDigest.getInstance("SHA-256").digest(bytes.toByteArray())
+            .joinToString("") { "%02x".format(it.toInt() and 255) }
     }
 
     /** Replaces a stale footer after a deliberate payload edit. */
@@ -485,6 +720,8 @@ class LocalAudioBackupCodecTest {
 
         fun uuid(value: String) = text(value)
 
+        fun size(): Int = buffer.size()
+
         fun bytes(): ByteArray {
             out.flush()
             return buffer.toByteArray()
@@ -503,6 +740,16 @@ class LocalAudioBackupCodecTest {
             (value ushr 8).toByte(), value.toByte())
 
     private fun long(value: Long): ByteArray = int((value ushr 32).toInt()) + int(value.toInt())
+
+    private fun longAt(bytes: ByteArray, offset: Int): Long =
+        ((bytes[offset].toLong() and 0xff) shl 56) or
+            ((bytes[offset + 1].toLong() and 0xff) shl 48) or
+            ((bytes[offset + 2].toLong() and 0xff) shl 40) or
+            ((bytes[offset + 3].toLong() and 0xff) shl 32) or
+            ((bytes[offset + 4].toLong() and 0xff) shl 24) or
+            ((bytes[offset + 5].toLong() and 0xff) shl 16) or
+            ((bytes[offset + 6].toLong() and 0xff) shl 8) or
+            (bytes[offset + 7].toLong() and 0xff)
 
     private fun uuid(value: Int): String =
         "00000000-0000-4000-8000-" + value.toString().padStart(12, '0')
@@ -650,6 +897,7 @@ class LocalAudioBackupCodecTest {
     private companion object {
         const val FOOTER_BYTES = 32
         const val ID_BYTES = 36
+        const val SOURCE_KEY_BYTES = 64
         const val NAME_BYTES = 4096
         val MAGIC: ByteArray = "MUSXI-LOCAL-ORG".toByteArray(Charsets.US_ASCII)
     }

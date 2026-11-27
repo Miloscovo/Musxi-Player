@@ -22,7 +22,16 @@ store password 与 key password 使用同一个密码。不要把密码写入
 
 v0.2 是 `tech.musxi.player` 的首次正式签名发布，版本为 `0.2.0` / code 5。
 v0.3 沿用相同签名及包名，版本为 `0.3.0` / code 6，支持覆盖更新。
+v0.3.1 继续沿用该签名及包名，版本为 `0.3.1` / code 7。
 旧 v0.1 的 `tech.musxi.player.dev` 使用开发签名，两种包各自保存数据，可以并存；不能用正式包自动迁移开发包账号或队列。
+
+## 无私钥的Release检查
+
+```powershell
+pwsh -NoProfile -File build.ps1 -ReleaseCheck
+```
+
+该模式通过共享锁编译release Kotlin、运行release Lint并生成合并清单，不打包、不签名、不安装；与Release／Test／Lint／Verify／Install互斥。源码／清单／编译类检查不替代最终APK的DEX隔离、证书或正式包设备验收。APK／AAB打包与底层 `packageReleaseBundle` 仍受签名配置门禁约束，不能无签名回退。本轮DSF结果见 [启用验收](backend-dsf-enablement-20261117.md)。
 
 ## 构建与安装
 

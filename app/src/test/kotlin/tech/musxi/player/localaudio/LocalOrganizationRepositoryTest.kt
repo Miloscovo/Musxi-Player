@@ -68,6 +68,37 @@ class LocalOrganizationRepositoryTest {
         assertEquals(members, repository.state.value.members)
     }
 
+    @Test fun checkpointKeepsPlainSearchAndOrganizationTokenButInvalidatesProgressSearch() = runBlocking {
+        val selected = repository.state.value.items.first().id
+        val request = LocalAudioQuery(sort = LocalAudioSort.TITLE, limit = 1)
+        val first = search(request).getOrThrow()
+        val version = repository.state.value.organizationToken
+        repository.saveProgress(folder.id, LocalAudioProgress(selected, 500, false, 1)).join()
+        assertNull(repository.searchState.value.error)
+        val next = search(request.copy(offset = first.nextOffset!!, expectedToken = first.token)).getOrThrow()
+        assertNotEquals(first.items.single().id, next.items.single().id)
+        var ordered: Result<Unit>? = null
+        repository.reorder(folder.id, repository.state.value.items.map { it.id }.reversed(), version) { ordered = it }.join()
+        assertTrue(ordered!!.isSuccess)
+        assertEquals(LocalAudioError.STALE_STATE, repository.searchState.value.error)
+        search(LocalAudioQuery(sort = LocalAudioSort.LAST_PROGRESS)).getOrThrow()
+        repository.saveProgress(folder.id, LocalAudioProgress(selected, 800, false, 2)).join()
+        assertEquals(LocalAudioError.STALE_STATE, repository.searchState.value.error)
+    }
+
+    @Test fun versionedSourceCheckIgnoresProgressButRejectsStructuralChanges() = runBlocking {
+        val selected = repository.state.value.items.first().id
+        val version = repository.state.value.organizationToken
+        repository.saveProgress(folder.id, LocalAudioProgress(selected, 500, false, 1)).join()
+        var checked: Result<List<LocalAudioSourceCheckResult>>? = null
+        repository.checkSources(listOf(selected), version) { checked = it }.join()
+        assertTrue(checked!!.isSuccess)
+        val stale = repository.state.value.organizationToken
+        repository.renameAudio(selected, "改名").join()
+        repository.checkSources(listOf(selected), stale) { checked = it }.join()
+        assertEquals(LocalAudioError.STALE_STATE, (checked!!.exceptionOrNull() as LocalAudioFailure).error)
+    }
+
     @Test fun searchesPublishedMetadataWithoutReopeningSources() = runBlocking {
         val chosen = repository.state.value.items.first()
         repository.renameAudio(chosen.id, "睡前 雨声").join()

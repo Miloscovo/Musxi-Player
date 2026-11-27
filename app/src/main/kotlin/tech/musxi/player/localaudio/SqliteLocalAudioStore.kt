@@ -29,10 +29,13 @@ import tech.musxi.core.localaudio.LocalAudioProgress
 import tech.musxi.core.localaudio.LocalAudioRestorePreview
 import tech.musxi.core.localaudio.LocalAudioRestoreResult
 import tech.musxi.core.localaudio.LocalAudioSearch
+import tech.musxi.core.localaudio.LocalAudioSegment
 import tech.musxi.core.localaudio.LocalAudioSort
 import tech.musxi.core.localaudio.LocalAudioSortResult
 import tech.musxi.core.localaudio.LocalAudioSource
 import tech.musxi.core.localaudio.LocalAudioStore
+import tech.musxi.core.localaudio.LocalCueImportTrack
+import tech.musxi.core.localaudio.LocalAudioVersionToken
 import tech.musxi.core.localaudio.LocalImportMode
 import tech.musxi.core.localaudio.LocalMediaKind
 import tech.musxi.core.localaudio.StoredLocalAudioDirectory
@@ -70,16 +73,22 @@ class SqliteLocalAudioStore(
 
         override fun onCreate(db: SQLiteDatabase) {
             SCHEMA.forEach { db.execSQL(it) }
-            db.insertOrThrow("meta", null, ContentValues().apply {
-                put("key", REVISION_KEY)
-                put("value", "0")
-            })
+            db.execSQL("ALTER TABLE directories ADD COLUMN last_refresh_failures INTEGER NOT NULL DEFAULT 0")
+            for (key in listOf(REVISION_KEY, ORGANIZATION_REVISION_KEY, PROGRESS_REVISION_KEY)) {
+                db.insertOrThrow("meta", null, ContentValues().apply {
+                    put("key", key)
+                    put("value", "0")
+                })
+            }
         }
 
         override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
             // Version 1 is the initial schema, version 2 adds directory associations plus the
             // stored modification time, version 3 adds the media kind and the artwork key, and
-            // version 4 adds the per-audio playback speed and the user's own cover.
+            // version 4 adds the per-audio playback speed and the user's own cover. Version 5
+            // adds an optional CUE slice without changing existing whole-file rows. Version 6
+            // splits organization and progress epochs while preserving the legacy counter.
+            // Version 7 adds the per-file failure count from the last complete directory scan.
             // Every statement is additive, so an upgraded library keeps all existing rows; the
             // steps always run in order, so a version-1 library reaches the current schema too.
             // Any other on-disk version must fail loudly instead of serving a library this build
@@ -90,12 +99,24 @@ class SqliteLocalAudioStore(
             if (oldVersion < 2) MIGRATION_2.forEach { db.execSQL(it) }
             if (oldVersion < 3) MIGRATION_3.forEach { db.execSQL(it) }
             if (oldVersion < 4) MIGRATION_4.forEach { db.execSQL(it) }
+            if (oldVersion < 5) MIGRATION_5.forEach { db.execSQL(it) }
+            if (oldVersion < 7) db.execSQL("ALTER TABLE directories ADD COLUMN last_refresh_failures INTEGER NOT NULL DEFAULT 0")
+            if (oldVersion < 6) {
+                // Seed both epochs from the old counter, never reset an existing library.
+                val seed = currentRevision(db, LocalAudioError.STORAGE_FAILED)
+                for (key in listOf(ORGANIZATION_REVISION_KEY, PROGRESS_REVISION_KEY)) {
+                    db.insertOrThrow("meta", null, ContentValues().apply {
+                        put("key", key); put("value", seed.toString())
+                    })
+                }
+            }
         }
     }
 
-    /** A single write transaction. [changed] decides whether the library revision advances. */
+    /** A transaction advances organization and/or progress epochs, plus the legacy counter. */
     private inner class Tx(val db: SQLiteDatabase) {
         var changed = false
+        var progressChanged = false
 
         fun requireFolder(id: String) {
             validateId(id, LocalAudioError.NOT_FOUND)
@@ -126,6 +147,8 @@ class SqliteLocalAudioStore(
         LocalAudioLibraryState(
             ready = true,
             revision = currentRevision(db, error),
+            organizationRevision = currentRevision(db, error, ORGANIZATION_REVISION_KEY),
+            progressRevision = currentRevision(db, error, PROGRESS_REVISION_KEY),
             folders = db.rawQuery(
                 "SELECT id, name, continue_playback FROM folders ORDER BY created_at_ms, rowid",
                 null,
@@ -232,6 +255,9 @@ class SqliteLocalAudioStore(
         val previousOrigin = directory?.let { savedOrigin(db, it.directoryId, it.documentIdentity) }
         val existing = findAudioId(db, source.mode, source.identity)
         val audioId = if (existing != null) {
+            // A CUE slice and a whole-file import are different records even if a caller supplies
+            // the same key. Never let the ordinary import path rewrite a segmented row.
+            if (segmentOf(db, existing) != null) throw LocalAudioFailure(LocalAudioError.SOURCE_CHANGED)
             // A known file size that changed means the document now holds different content. The
             // old progress/bookmarks may not be valid for it, so only an explicit relink may move
             // a reference entry to a new version.
@@ -271,6 +297,113 @@ class SqliteLocalAudioStore(
         }
         changed = true
         readItemById(db, audioId) ?: throw LocalAudioFailure(LocalAudioError.STORAGE_FAILED)
+    }
+
+    /**
+     * Imports every CUE slice as one transaction. Each slice keeps the complete source identity
+     * supplied by the facade, while the shared underlying document is represented by the common
+     * mode, location and grant. Repeating the same import preserves all user-owned fields.
+     */
+    override fun importCue(folderId: String, tracks: List<LocalCueImportTrack>, expectedRevision: Long,
+        checkCancelled: () -> Unit): List<LocalAudioItem> {
+        checkCancelled()
+        val frozen = tracks.toList()
+        if (frozen.size !in 1..99) throw LocalAudioFailure(LocalAudioError.LIMIT_REACHED)
+        val firstSource = frozen.first().source
+        val identities = HashSet<String>(frozen.size)
+        val trackNumbers = HashSet<Int>(frozen.size)
+        for (track in frozen) {
+            if (!identities.add(track.source.identity) || !trackNumbers.add(track.segment.trackNumber)) {
+                throw LocalAudioFailure(LocalAudioError.INVALID_ORDER)
+            }
+            if (track.source.mode != firstSource.mode || track.source.location != firstSource.location ||
+                track.source.grantUri != firstSource.grantUri) {
+                throw LocalAudioFailure(LocalAudioError.SOURCE_CHANGED)
+            }
+        }
+
+        return write {
+            checkCancelled()
+            if (currentRevision(db, LocalAudioError.STORAGE_FAILED) != expectedRevision) {
+                throw LocalAudioFailure(LocalAudioError.STALE_STATE)
+            }
+            requireFolder(folderId)
+
+            // Resolve and validate every row before the first write. The transaction still rolls
+            // back if cancellation or a database failure happens later.
+            val ids = arrayOfNulls<String>(frozen.size)
+            val addMembership = BooleanArray(frozen.size)
+            val pendingAudio = HashSet<String>(frozen.size)
+            for (index in frozen.indices) {
+                checkCancelled()
+                val track = frozen[index]
+                // Metadata is a whole-document version, while the model's duration is the slice
+                // duration. A mismatched pair could make source checks or playback bounds lie.
+                if (track.metadata.durationMs != track.segment.durationMs) {
+                    throw LocalAudioFailure(LocalAudioError.INVALID_TARGET)
+                }
+                val existingId = findAudioId(db, track.source.mode, track.source.identity)
+                if (existingId != null) {
+                    val stored = storedByIdentity(db, track.source.mode, track.source.identity)
+                        ?: throw LocalAudioFailure(LocalAudioError.STORAGE_FAILED)
+                    val storedSegment = stored.item.segment
+                    if (storedSegment == null || storedSegment != track.segment ||
+                        stored.source.location != track.source.location ||
+                        stored.source.grantUri != track.source.grantUri ||
+                        knownVersionChanged(stored.source.mode, stored.item.metadata, track.metadata)) {
+                        throw LocalAudioFailure(LocalAudioError.SOURCE_CHANGED)
+                    }
+                    ids[index] = existingId
+                } else {
+                    pendingAudio.add(track.source.identity)
+                }
+                if (existingId == null || !isMember(db, folderId, existingId)) addMembership[index] = true
+            }
+            val newItems = pendingAudio.size
+            val newMemberships = addMembership.count { it }
+            requireMemberCapacity(db, 0, newMemberships)
+            if (count(db, "audio") + newItems > LocalAudioLimits.MAX_ITEMS ||
+                count(db, "members") + newMemberships > LocalAudioLimits.MAX_MEMBERS) {
+                throw LocalAudioFailure(LocalAudioError.LIMIT_REACHED)
+            }
+            val finalPosition = nextPosition(db, folderId).toLong() + newMemberships - 1
+            if (newMemberships > 0 && finalPosition > Int.MAX_VALUE) {
+                throw LocalAudioFailure(LocalAudioError.LIMIT_REACHED)
+            }
+            for (index in frozen.indices) {
+                checkCancelled()
+                val track = frozen[index]
+                val existingId = ids[index]
+                val audioId = if (existingId != null) {
+                    val values = sourceValues(track.metadata, track.source)
+                    values.put("availability", LocalAudioAvailability.AVAILABLE.name)
+                    if (track.metadata.modifiedAtMs == null) values.remove("modified_at_ms")
+                    if (track.metadata.artworkKey == null) values.remove("artwork_key")
+                    putSegment(values, track.segment)
+                    if (db.update("audio", values, "id = ?", arrayOf(existingId)) != 1) {
+                        throw LocalAudioFailure(LocalAudioError.STORAGE_FAILED)
+                    }
+                    existingId
+                } else {
+                    val newId = LocalAudioLimits.newId()
+                    val values = sourceValues(track.metadata, track.source)
+                    values.put("id", newId)
+                    values.put("availability", LocalAudioAvailability.AVAILABLE.name)
+                    values.put("added_at_ms", now())
+                    putSegment(values, track.segment)
+                    db.insertOrThrow("audio", null, values)
+                    ids[index] = newId
+                    newId
+                }
+                if (addMembership[index]) addMember(folderId, audioId)
+                changed = true
+            }
+            checkCancelled()
+            ids.map { id ->
+                readItemById(db, id ?: throw LocalAudioFailure(LocalAudioError.STORAGE_FAILED))
+                    ?: throw LocalAudioFailure(LocalAudioError.STORAGE_FAILED)
+            }
+        }
     }
 
     override fun source(audioId: String): StoredLocalAudio? = query { db ->
@@ -494,7 +627,9 @@ class SqliteLocalAudioStore(
             }
         } }
         return LocalAudioLibraryState(ready = true, revision = currentRevision(db, LocalAudioError.STORAGE_FAILED),
-            folders = listOf(folder), items = items, members = members, progress = progress)
+            folders = listOf(folder), items = items, members = members, progress = progress,
+            organizationRevision = currentRevision(db, LocalAudioError.STORAGE_FAILED, ORGANIZATION_REVISION_KEY),
+            progressRevision = currentRevision(db, LocalAudioError.STORAGE_FAILED, PROGRESS_REVISION_KEY))
     }
 
     /** IDs not yet filed in [folderId], in the caller's order. */
@@ -556,6 +691,9 @@ class SqliteLocalAudioStore(
      */
     override fun relink(audioId: String, metadata: LocalAudioMetadata, source: LocalAudioSource): LocalAudioSource = write {
         requireAudio(audioId)
+        // A segment is tied to the source range encoded in its identity. The old whole-file
+        // relink contract cannot preserve that range and must not be used for a CUE slice.
+        if (segmentOf(db, audioId) != null) throw LocalAudioFailure(LocalAudioError.INVALID_TARGET)
         val current = sourceOf(db, audioId) ?: throw LocalAudioFailure(LocalAudioError.NOT_FOUND)
         if (current.mode != LocalImportMode.REFERENCE || source.mode != LocalImportMode.REFERENCE) {
             throw LocalAudioFailure(LocalAudioError.SOURCE_CHANGED)
@@ -642,6 +780,10 @@ class SqliteLocalAudioStore(
     override fun saveProgress(folderId: String?, value: LocalAudioProgress) {
         write {
             requireAudio(value.audioId)
+            val segment = segmentOf(db, value.audioId)
+            if (segment != null && value.positionMs > segment.durationMs) {
+                throw LocalAudioFailure(LocalAudioError.INVALID_TARGET)
+            }
             db.insertWithOnConflict("progress", null, ContentValues().apply {
                 put("audio_id", value.audioId)
                 put("position_ms", value.positionMs)
@@ -662,7 +804,7 @@ class SqliteLocalAudioStore(
                     }
                 }
             }
-            changed = true
+            progressChanged = true
         }
     }
 
@@ -671,6 +813,10 @@ class SqliteLocalAudioStore(
             requireAudio(audioId)
             validatePosition(positionMs)
             validateName(name)
+            val segment = segmentOf(db, audioId)
+            if (segment != null && positionMs > segment.durationMs) {
+                throw LocalAudioFailure(LocalAudioError.INVALID_TARGET)
+            }
             if (count(db, "bookmarks") >= LocalAudioLimits.MAX_BOOKMARKS) throw LocalAudioFailure(LocalAudioError.LIMIT_REACHED)
             val bookmark = LocalAudioBookmark(LocalAudioLimits.newId(), audioId, positionMs, name)
             db.insertOrThrow("bookmarks", null, ContentValues().apply {
@@ -745,6 +891,9 @@ class SqliteLocalAudioStore(
                 unmatchedItems = backup.items.size - matched.size,
                 folders = backup.folders.size,
                 bookmarks = backup.bookmarks.count { it.audioId in matched },
+                expectedVersion = LocalAudioVersionToken(
+                    currentRevision(db, LocalAudioError.READ_FAILED, ORGANIZATION_REVISION_KEY),
+                    currentRevision(db, LocalAudioError.READ_FAILED, PROGRESS_REVISION_KEY)),
             )
         }
     }
@@ -827,7 +976,7 @@ class SqliteLocalAudioStore(
                     put("completed", if (value.completed) 1 else 0)
                     put("updated_at_ms", value.updatedAtMs)
                 })
-                changed = true
+                progressChanged = true
             }
 
             val existingBookmarks = mutableSetOf<String>()
@@ -870,7 +1019,7 @@ class SqliteLocalAudioStore(
                     put("folder_id", cursor.folderId)
                     put("audio_id", audioId)
                 }, SQLiteDatabase.CONFLICT_IGNORE)
-                if (row != -1L) changed = true
+                if (row != -1L) progressChanged = true
             }
 
             checkCancelled()
@@ -1031,6 +1180,50 @@ class SqliteLocalAudioStore(
         missing
     }
 
+    // The outer transaction protects validation even against another helper for the same file.
+    // Android nests the existing mutation transaction on this connection; only the inner Tx
+    // advances counters, and a failure at either level rolls the entire operation back.
+    private fun <T> withVersion(token: LocalAudioVersionToken, needsProgress: Boolean = false,
+        action: (Long) -> T): T = write {
+        if (needsProgress && token.progressRevision == null) throw LocalAudioFailure(LocalAudioError.INVALID_TARGET)
+        if (token.organizationRevision != currentRevision(db, LocalAudioError.STORAGE_FAILED, ORGANIZATION_REVISION_KEY) ||
+            (token.progressRevision != null && token.progressRevision != currentRevision(db, LocalAudioError.STORAGE_FAILED, PROGRESS_REVISION_KEY))) {
+            throw LocalAudioFailure(LocalAudioError.STALE_STATE)
+        }
+        action(currentRevision(db, LocalAudioError.STORAGE_FAILED))
+    }
+
+    override fun importCue(folderId: String, tracks: List<LocalCueImportTrack>, expectedVersion: LocalAudioVersionToken,
+        checkCancelled: () -> Unit): List<LocalAudioItem> = withVersion(expectedVersion) {
+        importCue(folderId, tracks, it, checkCancelled)
+    }
+    override fun organize(audioIds: List<String>, action: LocalAudioBatchAction, folderId: String,
+        destinationFolderId: String?, expectedVersion: LocalAudioVersionToken,
+        checkCancelled: () -> Unit): LocalAudioBatchResult = withVersion(expectedVersion) {
+        organize(audioIds, action, folderId, destinationFolderId, it, checkCancelled)
+    }
+    override fun sortFolder(folderId: String, sort: LocalAudioSort, descending: Boolean,
+        expectedVersion: LocalAudioVersionToken, checkCancelled: () -> Unit): LocalAudioSortResult =
+        withVersion(expectedVersion, sort == LocalAudioSort.LAST_PROGRESS) {
+            sortFolder(folderId, sort, descending, it, checkCancelled)
+        }
+    override fun reorder(folderId: String, audioIds: List<String>, expectedVersion: LocalAudioVersionToken) =
+        withVersion(expectedVersion) { reorder(folderId, audioIds) }
+    override fun restoreOrganization(backup: LocalAudioBackup, expectedVersion: LocalAudioVersionToken,
+        checkCancelled: () -> Unit): LocalAudioRestoreResult = withVersion(expectedVersion, needsProgress = true) {
+        restoreOrganization(backup, it, checkCancelled)
+    }
+
+    override fun finishDirectoryRefresh(directoryId: String, seenIdentities: Set<String>, refreshedAtMs: Long,
+        failedItems: Int): Int = write {
+        if (failedItems !in 0..LocalAudioLimits.MAX_BATCH) throw LocalAudioFailure(LocalAudioError.INVALID_TARGET)
+        val missing = finishDirectoryRefresh(directoryId, seenIdentities, refreshedAtMs, error = null)
+        db.update("directories", ContentValues().apply { put("last_refresh_failures", failedItems) },
+            "id = ?", arrayOf(directoryId))
+        // The nested finish transaction already advances the organization counter.
+        missing
+    }
+
     override fun close() {
         synchronized(lock) { helper.close() }
     }
@@ -1048,7 +1241,9 @@ class SqliteLocalAudioStore(
         try {
             val tx = Tx(db)
             val value = tx.block()
-            if (tx.changed) bumpRevision(db)
+            if (tx.changed || tx.progressChanged) bumpRevision(db, REVISION_KEY)
+            if (tx.changed) bumpRevision(db, ORGANIZATION_REVISION_KEY)
+            if (tx.progressChanged) bumpRevision(db, PROGRESS_REVISION_KEY)
             db.setTransactionSuccessful()
             value
         } catch (e: Throwable) {
@@ -1106,11 +1301,12 @@ class SqliteLocalAudioStore(
         }
     }
 
-    private fun bumpRevision(db: SQLiteDatabase) {
-        val current = currentRevision(db, LocalAudioError.STORAGE_FAILED)
-        val next = if (current == Long.MAX_VALUE) 1L else current + 1
+    private fun bumpRevision(db: SQLiteDatabase, key: String) {
+        val current = currentRevision(db, LocalAudioError.STORAGE_FAILED, key)
+        if (current == Long.MAX_VALUE) throw LocalAudioFailure(LocalAudioError.STORAGE_FAILED)
+        val next = current + 1
         val row = db.insertWithOnConflict("meta", null, ContentValues().apply {
-            put("key", REVISION_KEY)
+            put("key", key)
             put("value", next.toString())
         }, SQLiteDatabase.CONFLICT_REPLACE)
         if (row == -1L) throw LocalAudioFailure(LocalAudioError.STORAGE_FAILED)
@@ -1120,8 +1316,8 @@ class SqliteLocalAudioStore(
      * The revision is the caller's staleness token, so a missing, non-numeric or negative value is
      * a damaged library, not revision zero.
      */
-    private fun currentRevision(db: SQLiteDatabase, error: LocalAudioError): Long {
-        val raw = db.rawQuery("SELECT value FROM meta WHERE key = ?", arrayOf(REVISION_KEY)).use { c ->
+    private fun currentRevision(db: SQLiteDatabase, error: LocalAudioError, key: String = REVISION_KEY): Long {
+        val raw = db.rawQuery("SELECT value FROM meta WHERE key = ?", arrayOf(key)).use { c ->
             if (c.moveToFirst()) c.getString(0) else null
         }
         return raw?.toLongOrNull()?.takeIf { it >= 0 } ?: throw LocalAudioFailure(error)
@@ -1142,28 +1338,43 @@ class SqliteLocalAudioStore(
         if (metadata.artworkKey == null) putNull("artwork_key") else put("artwork_key", metadata.artworkKey)
     }
 
+    private fun putSegment(values: ContentValues, segment: LocalAudioSegment) {
+        values.put("segment_start_us", segment.startUs)
+        values.put("segment_end_us", segment.endUs)
+        values.put("segment_track_number", segment.trackNumber)
+    }
+
     private fun readFolder(c: Cursor): LocalAudioFolder =
         LocalAudioFolder(c.getString(0), c.getString(1), c.getInt(2) != 0)
 
-    private fun readItem(c: Cursor): LocalAudioItem = LocalAudioItem(
-        id = c.getString(c.getColumnIndexOrThrow("id")),
-        metadata = LocalAudioMetadata(
-            fileName = c.getString(c.getColumnIndexOrThrow("file_name")),
-            title = stringOrNull(c, "title"),
-            creator = stringOrNull(c, "creator"),
-            durationMs = longOrNull(c, "duration_ms"),
-            sizeBytes = longOrNull(c, "size_bytes"),
-            modifiedAtMs = longOrNull(c, "modified_at_ms"),
-            kind = LocalMediaKind.valueOf(c.getString(c.getColumnIndexOrThrow("kind"))),
-            artworkKey = stringOrNull(c, "artwork_key"),
-        ),
-        mode = LocalImportMode.valueOf(c.getString(c.getColumnIndexOrThrow("mode"))),
-        displayName = stringOrNull(c, "display_name"),
-        availability = LocalAudioAvailability.valueOf(c.getString(c.getColumnIndexOrThrow("availability"))),
-        addedAtMs = c.getLong(c.getColumnIndexOrThrow("added_at_ms")),
-        playbackSpeed = c.getFloat(c.getColumnIndexOrThrow("playback_speed")),
-        customArtworkKey = stringOrNull(c, "custom_artwork_key"),
-    )
+    private fun readItem(c: Cursor): LocalAudioItem {
+        val startUs = longOrNull(c, "segment_start_us")
+        val endUs = longOrNull(c, "segment_end_us")
+        val trackNumber = intOrNull(c, "segment_track_number")
+        if (listOf(startUs, endUs, trackNumber).count { it == null } !in setOf(0, 3)) {
+            throw LocalAudioFailure(LocalAudioError.READ_FAILED)
+        }
+        return LocalAudioItem(
+            id = c.getString(c.getColumnIndexOrThrow("id")),
+            metadata = LocalAudioMetadata(
+                fileName = c.getString(c.getColumnIndexOrThrow("file_name")),
+                title = stringOrNull(c, "title"),
+                creator = stringOrNull(c, "creator"),
+                durationMs = longOrNull(c, "duration_ms"),
+                sizeBytes = longOrNull(c, "size_bytes"),
+                modifiedAtMs = longOrNull(c, "modified_at_ms"),
+                kind = LocalMediaKind.valueOf(c.getString(c.getColumnIndexOrThrow("kind"))),
+                artworkKey = stringOrNull(c, "artwork_key"),
+            ),
+            mode = LocalImportMode.valueOf(c.getString(c.getColumnIndexOrThrow("mode"))),
+            displayName = stringOrNull(c, "display_name"),
+            availability = LocalAudioAvailability.valueOf(c.getString(c.getColumnIndexOrThrow("availability"))),
+            addedAtMs = c.getLong(c.getColumnIndexOrThrow("added_at_ms")),
+            playbackSpeed = c.getFloat(c.getColumnIndexOrThrow("playback_speed")),
+            customArtworkKey = stringOrNull(c, "custom_artwork_key"),
+            segment = if (startUs == null) null else LocalAudioSegment(startUs, endUs!!, trackNumber!!),
+        )
+    }
 
     private fun readSource(c: Cursor): LocalAudioSource = LocalAudioSource(
         mode = LocalImportMode.valueOf(c.getString(c.getColumnIndexOrThrow("mode"))),
@@ -1182,6 +1393,11 @@ class SqliteLocalAudioStore(
         return if (c.isNull(index)) null else c.getLong(index)
     }
 
+    private fun intOrNull(c: Cursor, column: String): Int? {
+        val index = c.getColumnIndexOrThrow(column)
+        return if (c.isNull(index)) null else c.getInt(index)
+    }
+
     private fun readItemById(db: SQLiteDatabase, audioId: String): LocalAudioItem? =
         db.rawQuery("SELECT $AUDIO_COLUMNS FROM audio WHERE id = ?", arrayOf(audioId)).use { c ->
             if (c.moveToFirst()) readItem(c) else null
@@ -1196,6 +1412,33 @@ class SqliteLocalAudioStore(
         db.rawQuery("SELECT id FROM audio WHERE mode = ? AND identity = ?", arrayOf(mode.name, identity)).use { c ->
             if (c.moveToFirst()) c.getString(0) else null
         }
+
+    private fun storedByIdentity(db: SQLiteDatabase, mode: LocalImportMode, identity: String): StoredLocalAudio? =
+        db.rawQuery(
+            "SELECT $AUDIO_COLUMNS FROM audio WHERE mode = ? AND identity = ?",
+            arrayOf(mode.name, identity),
+        ).use { c -> if (c.moveToFirst()) StoredLocalAudio(readItem(c), readSource(c)) else null }
+
+    private fun segmentOf(db: SQLiteDatabase, audioId: String): LocalAudioSegment? =
+        db.rawQuery(
+            "SELECT segment_start_us, segment_end_us, segment_track_number FROM audio WHERE id = ?",
+            arrayOf(audioId),
+        ).use { c ->
+            if (!c.moveToFirst()) return@use null
+            if (c.isNull(0) && c.isNull(1) && c.isNull(2)) null
+            else LocalAudioSegment(c.getLong(0), c.getLong(1), c.getInt(2))
+        }
+
+    /**
+     * Unknown version fields are not evidence of a conflict. A reference modification time only
+     * matters for REFERENCE; a copied file is identified by its content hash, so a different
+     * provider timestamp cannot turn the same bytes into another copy.
+     */
+    private fun knownVersionChanged(mode: LocalImportMode, stored: LocalAudioMetadata,
+        incoming: LocalAudioMetadata): Boolean =
+        (stored.sizeBytes != null && incoming.sizeBytes != null && stored.sizeBytes != incoming.sizeBytes) ||
+            (mode == LocalImportMode.REFERENCE && stored.modifiedAtMs != null &&
+                incoming.modifiedAtMs != null && stored.modifiedAtMs != incoming.modifiedAtMs)
 
     /**
      * Only two known, different values prove that the document now holds other content; an unknown
@@ -1236,6 +1479,7 @@ class SqliteLocalAudioStore(
         lastRefreshedAtMs = longOrNull(c, "last_refreshed_at_ms"),
         missingCount = c.getInt(c.getColumnIndexOrThrow("missing_count")),
         error = stringOrNull(c, "error")?.let(LocalAudioError::valueOf),
+        lastRefreshFailures = c.getInt(c.getColumnIndexOrThrow("last_refresh_failures")),
     )
 
     /** The audio ID a document was last imported as, or null when this directory never saw it. */
@@ -1287,7 +1531,12 @@ class SqliteLocalAudioStore(
         val matched = LinkedHashMap<String, String>()
         for (entry in backup.items) {
             val candidates = current["${entry.item.mode.name}|${entry.sourceKey}"]
-            if (candidates != null && candidates.size == 1) matched[entry.item.id] = candidates.single()
+            if (candidates != null && candidates.size == 1) {
+                val currentItem = readItemById(db, candidates.single())
+                // A forged or stale backup range must never restore a long position into a short
+                // current slice even when its sourceKey text was copied from a valid backup.
+                if (currentItem != null && currentItem.segment == entry.item.segment) matched[entry.item.id] = currentItem.id
+            }
         }
         return matched
     }
@@ -1359,13 +1608,16 @@ class SqliteLocalAudioStore(
 
     companion object {
         const val DB_NAME = "local-audio-v1.db"
-        private const val SCHEMA_VERSION = 4
+        private const val SCHEMA_VERSION = 7
         private const val REVISION_KEY = "revision"
+        private const val ORGANIZATION_REVISION_KEY = "organization_revision"
+        private const val PROGRESS_REVISION_KEY = "progress_revision"
         private const val AUDIO_COLUMNS =
             "id, mode, identity, location, grant_uri, file_name, title, creator, duration_ms, size_bytes, modified_at_ms, " +
-                "display_name, availability, added_at_ms, kind, artwork_key, playback_speed, custom_artwork_key"
+                "display_name, availability, added_at_ms, kind, artwork_key, playback_speed, custom_artwork_key, " +
+                "segment_start_us, segment_end_us, segment_track_number"
         private const val DIRECTORY_COLUMNS =
-            "id, folder_id, name, mode, recursive, last_refreshed_at_ms, missing_count, error, created_at_ms"
+            "id, folder_id, name, mode, recursive, last_refreshed_at_ms, missing_count, error, last_refresh_failures, created_at_ms"
 
         private const val FOLDERS_TABLE =
             "CREATE TABLE folders (" +
@@ -1395,6 +1647,10 @@ class SqliteLocalAudioStore(
                 // Existing libraries start at normal speed and without a chosen cover.
                 "playback_speed REAL NOT NULL DEFAULT 1.0, " +
                 "custom_artwork_key TEXT, " +
+                // All three are NULL for an ordinary whole-file row. The model validates a slice.
+                "segment_start_us INTEGER, " +
+                "segment_end_us INTEGER, " +
+                "segment_track_number INTEGER, " +
                 "UNIQUE (mode, identity))"
         private val OTHER_TABLES = listOf(
             "CREATE TABLE members (" +
@@ -1471,6 +1727,16 @@ class SqliteLocalAudioStore(
         private val MIGRATION_4 = listOf(
             "ALTER TABLE audio ADD COLUMN playback_speed REAL NOT NULL DEFAULT 1.0",
             "ALTER TABLE audio ADD COLUMN custom_artwork_key TEXT",
+        )
+
+        /**
+         * Schema 5. Existing rows have no CUE range, so all three columns stay NULL. SQLite's
+         * additive ALTER TABLE preserves the row IDs, user data and directory provenance.
+         */
+        private val MIGRATION_5 = listOf(
+            "ALTER TABLE audio ADD COLUMN segment_start_us INTEGER",
+            "ALTER TABLE audio ADD COLUMN segment_end_us INTEGER",
+            "ALTER TABLE audio ADD COLUMN segment_track_number INTEGER",
         )
 
         /** A new database is created directly at the current version, never upgraded afterwards. */

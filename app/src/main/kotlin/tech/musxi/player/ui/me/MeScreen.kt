@@ -167,12 +167,10 @@ private fun LyricsGroup(lyrics: MeLyricsUi, actions: MeActions, picker: OpenPick
             choiceSample = { size -> LyricsSizeSample(size) },
         )
         MeDivider()
-        // Off by default: Bluetooth and car screens read the same title, so they show lyrics too.
-        MeSwitchRow(
-            "媒体卡片显示歌词",
-            lyrics.mediaCardLyrics,
-            actions.onSetMediaCardLyrics,
-            subtitle = "锁屏和通知栏的卡片标题换成当前歌词；蓝牙、车机上的歌名也会跟着变",
+        MeValueRow(
+            title = "锁屏歌词",
+            value = lockScreenLyricsModeLabel(lyrics.lockScreenLyricsMode),
+            onClick = actions.onOpenLockScreenLyrics,
         )
     }
 }

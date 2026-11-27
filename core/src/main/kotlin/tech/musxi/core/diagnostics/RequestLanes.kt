@@ -2,8 +2,8 @@ package tech.musxi.core.diagnostics
 
 import java.util.concurrent.Executor
 
-/** Audio resolves can proceed during a full library read. Account mutations and every ordinary
- * request keep their existing order on [library]. Source-search lookups may use a separate bounded
+/** Audio resolves can proceed during a full library read. Ordinary business requests keep their
+ * order on [library]; account lifecycle I/O uses separate platform workers. Source-search lookups may use a separate bounded
  * lane; leaving it unset keeps the original two-lane behavior.
  * Callers still fence session acquisition, completion and delivery against account changes.
  */

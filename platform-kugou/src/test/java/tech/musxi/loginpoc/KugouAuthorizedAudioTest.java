@@ -235,6 +235,67 @@ public final class KugouAuthorizedAudioTest {
         assertChain(chain);
     }
 
+    @Test public void basicVariantHashMismatchRequiresIndependentOfficialAuthorization() throws Exception {
+        List<KugouAuthorizedAudio.Request> calls = new ArrayList<>();
+        KugouAuthorizedAudio chain = new KugouAuthorizedAudio(DEVICE, authorizedTransport(request -> {
+            calls.add(request);
+            if(request.endpoint.contains("get_res_privilege")) {
+                JSONObject row=resource(HASH,"12","34","128");
+                row.put("relate_goods",new JSONArray().put(resource(HIGH_HASH,"12","35","flac")));
+                return new JSONObject().put("status",1).put("data",new JSONArray().put(row));
+            }
+            if(request.endpoint.contains("user_verify"))return new JSONObject().put("status",1)
+                .put("data",new JSONObject().put("valid",1).put("auth","user-auth"));
+            if(request.endpoint.contains("authorization"))return new JSONObject().put("status",1)
+                .put("data",new JSONObject().put("auth","song-auth"));
+            return basicAudio("flac","flac",900000).put("hash",HIGH_HASH);
+        }));
+        KugouApi api=new KugouApi(DEVICE,apiTransport(request ->
+            basicAudio("flac","flac",900000).put("hash","d".repeat(32))));
+        List<String> probed=new ArrayList<>();
+        KugouLibraryApi library=new KugouLibraryApi(api,probed::add,chain);
+        assertEquals("kugou:flac",library.audio(SESSION,HASH+"_12_34",0,"kugou:flac",true).qualityId);
+        assertEquals(4,calls.size());assertEquals(1,probed.size());
+        assertEquals(HIGH_HASH,calls.get(3).params.get("hash"));
+        int count=calls.size();
+        rejects("identity",()->library.audio(SESSION,HASH+"_12_34",0,"kugou:flac",false));
+        assertEquals(count,calls.size());
+    }
+
+    @Test public void variantMismatchCannotAcceptAnUnprovenAuthorizedHash() throws Exception {
+        KugouAuthorizedAudio chain=new KugouAuthorizedAudio(DEVICE,authorizedTransport(request -> {
+            if(request.endpoint.contains("get_res_privilege"))return new JSONObject().put("status",1)
+                .put("data",new JSONArray().put(resource("d".repeat(32),"12","34","128")));
+            throw new AssertionError("Unproven variant must not be authorized");
+        }));
+        KugouApi api=new KugouApi(DEVICE,apiTransport(request ->
+            basicAudio("flac","flac",900000).put("hash","d".repeat(32))));
+        KugouLibraryApi library=new KugouLibraryApi(api,url->{throw new AssertionError("Wrong hash played");},chain);
+        rejects("identity",()->library.audio(SESSION,HASH+"_12_34",0,"kugou:flac",true));
+    }
+
+    @Test public void authorizedFlacRetainsOnlyOfficialReturnedAllowlistedHttpFallback() throws Exception {
+        JSONObject payload=basicAudio("flac","flac",900000).put("url",new JSONArray()
+            .put("http://fs.youthandroid2.kugou.com/song.flac?sign=fixture")
+            .put("http://other.kugou.com/song.flac?sign=fixture"));
+        KugouLibraryApi.Audio audio=KugouLibraryApi.parseAuthorizedAudio(payload,HASH,0,"kugou:flac");
+        assertTrue(audio.candidates.get(0).startsWith("https://"));
+        List<String> visited=new ArrayList<>();
+        KugouLibraryApi.Audio selected=KugouLibraryApi.selectAudio(audio,url->{
+            visited.add(url);
+            if(url.startsWith("https:"))throw new javax.net.ssl.SSLPeerUnverifiedException("fixture");
+        });
+        assertEquals("http://fs.youthandroid2.kugou.com/song.flac?sign=fixture",selected.url);
+        assertFalse(visited.contains("http://other.kugou.com/song.flac?sign=fixture"));
+        JSONObject httpsOnly=basicAudio("flac","flac",900000).put("url",new JSONArray()
+            .put("https://fs.youthandroid2.kugou.com/song.flac?sign=fixture"));
+        assertFalse(KugouLibraryApi.parseAuthorizedAudio(httpsOnly,HASH,0,"kugou:flac").candidates.stream()
+            .anyMatch(url->url.startsWith("http:")));
+        JSONObject high=payload.put("bitRate",2000000);
+        assertFalse(KugouLibraryApi.parseAuthorizedAudio(high,HASH,0,"kugou:high").candidates.stream()
+            .anyMatch(url->url.startsWith("http:")));
+    }
+
     @Test public void networkFailureNeverFallsBackToAuthorization() throws Exception {
         int[] authorizedCalls = {0};
         KugouAuthorizedAudio authorized = new KugouAuthorizedAudio(DEVICE, authorizedTransport(request -> {

@@ -47,7 +47,7 @@ public final class NeteaseApi {
     static final String PLAYLIST_DETAIL = "https://interfacepc.music.163.com/eapi/v6/playlist/detail";
     static final String SONG_DETAIL = ORIGIN + "/weapi/v3/song/detail";
     static final String SEARCH = "https://interfacepc.music.163.com/eapi/cloudsearch/pc";
-    static final String SONG_URL = "https://interfacepc.music.163.com/eapi/song/enhance/player/url/v1";
+    static final String SONG_URL = "https://interface3.music.163.com/xeapi/song/enhance/player/url/v1";
     static final String LYRIC = "https://interfacepc.music.163.com/eapi/song/lyric";
     static final String LYRIC_NEW = "https://interfacepc.music.163.com/eapi/song/lyric/v1";
     static final String LIKED_IDS = "https://interfacepc.music.163.com/eapi/song/like/get";
@@ -74,6 +74,7 @@ public final class NeteaseApi {
     // Public pinned APP_CONF payload default, distinct from the fresh per-request antiCheatToken.
     private static final String SUBSCRIBE_BODY_TOKEN = "9ca17ae2e6ffcda170e2e6ee8af14fbabdb988f225b3868eb2c15a879b9a83d274a790ac8ff54a97b889d5d42af0feaec3b92af58cff99c470a7eafd88f75e839a9ea7c14e909da883e83fb692a3abdb6b92adee9e";
     private final Transport transport;
+    private final NeteaseXeapi xeapi;
     /** Internal provider seam for a fresh SDK-v2 token. No v3 fallback is compatible here. */
     interface CheckTokenProvider { String freshV2() throws IOException; }
     private final CheckTokenProvider checkTokens;
@@ -167,7 +168,9 @@ public final class NeteaseApi {
     }
     public NeteaseApi() { this(NeteaseApi::executeHttps); }
     NeteaseApi(Transport transport) { this(transport, new NeteaseCheckToken()::freshV2); }
-    NeteaseApi(Transport transport, CheckTokenProvider checkTokens) { this.transport = transport; this.checkTokens=checkTokens; }
+    NeteaseApi(Transport transport, CheckTokenProvider checkTokens) {
+        this.transport = transport; this.checkTokens=checkTokens; this.xeapi = new NeteaseXeapi(transport);
+    }
 
     /** Browser credentials remain unsavable until verify returns an identity. */
     public static Session fromBrowserCookies(String header) throws IOException {
@@ -194,7 +197,17 @@ public final class NeteaseApi {
     public Session verify(Session session) throws IOException {
         if (session == null) throw error("credentials", "缺少网易云登录凭证");
         Response response = call(STATUS, new JSONObject(), session.cookies);
-        return parseIdentity(response.body, session);
+        Session verified = parseIdentity(response.body, session);
+        // Accept a renewal only after this response has confirmed the account identity.
+        // Host-only response cookies must not be promoted to cross-host playback credentials.
+        Map<String,String> updates = readAuthCookies(response.headers, true);
+        if (updates.isEmpty()) return verified;
+        Map<String,String> merged = new LinkedHashMap<>(verified.cookies);
+        for (Map.Entry<String,String> update : updates.entrySet()) {
+            if (update.getValue().isEmpty()) merged.remove(update.getKey());
+            else merged.put(update.getKey(), update.getValue());
+        }
+        return new Session(merged, verified.userId, verified.nickname, verified.avatarUrl);
     }
     /** Exactly one read-only request; never saves, retries, or returns the fake token. */
     public ProbeResult probeInvalidToken(Session session) throws IOException {
@@ -271,6 +284,8 @@ public final class NeteaseApi {
         if (!allowedLibraryEndpoint(endpoint) || PLAYLIST_SUBSCRIBE.equals(endpoint) || PLAYLIST_UNSUBSCRIBE.equals(endpoint))
             throw error("endpoint", "请求目标不在允许的网易云官方接口范围内");
         Response response = call(endpoint, input, session.cookies);
+        if (SONG_URL.equals(endpoint) && responseCode(response.body) == -460)
+            throw error("risk", "网易云暂时限制播放取流，请稍后重试");
         if (!LYRIC.equals(endpoint)) requireSuccess(response.body);
         return response.body;
     }
@@ -296,6 +311,14 @@ public final class NeteaseApi {
     }
     private Response call(String endpoint, JSONObject input, Map<String,String> cookies,String antiCheatToken) throws IOException {
         requireEndpoint(new URL(endpoint));
+        if (SONG_URL.equals(endpoint)) {
+            try {
+                Response response = transport.execute(xeapi.request(endpoint, input, cookies, deviceId));
+                if (response == null || response.body == null) throw error("protocol", "网易云未返回有效数据");
+                return response;
+            } catch (ApiException safe) { throw safe; }
+            catch (IOException failure) { throw error("network", "无法连接网易云官方服务"); }
+        }
         String csrf = cookies.getOrDefault("__csrf", "");
         put(input, "e_r", false);
         StringBuilder key = new StringBuilder();
@@ -389,6 +412,9 @@ public final class NeteaseApi {
         return Base64.getEncoder().encodeToString(cipher.doFinal(text.getBytes(StandardCharsets.UTF_8)));
     }
     static Map<String,String> authCookies(Map<String,List<String>> headers) throws IOException {
+        return validateCookies(readAuthCookies(headers, false));
+    }
+    private static Map<String,String> readAuthCookies(Map<String,List<String>> headers, boolean renewal) throws IOException {
         Map<String,String> out = new LinkedHashMap<>();
         int size = 0;
         for (Map.Entry<String,List<String>> row : headers.entrySet()) {
@@ -400,19 +426,23 @@ public final class NeteaseApi {
                 for (HttpCookie c : parsed) {
                     if (!"MUSIC_U".equals(c.getName()) && !"__csrf".equals(c.getName())) continue;
                     String domain = c.getDomain();
+                    if (renewal && domain == null) continue;
                     if (domain != null) {
                         if (domain.startsWith(".")) domain = domain.substring(1);
                         if (!"music.163.com".equalsIgnoreCase(domain) && !"163.com".equalsIgnoreCase(domain)) continue;
                     }
                     if (c.getPath() != null && !c.getPath().isEmpty() && !"/".equals(c.getPath())) continue;
-                    if (c.hasExpired()) continue;
-                    String value = c.getValue();
+                    boolean deleted = c.hasExpired() || c.getValue().isEmpty();
+                    if (!renewal && c.hasExpired()) continue;
+                    if (renewal && deleted && "MUSIC_U".equals(c.getName()))
+                        throw error("expired", "网易云已撤回当前登录凭证");
+                    String value = renewal && deleted ? "" : c.getValue();
                     if (out.containsKey(c.getName()) && !out.get(c.getName()).equals(value)) throw error("protocol", "网易云凭证存在歧义");
                     out.put(c.getName(), value);
                 }
             }
         }
-        return validateCookies(out);
+        return out;
     }
     private static Map<String,String> validateCookies(Map<String,String> source) throws IOException {
         if (source == null || source.size() > 2 || !safeCookie(source.get("MUSIC_U"), 8192))
@@ -464,6 +494,7 @@ public final class NeteaseApi {
     static void requireEndpoint(URL url) throws IOException {
         String endpoint = url.getProtocol() + "://" + url.getHost() + url.getPath();
         if ((!KEY.equals(endpoint) && !POLL.equals(endpoint) && !STATUS.equals(endpoint)
+                && !NeteaseXeapi.KEY_ENDPOINT.equals(endpoint)
                 && !allowedLibraryEndpoint(endpoint))
                 || url.getUserInfo() != null
                 || url.getQuery() != null || url.getRef() != null || (url.getPort() != -1 && url.getPort() != 443))
@@ -495,10 +526,15 @@ public final class NeteaseApi {
             try (OutputStream stream = connection.getOutputStream()) { stream.write(sent); }
             int http = connection.getResponseCode();
             if (http >= 300 && http < 400) throw error("redirect", "网易云返回重定向，本次请求停止");
-            if (http < 200 || http >= 300) throw error("http", "网易云官方服务暂时拒绝请求");
+            if (http == 429) throw error("rate", "网易云请求频率受限，请稍后重试");
+            // XEAPI can carry its encrypted business error in an HTTP 400 response.
+            boolean xeapiBody = SONG_URL.equals(request.endpoint) && http == 400;
+            if ((http < 200 || http >= 300) && !xeapiBody) throw error("http", "网易云官方服务暂时拒绝请求");
             if (connection.getContentLengthLong() > LIMIT) throw error("protocol", "网易云响应超过限制");
             ByteArrayOutputStream received = new ByteArrayOutputStream();
-            try (InputStream stream = connection.getInputStream()) {
+            InputStream responseStream = xeapiBody ? connection.getErrorStream() : connection.getInputStream();
+            if (responseStream == null) throw error("protocol", "网易云未返回有效数据");
+            try (InputStream stream = responseStream) {
                 byte[] chunk = new byte[4096]; int count;
                 long deadline = System.nanoTime() + 30_000_000_000L;
                 while ((count = stream.read(chunk)) != -1) {
@@ -508,7 +544,8 @@ public final class NeteaseApi {
                 }
             }
             JSONObject json;
-            try { json = new JSONObject(new String(received.toByteArray(), StandardCharsets.UTF_8)); }
+            try { json = SONG_URL.equals(request.endpoint) ? NeteaseXeapi.decodeResponse(received.toByteArray())
+                    : new JSONObject(new String(received.toByteArray(), StandardCharsets.UTF_8)); }
             catch (JSONException invalid) { throw error("protocol", "网易云未返回有效数据"); }
             Map<String,List<String>> headers = new LinkedHashMap<>();
             int size = 0;

@@ -1,9 +1,6 @@
 package tech.musxi.player
 
 import android.os.Looper
-import java.util.concurrent.CountDownLatch
-import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import tech.musxi.accounts.AccountRepository
@@ -26,7 +23,7 @@ class NeteasePlaybackProvider(private val accounts: AccountRepository, private v
     override fun qualityOptions(mediaId: String, generation: Long): tech.musxi.core.playback.QualityOptions {
         if (!mediaId.startsWith("netease:") || currentGeneration() != generation)
             throw PlaybackSourceException(PlaybackFailure.AUTH_REQUIRED)
-        val options = awaitPlaybackResult(::mapFailure) { done ->
+        val options = awaitPlaybackResult(::mapFailure) { _, done ->
             library.qualities(MediaKey(Platform.NETEASE, mediaId.substringAfter(':')), done)
         }
         if (currentGeneration() != generation) throw PlaybackSourceException(PlaybackFailure.AUTH_REQUIRED)
@@ -36,20 +33,11 @@ class NeteasePlaybackProvider(private val accounts: AccountRepository, private v
         check(Looper.myLooper() != Looper.getMainLooper())
         if (!mediaId.startsWith("netease:") || !PlaybackSourcePolicy.acceptsMediaId(mediaId) || currentGeneration() != generation)
             throw PlaybackSourceException(PlaybackFailure.AUTH_REQUIRED)
-        val latch = CountDownLatch(1)
-        val response = AtomicReference<Result<NeteaseLibraryRepository.AudioCapability>?>()
-        library.resolveAudio(MediaKey(Platform.NETEASE, mediaId.substringAfter(':')), qualityId) {
-            response.set(it); latch.countDown()
-        }
-        try {
-            if (!latch.await(90, TimeUnit.SECONDS)) throw PlaybackSourceException(PlaybackFailure.TIMEOUT)
-        } catch (_: InterruptedException) {
-            Thread.currentThread().interrupt()
-            throw PlaybackSourceException(PlaybackFailure.NETWORK)
+        val capability = awaitPlaybackResult<NeteaseLibraryRepository.AudioCapability>(::mapFailure) { current, done ->
+            library.resolveAudio(MediaKey(Platform.NETEASE, mediaId.substringAfter(':')), qualityId, done,
+                isCurrent = { current() && currentGeneration() == generation })
         }
         if (currentGeneration() != generation) throw PlaybackSourceException(PlaybackFailure.AUTH_REQUIRED)
-        val capability = response.get()?.getOrElse { throw mapFailure(it) }
-            ?: throw PlaybackSourceException(PlaybackFailure.PROTOCOL)
         return StreamLease(capability.metadata, capability.qualityId, tech.musxi.core.playback.PlaybackQualities.name(capability.qualityId)) {
             if (currentGeneration() != generation) throw PlaybackSourceException(PlaybackFailure.AUTH_REQUIRED)
             var url: String? = null

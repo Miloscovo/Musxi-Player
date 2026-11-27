@@ -1,5 +1,6 @@
 package tech.musxi.player.ui.account
 
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.ButtonDefaults
@@ -27,25 +28,29 @@ fun AccountRowCard(
     identity: MeAccountRow,
     row: AccountRowUi,
     onAction: () -> Unit,
+    menu: (@Composable () -> Unit)? = null,
 ) {
     val cs = MaterialTheme.colorScheme
     val label = row.actionLabel
-    CardRow(onClick = if (row.action == AccountAction.MANAGE) onAction else null) {
-        Avatar(identity.title, identity.avatarUrl, identity.signedIn)
-        Spacer(Modifier.width(RowSpec.leadGap))
-        RowText(identity.title, subtitle = identity.subtitle, subtitleLines = 2)
-        when {
-            row.action == AccountAction.MANAGE -> {
-                Spacer(Modifier.width(RowSpec.trailGap))
-                RowChevron()
-            }
-            row.action != AccountAction.NONE && label != null -> {
-                Spacer(Modifier.width(RowSpec.trailGap))
-                TextButton(
-                    onClick = onAction,
-                    colors = ButtonDefaults.textButtonColors(contentColor = cs.primary),
-                ) { Text(label, style = MaterialTheme.typography.labelLarge) }
+    Box {
+        CardRow(onClick = if (row.action == AccountAction.MANAGE) onAction else null) {
+            Avatar(identity.title, identity.avatarUrl, identity.signedIn)
+            Spacer(Modifier.width(RowSpec.leadGap))
+            RowText(identity.title, subtitle = identity.subtitle, subtitleLines = 2)
+            when {
+                row.action == AccountAction.MANAGE -> {
+                    Spacer(Modifier.width(RowSpec.trailGap))
+                    RowChevron()
+                }
+                row.action != AccountAction.NONE && label != null -> {
+                    Spacer(Modifier.width(RowSpec.trailGap))
+                    TextButton(
+                        onClick = onAction,
+                        colors = ButtonDefaults.textButtonColors(contentColor = cs.primary),
+                    ) { Text(label, style = MaterialTheme.typography.labelLarge) }
+                }
             }
         }
+        menu?.invoke()
     }
 }

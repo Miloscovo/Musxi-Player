@@ -2,8 +2,16 @@ package tech.musxi.player.ui.lockscreen
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import tech.musxi.core.lyrics.LyricLine
+import tech.musxi.core.lyrics.LyricsState
+import tech.musxi.core.lyrics.LyricsStatus
+import tech.musxi.core.wallpaper.SavedWallpaper
+import tech.musxi.player.lockscreen.LockScreenLyricsContent
+import tech.musxi.player.lockscreen.LockScreenPosition
 import tech.musxi.player.ui.design.lyricsEmpty
 import tech.musxi.player.ui.design.lyricsTimed
 import tech.musxi.player.ui.player.LyricsPhase
@@ -60,5 +68,66 @@ class LockScreenUiTest {
         assertFalse(lockScreenUnlocks(dragUp = h * 0.5f, velocity = 600f, height = h))
         assertFalse("pulled down", lockScreenUnlocks(dragUp = -40f, velocity = 0f, height = h))
         assertFalse("no page", lockScreenUnlocks(dragUp = 100f, velocity = -9000f, height = 0f))
+    }
+
+    @Test fun clockFontScaleIsCappedForLargeSystemFonts() {
+        assertEquals(1f, lockScreenClockScale(0.85f, LockScreenClockMaxFontScale), 0.001f)
+        assertEquals(1.15f, lockScreenClockScale(1.15f, LockScreenClockMaxFontScale), 0.001f)
+        assertEquals(1.25f, lockScreenClockScale(2.0f, LockScreenClockMaxFontScale), 0.001f)
+        assertEquals(1.45f, lockScreenClockScale(2.0f, LockScreenDateMaxFontScale), 0.001f)
+    }
+
+    @Test fun slowContentStripsPositionAndWordProgressOnly() {
+        val timed = LyricsState(
+            status = LyricsStatus.TIMED,
+            lines = listOf(LyricLine(0L, "第一句"), LyricLine(4_000L, "第二句")),
+            activeIndex = 0,
+            activeWordIndex = 1,
+            activeWordProgress = 0.25f,
+        )
+        val first = LockScreenLyricsContent(
+            identified = true, title = "晴天", artist = "周杰伦", coverUrl = "https://example.com/a.jpg",
+            local = false, playing = true, buffering = false, hasPrevious = true, hasNext = true,
+            durationMs = 269_000L,
+            position = LockScreenPosition(12_000L, 1_000L, 1f, true),
+            lyrics = timed,
+            wallpaper = SavedWallpaper(),
+        )
+        val tick = first.copy(
+            position = LockScreenPosition(12_500L, 1_500L, 1f, true),
+            lyrics = timed.copy(activeWordIndex = 2, activeWordProgress = 0.8f),
+        )
+        val nextLine = tick.copy(lyrics = timed.copy(activeIndex = 1))
+
+        assertEquals(slowLockScreenContentOf(first), slowLockScreenContentOf(tick))
+        assertNotEquals(slowLockScreenContentOf(first), slowLockScreenContentOf(nextLine))
+    }
+
+    @Test fun lockScreenUiOfHidesUnidentifiedAndShowsCoverForLocalAudio() {
+        val timed = LyricsState(
+            status = LyricsStatus.TIMED,
+            lines = listOf(LyricLine(0L, "故事的小黄花")),
+            activeIndex = 0,
+        )
+        val base = LockScreenLyricsContent(
+            identified = true, title = "晴天", artist = "周杰伦", coverUrl = "https://example.com/a.jpg",
+            local = false, playing = true, buffering = false, hasPrevious = true, hasNext = true,
+            durationMs = 269_000L,
+            position = LockScreenPosition(0L, 0L, 1f, false),
+            lyrics = timed,
+            wallpaper = SavedWallpaper(),
+        )
+        val mapped = lockScreenUiOf(base, time = "21:47", date = "11月24日 星期二", showTranslation = true)
+        assertEquals(LockScreenBody.LYRICS, lockScreenBodyOf(mapped.lyrics))
+        assertEquals("晴天", mapped.title)
+
+        val local = lockScreenUiOf(base.copy(local = true), time = "21:47", date = "11月24日 星期二", showTranslation = true)
+        assertNull(local.lyrics)
+        assertEquals(LockScreenBody.COVER, lockScreenBodyOf(local.lyrics))
+
+        val disconnected = lockScreenUiOf(base.copy(identified = false), time = "21:47", date = "11月24日 星期二", showTranslation = true)
+        assertEquals("", disconnected.title)
+        assertNull(disconnected.coverUrl)
+        assertNull(disconnected.lyrics)
     }
 }

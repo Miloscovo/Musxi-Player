@@ -85,6 +85,16 @@ fun AccountScreen(
                             AccountAction.NONE -> Unit
                         }
                     },
+                    menu = {
+                        AccountManageMenu(
+                            expanded = dialogs.managing == row.platform,
+                            title = identity.title,
+                            subtitle = identity.subtitle,
+                            onDismiss = dialogs::dismissMenu,
+                            onReverify = { onReverify(row.platform) },
+                            onSignOut = { dialogs.requestSignOut(row.platform) },
+                        )
+                    },
                 )
             }
         }

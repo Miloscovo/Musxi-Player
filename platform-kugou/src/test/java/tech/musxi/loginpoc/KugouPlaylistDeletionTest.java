@@ -187,6 +187,67 @@ public class KugouPlaylistDeletionTest {
         assertEquals(1,account.writeCalls());
     }
 
+    @Test public void omittedDefaultFlagNeedsMatchingCanonicalAccountCreator() throws Exception {
+        for(Object creator:new Object[]{"123",123L}) {
+            Account account=new Account().with("22","目标",1);
+            account.rows.get(0).remove("is_def");
+            account.rows.get(0).put("list_create_userid",creator);
+            KugouLibraryApi library=new KugouLibraryApi(new KugouApi(device(),account));
+            assertTrue(library.playlists(SESSION,0,100).items.get(0).canDelete());
+            assertTrue(library.accountPlaylist(SESSION,"22",()->true).canDelete());
+            library.deletePlaylist(SESSION,"22",()->true);
+            assertEquals(1,account.writeCalls());
+        }
+    }
+
+    @Test public void omittedDefaultFlagCannotUseMissingForeignOrMalformedCreator() throws Exception {
+        for(Object creator:new Object[]{null,JSONObject.NULL,"124","0","0123","123 ","1.23e2",123.0,true,"9007199254740992"}) {
+            Account account=new Account().with("22","目标",1);
+            account.rows.get(0).remove("is_def");
+            account.rows.get(0).put("list_create_userid",creator);
+            KugouLibraryApi library=new KugouLibraryApi(new KugouApi(device(),account));
+            assertFalse(library.accountPlaylist(SESSION,"22",()->true).canDelete());
+            rejects("permission",()->library.deletePlaylist(SESSION,"22",()->true));
+            assertNoWrite(account.calls);
+        }
+    }
+
+    @Test public void matchingCreatorNeverOverridesExplicitProtectedUnknownOrNullFlags() throws Exception {
+        for(Object flag:new Object[]{JSONObject.NULL,"","unknown",1,2,3,false}) {
+            Account account=new Account().with("22","目标",1);
+            account.rows.get(0).put("is_def",flag).put("list_create_userid","123");
+            KugouLibraryApi library=new KugouLibraryApi(new KugouApi(device(),account));
+            assertFalse(library.accountPlaylist(SESSION,"22",()->true).canDelete());
+            rejects("permission",()->library.deletePlaylist(SESSION,"22",()->true));
+            assertNoWrite(account.calls);
+        }
+    }
+
+    @Test public void omittedDefaultFlagStillRequiresEditableAndKnownSessionOwner() throws Exception {
+        Account account=new Account().withShape("22","目标","0",null,1);
+        account.rows.get(0).put("list_create_userid","123");
+        KugouLibraryApi library=new KugouLibraryApi(new KugouApi(device(),account));
+        assertFalse(library.playlists(SESSION,0,100).items.get(0).canDelete());
+        rejects("permission",()->library.deletePlaylist(SESSION,"22",()->true));
+        account.rows.get(0).put("is_edit","1");
+        JSONObject root=json("{status:1,data:{info:[],total:1}}");
+        root.getJSONObject("data").getJSONArray("info").put(account.rows.get(0));
+        assertFalse("parsing without an authenticated owner fails closed",
+            KugouLibraryApi.parsePlaylists(root,0,100).items.get(0).canDelete());
+        assertNoWrite(account.calls);
+    }
+
+    @Test public void deleteRechecksCreatorAfterPreviouslyPermittedRead() throws Exception {
+        Account account=new Account().with("22","目标",1);
+        account.rows.get(0).remove("is_def");
+        account.rows.get(0).put("list_create_userid","123");
+        KugouLibraryApi library=new KugouLibraryApi(new KugouApi(device(),account));
+        assertTrue(library.accountPlaylist(SESSION,"22",()->true).canDelete());
+        account.rows.get(0).put("list_create_userid","124");
+        rejects("permission",()->library.deletePlaylist(SESSION,"22",()->true));
+        assertNoWrite(account.calls);
+    }
+
     @Test public void rejectedRiskyOrMalformedWriteResponsesNeverRetryOrClaimSuccess() throws Exception {
         String[][] cases={
             {"{status:0,error_code:1,data:{},msg:'private-fixture'}","platform"},
@@ -226,18 +287,86 @@ public class KugouPlaylistDeletionTest {
         assertEquals(3,account.listCalls());
     }
 
-    @Test public void aKnownTotalCannotDisappearAndNullUnknownTerminalIsNotAbsence() throws Exception {
+    @Test public void aKnownTotalCannotDisappearAndNullAfterAFullPageIsNotAbsence() throws Exception {
         Account disappearing=new Account();
         for(int i=0;i<101;i++)disappearing.with(String.valueOf(1000+i),"L"+i,0);
         disappearing.omitTotalAfterFirst=true;
         rejects("incomplete",()->new KugouLibraryApi(new KugouApi(device(),disappearing))
             .deletePlaylist(SESSION,"1000",()->true));
         assertNoWrite(disappearing.calls);
-        Account nullTerminal=new Account().with("21","保留",1);
+        Account nullTerminal=new Account();
+        for(int i=0;i<100;i++)nullTerminal.with(String.valueOf(1000+i),"保留",1);
         nullTerminal.omitTotal=true;nullTerminal.nullTerminal=true;
         rejects("incomplete",()->new KugouLibraryApi(new KugouApi(device(),nullTerminal))
             .deletablePlaylist(SESSION,"22",()->true));
         assertNoWrite(nullTerminal.calls);
+    }
+
+    @Test public void versionedNullAfterShortPageConfirmsExistingRowsAndAbsence() throws Exception {
+        for(int count:new int[] {4,101,130}) {
+            Account account=new Account();
+            for(int i=0;i<count;i++)account.withMetaShape(String.valueOf(1000+i),"歌单","1","0",1,"","");
+            account.omitTotal=true;account.nullTerminal=true;
+            KugouLibraryApi library=new KugouLibraryApi(new KugouApi(device(),account));
+            KugouLibraryApi.Playlist found=library.accountPlaylist(SESSION,String.valueOf(999+count),()->true);
+            assertTrue(found.canRename());assertTrue(found.canDelete());
+            assertNull(library.deletablePlaylist(SESSION,"9999",()->true));
+            assertNoWrite(account.calls);
+        }
+    }
+
+    @Test public void versionedNullTerminalStillRechecksOwnershipAndSendsAtMostOneDelete() throws Exception {
+        Account account=new Account().with("21","保留",1).with("22","目标",2);
+        account.omitTotal=true;account.nullTerminal=true;
+        KugouLibraryApi library=new KugouLibraryApi(new KugouApi(device(),account));
+        library.deletePlaylist(SESSION,"22",()->true);
+        assertEquals(2,account.listCalls());assertEquals(1,account.writeCalls());
+        Account protectedAccount=new Account().withShape("21","默认","1","1",0);
+        protectedAccount.omitTotal=true;protectedAccount.nullTerminal=true;
+        rejects("permission",()->new KugouLibraryApi(new KugouApi(device(),protectedAccount))
+            .deletePlaylist(SESSION,"21",()->true));
+        assertNoWrite(protectedAccount.calls);
+    }
+
+    @Test public void nullTerminalNeedsStablePresentValidVersionOnEveryPage() throws Exception {
+        for(String bad:new String[] {"missing","invalid","changed","changed-middle","missing-middle","missing-terminal","changed-terminal"}) {
+            Account account=new Account();
+            for(int i=0;i<101;i++)account.with(String.valueOf(1000+i),"保留",1);
+            account.omitTotal=true;account.nullTerminal=true;account.badVersion=bad;
+            rejects("incomplete",()->new KugouLibraryApi(new KugouApi(device(),account))
+                .deletePlaylist(SESSION,"1000",()->true));
+            assertNoWrite(account.calls);
+        }
+    }
+
+    @Test public void firstNullOrMissingTerminalFieldStillCannotProveAbsence() throws Exception {
+        Account first=new Account();first.omitTotal=true;first.nullTerminal=true;
+        rejects("incomplete",()->new KugouLibraryApi(new KugouApi(device(),first))
+            .deletablePlaylist(SESSION,"9999",()->true));
+        Account missing=new Account().with("21","保留",1);
+        missing.omitTotal=true;missing.missingTerminal=true;
+        rejects("incomplete",()->new KugouLibraryApi(new KugouApi(device(),missing))
+            .deletablePlaylist(SESSION,"9999",()->true));
+        assertNoWrite(first.calls);assertNoWrite(missing.calls);
+    }
+
+    @Test public void accountChangeAtNullTerminalStillPreventsMutation() throws Exception {
+        Account account=new Account().with("21","保留",1);
+        account.omitTotal=true;account.nullTerminal=true;
+        rejects("account_changed",()->new KugouLibraryApi(new KugouApi(device(),account))
+            .deletePlaylist(SESSION,"21",()->account.listCalls()<2));
+        assertNoWrite(account.calls);
+    }
+
+    @Test public void ambiguousNullTerminalWithAnotherListFieldCannotProveAbsence() throws Exception {
+        for(boolean array:new boolean[] {false,true}) {
+            Account account=new Account().with("21","保留",1);
+            account.omitTotal=true;account.nullTerminal=true;
+            account.terminalLists=array ? new JSONArray() : JSONObject.NULL;
+            rejects("incomplete",()->new KugouLibraryApi(new KugouApi(device(),account))
+                .deletablePlaylist(SESSION,"9999",()->true));
+            assertNoWrite(account.calls);
+        }
     }
 
     @Test public void accountChangeAfterTheFinalReadPreventsDispatch() throws Exception {
@@ -357,7 +486,9 @@ public class KugouPlaylistDeletionTest {
         JSONObject listResponse;
         JSONObject writeResponse=json("{status:1,error_code:0,data:{info:[],total_ver:0}}");
         IOException writeFailure;
-        boolean omitTotal,omitTotalAfterFirst,nullTerminal;
+        boolean omitTotal,omitTotalAfterFirst,nullTerminal,missingTerminal;
+        String badVersion;
+        Object terminalLists;
         int repeatPage;
         int phantomAfterFirstPage;
         long totalVersion;
@@ -421,6 +552,14 @@ public class KugouPlaylistDeletionTest {
             int total=rows.size()+(page>1?phantomAfterFirstPage:0);
             JSONObject data=new JSONObject().put("total_ver",totalVersion)
                 .put("info",nullTerminal && info.length()==0?JSONObject.NULL:info);
+            if(missingTerminal && info.length()==0)data.remove("info");
+            if(info.length()==0 && terminalLists!=null)data.put("lists",terminalLists);
+            if("missing".equals(badVersion) || ("missing-middle".equals(badVersion) && page==2) ||
+                ("missing-terminal".equals(badVersion) && info.length()==0))data.remove("total_ver");
+            if("invalid".equals(badVersion))data.put("total_ver","invalid");
+            if(("changed".equals(badVersion) && page>1) || ("changed-middle".equals(badVersion) && page==2) ||
+                ("changed-terminal".equals(badVersion) && info.length()==0))
+                data.put("total_ver",totalVersion+1);
             if(!omitTotal && !(omitTotalAfterFirst && page>1))data.put("total",total);
             return new JSONObject().put("status",1).put("data",data);
         }

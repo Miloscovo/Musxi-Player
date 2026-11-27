@@ -11,6 +11,7 @@ class AccountCoordinator {
     private var generation = 0L
     private val active = mutableMapOf<Platform, Long>()
     private val cancellationStates = mutableMapOf<Platform, AccountState>()
+    private val reauthenticating = mutableSetOf<Platform>()
     private val mutableStates = MutableStateFlow<Map<Platform, AccountState>>(
         Collections.unmodifiableMap(Platform.entries.associateWith {
             AccountState(it, AccountPhase.DISCONNECTED)
@@ -44,6 +45,16 @@ class AccountCoordinator {
         token
     }
 
+    /** A candidate login never grants access to the old session or destroys its rollback state. */
+    fun reauthenticate(platform: Platform): Long? = synchronized(gate) {
+        val previous = state(platform)
+        if (platform in active || previous.profile == null || previous.phase !in setOf(
+                AccountPhase.CONNECTED, AccountPhase.REAUTH_REQUIRED, AccountPhase.RETRYABLE_ERROR)) return null
+        val token = begin(platform)
+        reauthenticating += platform
+        token
+    }
+
     fun isCurrent(platform: Platform, token: Long): Boolean = synchronized(gate) {
         current(platform, token)
     }
@@ -73,7 +84,12 @@ class AccountCoordinator {
 
     fun fail(platform: Platform, token: Long, error: AccountError): Boolean = synchronized(gate) {
         if (!current(platform, token)) return false
+        val rollback = cancellationStates[platform]?.takeIf { platform in reauthenticating }
         complete(platform)
+        if (rollback != null) {
+            publish(rollback.copy(generation = token))
+            return true
+        }
         publish(state(platform).copy(
             phase = if (error == AccountError.EXPIRED) AccountPhase.REAUTH_REQUIRED
                 else AccountPhase.RETRYABLE_ERROR,
@@ -127,6 +143,7 @@ class AccountCoordinator {
     private fun complete(platform: Platform) {
         active.remove(platform)
         cancellationStates.remove(platform)
+        reauthenticating.remove(platform)
     }
 
     private fun publish(state: AccountState) {

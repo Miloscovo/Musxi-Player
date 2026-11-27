@@ -50,11 +50,14 @@ class SearchBrowser(
             return token == revision && latest.phase == AccountPhase.CONNECTED && latest.generation == identity.generation &&
                 latest.profile?.id == identity.profile?.id
         }
+        var received = false
         val callback: (Result<Page<SongSummary>>) -> Unit = callback@{ response ->
             if (!current()) {
                 if (token == revision) accountChanged()
                 return@callback
             }
+            if (received) return@callback
+            received = true
             response.fold({ page ->
                 if (page.items.size > PAGE_SIZE || page.items.any { it.key.platform != platform } ||
                     page.total?.let { it < 0 || offset + page.items.size > it } == true ||
@@ -65,6 +68,7 @@ class SearchBrowser(
                 } else {
                     val songs = Collections.unmodifiableList(page.items.map { song ->
                         song.copy(artists = Collections.unmodifiableList(song.artists.toList()),
+                            artistIds = Collections.unmodifiableList(song.artistIds.toList()),
                             coverUrl = ArtworkPolicy.sanitize(platform, song.coverUrl))
                     })
                     mutable.value = SearchBrowseState(query, page.copy(items = songs))

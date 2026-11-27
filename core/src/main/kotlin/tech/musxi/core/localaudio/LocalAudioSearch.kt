@@ -16,7 +16,7 @@ object LocalAudioSearch {
         request: LocalAudioQuery,
         checkCancelled: () -> Unit = {},
     ): LocalAudioSearchPage {
-        requireReadable(state, request.folderId, request.expectedRevision, checkCancelled)
+        requireReadable(state, request, checkCancelled)
         val visible = visibleScope(state, request.folderId, request.unfiledOnly, checkCancelled)
         val progress = progressById(state, checkCancelled)
         val bookmarked = HashSet<String>()
@@ -58,8 +58,28 @@ object LocalAudioSearch {
             offset = offset,
             items = page,
             nextOffset = (offset + page.size).takeIf { page.isNotEmpty() && it < total },
+            token = tokenFor(state, request),
         )
     }
+
+    /**
+     * Checks whether a query result may still be published. New pages use their query token;
+     * pages without one retain the conservative legacy whole-library revision check.
+     */
+    fun isCurrent(
+        state: LocalAudioLibraryState,
+        request: LocalAudioQuery,
+        page: LocalAudioSearchPage,
+    ): Boolean {
+        if (!state.ready) return false
+        if (request.expectedRevision != null && request.expectedRevision != state.revision) return false
+        if (page.token == null && request.expectedToken != null) return false
+        val token = page.token ?: return page.revision == state.revision
+        return token.query == request.identity() && token.isCurrent(state)
+    }
+
+    fun isCurrent(state: LocalAudioLibraryState, page: LocalAudioSearchPage): Boolean =
+        state.ready && (page.token?.isCurrent(state) ?: (page.revision == state.revision))
 
     fun ordered(
         state: LocalAudioLibraryState,
@@ -68,7 +88,11 @@ object LocalAudioSearch {
         descending: Boolean,
         checkCancelled: () -> Unit = {},
     ): List<LocalAudioItem> {
-        requireReadable(state, folderId, expectedRevision = null, checkCancelled = checkCancelled)
+        checkCancelled()
+        if (!state.ready) throw LocalAudioFailure(LocalAudioError.STORAGE_FAILED)
+        if (folderId != null && state.folders.none { it.id == folderId }) {
+            throw LocalAudioFailure(LocalAudioError.NOT_FOUND)
+        }
         val visible = visibleScope(state, folderId, unfiledOnly = false, checkCancelled = checkCancelled)
         val items = state.items.filter { item ->
             checkCancelled()
@@ -79,18 +103,47 @@ object LocalAudioSearch {
 
     private fun requireReadable(
         state: LocalAudioLibraryState,
-        folderId: String?,
-        expectedRevision: Long?,
+        request: LocalAudioQuery,
         checkCancelled: () -> Unit,
     ) {
         checkCancelled()
         if (!state.ready) throw LocalAudioFailure(LocalAudioError.STORAGE_FAILED)
-        if (folderId != null && state.folders.none { it.id == folderId }) {
+        if (request.folderId != null && state.folders.none { it.id == request.folderId }) {
             throw LocalAudioFailure(LocalAudioError.NOT_FOUND)
         }
-        if (expectedRevision != null && expectedRevision != state.revision) {
+        if (request.expectedRevision != null && request.expectedRevision != state.revision) {
             throw LocalAudioFailure(LocalAudioError.STALE_STATE)
         }
+        if (request.offset > 0 && request.expectedToken == null && request.expectedRevision == null) {
+            throw LocalAudioFailure(LocalAudioError.INVALID_TARGET)
+        }
+        val token = request.expectedToken
+        if (token != null) {
+            if (token.query != request.identity()) throw LocalAudioFailure(LocalAudioError.INVALID_TARGET)
+            if (!token.isCurrent(state)) throw LocalAudioFailure(LocalAudioError.STALE_STATE)
+        }
+    }
+
+    private fun tokenFor(state: LocalAudioLibraryState, request: LocalAudioQuery): LocalAudioQueryToken =
+        LocalAudioQueryToken(
+            query = request.identity(),
+            organizationRevision = state.organizationRevision,
+            progressRevision = state.progressRevision.takeIf { request.dependsOnProgress() },
+            legacyRevision = request.expectedRevision ?: request.expectedToken?.legacyRevision,
+        )
+
+    private fun LocalAudioQuery.identity(): LocalAudioQuery = copy(
+        offset = 0,
+        limit = 1,
+        expectedRevision = null,
+        expectedToken = null,
+    )
+
+    internal fun LocalAudioQueryToken.isCurrent(state: LocalAudioLibraryState): Boolean {
+        if (!state.ready) return false
+        if (organizationRevision != state.organizationRevision) return false
+        if (legacyRevision != null && legacyRevision != state.revision) return false
+        return !query.dependsOnProgress() || progressRevision == state.progressRevision
     }
 
     /**

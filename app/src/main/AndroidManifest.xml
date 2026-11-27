@@ -31,7 +31,16 @@
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="musxiplayer" android:host="login-return" />
+                <data android:scheme="${applicationId}.login" android:host="login-return" />
             </intent-filter>
         </activity>
+        <activity
+            android:name=".ui.lockscreen.LockScreenLyricsActivity"
+            android:exported="false"
+            android:launchMode="singleTask"
+            android:taskAffinity="${applicationId}.lockscreen"
+            android:excludeFromRecents="true"
+            android:showWhenLocked="true"
+            android:configChanges="orientation|screenSize|screenLayout|uiMode" />
     </application>
 </manifest>

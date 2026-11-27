@@ -18,6 +18,7 @@ class ForegroundPlaybackGateTest {
         val changes = mutableListOf<Boolean>()
         var readyCount = 0
         var deniedCount = 0
+        var invalidatedCount = 0
         lateinit var gate: ForegroundPlaybackGate
 
         init {
@@ -35,6 +36,7 @@ class ForegroundPlaybackGateTest {
                 },
                 ready = { ++readyCount },
                 denied = { ++deniedCount },
+                invalidated = { ++invalidatedCount },
             )
         }
 
@@ -148,7 +150,20 @@ class ForegroundPlaybackGateTest {
         assertFalse(f.gate.pending)
         assertEquals(0, f.readyCount)
         assertEquals(0, f.deniedCount)
+        assertEquals(1, f.invalidatedCount)
         assertEquals(listOf(true, false), f.changes)
+    }
+
+    @Test fun delayedPollCannotAcceptForegroundAfterTheDeadline() {
+        val f = Fixture()
+        f.gate.start { f.current }
+        val delayed = f.timers.single().action
+        f.time = 4_000
+        f.foreground = true
+        delayed()
+        assertFalse(f.gate.pending)
+        assertEquals(0, f.readyCount)
+        assertEquals(1, f.deniedCount)
     }
 
     @Test fun changedCanReentrantlyCancelBeforePollingBegins() {

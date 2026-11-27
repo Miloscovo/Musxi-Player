@@ -16,6 +16,7 @@ import tech.musxi.core.localaudio.LocalAudioFolder
 import tech.musxi.core.localaudio.LocalAudioImportResult
 import tech.musxi.core.localaudio.LocalAudioImportState
 import tech.musxi.core.localaudio.LocalAudioLibraryState
+import tech.musxi.core.localaudio.LocalAudioVersionToken
 import tech.musxi.core.localaudio.LocalAudioLimits
 import tech.musxi.core.localaudio.LocalAudioSourceCheckResult
 import tech.musxi.core.localaudio.LocalAudioSourceCheckState
@@ -52,6 +53,7 @@ interface LocalAudioController {
     fun removeFromFolder(folderId: String, audioId: String, result: (Result<Unit>) -> Unit)
     fun deleteAudio(audioId: String, result: (Result<Unit>) -> Unit)
 
+    /** expectedRevision is library.organizationRevision, never the legacy all-change counter. */
     fun addToFolderBatch(folderId: String, audioIds: List<String>, expectedRevision: Long, result: (Result<LocalAudioBatchResult>) -> Unit)
     fun removeFromFolderBatch(folderId: String, audioIds: List<String>, expectedRevision: Long, result: (Result<LocalAudioBatchResult>) -> Unit)
     fun moveToFolderBatch(sourceFolderId: String, destinationFolderId: String, audioIds: List<String>, expectedRevision: Long,
@@ -125,15 +127,15 @@ class AppLocalAudioController(private val app: MusxiApplication) : LocalAudioCon
     }
     override fun deleteAudio(audioId: String, result: (Result<Unit>) -> Unit) { repo.deleteAudio(audioId, result) }
     override fun addToFolderBatch(folderId: String, audioIds: List<String>, expectedRevision: Long,
-        result: (Result<LocalAudioBatchResult>) -> Unit) { repo.addToFolderBatch(folderId, audioIds, expectedRevision, result) }
+        result: (Result<LocalAudioBatchResult>) -> Unit) { repo.addToFolderBatch(folderId, audioIds, LocalAudioVersionToken(expectedRevision), result) }
     override fun removeFromFolderBatch(folderId: String, audioIds: List<String>, expectedRevision: Long,
-        result: (Result<LocalAudioBatchResult>) -> Unit) { repo.removeFromFolderBatch(folderId, audioIds, expectedRevision, result) }
+        result: (Result<LocalAudioBatchResult>) -> Unit) { repo.removeFromFolderBatch(folderId, audioIds, LocalAudioVersionToken(expectedRevision), result) }
     override fun moveToFolderBatch(sourceFolderId: String, destinationFolderId: String, audioIds: List<String>,
         expectedRevision: Long, result: (Result<LocalAudioBatchResult>) -> Unit) {
-        repo.moveToFolderBatch(sourceFolderId, destinationFolderId, audioIds, expectedRevision, result)
+        repo.moveToFolderBatch(sourceFolderId, destinationFolderId, audioIds, LocalAudioVersionToken(expectedRevision), result)
     }
     override fun checkSources(audioIds: List<String>, expectedRevision: Long,
-        result: (Result<List<LocalAudioSourceCheckResult>>) -> Unit) { repo.checkSources(audioIds, expectedRevision, result) }
+        result: (Result<List<LocalAudioSourceCheckResult>>) -> Unit) { repo.checkSources(audioIds, LocalAudioVersionToken(expectedRevision), result) }
     override fun importFiles(folderId: String, uris: List<Uri>, mode: LocalImportMode, grantedFlags: Int,
         result: (Result<List<LocalAudioImportResult>>) -> Unit) { repo.importFiles(folderId, uris, mode, grantedFlags, result) }
     override fun importDirectory(folderId: String, tree: Uri, mode: LocalImportMode, grantedFlags: Int,
@@ -213,13 +215,9 @@ internal fun selectionStillValid(
 }
 
 /**
- * Runs a revision-checked organizing command the way the backend asks until it splits the
- * organizing and progress revisions: read the newest revision when the user confirms, check that the
- * picked recordings and folders still fit, and on STALE_STATE check again and retry once only.
- *
- * Playing a local recording saves progress about every 15 seconds and each save moves the single
- * revision, so a first STALE_STATE is ordinary. A second one means the library really is changing
- * under the user; looping would risk overriding a concurrent edit, so it is reported instead.
+ * Runs an organization-version checked command. Playback checkpoints do not invalidate the
+ * selection; real organization changes still do. Recheck stable IDs before at most one retry.
+ * The controller adapter converts this organization counter to an explicit backend token.
  */
 internal fun <T> LocalAudioController.withFreshRevision(
     stillValid: (LocalAudioLibraryState) -> Boolean,
@@ -237,14 +235,14 @@ internal fun <T> LocalAudioController.withFreshRevision(
         result(Result.failure(SelectionChanged()))
         return
     }
-    command(first.revision) { response ->
+    command(first.organizationRevision) { response ->
         if (response.localError() != LocalAudioError.STALE_STATE) {
             result(response)
             return@command
         }
         retry {
             val latest = library.value
-            if (!stillValid(latest)) result(Result.failure(SelectionChanged())) else command(latest.revision, result)
+            if (!stillValid(latest)) result(Result.failure(SelectionChanged())) else command(latest.organizationRevision, result)
         }
     }
 }

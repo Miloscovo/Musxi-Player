@@ -372,6 +372,9 @@ internal class MediaMetadataArtworkFrameSource(context: Context) : LocalArtworkF
     private val app = context.applicationContext
 
     override fun frameOf(uri: Uri, metadata: LocalAudioMetadata, checkCancelled: () -> Unit): Bitmap? {
+        checkCancelled()
+        // DSF APIC is deliberately deferred: never pass a huge DSF to the unbounded platform tag reader.
+        if (tech.musxi.core.localaudio.DsfPlaybackSupport.isCandidate(metadata.fileName)) return null
         val retriever = MediaMetadataRetriever()
         try {
             retriever.setDataSource(app, uri)

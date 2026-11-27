@@ -120,6 +120,10 @@ class PlaybackConnection(context: Context) {
     val queueState = queueSnapshot.asStateFlow()
     val localQueueState = localQueueSnapshot.asStateFlow()
     val outputs = outputSnapshot.asStateFlow()
+    /** Service observations; no signed URLs or file capabilities. Unknown boundaries stay null. */
+    val audioInfo = audioInfoSnapshot.asStateFlow()
+    /** Recent process-local service and connection events; safe for a future support view. */
+    val diagnostics = PlaybackDiagnostics.state
     /** Service-owned monotonic timer, available even while the player page is closed. */
     val sleepTimer = sleepTimerSnapshot.asStateFlow()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -170,6 +174,11 @@ class PlaybackConnection(context: Context) {
         },
         changed = { connection ->
             recordValidationEvent(connection.phase.validationPhase(), connection.attempt)
+            when (connection.phase) {
+                PlaybackConnectionPhase.CONNECTING -> PlaybackDiagnosticStage.CONTROLLER_CONNECTING
+                PlaybackConnectionPhase.CONNECTED -> PlaybackDiagnosticStage.CONTROLLER_CONNECTED
+                else -> null
+            }?.let { PlaybackDiagnostics.record(it, connectionAttempt = connection.attempt) }
             if (connection.phase != PlaybackConnectionPhase.CONNECTED) {
                 main.removeCallbacks(progressTick)
                 controller = null
@@ -189,6 +198,13 @@ class PlaybackConnection(context: Context) {
                     runCatching { callback(Result.failure(IllegalStateException("Playback service disconnected"))) }
                 }
             }
+        }, failedAttempt = { reason, attempt ->
+            val event = when (reason) {
+                ControllerFailure.REJECTED -> PlaybackDiagnosticStage.CONTROLLER_REJECTED
+                ControllerFailure.TIMEOUT -> PlaybackDiagnosticStage.CONTROLLER_TIMEOUT
+                ControllerFailure.DISCONNECTED -> PlaybackDiagnosticStage.CONTROLLER_DISCONNECTED
+            }
+            PlaybackDiagnostics.record(event, connectionAttempt = attempt)
         })
 
     init {
@@ -488,7 +504,6 @@ class PlaybackConnection(context: Context) {
         controller?.takeIf { it.isCommandAvailable(Player.COMMAND_SET_SHUFFLE_MODE) }?.shuffleModeEnabled = enabled
     }
     fun resume() { controller?.let {
-        if (it.playerError != null || (it.playbackState == Player.STATE_IDLE && it.mediaItemCount > 0)) it.prepare()
         if (it.playbackState == Player.STATE_ENDED) it.seekToDefaultPosition()
         it.play()
     } }
@@ -527,7 +542,7 @@ class PlaybackConnection(context: Context) {
         if (if (next) !it.hasNextMediaItem() else !it.hasPreviousMediaItem()) return
         val retry = it.playerError != null
         if (next) it.seekToNextMediaItem() else it.seekToPreviousMediaItem()
-        if (retry) { it.prepare(); it.play() }
+        if (retry) it.play()
     } }
     // Replace and clear use the same path; ordinary batched player commands cannot reopen a
     // queue after clear. The service consumes only the latest intent, once.
@@ -604,6 +619,7 @@ class PlaybackConnection(context: Context) {
 
     private fun nowForValidation(): Long = android.os.SystemClock.elapsedRealtime()
 
+    @Suppress("DEPRECATION")
     private fun update(player: Player) {
         if (player !== controller) return
         main.removeCallbacks(progressTick)
@@ -632,6 +648,7 @@ class PlaybackConnection(context: Context) {
             when (player.playbackSuppressionReason) {
                 Player.PLAYBACK_SUPPRESSION_REASON_NONE -> PlaybackSuppression.NONE
                 Player.PLAYBACK_SUPPRESSION_REASON_TRANSIENT_AUDIO_FOCUS_LOSS -> PlaybackSuppression.AUDIO_FOCUS
+                Player.PLAYBACK_SUPPRESSION_REASON_UNSUITABLE_AUDIO_ROUTE,
                 Player.PLAYBACK_SUPPRESSION_REASON_UNSUITABLE_AUDIO_OUTPUT -> PlaybackSuppression.OUTPUT
                 else -> PlaybackSuppression.OTHER
             },

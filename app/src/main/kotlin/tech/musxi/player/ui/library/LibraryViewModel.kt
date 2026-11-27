@@ -12,6 +12,8 @@ import tech.musxi.core.library.LibraryContent
 import tech.musxi.core.library.MediaKey
 import tech.musxi.core.library.PlaylistChangeResult
 import tech.musxi.core.library.PlaylistChangeStatus
+import tech.musxi.core.library.PlaylistCatalog
+import tech.musxi.core.library.PlaylistCatalogState
 import tech.musxi.core.library.PlaylistSummary
 import tech.musxi.core.library.SongSummary
 import tech.musxi.player.MusxiApplication
@@ -82,6 +84,10 @@ data class PlaylistUiState(
     val fetchedAtEpochMs: Long? = null,
     val accountVerified: Boolean = false,
     val storageError: Boolean = false,
+    val revision: Long = 0,
+    val complete: Boolean = false,
+    val customOrder: Boolean = false,
+    val savingOrder: Boolean = false,
     /** A pull-to-refresh the user started is still running. Load-more never sets this. */
     val refreshing: Boolean = false,
 ) {
@@ -129,6 +135,8 @@ class LibraryViewModel(private val app: MusxiApplication) : ViewModel() {
     /** Set once the user taps a chip; from then on start-up no longer picks the platform. */
     private var userChosePlatform = false
 
+    private fun catalogFor(platform: Platform): PlaylistCatalog = app.playlists.catalog(platform)
+
     init {
         // Saved accounts are restored off the main thread, so the first account state may not have
         // a profile yet. Until the user picks a chip, follow the first signed-in platform; each
@@ -139,21 +147,28 @@ class LibraryViewModel(private val app: MusxiApplication) : ViewModel() {
                 val preferred = listOf(Platform.KUGOU, Platform.NETEASE, Platform.QQ)
                     .firstOrNull { states.getValue(it).profile != null } ?: return@collect
                 if (preferred != browsingPlatform) {
-                    browsingPlatform = preferred
-                    _playlists.value = PlaylistUiState(filter = filterOf(preferred))
-                    merge(browserFor(preferred).state.value)
+                    openPlatform(preferred)
                 }
             }
         }
-        viewModelScope.launch {
-            app.libraryBrowser.state.collect { if (browsingPlatform == Platform.NETEASE) merge(it) }
+        Platform.entries.forEach { platform ->
+            viewModelScope.launch { catalogFor(platform).state.collect { if (browsingPlatform == platform) merge(it) } }
+            // Catalogs own directory pages; the original browsers still deliver song details.
+            viewModelScope.launch {
+                browserFor(platform).state.collect { state ->
+                    if (state.query.playlist == _tracks.value.playlist?.key) merge(state)
+                }
+            }
         }
-        viewModelScope.launch {
-            app.kugouLibraryBrowser.state.collect { if (browsingPlatform == Platform.KUGOU) merge(it) }
-        }
-        viewModelScope.launch {
-            app.qqLibraryBrowser.state.collect { if (browsingPlatform == Platform.QQ) merge(it) }
-        }
+        catalogFor(browsingPlatform).open()
+    }
+
+    private fun openPlatform(platform: Platform) {
+        catalogFor(browsingPlatform).cancel()
+        browsingPlatform = platform
+        _playlists.value = PlaylistUiState(filter = filterOf(platform))
+        _tracks.value = TrackListUiState()
+        catalogFor(platform).open()
     }
 
     private fun browserFor(platform: Platform) = when (platform) {
@@ -168,24 +183,15 @@ class LibraryViewModel(private val app: MusxiApplication) : ViewModel() {
         val platform = filter.platform ?: return
         userChosePlatform = true
         if (platform != browsingPlatform) {
-            browserFor(browsingPlatform).cancel()
-            browsingPlatform = platform
-            _playlists.value = PlaylistUiState(filter = filter)
-            _tracks.value = TrackListUiState()
+            openPlatform(platform)
         } else {
             _playlists.value = _playlists.value.copy(filter = filter)
+            catalogFor(platform).open()
         }
-        loadPlaylists(reset = true)
     }
 
     fun loadPlaylists(reset: Boolean = false) {
-        val browser = browserFor(browsingPlatform)
-        val offset = if (reset) 0 else _playlists.value.nextOffset ?: return
-        if (reset) {
-            _playlists.value = _playlists.value.copy(items = emptyList(), nextOffset = null, error = null)
-        }
-        _playlists.value = _playlists.value.copy(loading = true)
-        browser.playlists(offset)
+        if (reset) catalogFor(browsingPlatform).refresh() else catalogFor(browsingPlatform).loadMore()
     }
 
     /**
@@ -221,34 +227,15 @@ class LibraryViewModel(private val app: MusxiApplication) : ViewModel() {
 
     /** Merges one page delivery, dropping pages that belong to a superseded query. */
     private fun merge(state: LibraryBrowseState) {
-        // A pull-to-refresh ends with whatever the browser settles on, including a failure with no
-        // page at all; otherwise the spinner would wait for content that never comes.
-        if (!state.refreshing) {
-            if (state.query.playlist == null && _playlists.value.refreshing) {
-                _playlists.value = _playlists.value.copy(refreshing = false, loading = false, error = state.error)
-            } else if (state.query.playlist != null && state.query.playlist == _tracks.value.playlist?.key &&
-                _tracks.value.refreshing) {
-                _tracks.value = _tracks.value.copy(refreshing = false, loading = false, error = state.error)
-            }
-        }
+        val open = _tracks.value.playlist ?: return
+        if (state.query.playlist != open.key) return
+        // A first read may fail without delivering any page. End its spinner as well as refresh.
+        _tracks.value = _tracks.value.copy(
+            loading = state.refreshing, error = state.error,
+            refreshing = _tracks.value.refreshing && state.refreshing,
+        )
         val content = state.content
-        if (content is LibraryContent.Playlists) {
-            if (state.query.playlist != null) return
-            val page = content.page
-            val current = _playlists.value
-            val accumulated = splicePage(current.items, state.query.offset, page.items) { it.key }
-            _playlists.value = current.copy(
-                items = accumulated,
-                nextOffset = page.nextOffset,
-                loading = state.refreshing,
-                error = state.error,
-                fromCache = state.source == tech.musxi.core.library.LibrarySource.CACHE,
-                fetchedAtEpochMs = state.fetchedAtEpochMs,
-                accountVerified = state.accountVerified,
-                storageError = state.storageError,
-                refreshing = current.refreshing && state.refreshing,
-            )
-        } else if (content is LibraryContent.Tracks) {
+        if (content is LibraryContent.Tracks) {
             val playlist = _tracks.value.playlist ?: return
             if (content.page.items.firstOrNull()?.key?.platform != playlist.key.platform &&
                 state.query.playlist != playlist.key
@@ -278,8 +265,27 @@ class LibraryViewModel(private val app: MusxiApplication) : ViewModel() {
         }
     }
 
+    private fun merge(state: PlaylistCatalogState) {
+        if (state.platform != browsingPlatform) return
+        val current = _playlists.value
+        _playlists.value = current.copy(
+            items = state.items,
+            nextOffset = state.nextOffset,
+            loading = state.loading,
+            error = state.error,
+            fromCache = state.fromCache,
+            accountVerified = state.identity?.verified == true,
+            storageError = state.storageError,
+            refreshing = current.refreshing && state.loading,
+            revision = state.revision,
+            complete = state.complete,
+            customOrder = state.customOrder,
+            savingOrder = state.savingOrder,
+        )
+    }
+
     /** Retry is always explicit; a failure never turns into an empty success. */
-    fun retryPlaylists() = loadPlaylists(reset = _playlists.value.items.isEmpty())
+    fun retryPlaylists() = loadPlaylists(reset = _playlists.value.let { it.items.isEmpty() || it.nextOffset == null })
     fun retryTracks() = _tracks.value.playlist?.let { browserFor(it.key.platform).refresh() }
 
     /**
@@ -288,7 +294,7 @@ class LibraryViewModel(private val app: MusxiApplication) : ViewModel() {
      */
     fun refreshPlaylists() {
         _playlists.value = _playlists.value.copy(refreshing = true, loading = true, error = null)
-        browserFor(browsingPlatform).playlists(0)
+        catalogFor(browsingPlatform).refresh()
     }
 
     fun refreshTracks() {
@@ -410,6 +416,44 @@ class LibraryViewModel(private val app: MusxiApplication) : ViewModel() {
         val (tracks, reread) = _tracks.value.afterMembership(song, results)
         _tracks.value = tracks
         if (reread) refreshTracks()
+    }
+
+    fun movePlaylist(key: MediaKey, before: MediaKey?, expectedRevision: Long, onNotice: (String) -> Unit) {
+        val platform = browsingPlatform
+        catalogFor(platform).move(key, before, expectedRevision) { result ->
+            if (platform != browsingPlatform) return@move
+            orderResult(result, if (before == null) "已移到最后" else null, onNotice)
+        }
+    }
+
+    fun movePlaylistToStart(key: MediaKey, expectedRevision: Long, onNotice: (String) -> Unit) {
+        val platform = browsingPlatform
+        catalogFor(platform).moveToStart(key, expectedRevision) { result ->
+            if (platform != browsingPlatform) return@moveToStart
+            orderResult(result, "已移到最前", onNotice)
+        }
+    }
+
+    fun resetPlaylistOrder(expectedRevision: Long, onNotice: (String) -> Unit) {
+        val platform = browsingPlatform
+        catalogFor(platform).resetOrder(expectedRevision) { result ->
+            if (platform != browsingPlatform) return@resetOrder
+            orderResult(result, "已恢复平台默认顺序", onNotice)
+        }
+    }
+
+    private fun orderResult(result: Result<Unit>, success: String?, onNotice: (String) -> Unit) {
+        result.onSuccess { success?.let(onNotice) }.onFailure { error ->
+            val category = (error as? tech.musxi.core.library.LibraryPageFailure)?.category
+            if (category == "conflict") catalogFor(browsingPlatform).refresh()
+            onNotice(playlistManagementError(category))
+        }
+    }
+
+    override fun onCleared() {
+        Platform.entries.forEach { catalogFor(it).cancel() }
+        trackPlatform?.let { browserFor(it).cancel() }
+        super.onCleared()
     }
 }
 

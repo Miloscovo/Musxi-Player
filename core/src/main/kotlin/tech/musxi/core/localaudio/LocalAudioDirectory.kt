@@ -10,11 +10,13 @@ data class LocalAudioDirectoryLink(
     val lastRefreshedAtMs: Long? = null,
     val missingCount: Int = 0,
     val error: LocalAudioError? = null,
+    val lastRefreshFailures: Int = 0,
 ) {
     init {
         LocalAudioLimits.requireId(id); LocalAudioLimits.requireId(folderId); LocalAudioLimits.requireName(name)
         require(lastRefreshedAtMs == null || lastRefreshedAtMs >= 0)
         require(missingCount in 0..LocalAudioLimits.MAX_ITEMS)
+        require(lastRefreshFailures in 0..LocalAudioLimits.MAX_BATCH)
     }
 }
 

@@ -29,6 +29,7 @@ internal interface PlatformDriver {
     fun membership(session: Any): Membership
     fun create(): LoginRequest
     fun poll(request: LoginRequest): PollResult
+    fun importBrowserSession(header: String): Any = throw UnsupportedOperationException("Browser login unavailable")
 }
 
 internal class KugouDriver(context: Context) : PlatformDriver {
@@ -61,6 +62,7 @@ internal class KugouDriver(context: Context) : PlatformDriver {
 }
 
 internal class QqDriver(context: Context) : PlatformDriver {
+    private val callbackScheme = context.packageName + ".login"
     private val store = tech.musxi.qqloginpoc.SessionStore(context)
     internal val api = QqMusicApi()
     override fun load(): Any? = store.load()
@@ -73,10 +75,17 @@ internal class QqDriver(context: Context) : PlatformDriver {
     }
     override fun create(): LoginRequest {
         val attempt = api.createLogin()
-        val uri = Uri.Builder().scheme("wtloginmqq").authority("ptlogin").path("/qlogin")
-            .appendQueryParameter("qrcode", attempt.authorizationPayload)
-            .appendQueryParameter("schemacallback", "musxiplayer://login-return").build()
-        return LoginRequest(attempt, Intent(Intent.ACTION_VIEW, uri).setPackage("com.tencent.mobileqq"))
+        return LoginRequest(attempt, officialIntent(attempt.authorizationPayload, callbackScheme))
+    }
+    internal companion object {
+        /** QQ's AgentActivity may background its task after confirmation; keep Musxi out of it. */
+        fun officialIntent(payload: String, callbackScheme: String): Intent {
+            val uri = Uri.Builder().scheme("wtloginmqq").authority("ptlogin").path("/qlogin")
+                .appendQueryParameter("qrcode", payload)
+                .appendQueryParameter("schemacallback", "$callbackScheme://login-return").build()
+            return Intent(Intent.ACTION_VIEW, uri).setPackage("com.tencent.mobileqq")
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
     }
     override fun poll(request: LoginRequest): PollResult {
         val result = api.poll(request.opaque as QqMusicApi.Attempt)
@@ -97,6 +106,7 @@ internal class NeteaseDriver(context: Context) : PlatformDriver {
     override fun verify(session: Any): Any = api.verify(session as NeteaseApi.Session)
     override fun save(session: Any) = store.save(session as NeteaseApi.Session)
     override fun clear() = store.clear()
+    override fun importBrowserSession(header: String): Any = NeteaseApi.fromBrowserCookies(header)
     override fun identity(session: Any): Identity = (session as NeteaseApi.Session).let { Identity(it.userId, it.nickname, it.avatarUrl) }
     override fun membership(session: Any): Membership = api.membership(session as NeteaseApi.Session).let {
         membershipState(it.isVip, "网易云会员", it.expiresAtEpochMs)

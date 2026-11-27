@@ -1,4 +1,4 @@
-﻿package tech.musxi.player.ui
+package tech.musxi.player.ui
 
 import android.os.SystemClock
 import androidx.activity.compose.BackHandler
@@ -12,7 +12,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.ime
 import tech.musxi.player.ui.shell.swipeSwitch
 import tech.musxi.player.ui.shell.swipeSwitchPage
@@ -78,6 +77,7 @@ import tech.musxi.core.account.Platform
 import tech.musxi.core.library.LibrarySource
 import tech.musxi.core.playback.SourceSelectionPhase
 import tech.musxi.accounts.NeteaseWebLogin
+import tech.musxi.accounts.NeteaseWebLoginSession
 import tech.musxi.player.MusxiApplication
 import tech.musxi.player.ui.account.AccountPageActions
 import tech.musxi.player.ui.account.AccountViewModel
@@ -106,7 +106,8 @@ import tech.musxi.player.ui.player.FullPlayer
 import tech.musxi.player.ui.player.PlayerSurface
 import tech.musxi.player.ui.player.fadesWithPlayer
 import tech.musxi.player.ui.player.rememberPlayerProgress
-import tech.musxi.player.ui.player.LyricsMatchSheet
+import tech.musxi.player.ui.player.LyricsMatchSheetOverlay
+import tech.musxi.player.ui.player.LyricsMatchUi
 import tech.musxi.player.ui.player.MiniPlayer
 import tech.musxi.player.ui.player.lyricsMatchUiOf
 import tech.musxi.player.ui.player.SourcePanel
@@ -124,7 +125,7 @@ import tech.musxi.player.ui.player.MoreAction
 import tech.musxi.player.ui.player.MoreMenuUi
 import tech.musxi.player.ui.player.OutputMenuUi
 import tech.musxi.player.ui.player.QualityMenuUi
-import tech.musxi.player.ui.player.SongInfoDialog
+import tech.musxi.player.ui.player.SongInfoSheet
 import tech.musxi.player.ui.player.menuIcon
 import tech.musxi.player.ui.model.formatDuration
 import tech.musxi.player.sleepStartedNotice
@@ -203,6 +204,7 @@ fun MainShell(app: MusxiApplication, dark: Boolean) {
         }
     }
     val tracks by libraryViewModel.tracks.collectAsStateWithLifecycle()
+    val managementBusy by app.playlists.busyPlatforms.collectAsStateWithLifecycle()
     val playlistSearch by libraryViewModel.playlistSearch.collectAsStateWithLifecycle()
     // The library tab's page stack (root list, then a playlist) and the root's scroll position,
     // hoisted so both survive switching tabs.
@@ -484,6 +486,8 @@ fun MainShell(app: MusxiApplication, dark: Boolean) {
     fun collapsePlayer() {
         showPlayer = false
         showQueue = false
+        showBookmarks = false
+        showSongInfo = false
         showLyricsMatch = false
         showPlayMode = false
         showQuality = false
@@ -772,26 +776,33 @@ fun MainShell(app: MusxiApplication, dark: Boolean) {
         val message = queueLoadMessage(queueLoad.error) ?: return@LaunchedEffect
         notice.show(message)
     }
-    // Netease logs in through the official web page in an in-app window. The window belongs to this
-    // Activity, so it is held here and closed with it.
+    // Netease logs in through the official web page in an in-app sheet window. The session belongs
+    // to this Activity, so it is held here and closed with it.
     val activity = remember(context) { context.findActivity() }
-    var neteaseWeb by remember { mutableStateOf<NeteaseWebLogin?>(null) }
+    var neteaseWebSession by remember { mutableStateOf<NeteaseWebLoginSession?>(null) }
     fun closeNeteaseWeb() {
-        neteaseWeb?.close()
-        neteaseWeb = null
+        neteaseWebSession?.close()
+        neteaseWebSession = null
     }
     DisposableEffect(activity) { onDispose { closeNeteaseWeb() } }
+    fun openNeteaseWeb(reauthenticate: Boolean) {
+        if (activity?.takeUnless { it.isFinishing || it.isDestroyed } == null) return
+        closeNeteaseWeb()
+        neteaseWebSession = NeteaseWebLogin.startSession(
+            accounts = app.accounts,
+            reauthenticate = reauthenticate,
+            closed = { neteaseWebSession = null },
+        )
+        if (neteaseWebSession == null) {
+            notice.show("网易云登录正在进行，请先完成或取消")
+        }
+    }
     fun connect(platform: Platform) {
         if (platform == Platform.NETEASE) {
-            val host = activity?.takeUnless { it.isFinishing || it.isDestroyed } ?: return
-            closeNeteaseWeb()
-            neteaseWeb = NeteaseWebLogin.open(host, app.accounts, closed = { neteaseWeb = null })
-            if (neteaseWeb == null) {
-                notice.show("网易云登录正在进行，请先完成或取消")
-            }
+            openNeteaseWeb(reauthenticate = false)
         } else {
             // The official login apps need a real Activity to launch their intent.
-            accountViewModel.connect(platform) { intent -> runCatching { context.startActivity(intent) } }
+            accountViewModel.connect(platform) { intent -> context.startActivity(intent) }
         }
     }
     var reconnectAfterClear by remember { mutableStateOf<Platform?>(null) }
@@ -814,6 +825,12 @@ fun MainShell(app: MusxiApplication, dark: Boolean) {
             if (!saved) notice.show("设置没能保存，请稍后重试")
         }
     }
+    val lockScreenState by app.lockScreenLyrics.state.collectAsStateWithLifecycle()
+    fun openSystemSettings(intent: android.content.Intent, fallback: (() -> android.content.Intent)? = null) {
+        val opened = runCatching { context.startActivity(intent) }.isSuccess ||
+            (fallback != null && runCatching { context.startActivity(fallback()) }.isSuccess)
+        if (!opened) notice.show("无法打开系统设置，请手动前往应用信息调整权限")
+    }
     val meTabActions = MeTabActions(
         onSetAutoSwitchSource = { on -> saveSetting { app.settingsRepository.setAutoSwitchSource(on) } },
         onSetRelaxDuration = { on -> saveSetting { app.settingsRepository.setRelaxSourceDuration(on) } },
@@ -832,7 +849,17 @@ fun MainShell(app: MusxiApplication, dark: Boolean) {
         onSetThemeMode = { mode -> saveSetting { app.settingsRepository.setThemeMode(mode) } },
         onSetDefaultQuality = { quality -> saveSetting { app.settingsRepository.setDefaultQuality(quality) } },
         onSetLyricsFontSize = { size -> saveSetting { app.settingsRepository.setLyricsFontSize(size) } },
-        onSetMediaCardLyrics = { on -> saveSetting { app.settingsRepository.setMediaCardLyrics(on) } },
+        onSelectLockScreenLyricsMode = { mode -> saveSetting { app.settingsRepository.setLockScreenLyricsMode(mode) } },
+        onOpenOverlayPermission = {
+            openSystemSettings(
+                intent = app.lockScreenLyrics.overlayPermissionIntent(),
+                fallback = { app.lockScreenLyrics.applicationSettingsIntent() },
+            )
+        },
+        onOpenAppPermissionSettings = {
+            openSystemSettings(app.lockScreenLyrics.applicationSettingsIntent())
+        },
+        onRefreshLockScreenPermissions = { app.lockScreenLyrics.refreshPermissions() },
         // Saved by name; MainActivity builds the theme from it, so the whole app follows at once.
         onSetAccent = { accent -> saveSetting { app.settingsRepository.setAccent(accent.name) } },
         // Switching only hides or shows covers already read; it never deletes or reads anything.
@@ -856,11 +883,18 @@ fun MainShell(app: MusxiApplication, dark: Boolean) {
         },
         onRetry = accountViewModel::retry,
         onRelogin = { platform ->
-            // An expired session is cleared first, then a new login starts by
-            // itself once the clearing has landed; one tap, not two.
             if (platform == Platform.NETEASE) closeNeteaseWeb()
-            reconnectAfterClear = platform
-            accountViewModel.relogin(platform)
+            if (accounts[platform]?.profile != null) {
+                if (platform == Platform.NETEASE) {
+                    openNeteaseWeb(reauthenticate = true)
+                } else {
+                    accountViewModel.reauthenticateOfficial(platform) { intent -> context.startActivity(intent) }
+                }
+            } else {
+                // No saved identity: clear first, then start a fresh connection once cleared.
+                reconnectAfterClear = platform
+                accountViewModel.relogin(platform)
+            }
         },
         onReverify = accountViewModel::reverify,
         onSignOut = { platform ->
@@ -1014,6 +1048,42 @@ fun MainShell(app: MusxiApplication, dark: Boolean) {
     fun managePlaylists(song: tech.musxi.core.library.SongSummary, from: tech.musxi.core.library.MediaKey? = null) {
         membership.open(song, pinned = from)
     }
+    val playlistManagement = remember {
+        tech.musxi.player.ui.library.PlaylistManagementController(
+            actions = object : tech.musxi.player.ui.library.PlaylistManagementActions {
+                override fun capabilities(platform: Platform) = app.playlists.capabilities(platform)
+                override fun info(key: tech.musxi.core.library.MediaKey, result: (Result<tech.musxi.core.library.PlaylistManagementInfo>) -> Unit) =
+                    app.playlists.managementInfo(key, result)
+                override fun create(platform: Platform, name: String, result: (Result<tech.musxi.core.library.EditablePlaylist>) -> Unit) =
+                    app.playlists.createPlaylist(platform, name, result)
+                override fun rename(target: tech.musxi.core.library.EditablePlaylist, name: String, result: (Result<Unit>) -> Unit) =
+                    app.playlists.renamePlaylist(target, name, result)
+                override fun delete(target: tech.musxi.core.library.EditablePlaylist, result: (Result<tech.musxi.core.library.PlaylistDeletionResult>) -> Unit) =
+                    app.playlists.deletePlaylist(target, result)
+                override fun refresh(platform: Platform) {
+                    app.playlists.catalog(platform).refresh()
+                }
+            },
+            onNotice = notice::show,
+            onDeleted = { key ->
+                if (libraryViewModel.tracks.value.playlist?.key == key && libraryNav.stack.top == "playlist") libraryNav.pop()
+            },
+        )
+    }
+    LaunchedEffect(libraryNav.depth) { playlistManagement.pageChanged() }
+    LaunchedEffect(playlists.filter.platform, connectedGenerations, librarySegmentLocal) {
+        playlists.filter.platform?.let { platform ->
+            if (librarySegmentLocal) playlistManagement.dismissMenu()
+            else playlistManagement.sync(platform, connectedGenerations[platform])
+        }
+    }
+    LifecycleStartEffect(tab == ShellTab.LIBRARY && libraryNav.depth == 1 && !librarySegmentLocal, playlists.filter.platform) {
+        val platform = libraryViewModel.playlists.value.filter.platform
+        if (tab == ShellTab.LIBRARY && libraryNav.depth == 1 && !librarySegmentLocal && platform != null) {
+            app.playlists.catalog(platform).open()
+        }
+        onStopOrDispose { platform?.let { app.playlists.catalog(it).cancel() } }
+    }
 
     // The shell's page colour is behind the bars unless the player covers it; the player then
     // reports its own backdrop, composed later, and wins.
@@ -1050,26 +1120,31 @@ fun MainShell(app: MusxiApplication, dark: Boolean) {
         // The pages are what the glass records and blurs; the dock, player, sheets and notice are
         // the host's overlay (spec section 3). The overlay is composed after the pages, so its back
         // handlers keep winning over the pages' own, as they did in the one Box before.
-        // Menus opened from the pages are drawn by the shell, over the dock, as glass (spec section 3).
+        // Menus and centered dialogs opened from the pages are drawn by the shell, over the dock,
+        // as glass (spec sections 3 and 9).
         val menuOverlay = remember { tech.musxi.player.ui.components.MenuOverlayState() }
+        val dialogOverlay = remember { tech.musxi.player.ui.components.DialogOverlayState() }
+        val dialogOpen = dialogOverlay.open ||
+            playlistManagement.naming != null ||
+            playlistManagement.deleting != null
         // Task 1: a sideways swipe walks the library's segments (网易云 / QQ / 酷狗 / 本地音频) and,
-        // past the last one, the tabs. Only on a tab's root page, with no keyboard, selection bar
-        // or player in the way.
+        // past the last one, the tabs. Only on a tab's root page, with no keyboard, selection bar,
+        // dialog or player in the way.
         val swipe = tech.musxi.player.ui.shell.rememberSwipeSwitchState()
         val swipeHaptics = tech.musxi.player.ui.theme.rememberHaptics()
         val platformFilters = remember { LibraryFilter.entries.filter { it.platform != null } }
         val librarySegment = if (librarySegmentLocal) platformFilters.size else
             platformFilters.indexOfFirst { it.platform == (playlists.filter.platform ?: Platform.NETEASE) }.coerceAtLeast(0)
         val imeUp = WindowInsets.ime.getBottom(LocalDensity.current) > 0
-        swipe.enabled = !playerActive && !imeUp && !dockHidden && when (tab) {
+        swipe.enabled = !playerActive && !imeUp && !dockHidden && !dialogOpen && when (tab) {
             ShellTab.LIBRARY -> libraryNav.depth == 1
             ShellTab.SEARCH -> true
             ShellTab.ME -> meNav.depth == 1
         }
         swipe.reduced = tech.musxi.player.ui.theme.rememberReducedMotion()
         // The dock only walks the tabs, and so does the page with a platform locked; the dock is
-        // off while it is hidden or the player is open.
-        swipe.dockEnabled = !playerActive && !dockHidden
+        // off while it is hidden, a dialog is open, or the player is open.
+        swipe.dockEnabled = !playerActive && !dockHidden && !dialogOpen
         val locked = libraryLock != tech.musxi.player.ui.library.LibraryLock.NONE
         fun swipeTo(dir: tech.musxi.player.ui.shell.SwipeDir) = tech.musxi.player.ui.shell.swipeTarget(
             tab, librarySegment, platformFilters.size + 1, dir, tabsOnly = swipe.tabsOnly || locked,
@@ -1098,6 +1173,7 @@ fun MainShell(app: MusxiApplication, dark: Boolean) {
             CompositionLocalProvider(
                 LocalNowPlayingAccent provides nowPlaying,
                 tech.musxi.player.ui.components.LocalMenuOverlay provides menuOverlay,
+                tech.musxi.player.ui.components.LocalDialogOverlay provides dialogOverlay,
                 tech.musxi.player.ui.shell.LocalScrollChrome provides scrollChrome,
             ) {
                 Box(
@@ -1266,6 +1342,30 @@ fun MainShell(app: MusxiApplication, dark: Boolean) {
                                     playlists.filter.platform?.let { app.playbackJournal.removeRecent(it, song.key) }
                                 },
                                 listState = libraryList,
+                                canCreatePlaylist = playlists.filter.platform?.let { app.playlists.capabilities(it).create } == true,
+                                onCreatePlaylist = playlistManagement::openCreate,
+                                management = playlistManagement.menu,
+                                onPlaylistMenu = playlistManagement::openMenu,
+                                onDismissManagement = playlistManagement::dismissMenu,
+                                onRenamePlaylist = playlistManagement::openRename,
+                                onDeletePlaylist = playlistManagement::openDelete,
+                                onMovePlaylist = { key, before, revision -> libraryViewModel.movePlaylist(key, before, revision, notice::show) },
+                                onMoveToStart = {
+                                    val key = playlistManagement.menu?.playlist?.key ?: return@LibraryContent
+                                    libraryViewModel.movePlaylistToStart(key, playlists.revision, notice::show)
+                                    playlistManagement.dismissMenu()
+                                },
+                                onMoveToEnd = {
+                                    val key = playlistManagement.menu?.playlist?.key ?: return@LibraryContent
+                                    if (!playlists.complete) notice.show("请先加载完整歌单列表")
+                                    else libraryViewModel.movePlaylist(key, null, playlists.revision, notice::show)
+                                    playlistManagement.dismissMenu()
+                                },
+                                onResetOrder = {
+                                    libraryViewModel.resetPlaylistOrder(playlists.revision, notice::show)
+                                    playlistManagement.dismissMenu()
+                                },
+                                managementEnabled = playlists.filter.platform !in managementBusy,
                             )
                         }
                         } // NavStackHost
@@ -1303,6 +1403,7 @@ fun MainShell(app: MusxiApplication, dark: Boolean) {
                             updateActions = updateActions,
                             bottomInset = contentInset,
                             backEnabled = !playerActive,
+                            lockScreenState = lockScreenState,
                         )
                     }
                   } // swipe page
@@ -1383,8 +1484,8 @@ fun MainShell(app: MusxiApplication, dark: Boolean) {
                     Spacer(Modifier.height(8.dp))
                 }
             }
-            // The queue sheet takes the back key itself while it is on screen (MusxiSheet).
-            BackHandler(enabled = showLyricsMatch) { showLyricsMatch = false }
+            // The queue, song info and lyrics match sheets are MusxiSheets in overPlayer and take
+            // the back key themselves while visible.
             // Back must peel one layer at a time, outermost first. Before this existed the back
             // gesture left the app from the player, which is the one screen a listener is most
             // likely to be holding.
@@ -1393,8 +1494,8 @@ fun MainShell(app: MusxiApplication, dark: Boolean) {
                     // The anchored menus are focusable popups and take the back key themselves, so
                     // they have no branch here.
                     showQueue -> showQueue = false
-                    // This handler is registered after the sheet's own, so it runs first: the
-                    // lyrics match sheet has to be closed here or back would collapse the player.
+                    showBookmarks -> showBookmarks = false
+                    showSongInfo -> showSongInfo = false
                     showLyricsMatch -> showLyricsMatch = false
                     // The source sheet takes the back key itself while it is on screen.
                     // Leaving lyrics returns to the cover first: it is a mode of this page, and a
@@ -1651,61 +1752,6 @@ fun MainShell(app: MusxiApplication, dark: Boolean) {
             }
             val overPlayer: @Composable BoxScope.() -> Unit = {
                 if (playerActive) {
-                    // Same layering as the queue: a sheet over the player, closed by the scrim or back.
-                    if (showLyricsMatch) {
-                        val match by app.lyricsMatch.state.collectAsStateWithLifecycle()
-                        val matchUi = lyricsMatchUiOf(
-                            match,
-                            title = currentSong?.title ?: playback.title,
-                            artist = currentSong?.artists?.joinToString(" / ") ?: playback.artist,
-                        )
-                        Box(
-                            Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.32f))
-                                .clickable(interactionSource = null, indication = null) { showLyricsMatch = false },
-                        ) {
-                            Column(Modifier.fillMaxSize().imePadding(), verticalArrangement = Arrangement.Bottom) {
-                                LyricsMatchSheet(
-                                    ui = matchUi,
-                                    modifier = Modifier.clickable(interactionSource = null, indication = null) {},
-                                    onSearch = { _, platform, keywords -> app.lyricsMatch.search(platform, keywords, 1) },
-                                    onPreview = app.lyricsMatch::preview,
-                                    onBind = { original, candidate -> app.lyricsMatch.bind(original, candidate, 0L) },
-                                    onUnbind = app.lyricsMatch::reset,
-                                    onDismiss = { showLyricsMatch = false },
-                                )
-                            }
-                        }
-                    }
-                    val localItem = playback.localAudio?.let { item -> localQueue.items.firstOrNull { it.id == item.id } ?: item }
-                    if (showSongInfo && localPlaying) {
-                        // Public metadata of the file only; no path or document URI exists in this state.
-                        SongInfoDialog(
-                            title = playback.title,
-                            rows = if (localItem != null) {
-                                localAudioInfoRows(localItem, playback.durationMs, localFolderName)
-                            } else {
-                                listOf(
-                                    "作者" to playback.artist,
-                                    "时长" to if (playback.durationMs > 0) formatDuration(playback.durationMs) else "",
-                                ).filter { it.second.isNotBlank() }
-                            },
-                            onDismiss = { showSongInfo = false },
-                            heading = "音频信息",
-                        )
-                    } else if (showSongInfo) {
-                        SongInfoDialog(
-                            title = playback.title,
-                            rows = listOf(
-                                "歌手" to playback.artist,
-                                "专辑" to playback.album,
-                                "时长" to if (playback.durationMs > 0) formatDuration(playback.durationMs) else "",
-                                "歌单平台" to playback.queuePlatform?.displayName.orEmpty(),
-                                "实际音源" to playback.sourcePlatform?.displayName.orEmpty(),
-                                "音质" to playback.qualityName.orEmpty(),
-                            ).filter { it.second.isNotBlank() },
-                            onDismiss = { showSongInfo = false },
-                        )
-                    }
                     // The source panel sits above the player: an interruption, not a destination. It stays in
                     // the tree so the sheet can slide out once the search is over, draws its own scrim and
                     // takes the back key while it is on screen.
@@ -1723,6 +1769,62 @@ fun MainShell(app: MusxiApplication, dark: Boolean) {
                         )
                     }
                 }
+                // Lyrics matching over the player: MusxiSheet with glass, pull-to-dismiss and spring
+                // exit, kept in the tree so it slides out smoothly.
+                val lyricsMatchVisible = showLyricsMatch && playerActive
+                val matchState by app.lyricsMatch.state.collectAsStateWithLifecycle()
+                val matchUi = if (lyricsMatchVisible) {
+                    lyricsMatchUiOf(
+                        matchState,
+                        title = currentSong?.title ?: playback.title,
+                        artist = currentSong?.artists?.joinToString(" / ") ?: playback.artist,
+                    )
+                } else {
+                    LyricsMatchUi()
+                }
+                LyricsMatchSheetOverlay(
+                    visible = lyricsMatchVisible,
+                    ui = matchUi,
+                    onSearch = { _, platform, keywords -> app.lyricsMatch.search(platform, keywords, 1) },
+                    onPreview = app.lyricsMatch::preview,
+                    onBind = { original, candidate -> app.lyricsMatch.bind(original, candidate, 0L) },
+                    onUnbind = app.lyricsMatch::reset,
+                    onDismiss = { showLyricsMatch = false },
+                )
+                // Song / local audio metadata sheet over the player (spec section 9).
+                val songInfoVisible = showSongInfo && playerActive
+                val localItem = if (songInfoVisible && localPlaying) {
+                    playback.localAudio?.let { item -> localQueue.items.firstOrNull { it.id == item.id } ?: item }
+                } else null
+                val songInfoRows = if (!songInfoVisible) {
+                    emptyList()
+                } else if (localPlaying) {
+                    // Public metadata of the file only; no path or document URI exists in this state.
+                    if (localItem != null) {
+                        localAudioInfoRows(localItem, playback.durationMs, localFolderName)
+                    } else {
+                        listOf(
+                            "作者" to playback.artist,
+                            "时长" to if (playback.durationMs > 0) formatDuration(playback.durationMs) else "",
+                        ).filter { it.second.isNotBlank() }
+                    }
+                } else {
+                    listOf(
+                        "歌手" to playback.artist,
+                        "专辑" to playback.album,
+                        "时长" to if (playback.durationMs > 0) formatDuration(playback.durationMs) else "",
+                        "歌单平台" to playback.queuePlatform?.displayName.orEmpty(),
+                        "实际音源" to playback.sourcePlatform?.displayName.orEmpty(),
+                        "音质" to playback.qualityName.orEmpty(),
+                    ).filter { it.second.isNotBlank() }
+                }
+                SongInfoSheet(
+                    visible = songInfoVisible,
+                    title = playback.title,
+                    rows = songInfoRows,
+                    onDismiss = { showSongInfo = false },
+                    heading = if (localPlaying) "音频信息" else "歌曲信息",
+                )
                 // The current recording's bookmarks: tap one to jump there, swipe it away to delete.
                 val bookmarkItemId = playback.localAudio?.id
                 LocalBookmarkSheet(
@@ -1825,6 +1927,28 @@ fun MainShell(app: MusxiApplication, dark: Boolean) {
                     actions = updateActions,
                     onDismiss = { showUpdateSheet = false },
                 )
+                tech.musxi.player.ui.account.NeteaseWebLoginSheetHost(
+                    session = neteaseWebSession,
+                    activity = activity,
+                    dark = dark,
+                    onDismiss = ::closeNeteaseWeb,
+                    onUseScanner = if (android.os.Build.VERSION.SDK_INT >= 29) {
+                        {
+                            val reauth = neteaseWebSession?.reauthenticate == true
+                            closeNeteaseWeb()
+                            if (reauth) {
+                                accountViewModel.reauthenticateNeteaseScanner { intent ->
+                                    runCatching { context.startActivity(intent) }
+                                }
+                            } else {
+                                accountViewModel.connectNeteaseScanner { intent ->
+                                    runCatching { context.startActivity(intent) }
+                                }
+                            }
+                            notice.show("登录二维码已存入相册，请在网易云扫一扫里从相册选择")
+                        }
+                    } else null,
+                )
                 // The cover frame a 本地音频 row asks for; a sheet, so it lives here, not in the page.
                 tech.musxi.player.ui.localaudio.CoverCropOverlay(coverCropHost)
                 // The wallpaper's preview bar on the open player, and its frame sheet over everything.
@@ -1891,9 +2015,23 @@ fun MainShell(app: MusxiApplication, dark: Boolean) {
             GlassLayer(active = playerActive, overlay = overPlayer, content = playerLayer)
             // Last, so a page's menu sits over the dock and its back handler runs first.
             tech.musxi.player.ui.components.MenuOverlayLayer(menuOverlay)
+            // After menus: centered dialogs sit over menus and the dock, and take back first.
+            tech.musxi.player.ui.components.DialogOverlayLayer(dialogOverlay)
         }
         // "透明效果" off, battery saver and Android below 12 make every glass surface solid.
-        GlassHost(enabled = settings.transparencyEnabled, overlay = chrome, content = pages)
+        GlassHost(enabled = settings.transparencyEnabled, overlay = {
+            chrome()
+            tech.musxi.player.ui.library.PlaylistNameDialogHost(
+                ui = playlistManagement.naming,
+                onDismiss = playlistManagement::dismissNaming,
+                onConfirm = playlistManagement::submitName,
+            )
+            tech.musxi.player.ui.library.PlaylistDeleteDialogHost(
+                ui = playlistManagement.deleting,
+                onDismiss = playlistManagement::dismissDelete,
+                onConfirm = playlistManagement::confirmDelete,
+            )
+        }, content = pages)
     }
     }
 }

@@ -17,7 +17,7 @@ class QqLibraryRepository(private val accounts: AccountRepository) : LibraryPage
     class LibraryFailure(category: String, val diagnostic: String? = null) : LibraryPageFailure(category)
     private fun <T> safe(result: (Result<T>) -> Unit): (Result<T>) -> Unit = { response ->
         result(response.fold({ Result.success(it) }, {
-            val code = (it as? LibraryFailure)?.category ?: (it as? QqMusicApi.ApiException)?.code
+            val code = (it as? LibraryPageFailure)?.category ?: (it as? QqMusicApi.ApiException)?.code
             val detail = (it as? QqMusicApi.ApiException)?.diagnostic?.takeIf { fixed -> fixed in setOf(
                 "vkey_denied_104003", "vkey_denied_104004", "vkey_denied_104013", "vkey_denied_other",
                 "filename_mismatch", "encrypted_audio", "preview_audio", "purl_path_mismatch") || fixed.matches(Regex("cgi_code_-?[0-9]{1,10}")) }
@@ -164,12 +164,9 @@ class QqLibraryRepository(private val accounts: AccountRepository) : LibraryPage
             return
         }
         val deadline = SystemClock.elapsedRealtime() + 60_000
-        var offset = knownSongs.size
-        var loadedCount = knownSongs.size
-        var expectedTotal: Int? = null
-        var finished = false
+        val cursor = PlaylistQueuePageCursor(knownSongs)
         val remainder = QueueRemainder(window.before, window.after, { callback ->
-            if (finished) {
+            if (cursor.finished) {
                 callback(Result.success(null))
             } else {
                 accounts.withQqSession({ api, session ->
@@ -177,21 +174,11 @@ class QqLibraryRepository(private val accounts: AccountRepository) : LibraryPage
                         throw LibraryFailure("cancelled")
                     if (SystemClock.elapsedRealtime() >= deadline) throw LibraryFailure("timeout")
                     val library = QqLibraryApi(api) { queueRevision.get() == revision && accounts.isQqGenerationConnected(generation) }
-                    val request = playlistQueuePage(offset)
+                    val request = cursor.request()
                     val page = library.tracks(session, playlist.id, request.offset, request.limit)
-                    if (expectedTotal != null && expectedTotal != page.total) throw LibraryFailure("incomplete")
-                    expectedTotal = page.total.takeIf { it >= 0 } ?: throw LibraryFailure("incomplete")
-                    if (expectedTotal!! > 20_000 || offset > expectedTotal!!) throw LibraryFailure("limit")
                     if (queueRevision.get() != revision || !accounts.isQqGenerationConnected(generation))
                         throw LibraryFailure("cancelled")
-                    val songs = request.unseen(page.items).map(::summary)
-                    if (page.nextOffset >= 0 && (songs.isEmpty() || page.nextOffset <= offset))
-                        throw LibraryFailure("incomplete")
-                    loadedCount += songs.size
-                    if (page.nextOffset < 0) {
-                        if (loadedCount != expectedTotal) throw LibraryFailure("incomplete")
-                        finished = true
-                    } else offset = page.nextOffset
+                    val songs = cursor.accept(Page(page.items.map(::summary), page.nextOffset.takeIf { it >= 0 }, page.total.takeIf { it >= 0 }))
                     if (SystemClock.elapsedRealtime() >= deadline) throw LibraryFailure("timeout")
                     if (queueRevision.get() != revision) throw LibraryFailure("cancelled")
                     songs
@@ -213,15 +200,18 @@ class QqLibraryRepository(private val accounts: AccountRepository) : LibraryPage
             tech.musxi.core.playback.QualityOptions(options.map { tech.musxi.core.playback.QualityOption(it.id, it.name) }, null)
         }, safe(result), RequestOperation.OTHER)
     }
-    fun resolveAudio(song: MediaKey, qualityId: String?, result: (Result<AudioCapability>) -> Unit) {
+    fun resolveAudio(song: MediaKey, qualityId: String?, result: (Result<AudioCapability>) -> Unit,
+        isCurrent: () -> Boolean = { true }) {
         require(song.platform == Platform.QQ)
         val generation = accounts.states.value.getValue(Platform.QQ).generation
         accounts.withQqSession({ api, session ->
-            val library = QqLibraryApi(api) { accounts.isQqGenerationConnected(generation) }
+            if (!isCurrent()) throw LibraryFailure("cancelled")
+            val library = QqLibraryApi(api) { isCurrent() && accounts.isQqGenerationConnected(generation) }
             val audio = resolvePreferredQuality("qq", accounts.preferredQuality(Platform.QQ), qualityId,
-                { (it as? tech.musxi.qqloginpoc.QqMusicApi.ApiException)?.code }) { id ->
+                { (it as? tech.musxi.qqloginpoc.QqMusicApi.ApiException)?.code }, isCurrent) { id ->
                 library.audio(session, song.id, SystemClock.elapsedRealtime(), id)
             }
+            if (!isCurrent()) throw LibraryFailure("cancelled")
             if (qualityId != null && audio.qualityId != qualityId) throw LibraryFailure("unavailable")
             AudioCapability(audio.url, audio.expiresAtElapsedMs, audio.qualityId) { accounts.isQqGenerationConnected(generation) }
         }, safe(result), RequestOperation.AUDIO)

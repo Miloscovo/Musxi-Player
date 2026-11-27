@@ -9,6 +9,8 @@ import android.os.PowerManager
 import android.os.SystemClock
 import tech.musxi.core.library.MediaKey
 import java.util.Locale
+import org.json.JSONArray
+import org.json.JSONObject
 
 /** Invokes the app's actual notification PendingIntent. No coordinate input or global settings. */
 internal object BackendSystemValidationRunner {
@@ -72,7 +74,14 @@ internal object BackendSystemValidationRunner {
         val keyguard = app.getSystemService(KeyguardManager::class.java)
         val notifications = notifications(app)
         val foreground = tech.musxi.playback.PlaybackServiceValidation.foregroundState()
+        val timeline = JSONArray(app.playback.diagnostics.value.map { event ->
+            JSONObject().put("elapsedMs", event.elapsedMs).put("stage", event.stage.name)
+                .put("media", event.media.name).put("platform", event.platform?.name)
+                .put("failure", event.failure?.name).put("media3Code", event.media3ErrorCode)
+                .put("connectionAttempt", event.connectionAttempt).put("output", event.output?.name)
+        })
         val edit = app.getSharedPreferences("backend-system-validation", Context.MODE_PRIVATE).edit().clear()
+            .putString("playbackTimeline", timeline.toString())
             .putBoolean("serviceForeground", foreground?.first == true)
             .putBoolean("foregroundGatePending", foreground?.second == true)
             .putString("command", command).putLong("revision", revision).putString("status", status)

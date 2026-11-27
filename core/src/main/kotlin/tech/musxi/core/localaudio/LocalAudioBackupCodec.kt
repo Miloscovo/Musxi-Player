@@ -22,7 +22,8 @@ import java.util.concurrent.CancellationException
  * The envelope is the ASCII magic, a version int and the payload, followed by a SHA-256 of every
  * byte before it. Only the fields a backup already exposes are written: no path, document URI,
  * grant, source identity or audio byte ever reaches the stream, and a reader rebuilds exactly what
- * was written or fails.
+ * was written or fails. Version 2 appends an optional segment to each item; version 1 remains
+ * readable and has no segment field.
  *
  * Writer and reader both stream through fixed buffers, keep a running total against [MAX_BYTES],
  * never allocate from a length that was not capped first, check `checkCancelled` before every
@@ -36,7 +37,8 @@ object LocalAudioBackupCodec {
     /** Hard ceiling for the whole envelope, magic, payload and footer included. */
     const val MAX_BYTES: Long = 32L * 1024 * 1024
 
-    private const val VERSION = 1
+    private const val VERSION = 2
+    private const val VERSION_WITHOUT_SEGMENTS = 1
     private const val FOOTER_BYTES = 32
     private const val BUFFER_BYTES = 8 * 1024
     private const val ID_BYTES = 36
@@ -80,6 +82,13 @@ object LocalAudioBackupCodec {
                 body.writeEnum(entry.item.availability, checkCancelled)
                 body.writeLong(entry.item.addedAtMs)
                 body.writeText(entry.sourceKey, SOURCE_KEY_BYTES, SOURCE_KEY_BYTES, checkCancelled)
+                checkCancelled()
+                body.writeBoolean(entry.item.segment != null)
+                entry.item.segment?.let { segment ->
+                    body.writeLong(segment.startUs)
+                    body.writeLong(segment.endUs)
+                    body.writeInt(segment.trackNumber)
+                }
             }
 
             body.writeCount(value.folders.size, LocalAudioLimits.MAX_FOLDERS)
@@ -153,7 +162,8 @@ object LocalAudioBackupCodec {
             val magic = ByteArray(MAGIC.size)
             body.readFully(magic)
             if (!magic.contentEquals(MAGIC)) throw invalid()
-            if (body.readInt() != VERSION) {
+            val version = body.readInt()
+            if (version != VERSION && version != VERSION_WITHOUT_SEGMENTS) {
                 throw LocalAudioFailure(LocalAudioError.UNSUPPORTED_BACKUP)
             }
             val id = body.readId(checkCancelled)
@@ -177,8 +187,19 @@ object LocalAudioBackupCodec {
                 val availability = body.readEnum<LocalAudioAvailability>(checkCancelled)
                 val addedAtMs = body.readLong()
                 val sourceKey = body.readText(SOURCE_KEY_BYTES, SOURCE_KEY_BYTES, checkCancelled)
+                val segment = if (version == VERSION_WITHOUT_SEGMENTS) null else {
+                    checkCancelled()
+                    if (body.readStrictBoolean(checkCancelled)) {
+                        LocalAudioSegment(
+                            startUs = body.readLong(),
+                            endUs = body.readLong(),
+                            trackNumber = body.readInt(),
+                        )
+                    } else null
+                }
                 items += LocalAudioBackupItem(
-                    LocalAudioItem(audioId, metadata, mode, displayName, availability, addedAtMs),
+                    LocalAudioItem(audioId, metadata, mode, displayName, availability, addedAtMs,
+                        segment = segment),
                     sourceKey,
                 )
             }

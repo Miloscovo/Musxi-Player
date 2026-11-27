@@ -66,3 +66,13 @@ other platform write is implemented; no new runtime dependency or license change
 at MIT revision 2aab9957dfd5231e5b192aecdb177f93ace4c92e: its explicit
 WEAPI /api/playlist/remove profile and single-ID JSON-array-string ids field.
 The original copyright and complete MIT license remain; no runtime dependency.
+
+2026-11-24 song playback additionally adapts XEAPI from MIT revision
+23d9e9d7ee5dfeccfc3b15916ccd9da1f76d3ea4: module/song_url_v1.js,
+module/register_xeapikey.js, util/xeapiKey.js, util/crypto.js and util/request.js.
+NeteaseXeapi implements phone-local key bootstrap, response-signature checks,
+fresh per-request envelopes and bounded AES/gzip response decoding. Other
+endpoints retain the earlier profile. No official login SDK is included.
+org.whispersystems:curve25519-java:0.5.0 (Whisper Systems, GPLv3) provides
+pure Java X25519 for Android 8+. Its complete license is bundled in
+licenses/curve25519-java-GPL-3.0.txt; the app remains GPL-3.0-or-later.

@@ -17,6 +17,7 @@ fun failureReasonText(reason: FailureReason): String = when (reason) {
     FailureReason.AUTH_REQUIRED -> "登录已失效"
     FailureReason.PLATFORM_UNAVAILABLE -> "暂时不可播"
     FailureReason.RATE_LIMIT -> "请求太频繁"
+    FailureReason.PLATFORM_RISK -> "平台暂时限制播放"
     FailureReason.PROTOCOL -> "平台返回异常"
     FailureReason.BACKGROUND_RESTRICTED -> "系统限制了后台播放"
     FailureReason.UNKNOWN -> "原因未知"

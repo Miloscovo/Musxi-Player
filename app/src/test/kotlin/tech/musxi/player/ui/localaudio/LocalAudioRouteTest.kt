@@ -184,7 +184,7 @@ class LocalAudioRouteTest {
     }
 
     @Test fun batchAddUsesTheCurrentRevision() {
-        controller.library.value = controller.library.value.copy(revision = 42)
+        controller.library.value = controller.library.value.copy(revision = 60, organizationRevision = 42, progressRevision = 18)
         folder()
         pickTwo()
         assertEquals(true, selections.last())
@@ -201,9 +201,9 @@ class LocalAudioRouteTest {
         folder()
         pickTwo()
         controller.batchErrors += LocalAudioError.STALE_STATE
-        // A progress save moved the revision while the first attempt was in flight.
+        // A real organization edit moved the organization revision while the attempt was in flight.
         controller.beforeBatchAnswer = {
-            controller.library.value = controller.library.value.copy(revision = 8)
+            controller.library.value = controller.library.value.copy(revision = 20, organizationRevision = 8)
             controller.beforeBatchAnswer = {}
         }
         compose.onNodeWithText("移到").performClick()
@@ -234,7 +234,8 @@ class LocalAudioRouteTest {
         compose.waitForIdle()
         assertTrue(controller.calls.none { it.startsWith("deleteAudio") })
         compose.onNode(isDialog()).assertExists()
-        compose.onNode(hasText("会删除这些音频的进度、书签和自定义名称。不会删除手机里的原文件；Musxi 中的副本会被清理。") and hasAnyAncestor(isDialog())).assertExists()
+        compose.onNode(hasText("会删除这些音频的进度、书签和自定义名称。") and hasAnyAncestor(isDialog())).assertExists()
+        compose.onNode(hasText("不会删除手机里的原文件；Musxi 中的副本会被清理。") and hasAnyAncestor(isDialog())).assertExists()
         compose.onNode(hasText("删除") and hasAnyAncestor(isDialog())).performClick()
         compose.waitForIdle()
         assertEquals(listOf("deleteAudio:${localId(1)}", "deleteAudio:${localId(3)}"), controller.calls)

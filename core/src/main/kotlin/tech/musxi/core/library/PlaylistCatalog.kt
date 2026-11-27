@@ -33,10 +33,16 @@ class PlaylistCatalog(
     private val browser: LibraryBrowser,
     private val identity: () -> LibraryCacheIdentity?,
     private val storage: PlaylistOrderAccess,
+    /** Page-number APIs advance by their request size even when a page has fewer visible rows. */
+    private val continuationStride: Int? = null,
 ) {
+    init { require(continuationStride == null || continuationStride in 1..FilePlaylistOrderStore.MAX_ITEMS) }
     private val mutable = MutableStateFlow(PlaylistCatalogState(platform))
     val state = mutable.asStateFlow()
     private val pages = sortedMapOf<Int, Page<PlaylistSummary>>()
+    // Display only while a same-owner reopen rebuilds the page chain. It must not serve
+    // pagination, ordering writes, completion or proof that a remote row still exists.
+    private var reopeningItems: List<PlaylistSummary>? = null
     private var order = emptyList<MediaKey>()
     private var owner: LibraryCacheIdentity? = null
     @Volatile private var version = 0L
@@ -50,6 +56,7 @@ class PlaylistCatalog(
     fun open(refresh: Boolean = true) {
         opened = true
         ensureOwner()
+        reopeningItems = state.value.items.takeIf { it.isNotEmpty() }
         pages.clear(); ++version
         publish()
         browser.playlists(0, refresh)
@@ -81,14 +88,20 @@ class PlaylistCatalog(
     }
     fun invalidate(expected: LibraryCacheIdentity) {
         if (expected != identity()) return
+        ensureOwner()
+        reopeningItems = if (!opened) state.value.items.takeIf { it.isNotEmpty() } else null
         pages.clear(); ++version; publish()
         browser.invalidate(expected, refreshNow = false)
+        // The page chain was already discarded above. Keep only the closed catalog's
+        // display snapshot when the next open observes this invalidation revision.
+        if (!opened) invalidation = browser.state.value.invalidationRevision
         if (opened) {
             browser.playlists(0)
             accept(browser.state.value)
         }
     }
     fun clearCachedPages() {
+        reopeningItems = null
         pages.clear(); ++version; publish()
         browser.clearCachedPages()
         accept(browser.state.value)
@@ -101,6 +114,7 @@ class PlaylistCatalog(
         if (!opened || value !== browser.state.value || value.query.playlist != null || !browser.represents(expected)) return
         if (invalidation != value.invalidationRevision) {
             invalidation = value.invalidationRevision
+            reopeningItems = null
             pages.clear(); ++version
         }
         val content = value.content as? LibraryContent.Playlists
@@ -109,10 +123,12 @@ class PlaylistCatalog(
             val offset = value.query.offset
             val previous = pages[offset]
             val end = offset + page.items.size
+            val expectedNext = continuationStride?.let { offset + it } ?: end
             if (page.items.size > FilePlaylistOrderStore.MAX_ITEMS || end > FilePlaylistOrderStore.MAX_ITEMS ||
+                (continuationStride != null && (page.items.size > continuationStride || offset % continuationStride != 0)) ||
                 page.items.any { it.key.platform != platform } ||
                 page.items.map { it.key }.distinct().size != page.items.size ||
-                (page.nextOffset != null && (page.items.isEmpty() || page.nextOffset != end)) ||
+                (page.nextOffset != null && (page.items.isEmpty() || page.nextOffset != expectedNext)) ||
                 (page.total != null && (page.total !in end..FilePlaylistOrderStore.MAX_ITEMS ||
                     (page.nextOffset == null && end != page.total) ||
                     (page.nextOffset != null && end >= page.total))) ||
@@ -123,6 +139,7 @@ class PlaylistCatalog(
                 mutable.value = state.value.copy(loading = false, error = "protocol")
                 return
             }
+            if (offset == 0) reopeningItems = null
             if (previous != page) {
                 // A changed prefix invalidates every later page, including cached continuation pages.
                 pages.keys.filter { it >= offset }.forEach(pages::remove)
@@ -150,9 +167,9 @@ class PlaylistCatalog(
     }
     fun moveToStart(key: MediaKey, expectedRevision: Long, result: (Result<Unit>) -> Unit) {
         ensureOwner()
-        if (state.value.items.none { it.key == key && it.kind != PlaylistKind.LIKED })
-            return result(Result.failure(LibraryPageFailure("invalid_request")))
         val loaded = rawItems().filter { it.kind != PlaylistKind.LIKED }.map { it.key }
+        if (key !in loaded)
+            return result(Result.failure(LibraryPageFailure("invalid_request")))
         update(expectedRevision, { saved ->
             listOf(key) + (saved + loaded).distinct().filter { it != key }
         }, result)
@@ -176,6 +193,7 @@ class PlaylistCatalog(
         val latest = identity()
         if (latest == owner) return false
         owner = latest; ++epoch; ++version; saving = false; storageReady = false
+        reopeningItems = null
         val abandoned = serverChanges.toList()
         serverChanges.clear()
         pages.clear(); order = emptyList(); invalidation = -1
@@ -250,7 +268,9 @@ class PlaylistCatalog(
         val rank = order.withIndex().associate { it.value to it.index }
         val fixed = raw.filter { it.kind == PlaylistKind.LIKED }
         val ordinary = raw.filter { it.kind != PlaylistKind.LIKED }.sortedBy { rank[it.key] ?: Int.MAX_VALUE }
-        mutable.value = PlaylistCatalogState(platform, (fixed + ordinary).toList(), version, owner,
-            next, next == null && pages.containsKey(0), loading, fromCache, order.isNotEmpty(), storageError, error, saving)
+        val visible = reopeningItems ?: (fixed + ordinary).toList()
+        val visibleNext = if (reopeningItems != null) null else next
+        mutable.value = PlaylistCatalogState(platform, visible, version, owner,
+            visibleNext, next == null && pages.containsKey(0), loading, fromCache, order.isNotEmpty(), storageError, error, saving)
     }
 }

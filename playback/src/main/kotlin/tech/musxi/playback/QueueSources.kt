@@ -17,6 +17,10 @@ interface PlaybackHost {
     val mediaCardLyrics: Flow<MediaCardLyricsState>
         get() = kotlinx.coroutines.flow.flowOf(MediaCardLyricsState())
     val localAudioPlayback: LocalAudioPlaybackHost? get() = null
+    /** Application-owned local DSF capability. Other hosts stay disabled unless explicitly enabled. */
+    val dsfPlaybackEnabled: Boolean get() = experimentalDsfDecoding
+    /** Compatibility for existing test hosts; production uses dsfPlaybackEnabled. */
+    val experimentalDsfDecoding: Boolean get() = false
     /** A validated platform takeover invalidates an older asynchronous local preparation. */
     fun onPlatformPlaybackRequested() = Unit
     /** Local takeover cancels platform fetches, without invalidating a newer local preparation. */

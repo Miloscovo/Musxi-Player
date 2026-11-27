@@ -18,6 +18,10 @@ class LocalAudioPickerValidationActivity : Activity() {
             "files" -> LocalAudioPickers.files()
             "tree" -> LocalAudioPickers.directory()
             "followup_files", "followup_oem_files" -> LocalAudioPickers.files(showAllFileTypes = true)
+            "expansion_files" -> LocalAudioPickers.files(showAllFileTypes = true)
+            "dsf_pipe_files" -> LocalAudioPickers.files(showAllFileTypes = true, allowMultiple = false)
+            "dsf_actual_external", "dsf_actual_downloads" -> LocalAudioPickers.files(showAllFileTypes = true, allowMultiple = false)
+            "expansion_tree" -> LocalAudioPickers.directory()
             "followup_oem_tree" -> LocalAudioPickers.directory()
             "export" -> LocalAudioPickers.exportAudio("musxi-device-export.wav", "audio/wav")
             "backup" -> LocalAudioPickers.exportOrganization("musxi-device-organization.musxiorg")
@@ -25,9 +29,19 @@ class LocalAudioPickerValidationActivity : Activity() {
             else -> { finish(); return }
         }
         val operation = intent.getStringExtra("operation").orEmpty()
-        val directory = if (operation.startsWith("followup_")) "Musxi-Followup-20261110" else DIRECTORY
+        val directory = when {
+            operation.startsWith("expansion_") -> "Musxi-Expansion-20261114"
+            operation.startsWith("followup_") -> "Musxi-Followup-20261110"
+            else -> DIRECTORY
+        }
         picker.putExtra(DocumentsContract.EXTRA_INITIAL_URI, DocumentsContract.buildDocumentUri(
             "com.android.externalstorage.documents", "primary:Download/$directory"))
+        if (operation == "dsf_pipe_files") picker.putExtra(DocumentsContract.EXTRA_INITIAL_URI,
+            DocumentsContract.buildRootUri("$packageName.dsf.validation.documents", "root"))
+        if (operation == "dsf_actual_external") picker.putExtra(DocumentsContract.EXTRA_INITIAL_URI,
+            DocumentsContract.buildDocumentUri("com.android.externalstorage.documents", "primary:Download/Musxi-Actual-20261116"))
+        if (operation == "dsf_actual_downloads") picker.putExtra(DocumentsContract.EXTRA_INITIAL_URI,
+            DocumentsContract.buildRootUri("com.android.providers.downloads.documents", "downloads"))
         // Fixed acceptance provider; production pickers continue using the user's system choice.
         picker.setPackage(if (operation.startsWith("followup_oem_")) "com.coloros.filemanager" else "com.android.documentsui")
         @Suppress("DEPRECATION")
@@ -44,7 +58,7 @@ class LocalAudioPickerValidationActivity : Activity() {
         }.distinct()
         selection = Selection(resultCode == RESULT_OK, uris, data?.flags ?: 0)
         // Keep temporary URI grants alive until the followup importer has consumed the result.
-        if (!intent.getStringExtra("operation").orEmpty().startsWith("followup_") || resultCode != RESULT_OK) finish()
+        if (intent.getStringExtra("operation").orEmpty().let { !it.startsWith("followup_") && !it.startsWith("expansion_") && it != "dsf_pipe_files" && !it.startsWith("dsf_actual_") } || resultCode != RESULT_OK) finish()
     }
 
     override fun onDestroy() {

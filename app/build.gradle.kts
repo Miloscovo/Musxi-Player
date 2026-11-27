@@ -18,8 +18,8 @@ android {
         applicationId = "tech.musxi.player"
         minSdk = 26
         targetSdk = 36
-        versionCode = 6
-        versionName = "0.3.0"
+        versionCode = 7
+        versionName = "0.3.1"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     signingConfigs {
@@ -72,7 +72,8 @@ val verifyMusxiReleaseSigningConfiguration by tasks.registering {
         }
     }
 }
-tasks.matching { it.name == "preReleaseBuild" }.configureEach {
+// Compiling/linting release needs no private key. Every APK/AAB packaging entry still requires it.
+tasks.matching { it.name in setOf("packageRelease", "assembleRelease", "packageReleaseBundle", "bundleRelease", "signReleaseBundle") }.configureEach {
     dependsOn(verifyMusxiReleaseSigningConfiguration)
 }
 kotlin { jvmToolchain(17) }
@@ -115,6 +116,7 @@ dependencies {
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")
     androidTestImplementation("androidx.test.ext:junit:1.1.5")
     androidTestImplementation("androidx.test:runner:1.5.2")
+    androidTestImplementation("androidx.media3:media3-extractor:1.8.0") // Existing runtime version; opt-in DSF pipeline diagnostics.
     androidTestImplementation(project(":platform-kugou"))
     androidTestImplementation(project(":platform-qq"))
     androidTestImplementation(project(":platform-netease"))

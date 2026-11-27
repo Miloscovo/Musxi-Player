@@ -15,7 +15,12 @@ internal class LocalAudioSourceProbe(private val files: LocalAudioFiles, private
             if (stored.item.metadata.sizeBytes != null && file.length() != stored.item.metadata.sizeBytes) {
                 throw LocalAudioFailure(LocalAudioError.SOURCE_CHANGED)
             }
-            file.inputStream().use { if (it.read() < 0) throw LocalAudioFailure(LocalAudioError.READ_FAILED) }
+            file.inputStream().use { input ->
+                val header = input.readBytesUpToDsfHeader(checkCancelled)
+                if (header.isEmpty()) throw LocalAudioFailure(LocalAudioError.READ_FAILED)
+                if (header.hasDsfMagic() || DsfPlaybackSupport.isCandidate(stored.item.metadata.fileName))
+                    validateDsfHeader(header, file.length())
+            }
             Uri.fromFile(file)
         } else {
             val value = Uri.parse(stored.source.location)
@@ -27,7 +32,16 @@ internal class LocalAudioSourceProbe(private val files: LocalAudioFiles, private
                 throw LocalAudioFailure(LocalAudioError.SOURCE_CHANGED)
             }
             checkCancelled()
-            documents.open(value).use { if (it.read() < 0) throw LocalAudioFailure(LocalAudioError.READ_FAILED) }
+            documents.open(value).use { input ->
+                val header = input.readBytesUpToDsfHeader(checkCancelled)
+                if (header.isEmpty()) throw LocalAudioFailure(LocalAudioError.READ_FAILED)
+                if (header.hasDsfMagic() || DsfPlaybackSupport.isCandidate(observed.name, observed.mime) ||
+                    DsfPlaybackSupport.isCandidate(stored.item.metadata.fileName)) {
+                    val info = validateDsfHeader(header, observed.size)
+                    requireDsfReferenceAccess(documents, observed, info, checkCancelled)
+                    requireDsfSourceUnchanged(documents, observed, checkCancelled)
+                }
+            }
             value
         }
         checkCancelled()
@@ -41,4 +55,37 @@ internal class LocalAudioSourceProbe(private val files: LocalAudioFiles, private
     }
     catch (_: IOException) { throw LocalAudioFailure(LocalAudioError.READ_FAILED) }
     catch (_: Exception) { throw LocalAudioFailure(LocalAudioError.READ_FAILED) }
+
+    private fun validateDsfHeader(bytes: ByteArray, size: Long?): DsfFileInfo {
+        if (!documents.dsfPlaybackEnabled) throw LocalAudioFailure(LocalAudioError.UNSUPPORTED_AUDIO)
+        val info = try { DsfFileParser.parse(bytes, size) }
+            catch (_: DsfParseFailure) { throw LocalAudioFailure(LocalAudioError.UNSUPPORTED_AUDIO) }
+        if (!DsfPlaybackSupport.supports(info)) throw LocalAudioFailure(LocalAudioError.UNSUPPORTED_AUDIO)
+        return info
+    }
+}
+
+private fun ByteArray.hasDsfMagic(): Boolean = size >= 4 && this[0] == 68.toByte() && this[1] == 83.toByte() &&
+    this[2] == 68.toByte() && this[3] == 32.toByte()
+
+private fun java.io.InputStream.readBytesUpToDsfHeader(checkCancelled: () -> Unit): ByteArray {
+    val bytes = ByteArray(DsfFileParser.HEADER_SIZE)
+    checkCancelled()
+    val first = read()
+    if (first < 0) return byteArrayOf()
+    if (first != 68) return byteArrayOf(first.toByte())
+    bytes[0] = first.toByte()
+    var count = 1
+    while (count < bytes.size) {
+        if (count >= 4 && !bytes.hasDsfMagic()) break
+        checkCancelled()
+        val next = read(bytes, count, (if (count < 4) 4 else bytes.size) - count)
+        if (next < 0) break
+        if (next == 0) {
+            val one = read()
+            if (one < 0) break
+            bytes[count++] = one.toByte()
+        } else count += next
+    }
+    return bytes.copyOf(count)
 }

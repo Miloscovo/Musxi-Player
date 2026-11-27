@@ -335,6 +335,41 @@ class LocalSourceCheckRepositoryTest {
         } finally { gate.release.countDown() }
     }
 
+    @Test fun successfulCallbackCanStartNextSourceCheck() = runBlocking {
+        val (_, id) = imported()
+        var next: Job? = null
+        var answer: Result<List<LocalAudioSourceCheckResult>>? = null
+        repository.checkSources(listOf(id), repository.state.value.organizationToken) { response ->
+            assertTrue(response.isSuccess)
+            next = repository.checkSources(listOf(id), repository.state.value.organizationToken) { answer = it }
+        }.join()
+        next!!.join()
+        assertTrue(answer!!.isSuccess)
+        assertTrue(repository.sourceChecks.value.completed)
+    }
+
+    @Test fun clearCheckInvalidatesLateProviderResultAndAllowsNextRunAfterCleanup() = runBlocking {
+        val (uri, id) = imported()
+        val gate = block(uri, LocalAudioError.PERMISSION_REQUIRED)
+        var callback = false
+        val job = repository.checkSources(listOf(id), repository.state.value.organizationToken) { callback = true }
+        try {
+            assertTrue(gate.entered.await(10, TimeUnit.SECONDS))
+            val runId = repository.sourceChecks.value.runId
+            repository.clearSourceCheck()
+            val cleared = repository.sourceChecks.value
+            assertTrue(cleared.runId > runId)
+            assertFalse(cleared.running)
+            gate.release.countDown(); job.join()
+            assertEquals(cleared, repository.sourceChecks.value)
+            assertFalse(callback)
+            assertEquals(LocalAudioAvailability.AVAILABLE, store.source(id)!!.item.availability)
+            repository.checkSources(listOf(id), repository.state.value.organizationToken).join()
+            assertTrue(repository.sourceChecks.value.completed)
+            assertTrue(repository.sourceChecks.value.runId > cleared.runId)
+        } finally { gate.release.countDown() }
+    }
+
     private suspend fun imported(name: String = "雨声.mp3", mode: LocalImportMode = LocalImportMode.REFERENCE): Pair<Uri, String> {
         val uri = documents.add(name)
         var result: Result<List<LocalAudioImportResult>>? = null

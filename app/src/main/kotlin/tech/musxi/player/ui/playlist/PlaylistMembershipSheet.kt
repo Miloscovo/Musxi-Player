@@ -24,14 +24,11 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -42,8 +39,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
@@ -53,11 +48,16 @@ import androidx.compose.ui.semantics.toggleableState
 import androidx.compose.ui.state.ToggleableState
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import tech.musxi.core.account.Platform
 import tech.musxi.core.library.MediaKey
 import tech.musxi.player.ui.components.Cover
+import tech.musxi.player.ui.components.MusxiDialogTextField
 import tech.musxi.player.ui.components.MusxiSheet
+import tech.musxi.player.ui.components.MusxiTextFieldDialog
 import tech.musxi.player.ui.components.PlainRow
 import tech.musxi.player.ui.components.PlatformTag
+import tech.musxi.player.ui.theme.identityColor
+import tech.musxi.player.ui.theme.isDarkSurface
 import tech.musxi.player.ui.components.ProgressArc
 import tech.musxi.player.ui.components.RowCheckbox
 import tech.musxi.player.ui.components.RowDivider
@@ -102,8 +102,13 @@ fun PlaylistMembershipSheet(
     MusxiSheet(visible = ui != null, onDismiss = onDismiss) {
         if (shown != null) SheetBody(shown, dark, onToggle, onSave, onRetry, onStartCreate)
     }
-    if (ui != null && ui.naming) {
-        NewPlaylistDialog(ui, onCancel = onCancelCreate, onCreate = onCreate)
+    if (shown != null) {
+        NewPlaylistDialog(
+            ui = shown,
+            visible = ui != null && ui.naming,
+            onCancel = onCancelCreate,
+            onCreate = onCreate,
+        )
     }
 }
 
@@ -210,40 +215,69 @@ private fun CreateRow(ui: MembershipSheetUi, onStartCreate: () -> Unit) {
  * make a second list.
  */
 @Composable
-private fun NewPlaylistDialog(ui: MembershipSheetUi, onCancel: () -> Unit, onCreate: (String) -> Unit) {
-    var value by remember { mutableStateOf(TextFieldValue("")) }
-    val problem = playlistNameProblem(value.text, ui.song.key.platform)
-    val shownProblem = ui.nameError ?: problem?.takeIf { value.text.isNotEmpty() }
-    AlertDialog(
-        onDismissRequest = { if (!ui.creating) onCancel() },
-        title = { Text("新建歌单") },
-        text = {
-            NewPlaylistField(value, { value = it }, shownProblem, ui.creating)
-        },
-        confirmButton = {
-            TextButton(onClick = { onCreate(value.text) }, enabled = !ui.creating && problem == null) {
-                Text(if (ui.creating) "正在新建…" else "新建并加入")
+private fun NewPlaylistDialog(
+    ui: MembershipSheetUi,
+    visible: Boolean,
+    onCancel: () -> Unit,
+    onCreate: (String) -> Unit,
+) {
+    val dark = MaterialTheme.colorScheme.background.isDarkSurface()
+    val platform = ui.song.key.platform
+    var value by remember(ui.song.key) { mutableStateOf(TextFieldValue("")) }
+    var editedAfterError by remember(ui.nameError, ui.song.key) { mutableStateOf(false) }
+    val seenOpen = remember { booleanArrayOf(false) }
+    LaunchedEffect(visible) {
+        if (visible) {
+            if (seenOpen[0]) {
+                value = TextFieldValue("")
+                editedAfterError = false
             }
+            seenOpen[0] = true
+        }
+    }
+    val candidate = value.text.trim()
+    val problem = playlistNameProblem(value.text, platform)
+    val remoteError = ui.nameError?.takeUnless { editedAfterError }
+    val shownProblem = remoteError ?: problem?.takeIf { value.text.isNotEmpty() }
+    val maxCount = if (platform == Platform.QQ) 20 else 80
+    val currentCount = if (platform == Platform.QQ) candidate.length else candidate.codePointCount(0, candidate.length)
+
+    // Drawn over the glass PlaylistMembershipSheet, so forceSolid keeps a single blur layer.
+    MusxiTextFieldDialog(
+        visible = visible,
+        title = "新建歌单",
+        value = value,
+        onValueChange = {
+            if (it.text != value.text) editedAfterError = true
+            value = it
         },
-        dismissButton = { TextButton(onClick = onCancel, enabled = !ui.creating) { Text("取消") } },
+        confirmLabel = "新建并加入",
+        onDismiss = onCancel,
+        onConfirm = { onCreate(value.text) },
+        confirmEnabled = problem == null,
+        placeholder = "歌单名称",
+        helperText = "创建后自动加入「${ui.song.title}」",
+        errorText = shownProblem,
+        counterText = "$currentCount / $maxCount",
+        busy = ui.creating,
+        busyLabel = "正在新建…",
+        forceSolid = true,
+        eyebrow = "${platform.displayName} · 新建并加入",
+        eyebrowDot = platform.identityColor(dark),
     )
 }
 
-/** The field on its own: under Robolectric a field inside a Dialog window never lets Compose idle. */
+/** Standalone field retained for unit tests of the naming rules. */
 @Composable
 internal fun NewPlaylistField(value: TextFieldValue, onValueChange: (TextFieldValue) -> Unit, problem: String?, busy: Boolean) {
-    val focus = remember { FocusRequester() }
-    OutlinedTextField(
+    MusxiDialogTextField(
         value = value,
         onValueChange = onValueChange,
-        singleLine = true,
         enabled = !busy,
-        placeholder = { Text("歌单名称") },
-        isError = problem != null,
-        supportingText = problem?.let { { Text(it) } },
-        modifier = Modifier.fillMaxWidth().focusRequester(focus),
+        placeholder = "歌单名称",
+        errorText = problem,
+        autoFocus = true,
     )
-    LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
 }
 
 /** The song, its platform, the save button, and one line of status when there is something to say. */

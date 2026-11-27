@@ -21,7 +21,9 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import kotlin.coroutines.resume
 import tech.musxi.core.wallpaper.WallpaperError
 import tech.musxi.core.wallpaper.WallpaperFrame
 import tech.musxi.player.wallpaper.AppWallpaperRepository
@@ -297,7 +299,7 @@ internal class WallpaperHost(
 }
 
 /** The managed picture whole (already upright, ≤2560 px a side) and a ≤160 px copy for its tones. */
-private fun decodeWallpaper(file: File): Pair<ImageBitmap, ImageBitmap>? = try {
+internal fun decodeWallpaper(file: File): Pair<ImageBitmap, ImageBitmap>? = try {
     BitmapFactory.decodeFile(file.path)?.let { full ->
         val scale = 160f / maxOf(full.width, full.height)
         val small = if (scale >= 1f) full else android.graphics.Bitmap.createScaledBitmap(
@@ -307,6 +309,46 @@ private fun decodeWallpaper(file: File): Pair<ImageBitmap, ImageBitmap>? = try {
     }
 } catch (_: OutOfMemoryError) {
     null
+}
+
+/**
+ * Read-only [tech.musxi.player.ui.player.WallpaperLook] for surfaces outside [MainShell] (such as
+ * the lock-screen lyrics page). Draws only the applied [saved] wallpaper while enabled; drafts and
+ * the interface wallpaper never enter here.
+ */
+@Composable
+internal fun rememberSavedWallpaperLook(
+    repo: AppWallpaperRepository,
+    saved: tech.musxi.core.wallpaper.SavedWallpaper,
+): tech.musxi.player.ui.player.WallpaperLook? {
+    val assetId = if (saved.preferences.enabled) saved.asset?.id else null
+    var decoded by remember(assetId) { mutableStateOf<Pair<ImageBitmap, ImageBitmap>?>(null) }
+    LaunchedEffect(repo, assetId) {
+        if (assetId == null) {
+            decoded = null
+            return@LaunchedEffect
+        }
+        val file = suspendCancellableCoroutine<File?> { cont ->
+            repo.imageFile(assetId) { result ->
+                if (cont.isActive) cont.resume(result.getOrNull())
+            }
+        }
+        decoded = if (file != null && file.isFile) {
+            withContext(Dispatchers.IO) { decodeWallpaper(file) }
+        } else {
+            null
+        }
+    }
+    val pair = decoded ?: return null
+    val prefs = saved.preferences
+    return remember(pair, prefs.frame, prefs.strength) {
+        tech.musxi.player.ui.player.WallpaperLook(
+            image = pair.first,
+            frame = prefs.frame,
+            strength = prefs.strength,
+            probe = pair.second,
+        )
+    }
 }
 
 /** The shell's two hosts. */

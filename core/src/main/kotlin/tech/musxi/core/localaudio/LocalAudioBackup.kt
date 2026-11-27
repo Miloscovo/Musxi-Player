@@ -43,6 +43,20 @@ class LocalAudioBackup(
         require(progress.all { it.audioId in audioIds })
         require(bookmarks.all { it.audioId in audioIds })
         require(cursors.all { (it.folderId to it.audioId) in membership })
+        val itemsById = items.associateBy { it.item.id }
+        require(items.all { entry ->
+            val segment = entry.item.segment
+            val durationMs = entry.item.metadata.durationMs
+            segment == null || durationMs == null || durationMs == segment.durationMs
+        })
+        require(progress.all { value ->
+            val segment = itemsById.getValue(value.audioId).item.segment
+            segment == null || value.positionMs <= segment.durationMs
+        })
+        require(bookmarks.all { value ->
+            val segment = itemsById.getValue(value.audioId).item.segment
+            segment == null || value.positionMs <= segment.durationMs
+        })
     }
 
     override fun toString() = "LocalAudioBackup($id, ${items.size} items)"
@@ -56,14 +70,24 @@ class LocalAudioBackupItem(val item: LocalAudioItem, val sourceKey: String) {
 
 object LocalAudioBackupKeys {
     fun source(value: StoredLocalAudio): String {
-        if (value.source.mode == LocalImportMode.COPY) return value.source.location
+        val segment = value.item.segment
+        if (segment == null && value.source.mode == LocalImportMode.COPY) {
+            return value.source.location
+        }
         val bytes = ByteArrayOutputStream()
         DataOutputStream(bytes).use { out ->
-            out.writeUTF("musxi-local-reference-v1")
+            out.writeUTF(if (segment == null) "musxi-local-reference-v1" else "musxi-local-segment-v1")
+            if (segment != null) out.writeUTF(value.source.mode.name)
             val identity = value.source.identity.toByteArray(Charsets.UTF_8)
             out.writeInt(identity.size); out.write(identity)
-            out.writeLong(value.item.metadata.sizeBytes ?: -1)
-            out.writeLong(value.item.metadata.modifiedAtMs ?: -1)
+            if (segment == null) {
+                out.writeLong(value.item.metadata.sizeBytes ?: -1)
+                out.writeLong(value.item.metadata.modifiedAtMs ?: -1)
+            } else {
+                out.writeLong(segment.startUs)
+                out.writeLong(segment.endUs)
+                out.writeInt(segment.trackNumber)
+            }
         }
         return MessageDigest.getInstance("SHA-256").digest(bytes.toByteArray())
             .joinToString("") { "%02x".format(it.toInt() and 255) }
@@ -77,6 +101,7 @@ data class LocalAudioRestorePreview(
     val unmatchedItems: Int,
     val folders: Int,
     val bookmarks: Int,
+    val expectedVersion: LocalAudioVersionToken? = null,
 )
 
 data class LocalAudioRestoreResult(

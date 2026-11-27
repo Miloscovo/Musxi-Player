@@ -1,9 +1,6 @@
 package tech.musxi.player
 
 import android.os.Looper
-import java.util.concurrent.CountDownLatch
-import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import tech.musxi.accounts.AccountRepository
@@ -24,7 +21,7 @@ class KugouPlaybackProvider(private val accounts: AccountRepository, private val
     override fun qualityOptions(mediaId: String, generation: Long): tech.musxi.core.playback.QualityOptions {
         if (!mediaId.startsWith("kugou:") || currentGeneration() != generation)
             throw PlaybackSourceException(PlaybackFailure.AUTH_REQUIRED)
-        val options = awaitPlaybackResult(::mapFailure) { done ->
+        val options = awaitPlaybackResult(::mapFailure) { _, done ->
             library.qualities(MediaKey(Platform.KUGOU, mediaId.substringAfter(':')), done)
         }
         if (currentGeneration() != generation) throw PlaybackSourceException(PlaybackFailure.AUTH_REQUIRED)
@@ -34,13 +31,11 @@ class KugouPlaybackProvider(private val accounts: AccountRepository, private val
         check(Looper.myLooper() != Looper.getMainLooper())
         if (!mediaId.startsWith("kugou:") || !PlaybackSourcePolicy.acceptsMediaId(mediaId) || currentGeneration() != generation)
             throw PlaybackSourceException(PlaybackFailure.AUTH_REQUIRED)
-        val latch = CountDownLatch(1)
-        val response = AtomicReference<Result<KugouLibraryRepository.AudioCapability>?>()
-        library.resolveAudio(MediaKey(Platform.KUGOU, mediaId.substringAfter(':')), qualityId) { response.set(it); latch.countDown() }
-        try { if (!latch.await(90, TimeUnit.SECONDS)) throw PlaybackSourceException(PlaybackFailure.TIMEOUT) }
-        catch (_: InterruptedException) { Thread.currentThread().interrupt(); throw PlaybackSourceException(PlaybackFailure.NETWORK) }
+        val capability = awaitPlaybackResult<KugouLibraryRepository.AudioCapability>(::mapFailure) { current, done ->
+            library.resolveAudio(MediaKey(Platform.KUGOU, mediaId.substringAfter(':')), qualityId, done,
+                isCurrent = { current() && currentGeneration() == generation })
+        }
         if (currentGeneration() != generation) throw PlaybackSourceException(PlaybackFailure.AUTH_REQUIRED)
-        val capability = response.get()?.getOrElse { throw mapFailure(it) } ?: throw PlaybackSourceException(PlaybackFailure.PROTOCOL)
         return StreamLease(null, capability.qualityId, tech.musxi.core.playback.PlaybackQualities.name(capability.qualityId)) {
             if (currentGeneration() != generation) throw PlaybackSourceException(PlaybackFailure.AUTH_REQUIRED)
             var url: String? = null

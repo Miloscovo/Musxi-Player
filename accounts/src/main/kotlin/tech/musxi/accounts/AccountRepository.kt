@@ -5,6 +5,9 @@ import android.content.Intent
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.map
@@ -16,9 +19,36 @@ import tech.musxi.core.diagnostics.*
 import tech.musxi.neteaseloginpoc.NeteaseApi
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.ScheduledExecutorService
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.ConcurrentHashMap
 
 /** Process-owned login execution. Activities receive state, never platform credentials. */
-class AccountRepository(context: Context) {
+class AccountRepository internal constructor(
+    context: Context,
+    private val driverOverrides: Map<Platform, PlatformDriver>?,
+    private val queue: ScheduledExecutorService = Executors.newSingleThreadScheduledExecutor(),
+    private val accountQueues: Map<Platform, ScheduledExecutorService> = Platform.entries.associateWith {
+        Executors.newSingleThreadScheduledExecutor()
+    },
+    private val membershipQueues: Map<Platform, ExecutorService> = Platform.entries.associateWith {
+        Executors.newSingleThreadExecutor()
+    },
+    elapsedNow: () -> Long = SystemClock::elapsedRealtime,
+    epochNow: () -> Long = System::currentTimeMillis,
+    private val observeNetwork: Boolean = true,
+    private val browserLogout: ((Boolean) -> Unit) -> Unit = { done ->
+        tech.musxi.neteaseloginpoc.WebLoginSession.clear(context.applicationContext) { done(it) }
+    },
+    private val officialLoginCompleted: (Platform, Long) -> Unit = { _, _ -> },
+    private val officialLoginLaunching: (Platform, Long) -> Unit = { _, _ -> },
+    private val officialLoginDiagnostic: (String) -> Unit = {},
+) {
+    constructor(context: Context, officialLoginCompleted: (Platform, Long) -> Unit = { _, _ -> },
+        officialLoginLaunching: (Platform, Long) -> Unit = { _, _ -> },
+        officialLoginDiagnostic: (String) -> Unit = {}) :
+        this(context, null, officialLoginCompleted = officialLoginCompleted, officialLoginLaunching = officialLoginLaunching,
+            officialLoginDiagnostic = officialLoginDiagnostic)
     private val app = context.applicationContext
     val settingsRepository = AppSettingsRepository(app,
         onRecommendationsEnabledChanged = { recommendationsBrowser.setEnabled(it) })
@@ -26,8 +56,12 @@ class AccountRepository(context: Context) {
     private val coordinator = AccountCoordinator()
     val states: StateFlow<Map<Platform, AccountState>> = coordinator.states
     private val gate = Any()
-    private val queue = Executors.newSingleThreadScheduledExecutor()
-    private val membershipQueue = Executors.newSingleThreadExecutor()
+    private val platformGates = Platform.entries.associateWith { Any() }
+    private val recoveryGate = AccountRecoveryGate(elapsedNow)
+    private val verificationHistory = AccountVerificationHistory(epochNow)
+    val verification: StateFlow<Map<Platform, AccountVerification>> = verificationHistory.states
+    private val recoveryTasks = mutableMapOf<Platform, Pair<Long, Runnable>>() // holds gate
+    @Volatile private var networkValidated: Boolean? = null
     private val membershipRequests = mutableMapOf<Platform, Long>() // every access holds gate
     private val membershipRefreshGate = MembershipRefreshGate(SystemClock::elapsedRealtime)
     private val playbackSearch = Executors.newFixedThreadPool(2)
@@ -87,66 +121,111 @@ class AccountRepository(context: Context) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private val temporaryImage = TemporaryLoginImage(app)
     private val drivers by lazy {
-        mapOf(Platform.KUGOU to KugouDriver(app), Platform.QQ to QqDriver(app),
+        driverOverrides ?: mapOf(Platform.KUGOU to KugouDriver(app), Platform.QQ to QqDriver(app),
             Platform.NETEASE to NeteaseDriver(app))
     }
     private val sessions = mutableMapOf<Platform, Any>() // every access holds gate
-    private class Pending(val token: Long, val request: LoginRequest, val deadline: Long)
-    private val pending = mutableMapOf<Platform, Pending>() // worker queue only
-    private val pollTasks = mutableMapOf<Platform, Pair<Long, java.util.concurrent.ScheduledFuture<*>>>()
+    private class Pending(val token: Long, val request: LoginRequest, val deadline: Long) {
+        @Volatile var launched = false
+    }
+    // Different keys have different workers; all operations on a key stay on its account worker.
+    private val pending = ConcurrentHashMap<Platform, Pending>()
+    private val pollTasks = ConcurrentHashMap<Platform, Pair<Long, java.util.concurrent.ScheduledFuture<*>>>()
+    private val deadlines = mutableMapOf<Platform, Pair<Long, Runnable>>() // holds gate
+    private class ProfileRefresh(val generation: Long, val callbacks: MutableList<(Result<Unit>) -> Unit>) {
+        @Volatile var completed = false
+        var finished = false // holds gate; timed out I/O may still own the worker
+        lateinit var timeout: Runnable
+    }
+    private val profileRefreshes = mutableMapOf<Platform, ProfileRefresh>() // holds gate
+    private val pollChecks = mutableSetOf<Platform>() // holds gate
+    private val disconnecting = mutableSetOf<Platform>() // holds gate
     @Volatile private var foreground = false
-    // Process-owned even when the UI facade has never been opened. Construction does no HTTP.
+    // Process-owned even when the UI facade has never been opened. HTTP runs only on workers.
     private val recommendationsBrowser = buildRecommendationsBrowser()
 
     init {
+        if (observeNetwork) observeNetworkRecovery()
         val tokens = Platform.entries.associateWith { coordinator.restore(it, null) }
-        queue.execute {
-            runCatching { temporaryImage.clear() }
-            // Publish every saved identity before any platform's blocking network verifier.
-            val verifiers = tokens.mapNotNull { (platform, token) -> loadRestore(platform, token) }
-            verifiers.forEach { queue.execute(it) }
+        tokens.forEach { (platform, token) ->
+            armDeadline(platform, token)
+            accountQueues.getValue(platform).execute {
+                if (platform == Platform.NETEASE) runCatching { temporaryImage.clear() }
+                loadRestore(platform, token)?.invoke()
+            }
         }
     }
 
     fun restore(platform: Platform) {
-        val initial = synchronized(gate) {
-            if (states.value.getValue(platform).phase in activePhases) return
-            coordinator.restore(platform, null)
-        }
-        queue.execute { loadRestore(platform, initial)?.let { queue.execute(it) } }
+        restore(platform, expectedRecovery = null)
     }
 
-    private fun loadRestore(platform: Platform, initial: Long): (() -> Unit)? {
+    private fun restore(platform: Platform, expectedRecovery: AccountState?) {
+        val initial = accountTransition(platform) {
+            val current = states.value.getValue(platform)
+            if (platform in disconnecting) return@accountTransition null
+            if (current.phase in activePhases) return@accountTransition null
+            if (profileRefreshes[platform]?.let { it.generation == current.generation && !it.finished } == true)
+                return@accountTransition null
+            if (expectedRecovery != null) {
+                if (!foreground || !recoveryNetworkAvailable() || current.generation != expectedRecovery.generation ||
+                    !recoveryGate.accept(current)) return@accountTransition null
+            } else recoveryGate.recordAttempt(platform)
+            cancelRecovery(platform)
+            coordinator.restore(platform, current.profile)
+        } ?: return
+        armDeadline(platform, initial)
+        accountQueues.getValue(platform).execute {
+            loadRestore(platform, initial, allowRecovery = expectedRecovery == null)?.invoke()
+        }
+    }
+
+    private fun loadRestore(platform: Platform, initial: Long, allowRecovery: Boolean = true): (() -> Unit)? {
         var token = initial
         return try {
             val driver = drivers.getValue(platform)
             val saved = driver.load()
             if (!coordinator.isCurrent(platform, token)) return null
             if (saved == null) clearLibraryCache(platform)
-            synchronized(gate) {
-                if (!coordinator.isCurrent(platform, token)) return null
+            accountTransition(platform) {
+                if (!coordinator.isCurrent(platform, token)) return@accountTransition
                 if (saved == null) {
-                    sessions.remove(platform); coordinator.disconnect(platform); return null
+                    sessions.remove(platform); coordinator.disconnect(platform)
+                    verificationHistory.clear(platform); cancelDeadline(platform); return@accountTransition
                 }
                 sessions[platform] = saved
+                recoveryGate.recordAttempt(platform)
                 token = coordinator.restore(platform, profile(platform, driver.identity(saved)))
             }
+            if (saved == null || !coordinator.isCurrent(platform, token)) return null
+            armDeadline(platform, token)
             val existing = requireNotNull(saved)
             val verify: () -> Unit = verify@{
                 if (!coordinator.isCurrent(platform, token)) return@verify
+                if (!allowRecovery && (!foreground || !recoveryNetworkAvailable())) {
+                    fail(platform, token, AccountError.NETWORK)
+                    return@verify
+                }
                 try {
                     val verified = driver.verify(existing)
                     if (!coordinator.isCurrent(platform, token)) return@verify
                     if (driver.identity(existing).id != driver.identity(verified).id)
                         clearLibraryCache(platform)
-                    synchronized(gate) {
+                    synchronized(platformGates.getValue(platform)) {
                         if (!coordinator.isCurrent(platform, token)) return@verify
                         driver.save(verified)
-                        sessions[platform] = verified
-                        coordinator.connected(platform, token, profile(platform, driver.identity(verified)))
+                        synchronized(gate) {
+                            sessions[platform] = verified
+                            coordinator.connected(platform, token, profile(platform, driver.identity(verified)))
+                            verificationHistory.succeeded(platform)
+                            cancelDeadline(platform)
+                        }
                     }
                     refreshMembership(platform)
-                } catch (failure: Exception) { fail(platform, token, failure) }
+                } catch (failure: Exception) {
+                    fail(platform, token, failure)
+                    if (allowRecovery) requestNetworkRecovery()
+                }
             }
             verify
         } catch (failure: Exception) { fail(platform, token, failure); null }
@@ -154,20 +233,33 @@ class AccountRepository(context: Context) {
 
     /** Launch callback must be invoked by the currently visible Activity; URI stays out of state. */
     fun connectOfficial(platform: Platform, launch: (Intent) -> Unit) {
+        connectOfficial(platform, reauthenticate = false, launch)
+    }
+
+    fun reauthenticateOfficial(platform: Platform, launch: (Intent) -> Unit) {
+        connectOfficial(platform, reauthenticate = true, launch)
+    }
+
+    private fun connectOfficial(platform: Platform, reauthenticate: Boolean, launch: (Intent) -> Unit) {
         require(platform != Platform.NETEASE)
-        val token = begin(platform) ?: return
-        queue.execute {
+        val token = begin(platform, reauthenticate) ?: return
+        accountQueues.getValue(platform).execute {
             try {
+                if (!coordinator.isCurrent(platform, token)) return@execute
                 val request = drivers.getValue(platform).create()
-                synchronized(gate) {
-                    if (!coordinator.isCurrent(platform, token)) return@execute
+                accountTransition(platform) {
+                    if (!coordinator.isCurrent(platform, token)) return@accountTransition
                     pending[platform] = Pending(token, request, SystemClock.elapsedRealtime() + ATTEMPT_MS)
                     coordinator.awaiting(platform, token)
                 }
                 main.post {
                     if (!coordinator.isCurrent(platform, token)) return@post
                     if (!foreground) { cancel(platform); return@post }
-                    try { launch(requireNotNull(request.launch)) }
+                    try {
+                        officialLoginLaunching(platform, token)
+                        launch(requireNotNull(request.launch))
+                        pending[platform]?.takeIf { it.token == token }?.launched = true
+                    }
                     catch (_: Exception) { fail(platform, token, AccountError.OPEN_FAILED) }
                 }
                 schedulePoll(platform, token)
@@ -176,24 +268,36 @@ class AccountRepository(context: Context) {
     }
 
     /** One browser attempt at a time. Cookie data is forwarded directly into the platform module. */
-    internal fun beginWebLogin(): Long? = begin(Platform.NETEASE)?.also {
+    internal fun beginWebLogin(reauthenticate: Boolean = false): Long? = begin(Platform.NETEASE, reauthenticate)?.also {
         val token = it
-        queue.execute { if (coordinator.isCurrent(Platform.NETEASE, token)) runCatching { temporaryImage.clear() } }
+        accountQueues.getValue(Platform.NETEASE).execute {
+            if (coordinator.isCurrent(Platform.NETEASE, token)) runCatching { temporaryImage.clear() }
+        }
         coordinator.awaiting(Platform.NETEASE, it)
     }
 
     fun connectNeteaseScanner(launch: (Intent) -> Unit) {
+        connectNeteaseScanner(reauthenticate = false, launch)
+    }
+
+    fun reauthenticateNeteaseScanner(launch: (Intent) -> Unit) {
+        connectNeteaseScanner(reauthenticate = true, launch)
+    }
+
+    private fun connectNeteaseScanner(reauthenticate: Boolean, launch: (Intent) -> Unit) {
         val platform = Platform.NETEASE
-        val token = begin(platform) ?: return
-        queue.execute {
+        val token = begin(platform, reauthenticate) ?: return
+        accountQueues.getValue(platform).execute {
             try {
                 val request = drivers.getValue(platform).create()
                 if (!coordinator.isCurrent(platform, token)) return@execute
                 temporaryImage.save((request.opaque as NeteaseApi.Attempt).authorizationUrl, token)
-                synchronized(gate) {
+                synchronized(platformGates.getValue(platform)) {
                     if (!coordinator.isCurrent(platform, token)) { temporaryImage.clear(token); return@execute }
-                    pending[platform] = Pending(token, request, SystemClock.elapsedRealtime() + ATTEMPT_MS)
-                    coordinator.awaiting(platform, token)
+                    synchronized(gate) {
+                        pending[platform] = Pending(token, request, SystemClock.elapsedRealtime() + ATTEMPT_MS)
+                        coordinator.awaiting(platform, token)
+                    }
                 }
                 main.post {
                     if (!coordinator.isCurrent(platform, token)) return@post
@@ -209,27 +313,32 @@ class AccountRepository(context: Context) {
 
     internal fun completeWebLogin(token: Long, header: String) {
         if (!coordinator.verifying(Platform.NETEASE, token)) return
-        queue.execute {
+        accountQueues.getValue(Platform.NETEASE).execute {
             try {
-                val session = NeteaseApi.fromBrowserCookies(header)
+                val session = drivers.getValue(Platform.NETEASE).importBrowserSession(header)
                 finish(Platform.NETEASE, token, session, null)
             } catch (failure: Exception) { fail(Platform.NETEASE, token, failure) }
         }
     }
 
+    internal fun isWebLoginCurrent(token: Long) = coordinator.isCurrent(Platform.NETEASE, token)
+
     internal fun cancelWebLogin(token: Long) {
-        synchronized(gate) {
+        accountTransition(Platform.NETEASE) {
             if (coordinator.isCurrent(Platform.NETEASE, token)) cancel(Platform.NETEASE)
         }
     }
 
     fun cancel(platform: Platform) {
-        val cancelled = synchronized(gate) {
+        val cancelled = accountTransition(platform) {
+            if (platform in disconnecting) return@accountTransition null
             val old = states.value.getValue(platform).generation
             coordinator.cancel(platform)
+            cancelDeadline(platform)
+            retireProfileRefresh(platform)
             old
-        }
-        queue.execute {
+        } ?: return
+        accountQueues.getValue(platform).execute {
             if (pending[platform]?.token == cancelled) pending.remove(platform)
             if (pollTasks[platform]?.first == cancelled) pollTasks.remove(platform)?.second?.cancel(false)
             if (platform == Platform.NETEASE) runCatching { temporaryImage.clear(cancelled) }
@@ -238,33 +347,123 @@ class AccountRepository(context: Context) {
 
     /** Report disconnected only once private storage cleanup has succeeded. */
     fun disconnect(platform: Platform) {
-        val token = synchronized(gate) { coordinator.cancel(platform); coordinator.begin(platform) }
-        queue.execute {
+        val token = accountTransition(platform) {
+            cancelDeadline(platform)
+            cancelRecovery(platform)
+            retireProfileRefresh(platform)
+            disconnecting += platform
+            coordinator.cancel(platform); coordinator.begin(platform)
+        }
+        accountQueues.getValue(platform).execute {
             try {
                 if (!coordinator.isCurrent(platform, token)) return@execute
                 clearLibraryCache(platform)
-                synchronized(gate) {
+                synchronized(platformGates.getValue(platform)) {
                     if (!coordinator.isCurrent(platform, token)) return@execute
+                    if (platform == Platform.NETEASE) tech.musxi.neteaseloginpoc.WebLoginSession.markForClear(app)
                     drivers.getValue(platform).clear()
                     if (platform == Platform.NETEASE) temporaryImage.clear()
-                    sessions.remove(platform)
                     pending.remove(platform)
-                    coordinator.disconnect(platform)
+                    synchronized(gate) {
+                        sessions.remove(platform)
+                        if (platform != Platform.NETEASE) completeDisconnect(platform)
+                    }
                 }
-            } catch (_: Exception) { fail(platform, token, AccountError.STORAGE) }
+                if (platform == Platform.NETEASE) browserLogout { cleared ->
+                    accountTransition(platform) {
+                        if (coordinator.isCurrent(platform, token)) {
+                            if (cleared) completeDisconnect(platform)
+                            else {
+                                disconnecting.remove(platform)
+                                coordinator.fail(platform, token, AccountError.STORAGE)
+                                verificationHistory.failed(platform, AccountError.STORAGE)
+                            }
+                        }
+                    }
+                }
+            } catch (_: Exception) {
+                synchronized(gate) {
+                    if (coordinator.isCurrent(platform, token)) disconnecting.remove(platform)
+                }
+                fail(platform, token, AccountError.STORAGE)
+            }
         }
+    }
+
+    private fun completeDisconnect(platform: Platform) {
+        disconnecting.remove(platform)
+        coordinator.disconnect(platform)
+        verificationHistory.clear(platform)
+        cancelRecovery(platform)
     }
 
     fun setForeground(visible: Boolean) {
         val returning = visible && !foreground
         foreground = visible
         if (returning) Platform.entries.forEach { refreshMembership(it, force = false) }
-        if (visible) queue.execute {
-            pending.toMap().forEach { (platform, attempt) -> poll(platform, attempt.token) }
+        if (returning) requestNetworkRecovery()
+        if (!visible) synchronized(gate) { Platform.entries.forEach(::cancelRecovery) }
+        if (visible) Platform.entries.forEach(::checkNow)
+    }
+
+    fun checkNow(platform: Platform) {
+        synchronized(gate) { if (!pollChecks.add(platform)) return }
+        accountQueues.getValue(platform).execute {
+            try { pending[platform]?.let { poll(platform, it.token) } }
+            finally { synchronized(gate) { pollChecks.remove(platform) } }
         }
     }
 
-    fun checkNow(platform: Platform) { queue.execute { pending[platform]?.let { poll(platform, it.token) } } }
+    /** One attempt per foreground/network event, with a per-platform cooldown. No retry loop. */
+    private fun requestNetworkRecovery() = synchronized(gate) {
+        if (!foreground || !recoveryNetworkAvailable()) return@synchronized
+        Platform.entries.forEach { platform ->
+            val state = states.value.getValue(platform)
+            val delay = recoveryGate.delayUntilAllowed(state) ?: return@forEach
+            if (recoveryTasks[platform]?.first == state.generation) return@forEach
+            cancelRecovery(platform)
+            val task = Runnable {
+                synchronized(gate) {
+                    if (recoveryTasks[platform]?.first != state.generation) return@Runnable
+                    recoveryTasks.remove(platform)
+                }
+                restore(platform, state)
+            }
+            recoveryTasks[platform] = state.generation to task
+            main.postDelayed(task, delay)
+        }
+    }
+
+    private fun cancelRecovery(platform: Platform) {
+        recoveryTasks.remove(platform)?.second?.let(main::removeCallbacks)
+    }
+
+    /** Read the current default network, including when an older callback is still queued. */
+    private fun recoveryNetworkAvailable(): Boolean {
+        if (!observeNetwork) return true
+        return runCatching {
+            val manager = app.getSystemService(ConnectivityManager::class.java) ?: return@runCatching false
+            manager.getNetworkCapabilities(manager.activeNetwork)
+                ?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true
+        }.getOrDefault(false)
+    }
+
+    private fun observeNetworkRecovery() {
+        val manager = app.getSystemService(ConnectivityManager::class.java) ?: return
+        fun changed() { main.post {
+            val validated = recoveryNetworkAvailable()
+            val recovered = validated && networkValidated != true
+            networkValidated = validated
+            if (recovered) requestNetworkRecovery()
+        } }
+        runCatching {
+            manager.registerDefaultNetworkCallback(object : ConnectivityManager.NetworkCallback() {
+                override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) = changed()
+                override fun onLost(network: Network) = changed()
+            })
+            changed()
+        }
+    }
 
     /** Optional, read-only entitlement metadata must never invalidate a verified login. */
     fun refreshMembership(platform: Platform, force: Boolean = true) {
@@ -274,7 +473,7 @@ class AccountRepository(context: Context) {
             if (!membershipRefreshGate.accept(platform, state.generation, force)) return
             state.generation.also { membershipRequests[platform] = it }
         }
-        membershipQueue.execute {
+        membershipQueues.getValue(platform).execute {
             val value = runCatching {
                 drivers.getValue(platform).membership(sessionSnapshot(platform, generation))
             }.getOrDefault(Membership())
@@ -289,15 +488,24 @@ class AccountRepository(context: Context) {
         }
     }
 
-    private fun begin(platform: Platform): Long? = synchronized(gate) {
+    private fun begin(platform: Platform, reauthenticate: Boolean = false): Long? = accountTransition(platform) {
         val state = states.value.getValue(platform)
-        if (state.phase in activePhases || state.phase == AccountPhase.CONNECTED || state.profile != null) return null
-        coordinator.begin(platform)
+        if (reauthenticate) {
+            val token = coordinator.reauthenticate(platform) ?: return@accountTransition null
+            retireProfileRefresh(platform)
+            cancelRecovery(platform)
+            armDeadline(platform, token, ATTEMPT_MS)
+            return@accountTransition token
+        }
+        if (state.phase in activePhases || state.phase == AccountPhase.CONNECTED || state.profile != null)
+            return@accountTransition null
+        coordinator.begin(platform).also { armDeadline(platform, it, ATTEMPT_MS) }
     }
 
     private fun schedulePoll(platform: Platform, token: Long) {
+        if (!coordinator.isCurrent(platform, token)) return
         pollTasks.remove(platform)?.second?.cancel(false)
-        pollTasks[platform] = token to queue.schedule({ poll(platform, token) }, 2500, TimeUnit.MILLISECONDS)
+        pollTasks[platform] = token to accountQueues.getValue(platform).schedule({ poll(platform, token) }, 2500, TimeUnit.MILLISECONDS)
     }
 
     private fun poll(platform: Platform, token: Long) {
@@ -309,12 +517,27 @@ class AccountRepository(context: Context) {
             fail(platform, token, AccountError.TIMEOUT)
             return
         }
-        if (!foreground) return
+        // Kugou has no callback. Only this user-launched, deadline-bound attempt keeps polling.
+        if (!foreground && !(platform == Platform.KUGOU && attempt.launched)) return
         try {
-            when (val result = drivers.getValue(platform).poll(attempt.request)) {
+            if (platform == Platform.KUGOU) officialLoginDiagnostic("POLL")
+            val result = drivers.getValue(platform).poll(attempt.request)
+            if (platform == Platform.KUGOU) officialLoginDiagnostic(when (result) {
+                is PollResult.Complete -> "AUTHORIZED"
+                PollResult.Waiting -> "WAITING"
+                PollResult.Expired -> "EXPIRED"
+                PollResult.Refused -> "REFUSED"
+            })
+            when (result) {
                 is PollResult.Complete -> {
                     if (coordinator.verifying(platform, token)) finish(platform, token, result.session, attempt.deadline)
-                    pending.remove(platform)
+                    if (pending.remove(platform, attempt) && platform == Platform.KUGOU && attempt.launched) {
+                        main.post {
+                            val state = states.value.getValue(platform)
+                            if (state.generation == token && state.phase == AccountPhase.CONNECTED)
+                                runCatching { officialLoginCompleted(platform, token) }
+                        }
+                    }
                 }
                 PollResult.Waiting -> schedulePoll(platform, token)
                 PollResult.Expired -> { pending.remove(platform); fail(platform, token, AccountError.TIMEOUT) }
@@ -331,16 +554,23 @@ class AccountRepository(context: Context) {
         if (!coordinator.isCurrent(platform, token)) return
         val driver = drivers.getValue(platform)
         val verified = driver.verify(session)
-        synchronized(gate) {
+        val candidateId = driver.identity(session).id
+        check(candidateId.isBlank() || candidateId == driver.identity(verified).id) { "Verified account mismatch" }
+        synchronized(platformGates.getValue(platform)) {
             if (!coordinator.isCurrent(platform, token)) return
             if (deadline != null && SystemClock.elapsedRealtime() >= deadline) {
                 fail(platform, token, AccountError.TIMEOUT); return
             }
             driver.save(verified)
-            sessions[platform] = verified
-            coordinator.connected(platform, token, profile(platform, driver.identity(verified)))
+            synchronized(gate) {
+                sessions[platform] = verified
+                coordinator.connected(platform, token, profile(platform, driver.identity(verified)))
+                verificationHistory.succeeded(platform)
+                cancelDeadline(platform)
+            }
             if (platform == Platform.NETEASE) runCatching { temporaryImage.clear(token) }
         }
+        // Cache readers/writers bind to the committed owner and generation. Never erase rollback data for a candidate.
         refreshMembership(platform)
     }
 
@@ -370,13 +600,7 @@ class AccountRepository(context: Context) {
                 else -> RequestOutcome.FAILED
             })
             val failure = response.exceptionOrNull()
-            var expirationGeneration: Long? = null
-            if (failure is NeteaseApi.ApiException && failure.code == "expired") {
-                synchronized(gate) {
-                    if (coordinator.invalidate(Platform.NETEASE, expected.generation))
-                        expirationGeneration = states.value.getValue(Platform.NETEASE).generation
-                }
-            }
+            val expirationGeneration = invalidateExpired(Platform.NETEASE, expected.generation, failure)
             main.post {
                 requestMetrics.delivered(timing)
                 val latest = states.value.getValue(Platform.NETEASE)
@@ -420,13 +644,7 @@ class AccountRepository(context: Context) {
                 else -> RequestOutcome.FAILED
             })
             val failure = response.exceptionOrNull()
-            var expirationGeneration: Long? = null
-            if (failure is tech.musxi.qqloginpoc.QqMusicApi.ApiException && failure.code == "expired") {
-                synchronized(gate) {
-                    if (coordinator.invalidate(Platform.QQ, expected.generation))
-                        expirationGeneration = states.value.getValue(Platform.QQ).generation
-                }
-            }
+            val expirationGeneration = invalidateExpired(Platform.QQ, expected.generation, failure)
             main.post {
                 requestMetrics.delivered(timing)
                 val latest = states.value.getValue(Platform.QQ)
@@ -467,12 +685,25 @@ class AccountRepository(context: Context) {
                 response.isSuccess -> RequestOutcome.SUCCESS
                 else -> RequestOutcome.FAILED
             })
+            val expirationGeneration = invalidateExpired(Platform.KUGOU, expected, response.exceptionOrNull())
             main.post {
                 requestMetrics.delivered(timing)
-                if (!isKugouGenerationConnected(expected)) result(Result.failure(LibraryUnavailable()))
+                val latest = states.value.getValue(Platform.KUGOU)
+                if (expirationGeneration != null && latest.generation == expirationGeneration &&
+                    latest.phase == AccountPhase.REAUTH_REQUIRED) result(response)
+                else if (!isKugouGenerationConnected(expected)) result(Result.failure(LibraryUnavailable()))
                 else result(response)
             }
         }
+    }
+
+    /** Only an explicit authentication rejection retires a business session, never a song error. */
+    private fun invalidateExpired(platform: Platform, expected: Long, failure: Throwable?): Long? = accountTransition(platform) {
+        if (failure !is Exception || safeErrorCode(failure) != "expired") return@accountTransition null
+        if (!coordinator.invalidate(platform, expected)) return@accountTransition null
+        verificationHistory.failed(platform, AccountError.EXPIRED)
+        cancelRecovery(platform)
+        states.value.getValue(platform).generation
     }
 
     // Do not retain gate during HTTP. Logout/re-auth can invalidate an in-flight snapshot immediately.
@@ -512,7 +743,8 @@ class AccountRepository(context: Context) {
     fun createPlaylistCatalog(fetch: LibraryPageFetch, platform: Platform): PlaylistCatalog {
         val browser = createLibraryBrowser(fetch, platform)
         val catalog = PlaylistCatalog(platform, browser, { playbackIdentity(platform) },
-            PlaylistOrderAccess { expected, change, result -> playlistOrder(platform, expected, change, result) })
+            PlaylistOrderAccess { expected, change, result -> playlistOrder(platform, expected, change, result) },
+            continuationStride = if (platform == Platform.KUGOU) 30 else null)
         scope.launch { browser.state.collect { catalog.accept(it) } }
         scope.launch {
             states.map { it.getValue(platform) }.distinctUntilChanged().collect { catalog.accountChanged() }
@@ -706,25 +938,93 @@ class AccountRepository(context: Context) {
 
     /** Refresh display metadata without a login transition or a new account generation. */
     fun refreshProfile(platform: Platform, result: (Result<Unit>) -> Unit = {}) {
-        val expected = states.value.getValue(platform)
-        if (expected.phase != AccountPhase.CONNECTED) {
-            main.post { result(Result.failure(LibraryUnavailable())) }; return
+        val request = synchronized(gate) {
+            val current = states.value.getValue(platform)
+            if (current.phase != AccountPhase.CONNECTED) {
+                main.post { result(Result.failure(LibraryUnavailable())) }; return
+            }
+            profileRefreshes[platform]?.takeIf { it.generation == current.generation && !it.finished }?.let {
+                if (!it.completed && it.callbacks.size < MAX_PROFILE_WAITERS) it.callbacks += result
+                else main.post { result(Result.failure(LibraryUnavailable())) }
+                return
+            }
+            ProfileRefresh(current.generation, mutableListOf(result)).also {
+                profileRefreshes[platform] = it
+                it.timeout = Runnable {
+                    synchronized(platformGates.getValue(platform)) {
+                        val failure = java.net.SocketTimeoutException("Account verification timed out")
+                        synchronized(gate) {
+                            val latest = states.value.getValue(platform)
+                            if (!it.completed && latest.generation == it.generation && latest.phase == AccountPhase.CONNECTED)
+                                verificationHistory.failed(platform, AccountError.NETWORK)
+                        }
+                        completeProfileRefresh(platform, it, Result.failure(failure), finished = false)
+                    }
+                }
+                main.postDelayed(it.timeout, VERIFY_WAIT_MS)
+            }
         }
-        queue.execute {
+        accountQueues.getValue(platform).execute {
             val response = runCatching {
+                synchronized(gate) { if (request.completed) throw LibraryUnavailable() }
                 val driver = drivers.getValue(platform)
-                val verified = driver.verify(sessionSnapshot(platform, expected.generation))
+                val verified = driver.verify(sessionSnapshot(platform, request.generation))
                 val updated = profile(platform, driver.identity(verified))
-                synchronized(gate) {
+                synchronized(platformGates.getValue(platform)) {
                     val current = states.value.getValue(platform)
-                    if (current.phase != AccountPhase.CONNECTED || current.generation != expected.generation ||
-                        updated.id != expected.profile?.id) throw LibraryUnavailable()
+                    if (request.completed || current.phase != AccountPhase.CONNECTED || current.generation != request.generation ||
+                        updated.id != current.profile?.id) throw LibraryUnavailable()
                     driver.save(verified)
-                    sessions[platform] = verified
-                    check(coordinator.refreshProfile(platform, expected.generation, updated))
+                    synchronized(gate) {
+                        sessions[platform] = verified
+                        check(coordinator.refreshProfile(platform, request.generation, updated))
+                        verificationHistory.succeeded(platform)
+                    }
+                    completeProfileRefresh(platform, request, Result.success(Unit))
                 }
             }
-            main.post { result(response) }
+            val failure = response.exceptionOrNull()
+            synchronized(platformGates.getValue(platform)) {
+                val expirationGeneration = if (request.completed) null
+                    else invalidateExpired(platform, request.generation, failure)
+                if (failure is Exception && failure !is LibraryUnavailable && expirationGeneration == null) {
+                    synchronized(gate) {
+                        val current = states.value.getValue(platform)
+                        if (!request.completed && current.phase == AccountPhase.CONNECTED && current.generation == request.generation)
+                            verificationHistory.failed(platform, accountError(failure))
+                    }
+                }
+                completeProfileRefresh(platform, request, response, expirationGeneration)
+            }
+        }
+    }
+
+    private fun completeProfileRefresh(platform: Platform, request: ProfileRefresh, response: Result<Unit>,
+        expirationGeneration: Long? = null, finished: Boolean = true) {
+        val callbacks = synchronized(gate) {
+            if (finished) {
+                request.finished = true
+                if (profileRefreshes[platform] === request) profileRefreshes.remove(platform)
+            }
+            if (request.completed) return
+            request.completed = true
+            main.removeCallbacks(request.timeout)
+            request.callbacks.toList().also { request.callbacks.clear() }
+        }
+        callbacks.forEach { callback ->
+            main.post {
+                val current = states.value.getValue(platform)
+                if ((current.generation == request.generation && current.phase == AccountPhase.CONNECTED) ||
+                    (expirationGeneration != null && current.generation == expirationGeneration &&
+                        current.phase == AccountPhase.REAUTH_REQUIRED)) callback(response)
+                else callback(Result.failure(LibraryUnavailable()))
+            }
+        }
+    }
+
+    private fun retireProfileRefresh(platform: Platform) {
+        profileRefreshes[platform]?.let {
+            completeProfileRefresh(platform, it, Result.failure(LibraryUnavailable()), finished = false)
         }
     }
 
@@ -733,23 +1033,49 @@ class AccountRepository(context: Context) {
         identity.name.filterNot { it.isISOControl() }.take(80), AvatarPolicy.sanitize(platform, identity.avatarUrl))
 
     private fun fail(platform: Platform, token: Long, error: AccountError) {
-        synchronized(gate) { coordinator.fail(platform, token, error) }
-        queue.execute {
+        accountTransition(platform) {
+            if (coordinator.fail(platform, token, error)) {
+                verificationHistory.failed(platform, error)
+                cancelDeadline(platform)
+            }
+        }
+        accountQueues.getValue(platform).execute {
             if (pending[platform]?.token == token) pending.remove(platform)
             if (pollTasks[platform]?.first == token) pollTasks.remove(platform)?.second?.cancel(false)
             if (platform == Platform.NETEASE) runCatching { temporaryImage.clear(token) }
         }
     }
-    private fun fail(platform: Platform, token: Long, error: Exception) = fail(platform, token,
-        when (safeErrorCode(error)) {
-            "network", "http", "timeout" -> AccountError.NETWORK
-            "expired", "credentials" -> AccountError.EXPIRED
-            "storage" -> AccountError.STORAGE
-            else -> AccountError.PLATFORM
-        })
+    private fun fail(platform: Platform, token: Long, error: Exception) = fail(platform, token, accountError(error))
+
+    private fun accountError(error: Exception): AccountError = when (safeErrorCode(error)) {
+        "network", "http", "timeout" -> AccountError.NETWORK
+        "expired", "credentials" -> AccountError.EXPIRED
+        "storage" -> AccountError.STORAGE
+        else -> AccountError.PLATFORM
+    }
+
+    /** Platform storage commits and transitions share this lock; other platforms never wait for disk. */
+    private fun <T> accountTransition(platform: Platform, work: () -> T): T =
+        synchronized(platformGates.getValue(platform)) { synchronized(gate) { work() } }
+
+    private fun armDeadline(platform: Platform, token: Long, delayMs: Long = VERIFY_WAIT_MS) = synchronized(gate) {
+        if (!coordinator.isCurrent(platform, token)) return@synchronized
+        cancelDeadline(platform)
+        val timeout = Runnable {
+            fail(platform, token, if (delayMs == ATTEMPT_MS) AccountError.TIMEOUT else AccountError.NETWORK)
+        }
+        deadlines[platform] = token to timeout
+        main.postDelayed(timeout, delayMs)
+    }
+
+    private fun cancelDeadline(platform: Platform) {
+        deadlines.remove(platform)?.second?.let(main::removeCallbacks)
+    }
 
     private companion object {
         const val ATTEMPT_MS = 180_000L
+        const val VERIFY_WAIT_MS = 45_000L
+        const val MAX_PROFILE_WAITERS = 64
         val activePhases = setOf(AccountPhase.PREPARING, AccountPhase.WAITING_CONFIRMATION,
             AccountPhase.VERIFYING, AccountPhase.REVALIDATING)
     }
