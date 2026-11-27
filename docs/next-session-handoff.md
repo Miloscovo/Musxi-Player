@@ -6,7 +6,7 @@
 
 - 11-27用户授权整理累计前后端成果，提交安卓仓库、向PC上游android/development提交PR并发布v0.3.1（0.3.1/code7），可更新README。按[本版说明](android-v0.3.1-release.md)重新统一验证与正式签名，沿用原证书；不自动合并PR。用户已反馈网易云网页登录大部分自行实测正常，扫码常驻入口建议未实现；旧专项断开原因未确认，发布记录保留边界。
 
-- v0.3.1发布准备：统一验证`20261127T064902391Z-27496`通过3,178项、Lint0错误165警告、1,093条路径冻结；正式签名包8c29dacb与原证书一致，APK清单／固定DEX调试类隔离通过，PJF110首次安装启动及设备APK散列核对通过，不等于覆盖升级或正式包账号／播放全验。release Lint与远端PR／Release结果后补，本地证据`.local/artifacts/release-v0.3.1-preparation/`。
+- v0.3.1发布准备：统一验证`20261127T064902391Z-27496`通过3,178项、Lint0错误165警告、1,093条路径冻结；正式签名包8c29dacb与原证书一致，APK清单／固定DEX调试类隔离通过，PJF110首次安装启动及设备APK散列核对通过，不等于覆盖升级或正式包账号／播放全验。release Lint0错误54警告；[安卓PR #1](https://github.com/qwt1011/Musxi-Player-Android/pull/1)与[PC上游PR #31](https://github.com/Miloscovo/Musxi-Player/pull/31)保持OPEN，源码树一致，Release附件核对后发布，本地证据`.local/artifacts/release-v0.3.1-preparation/`。
 
 
 - 11-26晚：用户授权Codex暂代CC调整网易云网页登录，指定wbapi K3.1前端主实现，主代理审查验证；底部按钮明确随当前主题Accent切换。仅改登录外壳与测试，保留官方网页、标准Sheet／GlassHost及CC其余前端；会话槽按session隔离、FLAG_SECURE保留原标记并覆盖退出动画。原“和gimini交流.md”提炼后已删除，未留全文备份。[本轮记录](frontend-netease-web-login-refinement-20261126.md)：11-27凌晨完整verify 3178项全过、Lint0错误165警告、编译及冻结通过，包3322f7d0；15项登录专项与7张新图检查通过。11-27已装机且用户认可外观；专项基础关闭／重开／刷新／拖拽／安全标记恢复通过，条款第二窗口返回通过。主包仍3322f7d0；新增androidTest仅单独编译，不包含在凌晨冻结中。官方确认等待超时已关闭，键盘／验证码／提交／扫码未验；收尾发现网易云DISCONNECTED且原凭据文件不存在，测试无退出／clear／submit调用，需用户确认是否主动退出，暂不继续账号操作；QQ酷狗仍连接。

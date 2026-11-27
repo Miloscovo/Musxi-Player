@@ -40,9 +40,9 @@
 
 ## 验证与已知边界
 
-发布前将重新执行统一 JVM 测试、debug Lint、主包／设备测试包编译及源码冻结检查，再进行正式签名、release Lint、包名／版本／证书与调试入口隔离检查。最终结果与包散列补在本节；各日期记录只证明对应包与样本。
+本版重新执行统一 JVM 测试、debug Lint、主包／设备测试包编译及源码冻结检查，并完成正式签名、release Lint、包名／版本／证书与调试入口隔离检查；各日期记录只证明对应包与样本。
 
-本次统一验证已通过：**3,178项测试，失败／错误／跳过均0，debug Lint0错误165警告**，主包和设备测试包编译、1,093条源码路径冻结通过。证据`.local/artifacts/verification/20261127T064902391Z-27496/`。正式APK为19,591,250字节，SHA-256 `8c29dacb6ceb8903e0738d4e21131b66188c39af8d4ed883e8a112183e2acad2`；v2验签、包名／版本／清单和四个DEX中的固定调试类隔离检查通过，公开证书与v0.2／v0.3.0一致。正式包已在PJF110／Android16首次安装启动，设备base.apk散列相同且采样未见FATAL EXCEPTION；未在正式包重复账号登录／播放，也未实测旧正式版覆盖升级。独立release Lint正在收尾，结果另补。
+本次统一验证已通过：**3,178项测试，失败／错误／跳过均0，debug Lint0错误165警告**，主包和设备测试包编译、1,093条源码路径冻结通过。证据`.local/artifacts/verification/20261127T064902391Z-27496/`。正式APK为19,591,250字节，SHA-256 `8c29dacb6ceb8903e0738d4e21131b66188c39af8d4ed883e8a112183e2acad2`；v2验签、包名／版本／清单和四个DEX中的固定调试类隔离检查通过，公开证书与v0.2／v0.3.0一致。正式包已在PJF110／Android16首次安装启动，设备base.apk散列相同且采样未见FATAL EXCEPTION；未在正式包重复账号登录／播放，也未实测旧正式版覆盖升级。独立release Lint为0错误54警告。正式包证据`.local/artifacts/release-0.3.1/`及`.local/artifacts/release-v0.3.1-preparation/`。验证后仅回填结果文档，生产源码未变。
 
 已有开发包实机覆盖三平台真实取消、酷狗942首分页补全与中途停止、跨进程暂停恢复、搜索／歌词预览，以及网易云约20分钟本地播放能力自然到期后的重新取流。它们不能替代本次正式签名包的全部设备检查。
 
@@ -59,3 +59,5 @@
 [状态矩阵](feature-status.md)、[网易云登录外壳](frontend-netease-web-login-refinement-20261126.md)、[三平台账号](backend-account-reauth-web-20261124.md)、[播放请求与授权返回](backend-playback-request-audit-20261124.md)、[分页队列](backend-pagination-queue-device-20261126.md)、[搜索与歌词一致性](backend-search-lyrics-consistency-20261126.md)、[DSF启用](backend-dsf-enablement-20261117.md)、[本地库实机](backend-local-versions-lifecycle-device-20261118.md)。历史 [v0.3.0 说明](android-v0.3-release.md)保留原版本结果。
 
 保留 GPL-3.0-or-later、原作者版权、模块许可与[第三方声明](../THIRD_PARTY_NOTICES.md)。正式签名流程见[构建说明](release-build.md)。
+
+源码审阅：[安卓仓库PR #1](https://github.com/qwt1011/Musxi-Player-Android/pull/1)、[PC上游PR #31](https://github.com/Miloscovo/Musxi-Player/pull/31)，两者保留开放，不自动合并；PC目标为android/development，源码树与安卓发布分支一致。
