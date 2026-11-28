@@ -217,12 +217,21 @@ public final class NeteaseLibraryApi {
         JSONObject playlist = requireOwnedPlaylist(detail, playlistId, session.userId);
         if (ownedSpecialType(playlist) != 0) throw error("permission");
         requireCurrent();
-        api.authenticatedCall(NeteaseApi.PLAYLIST_RENAME, payload, session);
+        IOException writeFailure = null;
+        try {
+            api.authenticatedCall(NeteaseApi.PLAYLIST_RENAME, payload, session);
+        } catch (NeteaseApi.ApiException failure) {
+            if (!"network".equals(failure.code) && !"timeout".equals(failure.code)) throw failure;
+            writeFailure = failure;
+        }
         requireCurrent();
         JSONObject confirm = api.authenticatedCall(NeteaseApi.PLAYLIST_DETAIL,
                 json("id", playlistId, "n", 0, "s", 0), session);
         JSONObject renamed = requireOwnedPlaylist(confirm, playlistId, session.userId);
-        if (!title.equals(renamed.opt("name"))) throw error("protocol");
+        if (!title.equals(renamed.opt("name"))) {
+            if (writeFailure != null) throw writeFailure;
+            throw error("protocol");
+        }
     }
 
     public static final class Subscription {

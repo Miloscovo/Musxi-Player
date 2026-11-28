@@ -1,7 +1,11 @@
 package tech.musxi.player.ui.lockscreen
 
+import tech.musxi.player.lockscreen.LockScreenLyricsContent
+import tech.musxi.player.lockscreen.LockScreenPosition
 import tech.musxi.player.ui.player.LyricsPhase
 import tech.musxi.player.ui.player.LyricsUi
+import tech.musxi.player.ui.player.lyricsUiOf
+import tech.musxi.player.ui.player.lyricsWithoutWordProgress
 import java.time.LocalDateTime
 import java.time.format.TextStyle
 import java.util.Locale
@@ -108,3 +112,63 @@ const val LockScreenFlickPxPerSecondPerHeight = 1.8f
 
 /** A release still moving down faster than this (px/s) never unlocks. */
 const val LockScreenFlickBackPxPerSecond = 200f
+
+/**
+ * Large-font cap for the 60sp clock and its date line so 200% system font scale does not crush the
+ * lyrics area in the middle of the screen.
+ */
+const val LockScreenClockMaxFontScale = 1.25f
+const val LockScreenDateMaxFontScale = 1.45f
+
+fun lockScreenClockScale(fontScale: Float, maxScale: Float): Float =
+    fontScale.coerceIn(1f, maxScale)
+
+/**
+ * Strips the twice-a-second position and word-sweep fields from [LockScreenLyricsContent] so the
+ * lock-screen page only recomposes when the song, active lyric line, playback state or wallpaper
+ * actually changes. The progress bar and word sweep read [LockScreenPosition] separately.
+ */
+fun slowLockScreenContentOf(content: LockScreenLyricsContent): LockScreenLyricsContent =
+    content.copy(
+        position = ZeroLockScreenPosition,
+        lyrics = lyricsWithoutWordProgress(content.lyrics),
+    )
+
+private val ZeroLockScreenPosition = LockScreenPosition(
+    positionMs = 0L,
+    sampledAtElapsedMs = 0L,
+    speed = 1f,
+    canExtrapolate = false,
+)
+
+/**
+ * Maps the backend's fenced [LockScreenLyricsContent] into display data for [LockScreenPage].
+ * Unidentified playback shows no stale title/cover/lyrics; local recordings and songs without timed
+ * lyrics leave [LockScreenUi.lyrics] null so the middle area shows the large cover cleanly.
+ */
+fun lockScreenUiOf(
+    content: LockScreenLyricsContent,
+    time: String,
+    date: String,
+    showTranslation: Boolean,
+): LockScreenUi {
+    val lyricsUi = if (content.identified && !content.local && content.hasTimedLyrics) {
+        lyricsUiOf(content.lyrics, browsing = false, showTranslation = showTranslation)
+    } else {
+        null
+    }
+    return LockScreenUi(
+        time = time,
+        date = date,
+        title = if (content.identified) content.title else "",
+        subtitle = if (content.identified) content.artist else "",
+        coverSeed = if (content.identified && content.title.isNotBlank()) content.title else "Musxi",
+        coverUrl = if (content.identified) content.coverUrl else null,
+        playing = content.playing,
+        buffering = content.buffering,
+        hasPrevious = content.hasPrevious,
+        hasNext = content.hasNext,
+        durationMs = content.durationMs,
+        lyrics = lyricsUi,
+    )
+}

@@ -182,7 +182,8 @@ fun SwitchRow(
 /**
  * Title on the left, current value on the right. With a chevron it opens a sub-page; without one it
  * runs an action in place. A null [onClick] leaves the row inert. [leading] sits just before the
- * value, for a small mark such as the accent swatch.
+ * value, for a small mark such as the accent swatch. At large font scales, a longer value drops
+ * underneath the title so neither column is squeezed.
  */
 @Composable
 fun ValueRow(
@@ -191,18 +192,44 @@ fun ValueRow(
     onClick: (() -> Unit)?,
     chevron: Boolean = onClick != null,
     leading: (@Composable () -> Unit)? = null,
+    subtitle: String? = null,
+    valueColor: Color = MaterialTheme.colorScheme.onSurfaceVariant,
 ) {
+    val dropValue = isLargeFont() && value.isNotEmpty() && (subtitle != null || value.length >= 4)
     CardRow(onClick) {
-        RowText(title, titleLines = ALL_LINES)
-        Spacer(Modifier.width(RowSpec.trailGap))
-        if (leading != null) {
-            leading()
-            Spacer(Modifier.width(RowSpec.chevronGap))
+        if (dropValue) {
+            Column(Modifier.weight(1f)) {
+                Text(title, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface)
+                if (!subtitle.isNullOrEmpty()) {
+                    Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                Row(
+                    Modifier.padding(top = 2.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    if (leading != null) {
+                        leading()
+                        Spacer(Modifier.width(RowSpec.chevronGap))
+                    }
+                    Text(value, style = MaterialTheme.typography.bodyMedium, color = valueColor)
+                }
+            }
+        } else {
+            RowText(title, subtitle = subtitle, titleLines = ALL_LINES, subtitleLines = ALL_LINES)
+            if (leading != null || value.isNotEmpty()) {
+                Spacer(Modifier.width(RowSpec.trailGap))
+                if (leading != null) {
+                    leading()
+                    Spacer(Modifier.width(RowSpec.chevronGap))
+                }
+                if (value.isNotEmpty()) {
+                    Text(
+                        value, style = MaterialTheme.typography.bodyMedium, color = valueColor,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
         }
-        Text(
-            value, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1, overflow = TextOverflow.Ellipsis,
-        )
         if (chevron) {
             Spacer(Modifier.width(RowSpec.chevronGap))
             RowChevron()
@@ -210,9 +237,14 @@ fun ValueRow(
     }
 }
 
-/** One choice of a single-choice list: label, and a check on the chosen one. Picking the chosen row does nothing. */
+/** One choice of a single-choice list: label, optional explanation, and a check on the chosen one. Picking the chosen row does nothing. */
 @Composable
-fun ChoiceRow(label: String, selected: Boolean, onSelect: () -> Unit) {
+fun ChoiceRow(
+    label: String,
+    selected: Boolean,
+    onSelect: () -> Unit,
+    subtitle: String? = null,
+) {
     val haptic = rememberHaptics()
     CardRow(
         onClick = {
@@ -224,8 +256,11 @@ fun ChoiceRow(label: String, selected: Boolean, onSelect: () -> Unit) {
         modifier = Modifier.semantics { this.selected = selected },
         role = Role.RadioButton,
     ) {
-        RowText(label, titleLines = ALL_LINES)
-        if (selected) RowCheck()
+        RowText(label, subtitle = subtitle, titleLines = ALL_LINES, subtitleLines = ALL_LINES)
+        if (selected) {
+            Spacer(Modifier.width(RowSpec.trailGap))
+            RowCheck()
+        }
     }
 }
 

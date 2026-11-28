@@ -158,6 +158,18 @@ class MeTabTest {
         compose.onNodeWithText("酷狗音乐").assertExists()
     }
 
+    @Test fun lockScreenLyricsRowPushesSettingsSubpageAndSelectsMode() {
+        val picked = mutableListOf<tech.musxi.core.settings.LockScreenLyricsMode>()
+        setTab(MeTabActions(onSelectLockScreenLyricsMode = { picked += it }))
+        click("锁屏歌词")
+        assertEquals(listOf(MeRootKey, MeLockScreenLyricsKey), nav.stack.keys)
+        click("锁屏歌词页")
+        assertEquals(listOf(tech.musxi.core.settings.LockScreenLyricsMode.PAGE), picked)
+        compose.onNodeWithContentDescription("返回").performClick()
+        compose.waitForIdle()
+        assertEquals(1, nav.depth)
+    }
+
     @Test fun thePlatformPageKeepsTheConnectFlowOfTheOldAccountScreen() {
         val connected = mutableListOf<Platform>()
         setTab(accountActions = AccountPageActions(onConnect = { connected += it }))

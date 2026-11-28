@@ -17,6 +17,19 @@ import tech.musxi.player.ui.theme.ThemeMode
  */
 class MainActivity : ComponentActivity() {
 
+    override fun onNewIntent(intent: android.content.Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        if (intent.getStringExtra("officialLoginReturn") == "KUGOU") {
+            (application as MusxiApplication).recordOfficialLoginReturn()
+            intent.removeExtra("officialLoginReturn")
+        }
+        if (intent.action == android.content.Intent.ACTION_VIEW &&
+            intent.data?.scheme == packageName + ".login" && intent.data?.host == "login-return") {
+            (application as MusxiApplication).accounts.checkNow(tech.musxi.core.account.Platform.QQ)
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val app = application as MusxiApplication

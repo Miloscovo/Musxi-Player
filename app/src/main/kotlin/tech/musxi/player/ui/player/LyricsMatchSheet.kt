@@ -5,6 +5,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
@@ -54,6 +55,8 @@ import tech.musxi.core.account.Platform
 import tech.musxi.core.library.MediaKey
 import tech.musxi.core.lyrics.LyricsMatchState
 import tech.musxi.core.lyrics.ParsedLyrics
+import tech.musxi.player.ui.components.MusxiSheet
+import tech.musxi.player.ui.components.SheetDetent
 import tech.musxi.player.ui.model.formatDuration
 import tech.musxi.player.ui.theme.Space
 import tech.musxi.player.ui.theme.displayName
@@ -217,12 +220,46 @@ internal fun lyricsBindLabel(preview: LyricsPreviewUi, saving: Boolean): String 
 private val MatchPlatforms = listOf(Platform.NETEASE, Platform.QQ, Platform.KUGOU)
 
 /**
- * Manual lyrics matching: a bottom sheet over the player.
- *
- * Same shell as the queue panel (rounded top, `surfaceContainerHigh`, grab handle). The caller owns
- * the scrim and whether the sheet is composed at all. Opening it searches once for the playing song
- * on its own platform; the chips search the same words on another platform. Every callback carries
- * the song it was meant for, so a track change between the tap and the call cannot rebind the new one.
+ * Manual lyrics matching hosted inside the app's unified [MusxiSheet] over the player (spec section
+ * 9). Always kept in the tree so it slides in and out with spring motion, samples the player as
+ * regular glass, pulls down to close, and handles back itself. Auto-search runs only when [visible]
+ * becomes true for a song, never while closed.
+ */
+@Composable
+fun LyricsMatchSheetOverlay(
+    visible: Boolean,
+    ui: LyricsMatchUi,
+    onSearch: (original: MediaKey, platform: Platform, keywords: String) -> Unit = { _, _, _ -> },
+    onPreview: (candidate: MediaKey) -> Unit = {},
+    onBind: (original: MediaKey, candidate: MediaKey) -> Unit = { _, _ -> },
+    onUnbind: (original: MediaKey) -> Unit = {},
+    onDismiss: () -> Unit = {},
+) {
+    val last = remember { arrayOfNulls<LyricsMatchUi>(1) }
+    if (visible) last[0] = ui
+    val shown = if (visible) ui else last[0]
+    MusxiSheet(
+        visible = visible,
+        onDismiss = onDismiss,
+        initialDetent = SheetDetent.FULL,
+    ) {
+        val current = shown ?: return@MusxiSheet
+        LyricsMatchBody(
+            ui = current,
+            active = visible,
+            fillHeight = true,
+            onSearch = onSearch,
+            onPreview = onPreview,
+            onBind = onBind,
+            onUnbind = onUnbind,
+            onDismiss = onDismiss,
+        )
+    }
+}
+
+/**
+ * Standalone lyrics match sheet content (kept for direct design previews and tests). For live app
+ * presentation over the player, prefer [LyricsMatchSheetOverlay].
  */
 @Composable
 fun LyricsMatchSheet(
@@ -235,125 +272,162 @@ fun LyricsMatchSheet(
     onDismiss: () -> Unit = {},
 ) {
     val cs = MaterialTheme.colorScheme
+    Column(
+        modifier.fillMaxWidth()
+            .heightIn(max = (LocalConfiguration.current.screenHeightDp * 0.85f).dp)
+            .clip(RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp))
+            .background(cs.surfaceContainerHigh),
+    ) {
+        Box(Modifier.fillMaxWidth().height(24.dp), contentAlignment = Alignment.Center) {
+            Box(
+                Modifier.size(width = 36.dp, height = 5.dp).clip(CircleShape)
+                    .background(cs.onSurface.copy(alpha = 0.30f)),
+            )
+        }
+        LyricsMatchBody(
+            ui = ui,
+            active = true,
+            fillHeight = false,
+            onSearch = onSearch,
+            onPreview = onPreview,
+            onBind = onBind,
+            onUnbind = onUnbind,
+            onDismiss = onDismiss,
+        )
+    }
+}
+
+@Composable
+private fun ColumnScope.LyricsMatchBody(
+    ui: LyricsMatchUi,
+    active: Boolean,
+    fillHeight: Boolean,
+    onSearch: (original: MediaKey, platform: Platform, keywords: String) -> Unit,
+    onPreview: (candidate: MediaKey) -> Unit,
+    onBind: (original: MediaKey, candidate: MediaKey) -> Unit,
+    onUnbind: (original: MediaKey) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val cs = MaterialTheme.colorScheme
     val keyboard = LocalSoftwareKeyboardController.current
     val original = ui.original
     var platform by remember(original) { mutableStateOf(original?.platform ?: Platform.NETEASE) }
     var query by remember(original) { mutableStateOf(ui.defaultQuery) }
     var searched by remember(original) { mutableStateOf(false) }
-    fun search(on: Platform) {
+    val interactive = active && !ui.saving
+    fun search(on: Platform, text: String = query) {
         val song = original ?: return
-        val keywords = lyricsSearchKeywords(query) ?: return
+        val keywords = lyricsSearchKeywords(text) ?: return
         searched = true
         onSearch(song, on, keywords)
     }
-    LaunchedEffect(original) { search(platform) }
+    LaunchedEffect(active, original) {
+        if (active && original != null) {
+            val freshPlatform = original.platform
+            val freshQuery = ui.defaultQuery
+            platform = freshPlatform
+            query = freshQuery
+            searched = false
+            search(freshPlatform, freshQuery)
+        }
+    }
 
+    Header(ui, onDismiss)
+    Spacer(Modifier.height(8.dp))
     Column(
-        modifier.fillMaxWidth()
+        Modifier.weight(1f, fill = fillHeight)
+            .verticalScroll(rememberScrollState())
             .imePadding()
-            .heightIn(max = (LocalConfiguration.current.screenHeightDp * 0.85f).dp)
-            .clip(RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp))
-            .background(cs.surfaceContainerHigh)
             .windowInsetsPadding(WindowInsets.navigationBars)
             .padding(bottom = 16.dp),
     ) {
-        Box(Modifier.fillMaxWidth().padding(vertical = 10.dp), contentAlignment = Alignment.Center) {
-            Box(
-                Modifier.size(width = 32.dp, height = 4.dp).clip(CircleShape)
-                    .background(cs.onSurfaceVariant.copy(alpha = 0.4f)),
+        if (original != null) {
+            SearchField(
+                query = query,
+                onChange = { if (active) query = it.take(MAX_QUERY) },
+                onSearch = {
+                    keyboard?.hide()
+                    if (interactive) search(platform)
+                },
+                modifier = Modifier.padding(horizontal = Space.page),
+            )
+            Spacer(Modifier.height(10.dp))
+            // Same switcher as the search and library pages, so the selected platform reads clearly.
+            tech.musxi.player.ui.components.PlatformSegmented(
+                platforms = MatchPlatforms,
+                selected = platform,
+                onSelect = { picked ->
+                    if (interactive) {
+                        platform = picked
+                        search(picked)
+                    }
+                },
+                modifier = Modifier.padding(horizontal = Space.page),
+                // No switching while a choice is being saved or dismissing; disabled, so no tick either.
+                enabled = interactive,
+            )
+            Spacer(Modifier.height(6.dp))
+        }
+        lyricsMatchNotice(ui, searched)?.let { notice ->
+            Text(
+                notice,
+                style = MaterialTheme.typography.bodySmall,
+                color = if (ui.error != null) cs.onSurface else cs.onSurfaceVariant,
+                modifier = Modifier.fillMaxWidth().padding(horizontal = Space.page, vertical = 6.dp),
             )
         }
-        Header(ui, onDismiss)
-        Spacer(Modifier.height(8.dp))
-        Column(Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState())) {
-            if (original != null) {
-                SearchField(
-                    query = query,
-                    onChange = { query = it.take(MAX_QUERY) },
-                    onSearch = {
-                        keyboard?.hide()
-                        if (!ui.saving) search(platform)
-                    },
-                    modifier = Modifier.padding(horizontal = Space.page),
-                )
-                Spacer(Modifier.height(10.dp))
-                // Same switcher as the search and library pages, so the selected platform reads clearly.
-                tech.musxi.player.ui.components.PlatformSegmented(
-                    platforms = MatchPlatforms,
-                    selected = platform,
-                    onSelect = { picked ->
-                        if (!ui.saving) {
-                            platform = picked
-                            search(picked)
-                        }
-                    },
-                    modifier = Modifier.padding(horizontal = Space.page),
-                    // No switching while a choice is being saved; disabled, so no tick either.
-                    enabled = !ui.saving,
-                )
-                Spacer(Modifier.height(6.dp))
-            }
-            lyricsMatchNotice(ui, searched)?.let { notice ->
+        if (ui.manual && original != null) {
+            Row(
+                Modifier.fillMaxWidth().padding(start = Space.page, end = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
                 Text(
-                    notice,
+                    "已手动匹配歌词",
                     style = MaterialTheme.typography.bodySmall,
-                    color = if (ui.error != null) cs.onSurface else cs.onSurfaceVariant,
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = Space.page, vertical = 6.dp),
+                    color = cs.onSurfaceVariant,
+                    modifier = Modifier.weight(1f),
                 )
-            }
-            if (ui.manual && original != null) {
-                Row(
-                    Modifier.fillMaxWidth().padding(start = Space.page, end = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
+                TextButton(
+                    onClick = { if (interactive) onUnbind(original) },
+                    enabled = interactive,
+                    colors = ButtonDefaults.textButtonColors(contentColor = cs.onSurface),
                 ) {
-                    Text(
-                        "已手动匹配歌词",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = cs.onSurfaceVariant,
-                        modifier = Modifier.weight(1f),
-                    )
-                    TextButton(
-                        onClick = { onUnbind(original) },
-                        enabled = !ui.saving,
-                        colors = ButtonDefaults.textButtonColors(contentColor = cs.onSurface),
-                    ) {
-                        Text("恢复自动匹配", style = MaterialTheme.typography.labelLarge)
-                    }
+                    Text("恢复自动匹配", style = MaterialTheme.typography.labelLarge)
                 }
             }
-            val preview = ui.preview
-            // A stored match whose song is not in the current results still needs somewhere to show.
-            if (preview != null && original != null && ui.candidates.none { it.key == preview.key }) {
+        }
+        val preview = ui.preview
+        // A stored match whose song is not in the current results still needs somewhere to show.
+        if (preview != null && original != null && ui.candidates.none { it.key == preview.key }) {
+            PreviewCard(
+                preview = preview,
+                saving = !interactive,
+                failed = ui.error != null,
+                heading = preview.title.ifBlank { "当前匹配的歌词" },
+                onBind = { if (interactive) onBind(original, preview.key) },
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+            )
+        }
+        ui.candidates.forEach { candidate ->
+            val shown = preview != null && preview.key == candidate.key
+            CandidateRow(
+                candidate = candidate,
+                selected = shown,
+                onClick = {
+                    // Tapping the row already on show only matters to retry an empty preview.
+                    val retry = preview != null && preview.lines.isEmpty() && !preview.loading
+                    if (interactive && (!shown || retry)) onPreview(candidate.key)
+                },
+            )
+            if (shown && original != null) {
                 PreviewCard(
                     preview = preview,
-                    saving = ui.saving,
+                    saving = !interactive,
                     failed = ui.error != null,
-                    heading = preview.title.ifBlank { "当前匹配的歌词" },
-                    onBind = { onBind(original, preview.key) },
+                    heading = null,
+                    onBind = { if (interactive) onBind(original, preview.key) },
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
                 )
-            }
-            ui.candidates.forEach { candidate ->
-                val shown = preview != null && preview.key == candidate.key
-                CandidateRow(
-                    candidate = candidate,
-                    selected = shown,
-                    onClick = {
-                        // Tapping the row already on show only matters to retry an empty preview.
-                        val retry = preview != null && preview.lines.isEmpty() && !preview.loading
-                        if (!ui.saving && (!shown || retry)) onPreview(candidate.key)
-                    },
-                )
-                if (shown && preview != null && original != null) {
-                    PreviewCard(
-                        preview = preview,
-                        saving = ui.saving,
-                        failed = ui.error != null,
-                        heading = null,
-                        onBind = { onBind(original, preview.key) },
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
-                    )
-                }
             }
         }
     }

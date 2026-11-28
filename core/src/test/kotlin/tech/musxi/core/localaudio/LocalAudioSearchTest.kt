@@ -2,6 +2,8 @@ package tech.musxi.core.localaudio
 
 import java.util.Locale
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
@@ -180,16 +182,17 @@ class LocalAudioSearchTest {
         assertEquals(0, first.offset)
         assertEquals(listOf(songs[0], songs[1]), first.items)
         assertEquals(2, first.nextOffset)
+        assertNotNull(first.token)
 
-        val middle = page(state, LocalAudioQuery(offset = 2, limit = 2))
+        val middle = page(state, LocalAudioQuery(offset = 2, limit = 2, expectedToken = first.token))
         assertEquals(listOf(songs[2], songs[3]), middle.items)
         assertEquals(4, middle.nextOffset)
 
-        val last = page(state, LocalAudioQuery(offset = 4, limit = 2))
+        val last = page(state, LocalAudioQuery(offset = 4, limit = 2, expectedToken = middle.token))
         assertEquals(listOf(songs[4]), last.items)
         assertNull(last.nextOffset)
 
-        val past = page(state, LocalAudioQuery(offset = 5, limit = 2))
+        val past = page(state, LocalAudioQuery(offset = 5, limit = 2, expectedToken = last.token))
         assertTrue(past.items.isEmpty())
         assertNull(past.nextOffset)
 
@@ -197,6 +200,207 @@ class LocalAudioSearchTest {
         assertFailure(LocalAudioError.STALE_STATE) {
             page(state, LocalAudioQuery(expectedRevision = 6))
         }
+    }
+
+    @Test
+    fun progressIndependentPagesContinueAcrossProgressChanges() {
+        val songs = (1..4).map { track(it, title = "Song $it") }
+        val firstState = library(songs, revision = 10, organizationRevision = 20, progressRevision = 30)
+        val first = page(firstState, LocalAudioQuery(limit = 2))
+        assertNull(first.token?.progressRevision)
+
+        val changed = firstState.copy(
+            revision = 11,
+            progressRevision = 31,
+            progress = listOf(LocalAudioProgress(songs[0].id, 1_000, false, 1)),
+        )
+        val second = page(changed, LocalAudioQuery(offset = 2, limit = 2, expectedToken = first.token))
+
+        assertEquals(listOf(songs[2], songs[3]), second.items)
+        assertTrue(first.isCurrent(changed))
+        assertTrue(LocalAudioQuery(limit = 2).isCurrent(changed, first))
+    }
+
+    @Test
+    fun progressDependentPagesRejectProgressChanges() {
+        val first = track(1, title = "Started")
+        val second = track(2, title = "Unplayed")
+        val firstState = library(
+            listOf(first, second),
+            revision = 10,
+            organizationRevision = 20,
+            progressRevision = 30,
+            progress = listOf(LocalAudioProgress(first.id, 1_000, false, 1)),
+        )
+        val request = LocalAudioQuery(progress = LocalAudioProgressFilter.IN_PROGRESS, limit = 1)
+        val page = page(firstState, request)
+        assertEquals(30L, page.token?.progressRevision)
+
+        val changed = firstState.copy(
+            revision = 11,
+            progressRevision = 31,
+            progress = listOf(LocalAudioProgress(first.id, 2_000, false, 2)),
+        )
+        assertFailure(LocalAudioError.STALE_STATE) {
+            page(changed, request.copy(offset = 1, expectedToken = page.token))
+        }
+        assertFalse(page.isCurrent(changed))
+        assertFalse(request.isCurrent(changed, page))
+    }
+
+    @Test
+    fun lastProgressSortRejectsProgressChanges() {
+        val first = track(1)
+        val second = track(2)
+        val firstState = library(
+            listOf(first, second),
+            revision = 10,
+            organizationRevision = 20,
+            progressRevision = 30,
+            progress = listOf(LocalAudioProgress(first.id, 1_000, false, 1)),
+        )
+        val request = LocalAudioQuery(sort = LocalAudioSort.LAST_PROGRESS, limit = 1)
+        val page = page(firstState, request)
+
+        assertFailure(LocalAudioError.STALE_STATE) {
+            page(firstState.copy(revision = 11, progressRevision = 31),
+                request.copy(offset = 1, expectedToken = page.token))
+        }
+    }
+
+    @Test
+    fun organizationChangesRejectEveryToken() {
+        val songs = (1..2).map { track(it) }
+        val firstState = library(songs, revision = 10, organizationRevision = 20, progressRevision = 30)
+        val request = LocalAudioQuery(limit = 1)
+        val page = page(firstState, request)
+        val changed = firstState.copy(revision = 11, organizationRevision = 21)
+
+        assertFailure(LocalAudioError.STALE_STATE) {
+            page(changed, request.copy(offset = 1, expectedToken = page.token))
+        }
+        assertFalse(page.isCurrent(changed))
+        assertFalse(request.isCurrent(changed, page))
+    }
+
+    @Test
+    fun tokensCannotBeMovedToAnotherQuery() {
+        val firstState = library((1..3).map { track(it, title = "Song $it") },
+            revision = 10, organizationRevision = 20)
+        val original = LocalAudioQuery(text = "Song 1")
+        val page = page(firstState, original)
+        val other = original.copy(text = "Song 2", descending = true)
+
+        assertFailure(LocalAudioError.INVALID_TARGET) {
+            page(firstState, other.copy(offset = 1, expectedToken = page.token))
+        }
+        assertFalse(other.isCurrent(firstState, page))
+    }
+
+    @Test
+    fun tokenIdentityExcludesPagingAndLegacyRevisionChecks() {
+        val songs = (1..4).map { track(it, title = "Song $it") }
+        val firstState = library(songs, revision = 10, organizationRevision = 20, progressRevision = 30)
+        val first = page(firstState, LocalAudioQuery(text = "Song", limit = 2))
+        val continuation = LocalAudioQuery(
+            text = "Song",
+            offset = 2,
+            limit = 1,
+            expectedRevision = firstState.revision,
+            expectedToken = first.token,
+        )
+
+        assertEquals(listOf(songs[2]), page(firstState, continuation).items)
+        assertTrue(continuation.isCurrent(firstState, page(firstState, continuation)))
+    }
+
+    @Test
+    fun requestTokenCannotValidateALegacyPage() {
+        val state = library((1..2).map { track(it) })
+        val tokenPage = page(state, LocalAudioQuery(limit = 1))
+        val legacyPage = tokenPage.copy(token = null)
+
+        assertFalse(
+            LocalAudioQuery(limit = 1, expectedToken = tokenPage.token).isCurrent(state, legacyPage),
+        )
+        assertTrue(LocalAudioQuery(limit = 1).isCurrent(state, legacyPage))
+    }
+
+    @Test
+    fun legacyRevisionStillRejectsProgressChanges() {
+        val songs = (1..3).map { track(it) }
+        val firstState = library(songs, revision = 10, organizationRevision = 20, progressRevision = 30)
+
+        assertFailure(LocalAudioError.STALE_STATE) {
+            page(
+                firstState.copy(revision = 11, progressRevision = 31),
+                LocalAudioQuery(offset = 1, expectedRevision = firstState.revision),
+            )
+        }
+    }
+
+    @Test
+    fun legacyProtectedPagesRemainStrictAtPublication() {
+        val state = library((1..3).map { track(it) }, revision = 10,
+            organizationRevision = 20, progressRevision = 30)
+        val request = LocalAudioQuery(limit = 1, expectedRevision = state.revision)
+        val page = page(state, request)
+
+        assertNull(page.token?.query?.expectedRevision)
+        assertEquals(10L, page.token?.legacyRevision)
+        assertTrue(request.isCurrent(state, page))
+        val next = page(
+            state,
+            LocalAudioQuery(offset = 1, limit = 1, expectedToken = page.token),
+        )
+        assertEquals(10L, next.token?.legacyRevision)
+        assertFalse(request.isCurrent(state.copy(revision = 11, progressRevision = 31), page))
+        assertFalse(page.isCurrent(state.copy(revision = 11, progressRevision = 31)))
+        assertFalse(next.isCurrent(state.copy(revision = 11, progressRevision = 31)))
+    }
+
+    @Test
+    fun requestRevisionCannotBeRelaxedByATokenPage() {
+        val state = library((1..2).map { track(it) })
+        val page = page(state, LocalAudioQuery(limit = 1))
+
+        assertFalse(
+            LocalAudioQuery(limit = 1, expectedRevision = state.revision - 1).isCurrent(state, page),
+        )
+    }
+
+    @Test
+    fun unreadyStateInvalidatesNewAndLegacyPages() {
+        val state = library((1..2).map { track(it) }, revision = 10)
+        val request = LocalAudioQuery(limit = 1)
+        val page = page(state, request)
+        val legacyPage = page.copy(token = null)
+        val unready = state.copy(ready = false)
+
+        assertFalse(request.isCurrent(unready, page))
+        assertFalse(page.isCurrent(unready))
+        assertFalse(request.isCurrent(unready, legacyPage))
+        assertFalse(legacyPage.isCurrent(unready))
+    }
+
+    @Test
+    fun continuationRequiresATokenOrLegacyRevision() {
+        val state = library((1..3).map { track(it) })
+
+        assertFailure(LocalAudioError.INVALID_TARGET) {
+            page(state, LocalAudioQuery(offset = 1))
+        }
+        assertEquals(
+            1,
+            page(state, LocalAudioQuery(offset = 1, limit = 1, expectedRevision = state.revision)).items.size,
+        )
+    }
+
+    @Test
+    fun firstPageMayStartWithoutATokenOrLegacyRevision() {
+        val state = library((1..3).map { track(it) })
+
+        assertEquals(1, page(state, LocalAudioQuery(limit = 1)).items.size)
     }
 
     @Test
@@ -302,9 +506,13 @@ class LocalAudioSearchTest {
         bookmarks: List<LocalAudioBookmark> = emptyList(),
         ready: Boolean = true,
         revision: Long = 1,
+        organizationRevision: Long = revision,
+        progressRevision: Long = revision,
     ): LocalAudioLibraryState = LocalAudioLibraryState(
         ready = ready,
         revision = revision,
+        organizationRevision = organizationRevision,
+        progressRevision = progressRevision,
         folders = folders,
         items = items,
         members = members,

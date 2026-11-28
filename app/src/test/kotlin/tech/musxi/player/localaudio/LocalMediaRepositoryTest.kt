@@ -34,9 +34,12 @@ class LocalMediaRepositoryTest {
     private lateinit var images: Images
     private lateinit var folder: LocalAudioFolder
     private val context get() = RuntimeEnvironment.getApplication() as Context
-    private val dbName = "media-${LocalAudioLimits.newId()}.db"
+    private lateinit var dbName: String
 
     @Before fun setup() = runBlocking {
+        // Own the database directory as well as the file. A unique filename in Robolectric's
+        // shared application database directory still depends on that sandbox's directory setup.
+        dbName = File(temporary.newFolder("database"), "media.db").absolutePath
         store = SqliteLocalAudioStore(context, dbName)
         // Open Robolectric's SQLite helper on the test thread before repository IO starts.
         store.read()
@@ -47,9 +50,10 @@ class LocalMediaRepositoryTest {
         folder = requireNotNull(created) { "Folder setup did not complete: ${repository.state.value}" }.getOrThrow()
     }
     @After fun close() = runBlocking {
-        images.gate?.second?.countDown()
+        if (::images.isInitialized) images.gate?.second?.countDown()
         scope.coroutineContext[Job]!!.cancelAndJoin()
-        store.close(); context.deleteDatabase(dbName)
+        if (::store.isInitialized) store.close()
+        if (::dbName.isInitialized) context.deleteDatabase(dbName)
         Unit
     }
 

@@ -72,6 +72,15 @@ class AccountViewModel(private val accounts: AccountRepository) : ViewModel() {
     /** Fallback for Netease: save a QR image to the gallery and open the app's scanner. */
     fun connectNeteaseScanner(launch: (Intent) -> Unit) = accounts.connectNeteaseScanner(launch)
 
+    /** In-place reauthentication via official app for QQ/Kugou when an identity is already saved. */
+    fun reauthenticateOfficial(platform: Platform, launch: (Intent) -> Unit) {
+        require(platform != Platform.NETEASE)
+        accounts.reauthenticateOfficial(platform, launch)
+    }
+
+    /** In-place reauthentication fallback for Netease via gallery QR scanner. */
+    fun reauthenticateNeteaseScanner(launch: (Intent) -> Unit) = accounts.reauthenticateNeteaseScanner(launch)
+
     /** Both the explicit cancel and the reverse of a stuck prepare go through the same path. */
     fun cancel(platform: Platform) = accounts.cancel(platform)
 

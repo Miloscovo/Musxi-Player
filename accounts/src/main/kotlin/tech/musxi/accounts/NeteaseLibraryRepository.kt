@@ -16,7 +16,7 @@ class NeteaseLibraryRepository(private val accounts: AccountRepository) : Librar
     class LibraryFailure(category: String) : LibraryPageFailure(category)
     private fun <T> safeCallback(result: (Result<T>) -> Unit): (Result<T>) -> Unit = { response ->
         result(response.fold({ Result.success(it) }, { error ->
-            val code = (error as? LibraryFailure)?.category ?: (error as? NeteaseApi.ApiException)?.code
+            val code = (error as? LibraryPageFailure)?.category ?: (error as? NeteaseApi.ApiException)?.code
             val safe = if (code in setOf("expired", "network", "risk", "rate", "protocol", "identity", "limit", "cancelled",
                     "incomplete", "permission", "membership", "copyright", "preview", "unavailable", "endpoint", "platform", "http", "timeout", "request", "account_changed")) code!! else "unclassified"
             Result.failure(LibraryFailure(safe))
@@ -172,16 +172,20 @@ class NeteaseLibraryRepository(private val accounts: AccountRepository) : Librar
             tech.musxi.core.playback.QualityOptions(options.map { tech.musxi.core.playback.QualityOption(it.id, it.name) }, null)
         }, safeCallback(result), RequestOperation.OTHER)
     }
-    fun resolveAudio(song: MediaKey, qualityId: String?, result: (Result<AudioCapability>) -> Unit) {
+    fun resolveAudio(song: MediaKey, qualityId: String?, result: (Result<AudioCapability>) -> Unit,
+        isCurrent: () -> Boolean = { true }) {
         require(song.platform == Platform.NETEASE)
         val generation = accounts.states.value.getValue(Platform.NETEASE).generation
         accounts.withNeteaseSession({ api, session ->
+            if (!isCurrent()) throw LibraryFailure("cancelled")
             val library = NeteaseLibraryApi(api)
             val track = library.song(session, song.id)
+            if (!isCurrent()) throw LibraryFailure("cancelled")
             val audio = resolvePreferredQuality("netease", accounts.preferredQuality(Platform.NETEASE), qualityId,
-                { (it as? NeteaseApi.ApiException)?.code }) { id ->
+                { (it as? NeteaseApi.ApiException)?.code }, isCurrent) { id ->
                 library.audio(session, song.id, SystemClock.elapsedRealtime(), id)
             }
+            if (!isCurrent()) throw LibraryFailure("cancelled")
             if (qualityId != null && audio.qualityId != qualityId) throw LibraryFailure("unavailable")
             AudioCapability(song, summary(track), audio.url, audio.expiresAtElapsedMs, audio.qualityId) {
                 accounts.isNeteaseGenerationConnected(generation)

@@ -1,16 +1,21 @@
 # 前端接入约定
 
-> **状态：现行接入总览，2026-11-13 更新。** 本文只维护应用入口、接口边界和专门合同；后端/界面/实机完成度统一见[能力状态](feature-status.md)，当前任务和基线见[开发接续](next-session-handoff.md)。原总览的早期阶段描述保存在[历史总览](history/frontend-contract-through-20261028.md)。
+> **状态：现行接入总览，2026-11-17 更新。** 本文只维护应用入口、接口边界和专门合同；后端/界面/实机完成度统一见[能力状态](feature-status.md)，当前任务和基线见[开发接续](next-session-handoff.md)。原总览的早期阶段描述保存在[历史总览](history/frontend-contract-through-20261028.md)。
 
 ## 接口边界
 
 UI 观察公开 StateFlow，通过命令和结果回调发起操作；不持有 Session、Cookie、原始平台响应或带签名的音频 URL。`MediaKey(platform,id)` 表示身份，不按歌名或数字 ID 跨平台合并。账号代次、请求修订和队列 revision 在交付前再次校验，迟到结果不能覆盖用户的新选择。
 
+2026-11-26[内容一致性增量](backend-search-lyrics-consistency-20261126.md)：公开搜索／歌词匹配调用不变。搜索同一次请求只接受首次完成，歌曲与候选的artists／artistIds均为不可变快照；歌词匹配的新搜索、取消或账号代次变化会使旧平台排队搜索失效。已发出的HTTP可能自然结束，但不能发布旧状态；这些后端保护不要求前端新增参数或改页面。
+
 `MusxiApplication` 提供以下入口，装配源码为 `app/src/main/kotlin/tech/musxi/player/MusxiApplication.kt`：
 
 | 能力 | 入口 | 详细约定 |
 | --- | --- | --- |
-| 账号、头像、会员与登录 | `accounts` | 账号状态与错误；资料刷新不改变同一账号代次；会员不代表逐曲版权 |
+| DSF预览／本地播放 | `localAudio.dsfPreview`、既有导入与播放接口 | [现行本地合同](frontend-backend-contract-local-audio.md#dsf只读预览与本地播放边界)；正常能力已启用，64／128复制／引用及新进程读回通过；恢复提示页面与正式签名包另验，见[DSF正常生产启用验收](backend-dsf-enablement-20261117.md) |
+| 音频格式事实 | `localAudio.inspectFormat`、`playback.audioInfo` | [第三批合同](backend-audio-format-info-20261114.md)，区分来源、解码器、应用AudioTrack与未知物理输出 |
+| CUE只读预览 | `localAudio.cuePreview` | [CUE第一批](backend-cue-preview-20261114.md)，显式文件选择与绑定、动态曲目、解析与范围检查；入库／播放见[第二批合同](backend-cue-import-playback-20261114.md) |
+| 账号、头像、会员与登录 | `accounts` | [状态与恢复](backend-account-status-recovery-20261124.md)、[执行与等待](backend-account-execution-20261124.md)、[三平台原位重认证／网页生命周期](backend-account-reauth-web-20261124.md)；新入口待前端接线，成功资料刷新保持代次，重认证使用新代次；会员不代表逐曲版权 |
 | 曲库、分页与缓存 | `libraryBrowser` / `qqLibraryBrowser` / `kugouLibraryBrowser` | [数据增量](frontend-backend-contract-p1.md)，刷新失败保留已有内容；[主动补全歌单缓存](backend-requests-20261111-3.md#交付说明)的 `fillPlaylist/fillState/cancelFill` |
 | 搜索与实体歌曲 | `searchBrowser` / `catalog` | [第四批合同](backend-batch4-contract.md)，实体 ID 缺失不猜测 |
 | 歌曲推荐 | `recommendations` | [推荐合同](frontend-backend-contract-recommendations.md)，网易云/酷狗每日歌曲，QQ猜你喜欢；按账号缓存、取消与revision点播 |

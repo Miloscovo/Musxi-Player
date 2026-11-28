@@ -27,6 +27,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -63,7 +64,12 @@ fun LocalBookmarkSheet(
 ) {
     var renaming by remember { androidx.compose.runtime.mutableStateOf<LocalAudioBookmark?>(null) }
     var saving by remember { androidx.compose.runtime.mutableStateOf(false) }
-    if (!visible && renaming != null) renaming = null
+    LaunchedEffect(visible) {
+        if (!visible) {
+            renaming = null
+            saving = false
+        }
+    }
     // Kept so the sheet slides out showing what it showed.
     val last = remember { arrayOfNulls<List<LocalAudioBookmark>>(1) }
     if (visible) last[0] = bookmarks
@@ -86,11 +92,21 @@ fun LocalBookmarkSheet(
         }
         Spacer(Modifier.windowInsetsPadding(WindowInsets.navigationBars).height(8.dp))
     }
-    renaming?.let { target ->
+    val lastRenaming = remember { arrayOfNulls<LocalAudioBookmark>(1) }
+    if (renaming != null) lastRenaming[0] = renaming
+    val shownTarget = renaming ?: lastRenaming[0]
+    if (shownTarget != null) {
         tech.musxi.player.ui.localaudio.LocalNameDialog(
-            title = "书签名称", initial = target.name, confirmLabel = "保存", saving = saving,
+            title = "书签名称",
+            initial = shownTarget.name,
+            confirmLabel = "保存",
+            saving = saving,
+            forceSolid = true,
+            visible = renaming != null,
             onDismiss = { renaming = null },
             onConfirm = { name ->
+                if (saving) return@LocalNameDialog
+                val target = renaming ?: return@LocalNameDialog
                 if (name == target.name) { renaming = null; return@LocalNameDialog }
                 saving = true
                 onRename(target, name) { ok -> saving = false; if (ok) renaming = null }

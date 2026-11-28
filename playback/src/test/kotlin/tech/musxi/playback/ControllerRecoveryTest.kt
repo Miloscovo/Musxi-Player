@@ -14,6 +14,7 @@ class ControllerRecoveryTest {
         val released = mutableListOf<Resource>()
         val attached = mutableListOf<Resource>()
         val changes = mutableListOf<ControllerConnectionState>()
+        val failures = mutableListOf<Pair<ControllerFailure, Int>>()
         val connection = ControllerRecovery<Resource>(
             connect = { token, result ->
                 val attempt = Attempt(token, result).also(attempts::add)
@@ -25,7 +26,8 @@ class ControllerRecoveryTest {
                 val timer = Timer(time + delay, run).also(timers::add)
                 val cancel: () -> Unit = { timer.cancelled = true }
                 cancel
-            }, now = { time }, attached = { attached.add(it) }, changed = { changes.add(it) })
+            }, now = { time }, attached = { attached.add(it) }, changed = { changes.add(it) },
+            failedAttempt = { reason, attempt -> failures.add(reason to attempt) })
         fun advance(delta: Long) {
             val end = time + delta
             while (true) {
@@ -36,6 +38,19 @@ class ControllerRecoveryTest {
         }
         fun success(index: Int = attempts.lastIndex): Resource = Resource(index).also { attempts[index].result(Result.success(it)) }
         fun fail(index: Int = attempts.lastIndex) { attempts[index].result(Result.failure(IllegalStateException("private error"))) }
+    }
+
+    @Test fun connectionDiagnosticsDistinguishTimeoutRejectionAndDisconnection() {
+        val f = Fixture()
+        f.connection.start()
+        f.advance(11_000)
+        f.fail()
+        f.advance(3_000)
+        f.success()
+        f.connection.disconnected(f.attempts.last().token)
+        f.fail(0) // The late failure from the first controller does not get a second entry.
+        assertEquals(listOf(ControllerFailure.TIMEOUT to 1, ControllerFailure.REJECTED to 2,
+            ControllerFailure.DISCONNECTED to 3), f.failures)
     }
 
     @Test fun initialConnectionAttachesOnceAndBusyRetryDoesNotCreateAnotherController() {

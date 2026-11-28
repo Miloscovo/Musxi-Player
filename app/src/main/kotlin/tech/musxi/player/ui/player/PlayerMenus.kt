@@ -1,9 +1,20 @@
 package tech.musxi.player.ui.player
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.automirrored.outlined.OpenInNew
@@ -20,14 +31,15 @@ import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material.icons.outlined.Speaker
 import androidx.compose.material.icons.outlined.SwapHoriz
 import androidx.compose.material.icons.outlined.Timer
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import tech.musxi.player.ui.components.AnchoredMenu
 import tech.musxi.player.ui.components.MenuAlign
@@ -35,10 +47,16 @@ import tech.musxi.player.ui.components.MenuChevron
 import tech.musxi.player.ui.components.MenuDivider
 import tech.musxi.player.ui.components.MenuHeader
 import tech.musxi.player.ui.components.MenuItem
+import tech.musxi.player.ui.components.MusxiSheet
 import tech.musxi.player.ui.components.ProgressArc
+import tech.musxi.player.ui.components.RowDivider
+import tech.musxi.player.ui.components.RowSpec
 import tech.musxi.player.ui.components.RowSwitch
+import tech.musxi.player.ui.components.isLargeFont
 import tech.musxi.playback.OutputType
 import tech.musxi.player.ui.theme.Haptic
+import tech.musxi.player.ui.theme.Space
+import tech.musxi.player.ui.theme.isDarkSurface
 import tech.musxi.player.ui.theme.rememberHaptics
 
 /** One selectable row of the quality and output menus. */
@@ -371,36 +389,117 @@ internal fun MoreMenu(
     }
 }
 
+private data class SongInfoSnapshot(
+    val title: String,
+    val rows: List<Pair<String, String>>,
+    val heading: String,
+)
+
 /**
- * The "歌曲信息" dialog: one labelled line per known field. [heading] stands in for a blank title:
- * "歌曲信息" for a platform song, "音频信息" for a local recording.
+ * The "歌曲信息" / "音频信息" sheet over the player (spec section 9). Information browsing belongs
+ * in [MusxiSheet] rather than a centered confirmation dialog, so it samples the player as regular
+ * glass, pulls down to close, and gives long metadata lines room to breathe.
  */
 @Composable
-internal fun SongInfoDialog(
+internal fun SongInfoSheet(
+    visible: Boolean,
     title: String,
     rows: List<Pair<String, String>>,
     onDismiss: () -> Unit,
     heading: String = "歌曲信息",
 ) {
-    val cs = MaterialTheme.colorScheme
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(title.ifBlank { heading }) },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                rows.forEach { (label, value) ->
-                    Row {
-                        Text(
-                            label,
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = cs.onSurfaceVariant,
-                            modifier = Modifier.width(72.dp),
-                        )
-                        Text(value, style = MaterialTheme.typography.bodyMedium, color = cs.onSurface)
+    val last = remember { arrayOfNulls<SongInfoSnapshot>(1) }
+    if (visible) last[0] = SongInfoSnapshot(title, rows, heading)
+    val shown = if (visible) SongInfoSnapshot(title, rows, heading) else last[0]
+    MusxiSheet(visible = visible, onDismiss = onDismiss) {
+        val snapshot = shown ?: return@MusxiSheet
+        val cs = MaterialTheme.colorScheme
+        val dark = cs.background.isDarkSurface()
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = Space.page)
+                .padding(top = 4.dp, bottom = Space.sibling),
+        ) {
+            Text(
+                snapshot.title.ifBlank { snapshot.heading },
+                style = MaterialTheme.typography.titleMedium,
+                color = cs.onSurface,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (snapshot.title.isNotBlank()) {
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    snapshot.heading,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = cs.onSurfaceVariant,
+                )
+            }
+        }
+        val largeFont = isLargeFont()
+        val labelWidth = 68.dp * LocalDensity.current.fontScale.coerceAtLeast(1f)
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .weight(1f)
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = Space.page),
+        ) {
+            if (snapshot.rows.isNotEmpty()) {
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .clip(MaterialTheme.shapes.large)
+                        .background(cs.onSurface.copy(alpha = if (dark) 0.07f else 0.045f)),
+                ) {
+                    snapshot.rows.forEachIndexed { index, (label, value) ->
+                        if (index > 0) {
+                            RowDivider(start = Space.inner)
+                        }
+                        if (largeFont) {
+                            Column(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = Space.inner, vertical = Space.sibling),
+                                verticalArrangement = Arrangement.spacedBy(2.dp),
+                            ) {
+                                Text(
+                                    label,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = cs.onSurfaceVariant,
+                                )
+                                Text(
+                                    value,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = cs.onSurface,
+                                )
+                            }
+                        } else {
+                            Row(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = Space.inner, vertical = Space.sibling),
+                                horizontalArrangement = Arrangement.spacedBy(RowSpec.leadGap),
+                            ) {
+                                Text(
+                                    label,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = cs.onSurfaceVariant,
+                                    modifier = Modifier.width(labelWidth),
+                                )
+                                Text(
+                                    value,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = cs.onSurface,
+                                    modifier = Modifier.weight(1f),
+                                )
+                            }
+                        }
                     }
                 }
             }
-        },
-        confirmButton = { TextButton(onClick = onDismiss) { Text("好") } },
-    )
+            Spacer(Modifier.windowInsetsPadding(WindowInsets.navigationBars).height(Space.inner))
+        }
+    }
 }

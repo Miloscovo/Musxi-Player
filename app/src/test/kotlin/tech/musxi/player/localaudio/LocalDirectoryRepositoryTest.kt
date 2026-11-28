@@ -246,6 +246,100 @@ class LocalDirectoryRepositoryTest {
         assertTrue(repository.state.value.directories.single().includeSubdirectories)
     }
 
+    @Test fun omittedDirectoryNameUsesProviderAndExplicitNameWins() = runBlocking {
+        var response: Result<LocalAudioDirectoryLink>? = null
+        repository.linkDirectory(folder.id, tree, grantedFlags = 65) { response = it }.join()
+        assertEquals("系统目录", response!!.getOrThrow().name)
+        assertEquals(1, docs.nameReads)
+        repository.unlinkDirectory(response!!.getOrThrow().id).join()
+        repository.linkDirectory(folder.id, tree, "我的名称", grantedFlags = 65) { response = it }.join()
+        assertEquals("我的名称", response!!.getOrThrow().name)
+        assertEquals(1, docs.nameReads)
+    }
+
+    @Test fun partialRefreshFailuresArePersistedSeparatelyFromDirectoryError() = runBlocking {
+        val broken = docs.add("坏文件.mp3", byteArrayOf(1))
+        docs.add("正常.mp3", byteArrayOf(2))
+        docs.failedRead = broken
+        val link = link()
+        val first = refresh(link.id).getOrThrow()
+        assertEquals(1, first.results.count { it.error != null })
+        val observed = repository.state.value.directories.single()
+        assertNull(observed.error)
+        assertEquals(1, observed.lastRefreshFailures)
+        store.close(); store = SqliteLocalAudioStore(context, dbName)
+        assertEquals(1, store.read().directories.single().lastRefreshFailures)
+        repository = AppLocalAudioRepository(store, files, docs, work)
+        docs.listError = LocalAudioError.READ_FAILED
+        assertTrue(refresh(link.id).isFailure)
+        assertEquals(1, repository.state.value.directories.single().lastRefreshFailures)
+        assertEquals(observed.lastRefreshedAtMs, repository.state.value.directories.single().lastRefreshedAtMs)
+        assertNull(repository.state.value.error)
+        docs.listError = null; docs.failedRead = null
+        refresh(link.id).getOrThrow()
+        assertEquals(0, repository.state.value.directories.single().lastRefreshFailures)
+        assertNull(repository.state.value.directories.single().error)
+        assertEquals(2, repository.state.value.items.size)
+        refresh(link.id).getOrThrow()
+        assertEquals(2, repository.state.value.items.size)
+    }
+
+    @Test fun clearImportCancelsButLateProviderReturnCannotRestoreDismissedResults() = runBlocking {
+        val blocked = docs.add("慢.mp3", byteArrayOf(1, 2))
+        docs.blocked = blocked
+        var callback = false
+        val job = repository.importFiles(folder.id, listOf(blocked)) { callback = true }
+        try {
+            assertTrue(docs.entered.await(10, TimeUnit.SECONDS))
+            val running = repository.imports.value.runId
+            repository.clearImport()
+            val cleared = repository.imports.value
+            assertTrue(cleared.runId > running)
+            assertFalse(cleared.running)
+            var busy: Result<List<LocalAudioImportResult>>? = null
+            repository.importFiles(folder.id, listOf(blocked)) { busy = it }.join()
+            assertEquals(LocalAudioError.LIMIT_REACHED, (busy!!.exceptionOrNull() as LocalAudioFailure).error)
+            docs.release.countDown(); job.join()
+            assertEquals(cleared, repository.imports.value)
+            assertFalse(callback)
+            assertTrue(repository.state.value.items.isEmpty())
+            assertTrue(store.retainedCopyNames().isEmpty())
+            assertEquals(0, File(temporary.root, "audio").walkTopDown().count { it.isFile })
+            docs.blocked = null
+            repository.importFiles(folder.id, listOf(blocked)).join()
+            assertTrue(repository.imports.value.completed)
+            assertTrue(repository.imports.value.runId > cleared.runId)
+        } finally { docs.release.countDown() }
+    }
+
+    @Test fun successfulCallbackCanStartNextImportAfterCleanup() = runBlocking {
+        val first = docs.add("一.mp3", byteArrayOf(1))
+        val second = docs.add("二.mp3", byteArrayOf(2))
+        var next: Job? = null
+        var answer: Result<List<LocalAudioImportResult>>? = null
+        repository.importFiles(folder.id, listOf(first)) { response ->
+            assertTrue(response.isSuccess)
+            next = repository.importFiles(folder.id, listOf(second)) { answer = it }
+        }.join()
+        next!!.join()
+        assertTrue(answer!!.isSuccess)
+        assertEquals(2, repository.state.value.items.size)
+        assertTrue(repository.imports.value.completed)
+    }
+
+    @Test fun wholeImportFailureLivesInRunStateAndKeepsLibraryReady() = runBlocking {
+        repository.importFiles(folder.id, emptyList()).join()
+        val failed = repository.imports.value
+        assertEquals(LocalAudioError.LIMIT_REACHED, failed.error)
+        assertFalse(failed.running)
+        assertFalse(failed.completed)
+        assertTrue(repository.state.value.ready)
+        assertNull(repository.state.value.error)
+        repository.clearImport()
+        assertNull(repository.imports.value.error)
+        assertTrue(repository.imports.value.runId > failed.runId)
+    }
+
     private suspend fun link(mode: LocalImportMode = LocalImportMode.COPY): LocalAudioDirectoryLink {
         var result: Result<LocalAudioDirectoryLink>? = null
         repository.linkDirectory(folder.id, tree, "音声目录", mode,
@@ -265,6 +359,9 @@ class LocalDirectoryRepositoryTest {
         val listing = mutableListOf<Uri>()
         val grants = mutableSetOf<String>()
         var opens = 0
+        var nameReads = 0
+        var failedRead: Uri? = null
+        override fun directoryName(tree: Uri): String { nameReads++; return "系统目录" }
         var listError: LocalAudioError? = null
         var lastRecursive: Boolean? = null
         var blocked: Uri? = null
@@ -280,6 +377,7 @@ class LocalDirectoryRepositoryTest {
         override fun metadata(document: LocalAudioDocument) = LocalAudioMetadata(document.name,
             sizeBytes = document.size, modifiedAtMs = document.modifiedAtMs)
         override fun open(uri: Uri): ByteArrayInputStream {
+            if (uri == failedRead) throw LocalAudioFailure(LocalAudioError.READ_FAILED)
             opens++
             if (uri == blocked) { entered.countDown(); check(release.await(10, TimeUnit.SECONDS)) }
             return ByteArrayInputStream(data[uri] ?: throw LocalAudioFailure(LocalAudioError.NOT_FOUND))

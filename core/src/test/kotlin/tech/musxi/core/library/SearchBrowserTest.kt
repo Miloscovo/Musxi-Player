@@ -83,12 +83,33 @@ class SearchBrowserTest {
 
     @Test fun resultsAreCopiedAndArtworkIsSanitizedBeforePublishing() {
         val artists = mutableListOf("Artist")
+        val artistIds = mutableListOf("artist-1")
         val rows = mutableListOf(SongSummary(MediaKey(Platform.NETEASE, "1"), "Song", artists, "Album", 1,
-            "https://p1.music.126.net/image?private=true"))
+            "https://p1.music.126.net/image?private=true", artistIds))
         browser.search(Platform.NETEASE, "query")
         calls[0].callback(Result.success(Page(rows, null, 1)))
-        artists.clear(); rows.clear()
+        artists.clear(); artistIds.clear(); rows.clear()
         val song = browser.state.value.page!!.items.single()
         assertEquals(listOf("Artist"), song.artists); assertNull(song.coverUrl)
+        assertEquals(listOf("artist-1"), song.artistIds)
+        assertThrows(UnsupportedOperationException::class.java) { (song.artistIds as MutableList).clear() }
+    }
+
+    @Test fun repeatedCompletionCannotReplaceAcceptedResultsOrError() {
+        for (platform in Platform.entries) {
+            browser.search(platform, "query")
+            val call = calls.last()
+            call.callback(Result.success(page(platform, title = "accepted")))
+            call.callback(Result.failure(LibraryPageFailure("network")))
+            call.callback(Result.success(page(platform, title = "repeated")))
+            assertEquals("accepted", browser.state.value.page!!.items.single().title)
+            assertNull(browser.state.value.error)
+            browser.refresh()
+            val failed = calls.last()
+            failed.callback(Result.failure(LibraryPageFailure("network")))
+            failed.callback(Result.success(page(platform, title = "late")))
+            assertEquals("network", browser.state.value.error)
+            assertEquals("accepted", browser.state.value.page!!.items.single().title)
+        }
     }
 }

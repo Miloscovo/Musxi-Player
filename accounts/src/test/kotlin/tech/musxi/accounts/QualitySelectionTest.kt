@@ -6,6 +6,48 @@ import org.junit.Assert.assertThrows
 import org.junit.Test
 
 class QualitySelectionTest {
+    @Test fun cancellationStopsDowngradeForEveryPlatform() {
+        for (platform in listOf("netease", "qq", "kugou")) {
+            var active = true
+            var requests = 0
+            val failure = assertThrows(tech.musxi.core.library.LibraryPageFailure::class.java) {
+                resolvePreferredQuality(platform, "$platform:best", null, ::failureCategory,
+                    isCurrent = { active }) {
+                    requests++
+                    active = false
+                    throw CategorizedFailure("membership")
+                }
+            }
+            assertEquals("cancelled", failure.category)
+            assertEquals(1, requests)
+        }
+    }
+
+    @Test fun cancelledQueuedRequestNeverResolvesExactOrPreferredQuality() {
+        for (exact in listOf(null, "netease:standard")) {
+            val failure = assertThrows(tech.musxi.core.library.LibraryPageFailure::class.java) {
+                resolvePreferredQuality("netease", "netease:best", exact, ::failureCategory,
+                    isCurrent = { false }) { throw AssertionError("Cancelled request reached platform") }
+            }
+            assertEquals("cancelled", failure.category)
+        }
+    }
+
+    @Test fun riskAndRateFailuresNeverDowngradeAcrossPlatforms() {
+        for (platform in listOf("netease", "qq", "kugou")) for (category in listOf("risk", "rate", "expired", "timeout")) {
+            var requests = 0
+            val original = CategorizedFailure(category)
+            val failure = assertThrows(CategorizedFailure::class.java) {
+                resolvePreferredQuality(platform, "$platform:best", null, ::failureCategory) {
+                    requests++
+                    throw original
+                }
+            }
+            assertSame(original, failure)
+            assertEquals(1, requests)
+        }
+    }
+
     @Test fun bestFallsBackWhenPlatformMaximumIsRejected() {
         val requested = mutableListOf<String>()
 

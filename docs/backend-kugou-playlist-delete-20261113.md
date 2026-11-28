@@ -5,8 +5,8 @@
 ## 已接入行为
 
 - `KugouApi` 固定 `POST https://gateway.kugou.com/v2/delete_list`，`x-router=cloudlist.service.kugou.com`，解密正文恰为 `{listid, total_ver:0, type:1}`。六位小写字母／数字AES会话，MD5派生CBC、RSA portrait、lite签名及默认设备／会话query沿用实机成功profile；Base64文本正文以 `text/plain; charset=utf-8` 发送并参与Android签名。与改名的二进制CBC profile分开，不允许外部传type、版本、URL或任意正文，不自动重试。
-- `KugouLibraryApi.deletePlaylist` 写前完整读取本人列表，按精确ID检查服务端 `is_edit=1,is_def=0`，要求普通自建；喜欢、系统默认、他人收藏、缺失／未知系统标志均不允许删。非空普通歌单允许整单删除，不先清歌、不依赖改名元数据，不改红心。ID限正整数且不超过JS安全整数上限。
-- 完整读取受账号代次、线程中断、60秒、20,000条与重复ID保护。有total时要求稳定且最终数量完全一致，后续total消失拒绝；没有total时沿服务端每页100的页号窗口继续取到显式空数组终页，短页本身不构成结束。未知total的null终页、错误响应或重复页都不能证明目标缺席。
+- `KugouLibraryApi.deletePlaylist` 写前完整读取本人列表，按精确ID检查服务端 `is_edit=1,is_def=0`，要求普通自建。11-17 实机补充：普通行可能省略 `is_def`，仅键完全缺失且规范 `list_create_userid` 与当前 session 精确匹配时兼容；显式 null／未知、喜欢、系统默认及他人收藏继续拒绝，详见[菜单权限修复](backend-playlist-menu-permissions-20261117.md)。非空普通歌单允许整单删除，不先清歌、不依赖改名元数据，不改红心。ID限正整数且不超过JS安全整数上限。
+- 完整读取受账号代次、线程中断、60秒、20,000条与重复ID保护。有total时要求稳定且最终数量完全一致，后续total消失拒绝；没有total时沿服务端每页100的页号窗口继续取到终页，短页本身不构成结束。11-13 实现仅接受显式空数组；[11-17菜单权限修复](backend-playlist-menu-permissions-20261117.md)因实机观察到 info:null，补充仅非空短页后、全程版本合法稳定、无冲突字段时兼容；满页后或无版本的null终页、错误响应或重复页仍不能证明目标缺席。11-17重连同包只读权限已通过，真实删除未重做，不改写11-13历史结果。
 - `PlaylistRepository.capabilities(KUGOU).delete=true`；`managementInfo(key).canDelete` 使用同一行权限，与 `canRename` 独立。已有 `deletePlaylist` 入口、同平台写互斥、账号代次及缓存／顺序／未完成播放工作失效链自然复用。
 
 ## 结果与异常

@@ -12,4 +12,10 @@ class FailureReasonTest {
         assertEquals(FailureReason.UNKNOWN, FailureReason.fromCategory("vip_maybe"))
         assertEquals(FailureReason.NETWORK, FailureReason.fromCategory("network"))
     }
+
+    @Test fun riskRejectionIsNotReportedAsExcessiveRequests() {
+        assertEquals(FailureReason.PLATFORM_RISK, FailureReason.fromCategory("risk"))
+        assertEquals(FailureReason.RATE_LIMIT, FailureReason.fromCategory("rate"))
+        assertEquals(FailureReason.RATE_LIMIT, FailureReason.fromFailure(PlaybackFailure.RATE_LIMIT))
+    }
 }

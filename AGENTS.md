@@ -2,7 +2,7 @@
 
 ## 当前入口
 
-当前源码版本为 `0.3.0`（versionCode 6），对应 Android v0.3；仍在持续完善，发布范围与限制见 docs/android-v0.3-release.md。后续更新递增 versionCode，并沿用同一正式包名与发布签名；不要使用一次性测试密钥替换已发布的签名。开工先读 README.md、docs/README.md 与 docs/next-session-handoff.md，再按任务读取合同或历史证据。现状只维护一个入口，旧交接全文在 docs/history/；历史版本、临时权限和队列快照不能作为当前指令。
+当前源码版本为 `0.3.1`（versionCode 7），对应 Android v0.3.1；仍在持续完善，发布范围与限制见 docs/android-v0.3.1-release.md。后续更新递增 versionCode，并沿用同一正式包名与发布签名；不要使用一次性测试密钥替换已发布的签名。开工先读 README.md、docs/README.md 与 docs/next-session-handoff.md，再按任务读取合同或历史证据。现状只维护一个入口，旧交接全文在 docs/history/；历史版本、临时权限和队列快照不能作为当前指令。
 
 安卓独立仓库为 https://github.com/qwt1011/Musxi-Player-Android ，默认分支 main；PC 来源为 https://github.com/Miloscovo/Musxi-Player 。向 PC 上游提交安卓代码时目标是 android/development，遵守 fork 网络和上次已合并 PR 的基线，不直接合并 PC 根目录到安卓工程。
 

@@ -20,6 +20,10 @@ class ValidationReceiver : BroadcastReceiver() {
         val app = context.applicationContext as MusxiApplication
         val step = intent.getStringExtra("step").orEmpty()
         when (step) {
+            "account_authorization_open" -> { AccountAuthorizationValidationActivity.launch(app); return }
+            "account_authorization_kugou" -> { AccountAuthorizationValidationActivity.launch(app, Platform.KUGOU); return }
+            "account_authorization_qq" -> { AccountAuthorizationValidationActivity.launch(app, Platform.QQ); return }
+            "account_authorization_cancel" -> { Platform.entries.forEach { app.accounts.cancel(it) }; return }
             "kugou_web_open" -> { KugouWebLoginValidationActivity.launch(app); return }
             "kugou_web_close" -> { KugouWebLoginValidationActivity.close(); return }
             "kugou_web_restart_check" -> { KugouWebLoginValidationActivity.restartCheck(app); return }
@@ -28,9 +32,18 @@ class ValidationReceiver : BroadcastReceiver() {
             "qq_web_close" -> { QqWebLoginValidationActivity.close(); return }
             "qq_web_restart_check" -> { QqWebLoginValidationActivity.restartCheck(app); return }
         }
+        if (ContentConsistencyValidationRunner.run(app, step)) return
+        if (PlaybackRemainingValidationRunner.run(app, step)) return
+        if (QueueConsistencyValidationRunner.run(app, step)) return
+        if (PlaybackRequestValidationRunner.run(app, step)) return
         if (tech.musxi.playback.LockScreenLyricsProbeValidation.run(app, step)) return
         if (LockScreenPageProbeValidation.run(app, step)) return
         if (LocalAudioBackgroundValidationRunner.run(app, step)) return
+        if (DsfDeviceValidationRunner.accepts(step)) {
+            val pending = goAsync()
+            DsfDeviceValidationRunner.run(app, step) { pending.finish() }
+            return
+        }
         if (BackendLiveValidationRunner.run(app, step)) return
         if (BackendToolsAcceptanceRunner.run(app, step) || OutputAcceptanceValidationRunner.run(app, step)) return
         if (PlaybackToolsValidationRunner.run(app, step) || OutputTraceValidationRunner.run(app, step)) return

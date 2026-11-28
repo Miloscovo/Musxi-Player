@@ -1121,6 +1121,30 @@ public class KugouLibraryApiTest {
         assertEquals(7L,payload.getLong("sort"));
         assertEquals(979L,payload.getLong("total_ver"));
     }
+    @Test public void renameReadsVersionedNullTerminalBeforeAndAfterItsSingleWrite() throws Exception {
+        List<KugouApi.Request> calls=new ArrayList<>();
+        boolean[] renamed={false};
+        KugouLibraryApi library=new KugouLibraryApi(new KugouApi(new KugouApi.Device("b".repeat(32)),request->{
+            calls.add(request);
+            if(request.endpoint.endsWith("/modify_list")) {
+                renamed[0]=true;
+                return json("{status:1,data:{}}");
+            }
+            if(!request.endpoint.endsWith("/get_all_list"))throw new AssertionError("Unexpected endpoint");
+            JSONObject body=json(request.body);
+            int version=renamed[0]?980:979;
+            String info=body.optInt("page")==1 ? "[{listid:10,name:'"+(renamed[0]?"新名":"旧名")+
+                "',is_edit:1,is_def:0,count:3,sort:7,tags:'通勤',intro:'简介'}]" : "null";
+            return json("{status:1,data:{total_ver:"+version+",info:"+info+"}}");
+        }));
+        library.renamePlaylist(new KugouApi.Session("fixture-token","123","Fixture"),"10","新名",()->true);
+        assertEquals(1,writeCount(calls));
+        assertEquals(5,calls.size());
+        JSONObject payload=decrypted(single(calls,"/modify_list"));
+        assertEquals(979L,payload.getLong("total_ver"));
+        assertEquals("通勤",payload.getString("tags"));
+        assertEquals("简介",payload.getString("intro"));
+    }
     @Test public void renameRefusesMissingMetadataBeforeAnyWrite() throws Exception {
         String[] rows={
             "{listid:10,name:'旧名',is_edit:1,is_def:0,count:0,sort:1,intro:'i'}",
@@ -1188,6 +1212,39 @@ public class KugouLibraryApiTest {
             new KugouApi.Session("t","123","n"),"10","新名",()->writeCount(late)==0));
         assertEquals("the write happened but was never reported as success",1,writeCount(late));
     }
+    @Test public void renameLostResponseReadsBackWithoutRepeatingWrite() throws Exception {
+        for(boolean applied:new boolean[]{true,false}) {
+            int[] writes={0},reads={0};
+            KugouLibraryApi library=new KugouLibraryApi(new KugouApi(new KugouApi.Device("b".repeat(32)),r->{
+                if(r.endpoint.endsWith("/modify_list")) { writes[0]++; throw new IOException("lost response"); }
+                if(r.endpoint.endsWith("/get_all_list")) {
+                    reads[0]++;
+                    String name=writes[0]>0 && applied?"新名":"旧名";
+                    return json("{status:1,data:{total:1,info:[{listid:10,name:'"+name+
+                        "',is_edit:1,is_def:0,count:0,total_ver:979,sort:1,tags:'t',intro:'i'}]}}");
+                }
+                return json("{status:1}");
+            }));
+            KugouApi.Session session=new KugouApi.Session("t","123","n");
+            if(applied)library.renamePlaylist(session,"10","新名",()->true);
+            else rejects("network",()->library.renamePlaylist(session,"10","新名",()->true));
+            assertEquals(1,writes[0]);
+            assertEquals(2,reads[0]);
+        }
+    }
+
+    @Test public void renameLostResponseCannotReadBackAfterAccountChange() throws Exception {
+        boolean[] current={true};int[] reads={0};
+        KugouLibraryApi library=new KugouLibraryApi(new KugouApi(new KugouApi.Device("b".repeat(32)),r->{
+            if(r.endpoint.endsWith("/modify_list")) { current[0]=false;throw new IOException("lost response"); }
+            if(r.endpoint.endsWith("/get_all_list")) { reads[0]++;return json(
+                "{status:1,data:{total:1,info:[{listid:10,name:'旧名',is_edit:1,is_def:0,count:0,total_ver:979,sort:1,tags:'t',intro:'i'}]}}"); }
+            return json("{status:1}");
+        }));
+        rejects("account_changed",()->library.renamePlaylist(new KugouApi.Session("t","123","n"),"10","新名",()->current[0]));
+        assertEquals(1,reads[0]);
+    }
+
     @Test public void renameNeverReportsSuccessOnFailureOrUnconfirmedReadBack() throws Exception {
         String row="{listid:10,name:'旧名',is_edit:1,is_def:0,count:0,total_ver:979,sort:1,tags:'t',intro:'i'}";
         KugouApi.Session session=new KugouApi.Session("t","123","n");

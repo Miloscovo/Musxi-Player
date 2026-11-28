@@ -54,7 +54,7 @@ class KugouLibraryRepository(private val accounts: AccountRepository) : LibraryP
     class LibraryFailure(category: String, val diagnostic: String? = null) : LibraryPageFailure(category)
     private fun <T> safe(result: (Result<T>) -> Unit): (Result<T>) -> Unit = { response ->
         result(response.fold({ Result.success(it) }, {
-            val code = (it as? LibraryFailure)?.category ?: (it as? KugouApi.ApiException)?.code
+            val code = (it as? LibraryPageFailure)?.category ?: (it as? KugouApi.ApiException)?.code
             val detail = (it as? KugouApi.ApiException)?.identityDiagnostic?.takeIf { fixed ->
                 fixed.matches(Regex("transport_(connect|read)_(ssl|dns|connect|eof|io)")) ||
                     fixed.matches(Regex("cdn:(ssl_peer|ssl|dns|timeout|io)(,(ssl_peer|ssl|dns|timeout|io)){0,4}"))
@@ -250,34 +250,21 @@ class KugouLibraryRepository(private val accounts: AccountRepository) : LibraryP
             return
         }
         val deadline = SystemClock.elapsedRealtime() + 60_000
-        var offset = knownSongs.size
-        var loadedCount = knownSongs.size
-        var expectedTotal: Int? = null
-        var finished = false
+        val cursor = PlaylistQueuePageCursor(knownSongs)
         val remainder = QueueRemainder(window.before, window.after, { callback ->
-            if (finished) {
+            if (cursor.finished) {
                 callback(Result.success(null))
             } else {
                 accounts.withKugouSession({ api, session ->
                     if (queueRevision.get() != revision || !accounts.isKugouGenerationConnected(generation))
                         throw LibraryFailure("cancelled")
                     if (SystemClock.elapsedRealtime() >= deadline) throw LibraryFailure("timeout")
-                    val request = playlistQueuePage(offset)
+                    val request = cursor.request()
                     val route = playlistRoute(api, session, playlist.id, generation)
                     val page = KugouLibraryApi(api).tracksNewestFirst(session, route, request.offset, request.limit)
-                    if (expectedTotal != null && expectedTotal != page.total) throw LibraryFailure("incomplete")
-                    expectedTotal = page.total.takeIf { it >= 0 } ?: throw LibraryFailure("incomplete")
-                    if (expectedTotal!! > 20_000 || offset > expectedTotal!!) throw LibraryFailure("limit")
                     if (queueRevision.get() != revision || !accounts.isKugouGenerationConnected(generation))
                         throw LibraryFailure("cancelled")
-                    val songs = remember(request.unseen(page.items).map(::summary), generation)
-                    if (page.nextOffset >= 0 && (songs.isEmpty() || page.nextOffset <= offset))
-                        throw LibraryFailure("incomplete")
-                    loadedCount += songs.size
-                    if (page.nextOffset < 0) {
-                        if (loadedCount != expectedTotal) throw LibraryFailure("incomplete")
-                        finished = true
-                    } else offset = page.nextOffset
+                    val songs = remember(cursor.accept(Page(page.items.map(::summary), page.nextOffset.takeIf { it >= 0 }, page.total.takeIf { it >= 0 })), generation)
                     if (SystemClock.elapsedRealtime() >= deadline) throw LibraryFailure("timeout")
                     if (queueRevision.get() != revision) throw LibraryFailure("cancelled")
                     songs
@@ -303,17 +290,20 @@ class KugouLibraryRepository(private val accounts: AccountRepository) : LibraryP
             }
         }, safe(result), RequestOperation.OTHER)
     }
-    fun resolveAudio(song: MediaKey, qualityId: String?, result: (Result<AudioCapability>) -> Unit) {
+    fun resolveAudio(song: MediaKey, qualityId: String?, result: (Result<AudioCapability>) -> Unit,
+        isCurrent: () -> Boolean = { true }) {
         require(song.platform == Platform.KUGOU)
         val state = accounts.states.value.getValue(Platform.KUGOU)
         val generation = state.generation
         val allowAuthorized = state.membership.level != MembershipLevel.NO
         accounts.withKugouSession({ api, session ->
+            if (!isCurrent()) throw LibraryFailure("cancelled")
             val library = KugouLibraryApi(api)
             val audio = resolvePreferredQuality("kugou", accounts.preferredQuality(Platform.KUGOU), qualityId,
-                { (it as? KugouApi.ApiException)?.code }) { id ->
+                { (it as? KugouApi.ApiException)?.code }, isCurrent) { id ->
                 library.audio(session, song.id, SystemClock.elapsedRealtime(), id, allowAuthorized)
             }
+            if (!isCurrent()) throw LibraryFailure("cancelled")
             if (qualityId != null && audio.qualityId != qualityId) throw LibraryFailure("unavailable")
             AudioCapability(audio.url, audio.expiresAtElapsedMs, audio.qualityId) { accounts.isKugouGenerationConnected(generation) }
         }, safe(result), RequestOperation.AUDIO)

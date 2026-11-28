@@ -1,21 +1,16 @@
 package tech.musxi.player.ui.localaudio
 
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
+import tech.musxi.player.ui.components.MusxiConfirmDialog
+import tech.musxi.player.ui.components.MusxiDialogTextField
+import tech.musxi.player.ui.components.MusxiTextFieldDialog
 
 /**
  * Asks for one name: a folder's or a recording's. The rule is checked as the user types, so the
@@ -23,7 +18,7 @@ import androidx.compose.ui.text.input.TextFieldValue
  * a second tap cannot send the command twice.
  *
  * [onRestore] adds "恢复原名" for a renamed recording: it clears the user's name and the tag title or
- * file name shows again.
+ * file name shows again. Pass [forceSolid] = true when shown above a glass [MusxiSheet].
  */
 @Composable
 internal fun LocalNameDialog(
@@ -34,53 +29,60 @@ internal fun LocalNameDialog(
     onDismiss: () -> Unit,
     onConfirm: (String) -> Unit,
     onRestore: (() -> Unit)? = null,
+    forceSolid: Boolean = false,
+    visible: Boolean = true,
 ) {
     // The whole name is selected, so typing replaces it and a small edit is one tap away.
-    var value by remember { mutableStateOf(TextFieldValue(initial, TextRange(0, initial.length))) }
+    var value by remember(title, initial) { mutableStateOf(TextFieldValue(initial, TextRange(0, initial.length))) }
+    val seenOpen = remember { booleanArrayOf(false) }
+    LaunchedEffect(visible) {
+        if (visible) {
+            if (seenOpen[0]) value = TextFieldValue(initial, TextRange(0, initial.length))
+            seenOpen[0] = true
+        }
+    }
     val problem = nameProblem(value.text)
-    AlertDialog(
-        onDismissRequest = { if (!saving) onDismiss() },
-        title = { Text(title) },
-        text = { LocalNameField(value, { value = it }, problem, saving) },
-        confirmButton = {
-            Row {
-                TextButton(onClick = { onConfirm(value.text.trim()) }, enabled = !saving && problem == null) {
-                    Text(if (saving) "正在保存…" else confirmLabel)
-                }
-            }
-        },
-        dismissButton = {
-            Row {
-                if (onRestore != null) {
-                    TextButton(onClick = onRestore, enabled = !saving) { Text("恢复原名") }
-                }
-                TextButton(onClick = onDismiss, enabled = !saving) { Text("取消") }
-            }
-        },
+    MusxiTextFieldDialog(
+        visible = visible,
+        title = title,
+        value = value,
+        onValueChange = { value = it },
+        confirmLabel = confirmLabel,
+        onDismiss = onDismiss,
+        onConfirm = { onConfirm(value.text.trim()) },
+        confirmEnabled = problem == null,
+        placeholder = "输入名称",
+        errorText = problem?.takeIf { value.text.isNotEmpty() },
+        busy = saving,
+        busyLabel = "正在保存…",
+        forceSolid = forceSolid,
+        eyebrow = "本地音频",
+        auxiliaryLabel = if (onRestore != null) "恢复原名" else null,
+        onAuxiliary = onRestore,
     )
 }
 
 /**
- * The name field on its own, so it can be checked outside a dialog window: under Robolectric a text
- * field inside a Dialog window never lets Compose go idle, while the same field in the activity does.
+ * The name field on its own, kept for direct unit testing of the naming rules and capsule field.
  */
 @Composable
-internal fun LocalNameField(value: TextFieldValue, onValueChange: (TextFieldValue) -> Unit, problem: String?, saving: Boolean) {
-    Column {
-        OutlinedTextField(
-            value = value,
-            onValueChange = onValueChange,
-            singleLine = true,
-            enabled = !saving,
-            // An empty field is the starting state, not a mistake; only say why once typed.
-            isError = problem != null && value.text.isNotEmpty(),
-            supportingText = if (problem != null && value.text.isNotEmpty()) ({ Text(problem) }) else null,
-            modifier = Modifier.fillMaxWidth(),
-        )
-    }
+internal fun LocalNameField(
+    value: TextFieldValue,
+    onValueChange: (TextFieldValue) -> Unit,
+    problem: String?,
+    saving: Boolean,
+) {
+    MusxiDialogTextField(
+        value = value,
+        onValueChange = onValueChange,
+        enabled = !saving,
+        placeholder = "输入名称",
+        // An empty field is the starting state, not a mistake; only say why once typed.
+        errorText = problem?.takeIf { value.text.isNotEmpty() },
+    )
 }
 
-/** A yes/no before something the user cannot undo from here. [danger] paints the yes red. */
+/** A yes/no before something the user cannot undo from here. [danger] paints the confirm button red. */
 @Composable
 internal fun LocalConfirmDialog(
     title: String,
@@ -90,17 +92,20 @@ internal fun LocalConfirmDialog(
     saving: Boolean,
     onDismiss: () -> Unit,
     onConfirm: () -> Unit,
+    note: String? = null,
+    visible: Boolean = true,
 ) {
-    val cs = MaterialTheme.colorScheme
-    AlertDialog(
-        onDismissRequest = { if (!saving) onDismiss() },
-        title = { Text(title) },
-        text = { Text(text) },
-        confirmButton = {
-            TextButton(onClick = onConfirm, enabled = !saving) {
-                Text(confirmLabel, color = if (danger && !saving) cs.error else androidx.compose.ui.graphics.Color.Unspecified)
-            }
-        },
-        dismissButton = { TextButton(onClick = onDismiss, enabled = !saving) { Text("取消") } },
+    MusxiConfirmDialog(
+        visible = visible,
+        title = title,
+        body = text,
+        note = note,
+        confirmLabel = confirmLabel,
+        danger = danger,
+        busy = saving,
+        busyLabel = "正在处理…",
+        eyebrow = "本地音频",
+        onDismiss = onDismiss,
+        onConfirm = onConfirm,
     )
 }

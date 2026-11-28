@@ -22,6 +22,8 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.distinctUntilChanged
 
 open class MusxiApplication : Application(), PlaybackHost {
+    /** Local DSF64/128/256 through the existing PCM bridge; no native DSD/USB claim. */
+    override val dsfPlaybackEnabled: Boolean get() = true
     val settingsRepository get() = accounts.settingsRepository
     val settings get() = settingsRepository.settings
     override val mediaCardLyrics by lazy {
@@ -124,10 +126,11 @@ open class MusxiApplication : Application(), PlaybackHost {
     lateinit var accounts: AccountRepository
         private set
     val playback by lazy { PlaybackConnection(this) }
-    /** Lifecycle/permission backend only; release has no concrete page until the front end connects it. */
+    /** Lock-screen lyrics page controller; concrete Activity lives in `ui/lockscreen/`. */
     val lockScreenLyrics by lazy { tech.musxi.player.lockscreen.LockScreenLyricsController(this,
         lockScreenLyricsHostClass()) }
-    protected open fun lockScreenLyricsHostClass(): Class<out tech.musxi.player.lockscreen.LockScreenLyricsHostActivity>? = null
+    protected open fun lockScreenLyricsHostClass(): Class<out tech.musxi.player.lockscreen.LockScreenLyricsHostActivity>? =
+        tech.musxi.player.ui.lockscreen.LockScreenLyricsActivity::class.java
     /** Shared public content, with the applied player wallpaper; drafts never leak onto the lock screen. */
     val lockScreenLyricsContent by lazy {
         combine(playback.state, lyrics.state, sourceSelection.state, wallpaper.state) { playback, lyrics, selection, wallpaper ->
@@ -232,7 +235,14 @@ open class MusxiApplication : Application(), PlaybackHost {
                 Platform.KUGOU -> kugouLibrary.searchPage(keywords, (page - 1) * 30, result)
             }
         }, previewFetch = lyricsRepository::preview, bindingAccess = accounts::lyricsBinding,
-        onBindingChanged = { _, _ -> lyrics.refresh() }) }
+        onBindingChanged = { _, _ -> lyrics.refresh() },
+        guardedSearch = { platform, keywords, page, current, result ->
+            when (platform) {
+                Platform.NETEASE -> library.searchPage(keywords, (page - 1) * 30, result, current)
+                Platform.QQ -> qqLibrary.searchPage(keywords, (page - 1) * 30, result, current)
+                Platform.KUGOU -> kugouLibrary.searchPage(keywords, (page - 1) * 30, result, current)
+            }
+        }) }
     protected open fun fetchLyricsTranslation(key: tech.musxi.core.library.MediaKey,
         original: tech.musxi.core.lyrics.ParsedLyrics, refresh: Boolean,
         result: (Result<tech.musxi.core.lyrics.ParsedLyrics>) -> Unit) =
@@ -314,14 +324,39 @@ open class MusxiApplication : Application(), PlaybackHost {
         accounts.rememberPreferredQuality(platform, qualityId)
     }
 
+    /** Fixed labels only; release keeps no account navigation trace. */
+    protected open fun onOfficialLoginReturn(stage: String) = Unit
+    internal fun recordOfficialLoginReturn() = onOfficialLoginReturn("RETURNED")
+    private val kugouAuthorizationReturn by lazy { KugouAuthorizationReturn(this) }
+
     override fun onCreate() {
         super.onCreate()
         // Dedicated app-owned WebView jar. No other platform uses this browser profile.
         if (Build.VERSION.SDK_INT >= 28) WebView.setDataDirectorySuffix("netease_login")
-        accounts = AccountRepository(this)
+        accounts = AccountRepository(this, officialLoginCompleted = { platform, generation ->
+            // A single return after verified/saved Kugou authorization; never a timer retry loop.
+            val state = accounts.states.value.getValue(platform)
+            if (platform == Platform.KUGOU && state.generation == generation &&
+                state.phase == tech.musxi.core.account.AccountPhase.CONNECTED &&
+                kugouAuthorizationReturn.isArmed(generation)) {
+                onOfficialLoginReturn("REQUESTED")
+                runCatching {
+                    startActivity(android.content.Intent(this, MainActivity::class.java)
+                        .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                        .putExtra("officialLoginReturn", platform.name))
+                }.onFailure { onOfficialLoginReturn("OPEN_FAILED") }
+                kugouAuthorizationReturn.close()
+            }
+        }, officialLoginLaunching = { platform, generation ->
+            if (platform == Platform.KUGOU) kugouAuthorizationReturn.start(generation)
+        }, officialLoginDiagnostic = { onOfficialLoginReturn(it) })
         registerActivityLifecycleCallbacks(object : ActivityLifecycleCallbacks {
             private val started = mutableSetOf<android.app.Activity>()
             override fun onActivityStarted(activity: android.app.Activity) {
+                if (activity is MainActivity && activity.intent.getStringExtra("officialLoginReturn") == Platform.KUGOU.name) {
+                    activity.intent.removeExtra("officialLoginReturn")
+                    onOfficialLoginReturn("RETURNED")
+                }
                 if (activity !is tech.musxi.player.lockscreen.LockScreenLyricsHostActivity) started.add(activity)
                 accounts.setForeground(started.isNotEmpty())
                 lockScreenLyrics.refreshPermissions()

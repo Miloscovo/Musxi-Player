@@ -51,7 +51,8 @@ enum class LocalAudioError {
     PERMISSION_REQUIRED, UNSUPPORTED_AUDIO, TOO_LARGE, NOT_ENOUGH_SPACE, SOURCE_CHANGED,
     INVALID_BACKUP, UNSUPPORTED_BACKUP, STALE_STATE, INVALID_TARGET,
 }
-class LocalAudioFailure(val error: LocalAudioError) : IOException("Local audio: ${error.name}")
+enum class LocalAudioRecoveryAction { COPY_REQUIRED }
+class LocalAudioFailure(val error: LocalAudioError, val recoveryAction: LocalAudioRecoveryAction? = null) : IOException("Local audio: ${error.name}")
 
 data class LocalAudioMetadata(
     val fileName: String,
@@ -86,6 +87,8 @@ data class LocalAudioItem(
     val playbackSpeed: Float = 1f,
     /** The user's own cover; [metadata] only ever holds the automatically extracted one. */
     val customArtworkKey: String? = null,
+    /** Optional immutable slice of one shared source; progress and bookmarks are slice-relative. */
+    val segment: LocalAudioSegment? = null,
 ) {
     init {
         LocalAudioLimits.requireId(id)
@@ -151,9 +154,23 @@ data class LocalAudioLibraryState(
     val bookmarks: List<LocalAudioBookmark> = emptyList(),
     val error: LocalAudioError? = null,
     val directories: List<LocalAudioDirectoryLink> = emptyList(),
-)
+    /** Legacy all-change revision remains strict for existing callers. */
+    val organizationRevision: Long = revision,
+    val progressRevision: Long = revision,
+) {
+    val organizationToken: LocalAudioVersionToken get() = LocalAudioVersionToken(organizationRevision)
+    val fullToken: LocalAudioVersionToken get() = LocalAudioVersionToken(organizationRevision, progressRevision)
+}
 
-data class LocalAudioImportResult(val fileName: String, val audioId: String? = null, val error: LocalAudioError? = null)
+/** Structural commands ignore checkpoints; progress-dependent operations carry both versions. */
+data class LocalAudioVersionToken(val organizationRevision: Long, val progressRevision: Long? = null) {
+    init { require(organizationRevision >= 0 && (progressRevision == null || progressRevision >= 0)) }
+    fun matches(state: LocalAudioLibraryState): Boolean = state.ready && organizationRevision == state.organizationRevision &&
+        (progressRevision == null || progressRevision == state.progressRevision)
+}
+
+data class LocalAudioImportResult(val fileName: String, val audioId: String? = null, val error: LocalAudioError? = null,
+    val recoveryAction: LocalAudioRecoveryAction? = null)
 data class LocalAudioImportState(
     val running: Boolean = false,
     val total: Int = 0,
@@ -163,6 +180,9 @@ data class LocalAudioImportState(
     val expectedBytes: Long? = null,
     val results: List<LocalAudioImportResult> = emptyList(),
     val cancelled: Boolean = false,
+    val runId: Long = 0,
+    val completed: Boolean = false,
+    val error: LocalAudioError? = null,
 )
 
 /** Blocking transactional storage. The application facade dispatches every call to IO. */
@@ -176,6 +196,22 @@ interface LocalAudioStore : AutoCloseable {
     /** Deduplicate by (mode, source.identity); preserve user names/progress/bookmarks. */
     fun importAudio(folderId: String, metadata: LocalAudioMetadata, source: LocalAudioSource,
         directory: LocalAudioDirectoryImport? = null): LocalAudioItem
+    /** All slices and memberships commit together, or none do. Never creates an implicit whole-file item. */
+    fun importCue(folderId: String, tracks: List<LocalCueImportTrack>, expectedRevision: Long,
+        checkCancelled: () -> Unit = {}): List<LocalAudioItem> = throw LocalAudioFailure(LocalAudioError.UNSUPPORTED_AUDIO)
+    /** Version-token overloads; production stores must validate and mutate in one transaction. */
+    fun importCue(folderId: String, tracks: List<LocalCueImportTrack>, expectedVersion: LocalAudioVersionToken,
+        checkCancelled: () -> Unit = {}): List<LocalAudioItem> = throw LocalAudioFailure(LocalAudioError.STORAGE_FAILED)
+    fun organize(audioIds: List<String>, action: LocalAudioBatchAction, folderId: String,
+        destinationFolderId: String? = null, expectedVersion: LocalAudioVersionToken,
+        checkCancelled: () -> Unit = {}): LocalAudioBatchResult = throw LocalAudioFailure(LocalAudioError.STORAGE_FAILED)
+    fun sortFolder(folderId: String, sort: LocalAudioSort, descending: Boolean,
+        expectedVersion: LocalAudioVersionToken, checkCancelled: () -> Unit = {}): LocalAudioSortResult =
+        throw LocalAudioFailure(LocalAudioError.STORAGE_FAILED)
+    fun reorder(folderId: String, audioIds: List<String>, expectedVersion: LocalAudioVersionToken): Unit =
+        throw LocalAudioFailure(LocalAudioError.STORAGE_FAILED)
+    fun restoreOrganization(backup: LocalAudioBackup, expectedVersion: LocalAudioVersionToken,
+        checkCancelled: () -> Unit = {}): LocalAudioRestoreResult = throw LocalAudioFailure(LocalAudioError.STORAGE_FAILED)
     fun source(audioId: String): StoredLocalAudio?
     fun renameAudio(audioId: String, name: String?)
     fun addToFolder(folderId: String, audioId: String)
@@ -218,6 +254,9 @@ interface LocalAudioStore : AutoCloseable {
         checkCancelled: () -> Unit = {}): LocalAudioRestoreResult
     fun linkDirectory(folderId: String, treeUri: String, name: String, mode: LocalImportMode,
         includeSubdirectories: Boolean): LocalAudioDirectoryLink
+    /** Complete listing, with per-file failures separate from directory errors. */
+    fun finishDirectoryRefresh(directoryId: String, seenIdentities: Set<String>, refreshedAtMs: Long,
+        failedItems: Int): Int = throw LocalAudioFailure(LocalAudioError.STORAGE_FAILED)
     fun directory(directoryId: String): StoredLocalAudioDirectory?
     fun directoryEntry(directoryId: String, documentIdentity: String): LocalAudioDirectoryEntry?
     /** Removes association/provenance only, leaving imported audio and memberships intact. */

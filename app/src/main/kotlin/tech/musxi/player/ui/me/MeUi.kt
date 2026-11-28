@@ -2,6 +2,7 @@ package tech.musxi.player.ui.me
 
 import tech.musxi.core.account.Platform
 import tech.musxi.core.playback.PreferredAudioQuality
+import tech.musxi.core.settings.LockScreenLyricsMode
 import tech.musxi.core.settings.LyricsFontSize
 import tech.musxi.core.settings.ThemeMode
 import tech.musxi.player.ui.theme.Accent
@@ -62,8 +63,8 @@ data class MeLyricsUi(
     val followCover: Boolean = true,
     val showTranslation: Boolean = true,
     val fontSize: LyricsFontSize = LyricsFontSize.MEDIUM,
-    /** The system media card (lock screen, notification shade) shows the current lyric line as its title. */
-    val mediaCardLyrics: Boolean = false,
+    /** Effective mutually exclusive lock-screen lyrics mode (OFF / CARD / PAGE). */
+    val lockScreenLyricsMode: LockScreenLyricsMode = LockScreenLyricsMode.OFF,
 )
 
 data class MeAppearanceUi(
@@ -109,7 +110,7 @@ class MeActions(
     val onSetFollowCover: (Boolean) -> Unit = {},
     val onSetShowTranslation: (Boolean) -> Unit = {},
     val onSelectFontSize: (LyricsFontSize) -> Unit = {},
-    val onSetMediaCardLyrics: (Boolean) -> Unit = {},
+    val onOpenLockScreenLyrics: () -> Unit = {},
     val onSelectThemeMode: (ThemeMode) -> Unit = {},
     val onSetTransparency: (Boolean) -> Unit = {},
     val onSelectAccent: (Accent) -> Unit = {},

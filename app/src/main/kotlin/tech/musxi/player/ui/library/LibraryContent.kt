@@ -1,6 +1,8 @@
 ﻿package tech.musxi.player.ui.library
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -21,6 +23,10 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.GridView
+import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.MoreVert
+import androidx.compose.material.icons.outlined.RestartAlt
+import androidx.compose.material.icons.outlined.Sort
 import androidx.compose.material.icons.outlined.ViewList
 import androidx.compose.material.icons.outlined.ViewModule
 import androidx.compose.material3.Button
@@ -38,8 +44,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -62,6 +71,8 @@ import tech.musxi.player.ui.shell.PageTopBar
 import tech.musxi.player.ui.shell.largeTitle
 import tech.musxi.player.ui.shell.rememberTitleProbe
 import tech.musxi.player.ui.theme.Space
+import tech.musxi.player.ui.theme.Haptic
+import tech.musxi.player.ui.theme.rememberHaptics
 import tech.musxi.player.ui.theme.displayName
 import tech.musxi.player.ui.theme.tabular
 
@@ -121,6 +132,18 @@ fun LibraryContent(
     onOpenRecommendation: () -> Unit = {},
     onPlayRecommendation: () -> Unit = {},
     onRetryRecommendation: () -> Unit = {},
+    canCreatePlaylist: Boolean = false,
+    onCreatePlaylist: () -> Unit = {},
+    management: PlaylistMenuUi? = null,
+    onPlaylistMenu: (PlaylistSummary) -> Unit = {},
+    onDismissManagement: () -> Unit = {},
+    onRenamePlaylist: () -> Unit = {},
+    onDeletePlaylist: () -> Unit = {},
+    onMovePlaylist: (tech.musxi.core.library.MediaKey, tech.musxi.core.library.MediaKey?, Long) -> Unit = { _, _, _ -> },
+    onMoveToStart: () -> Unit = {},
+    onMoveToEnd: () -> Unit = {},
+    onResetOrder: () -> Unit = {},
+    managementEnabled: Boolean = true,
 ) {
     val cs = MaterialTheme.colorScheme
     val pageInset = Modifier.padding(horizontal = Space.page)
@@ -156,6 +179,16 @@ fun LibraryContent(
                         contentDescription = "歌单显示：${density.label}，点按切换",
                         tint = cs.onSurfaceVariant,
                     )
+                }
+                if (!showLocal && state.customOrder) {
+                    IconButton(onClick = onResetOrder, enabled = managementEnabled && !state.savingOrder) {
+                        Icon(Icons.Outlined.RestartAlt, "恢复平台默认歌单顺序", tint = cs.onSurfaceVariant)
+                    }
+                }
+                if (!showLocal && canCreatePlaylist && state.accountVerified) {
+                    IconButton(onClick = onCreatePlaylist, enabled = managementEnabled) {
+                        Icon(Icons.Outlined.Add, "新建歌单", tint = cs.onSurfaceVariant)
+                    }
                 }
             }
             val status = statusLine(state, System.currentTimeMillis())
@@ -195,6 +228,10 @@ fun LibraryContent(
                     modifier = pageInset,
                 )
             }
+            if (!showLocal && state.storageError) {
+                Text("歌单顺序读取或保存异常，请检查存储空间",
+                    style = MaterialTheme.typography.bodySmall, color = cs.error, modifier = pageInset)
+            }
         }
     }
     if (showLocal) {
@@ -217,6 +254,8 @@ fun LibraryContent(
                     platformName = state.filter.platform?.displayName ?: "平台",
                     onOpenAccount = onOpenAccount,
                     onRefresh = onRefresh,
+                    canCreatePlaylist = canCreatePlaylist && managementEnabled,
+                    onCreatePlaylist = onCreatePlaylist,
                     bottomInset = bottomInset,
                     header = header,
                 )
@@ -226,12 +265,12 @@ fun LibraryContent(
                 val rest = remember(state.items, featured) {
                     if (featured == null) state.items else state.items.filter { it.key != featured.key }
                 }
-                val sections = remember(rest) { groupPlaylists(rest) }
+                val rows = remember(rest) { rest.map(::PlaylistRowItem) }
                 val hasModules = home.resume != null || home.recommendation != null || featured != null ||
                     home.recent.isNotEmpty()
                 // With nothing above it the page is already clear: a heading would only label the one
                 // list there is. A titled section names itself.
-                val playlistsTitle = hasModules && rest.isNotEmpty() && sections.firstOrNull()?.title == null
+                val playlistsTitle = hasModules && rest.isNotEmpty()
                 // Scrolling near the end loads the next page by itself; the pill stays for a
                 // failed page (its manual retry) and for anyone who reaches the end first.
                 tech.musxi.player.ui.components.AutoLoadMore(
@@ -240,6 +279,15 @@ fun LibraryContent(
                     failed = state.error != null,
                     onLoadMore = onLoadMore,
                 )
+                val reorder = rememberPlaylistReorderState(state.revision, state.savingOrder, managementEnabled)
+                val managementMenu: @Composable (PlaylistSummary) -> Unit = { playlist ->
+                    management?.takeIf { it.playlist.key == playlist.key }?.let { menu ->
+                        PlaylistManagementMenu(menu, onDismissManagement, onRenamePlaylist,
+                            onDeletePlaylist, onMoveToStart, onMoveToEnd, onResetOrder,
+                            canMove = rest.size > 1, canMoveToEnd = state.complete,
+                            customOrder = state.customOrder, enabled = managementEnabled && !state.savingOrder)
+                    }
+                }
                 LazyColumn(
                     Modifier.fillMaxSize(),
                     state = listState,
@@ -272,38 +320,30 @@ fun LibraryContent(
                             if (playlistsTitle) SectionTitle("歌单")
                         }
                     }
-                    // Sections are plain items in the same list, so "load more" below stays last.
-                    sections.forEachIndexed { sectionIndex, section ->
-                        // A heading is there when the section has its own or the "歌单" one leads the list.
-                        val headed = section.title != null || (sectionIndex == 0 && playlistsTitle)
-                        section.title?.let { title ->
-                            item(key = "section-$title") {
-                                // The first heading follows the segmented control or a module, each of
-                                // which leaves its own gap; a later section needs one.
-                                val top = if (sectionIndex > 0) Space.section else 0.dp
-                                SectionTitle(title, pageInset.padding(top = top))
-                            }
-                        }
-                        if (density == LibraryDensity.LIST) {
-                            itemsIndexed(section.items, key = { _, it -> it.key.stableId }) { index, playlist ->
-                                Column(pageInset) {
-                                    PlaylistRow(playlist) { onOpenPlaylist(playlist) }
-                                    // The line starts at the text, not under the cover.
-                                    if (index < section.items.lastIndex) {
-                                        RowDivider(start = RowSpec.textStart(RowSpec.cover))
+                    if (density == LibraryDensity.LIST) {
+                        itemsIndexed(rows, key = { _, item -> "playlist-${item.playlist.key.stableId}" }) { index, item ->
+                            PlaylistReorderRow(item, index, rows, state.revision, state.savingOrder, listState, reorder,
+                                row = { entry, lifted, offset ->
+                                    Box(Modifier.padding(horizontal = Space.page).graphicsLayer {
+                                        translationY = offset
+                                        shadowElevation = if (lifted) 8.dp.toPx() else 0f
+                                    }.background(if (lifted) cs.surfaceContainerHighest else Color.Transparent,
+                                        MaterialTheme.shapes.medium)) {
+                                        PlaylistRow(entry.playlist, { onOpenPlaylist(entry.playlist) },
+                                            onMenu = { onPlaylistMenu(entry.playlist) },
+                                            menuContent = { managementMenu(entry.playlist) })
                                     }
-                                }
-                            }
-                        } else {
+                                }, onMove = onMovePlaylist, enabled = managementEnabled)
+                        }
+                    } else {
                             // Grid rows are plain items too, so the load-more pill stays the last item.
-                            val rows = section.items.chunked(density.columns)
+                            val rows = rest.chunked(density.columns)
                             itemsIndexed(rows, key = { _, row -> "row-${row.first().key.stableId}" }) { index, row ->
                                 // Rows space themselves from below; the first one also takes the padding a
                                 // list row has above its cover when no heading sits above it.
-                                if (index == 0 && !headed) Spacer(Modifier.height(RowSpec.vertical))
-                                PlaylistGridRow(row, density.columns, pageInset) { onOpenPlaylist(it) }
+                                if (index == 0 && !playlistsTitle) Spacer(Modifier.height(RowSpec.vertical))
+                                PlaylistGridRow(row, density.columns, pageInset, { onOpenPlaylist(it) }, onPlaylistMenu, managementMenu)
                             }
-                        }
                     }
                     item {
                         if (state.canLoadMore || (state.loading && state.items.isNotEmpty())) {
@@ -329,13 +369,16 @@ private fun LibraryEmpty(
     platformName: String,
     onOpenAccount: () -> Unit,
     onRefresh: () -> Unit,
+    canCreatePlaylist: Boolean,
+    onCreatePlaylist: () -> Unit,
     bottomInset: Dp,
     header: @Composable () -> Unit = {},
 ) {
     val cs = MaterialTheme.colorScheme
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
         header()
-        LibraryEmptyBody(failed, connected, platformName, onOpenAccount, onRefresh, bottomInset)
+        LibraryEmptyBody(failed, connected, platformName, onOpenAccount, onRefresh, bottomInset,
+            canCreatePlaylist, onCreatePlaylist)
     }
 }
 
@@ -347,6 +390,8 @@ private fun LibraryEmptyBody(
     onOpenAccount: () -> Unit,
     onRefresh: () -> Unit,
     bottomInset: Dp,
+    canCreatePlaylist: Boolean,
+    onCreatePlaylist: () -> Unit,
 ) {
     val cs = MaterialTheme.colorScheme
     Column(Modifier.fillMaxWidth().padding(horizontal = Space.page)) {
@@ -381,6 +426,10 @@ private fun LibraryEmptyBody(
             Button(onClick = onRefresh) {
                 Text("重新读取", style = MaterialTheme.typography.labelLarge)
             }
+        }
+        if (!failed && connected && canCreatePlaylist) {
+            Spacer(Modifier.height(16.dp))
+            Button(onClick = onCreatePlaylist) { Text("新建歌单", style = MaterialTheme.typography.labelLarge) }
         }
         Spacer(Modifier.height(24.dp + bottomInset))
     }
@@ -420,23 +469,41 @@ private fun PlaylistGridRow(
     columns: Int,
     pageInset: Modifier,
     onOpen: (PlaylistSummary) -> Unit,
+    onMenu: (PlaylistSummary) -> Unit,
+    menuContent: @Composable (PlaylistSummary) -> Unit,
 ) {
     Row(
         pageInset.fillMaxWidth().padding(bottom = Space.inner),
         horizontalArrangement = Arrangement.spacedBy(Space.sibling),
     ) {
         row.forEach { playlist ->
-            PlaylistTile(playlist, Modifier.weight(1f)) { onOpen(playlist) }
+            Box(Modifier.weight(1f)) {
+                PlaylistTile(playlist, Modifier.fillMaxWidth(), { onOpen(playlist) }, { onMenu(playlist) })
+                menuContent(playlist)
+            }
         }
         repeat(columns - row.size) { Spacer(Modifier.weight(1f)) }
     }
 }
 
 /** A grid cell: a square cover, then the title on one line and the count on the next. */
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
-private fun PlaylistTile(playlist: PlaylistSummary, modifier: Modifier, onClick: () -> Unit) {
+private fun PlaylistTile(playlist: PlaylistSummary, modifier: Modifier, onClick: () -> Unit, onLongClick: () -> Unit) {
     val cs = MaterialTheme.colorScheme
-    Column(modifier.pressableRow(onClick = onClick)) {
+    val haptic = rememberHaptics()
+    Column(modifier.clip(MaterialTheme.shapes.medium).combinedClickable(
+        interactionSource = remember { MutableInteractionSource() },
+        indication = null,
+        role = Role.Button,
+        hapticFeedbackEnabled = false,
+        onClick = onClick,
+        onLongClickLabel = "歌单操作",
+        onLongClick = {
+            haptic(Haptic.LONG_PRESS)
+            onLongClick()
+        },
+    )) {
         Cover(
             seed = playlist.key.stableId,
             modifier = Modifier.fillMaxWidth().aspectRatio(1f),
@@ -470,6 +537,11 @@ private fun LibraryDensity.icon(): ImageVector = when (this) {
  */
 @Composable
 private fun PlaylistRow(playlist: PlaylistSummary, onClick: () -> Unit) {
+    PlaylistRow(playlist, onClick, onMenu = null)
+}
+
+@Composable
+private fun PlaylistRow(playlist: PlaylistSummary, onClick: () -> Unit, onMenu: (() -> Unit)?, menuContent: @Composable () -> Unit = {}) {
     PlainRow(onClick = onClick) {
         Cover(
             seed = playlist.key.stableId,
@@ -479,6 +551,16 @@ private fun PlaylistRow(playlist: PlaylistSummary, onClick: () -> Unit) {
         )
         Spacer(Modifier.width(RowSpec.leadGap))
         RowText(playlist.title, subtitle = "${playlist.trackCount} 首", subtitleStyle = MaterialTheme.typography.bodySmall.tabular)
+        if (onMenu != null) {
+            Spacer(Modifier.size(44.dp))
+            Spacer(Modifier.width(RowSpec.trailGap))
+            Box {
+                IconButton(onClick = onMenu, modifier = Modifier.size(40.dp)) {
+                    Icon(Icons.Outlined.MoreVert, "歌单操作：${playlist.title}", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                menuContent()
+            }
+        }
     }
 }
 
@@ -527,12 +609,3 @@ internal data class PlaylistSection(val title: String?, val items: List<Playlist
  * Created playlists keep their order at the top of the first group. OTHER (and any other kind that is
  * not COLLECTED) follows them at the end of that group.
  */
-internal fun groupPlaylists(playlists: List<PlaylistSummary>): List<PlaylistSection> {
-    val hasCreated = playlists.any { it.kind == PlaylistKind.CREATED }
-    val hasCollected = playlists.any { it.kind == PlaylistKind.COLLECTED }
-    if (!hasCreated || !hasCollected) return listOf(PlaylistSection(null, playlists))
-    val created = playlists.filter { it.kind == PlaylistKind.CREATED } +
-        playlists.filter { it.kind != PlaylistKind.CREATED && it.kind != PlaylistKind.COLLECTED }
-    val collected = playlists.filter { it.kind == PlaylistKind.COLLECTED }
-    return listOf(PlaylistSection("创建的歌单", created), PlaylistSection("收藏的歌单", collected))
-}

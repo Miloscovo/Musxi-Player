@@ -4,6 +4,14 @@ import android.content.Intent
 
 /** Pass the returned Intent/ClipData and flags to the repository; picker cancellation is a no-op. */
 object LocalAudioPickers {
+    /** CUE MIME types vary between providers; the backend performs bounded format validation. */
+    fun cue(): Intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+        addCategory(Intent.CATEGORY_OPENABLE)
+        type = "*/*"
+        putExtra(Intent.EXTRA_ALLOW_MULTIPLE, false)
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    }
+
     fun exportAudio(fileName: String, mimeType: String = "application/octet-stream"): Intent = create(fileName, mimeType)
 
     fun exportOrganization(fileName: String = "Musxi-本地整理.musxiorg"): Intent = create(fileName, "application/octet-stream")

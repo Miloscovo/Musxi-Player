@@ -6,7 +6,7 @@ import tech.musxi.core.account.Platform
 enum class FailureReason {
     MEMBERSHIP_REQUIRED, COPYRIGHT_RESTRICTED, PREVIEW_ONLY, PERMISSION_RESTRICTED,
     NETWORK, TIMEOUT, AUTH_REQUIRED, PLATFORM_UNAVAILABLE, RATE_LIMIT, PROTOCOL,
-    BACKGROUND_RESTRICTED, UNKNOWN;
+    BACKGROUND_RESTRICTED, UNKNOWN, PLATFORM_RISK;
 
     companion object {
         fun fromCategory(category: String?): FailureReason = when (category) {
@@ -18,7 +18,8 @@ enum class FailureReason {
             "timeout" -> TIMEOUT
             "expired", "account_changed" -> AUTH_REQUIRED
             "unavailable", "platform" -> PLATFORM_UNAVAILABLE
-            "rate", "risk" -> RATE_LIMIT
+            "rate" -> RATE_LIMIT
+            "risk" -> PLATFORM_RISK
             "protocol", "identity", "endpoint", "incomplete", "limit", "request" -> PROTOCOL
             else -> UNKNOWN
         }

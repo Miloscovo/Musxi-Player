@@ -1,9 +1,5 @@
 package tech.musxi.player.ui.shell
 
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -14,23 +10,30 @@ import tech.musxi.core.account.Platform
 import tech.musxi.core.cache.CacheKind
 import tech.musxi.core.cache.CacheOperationResult
 import tech.musxi.core.playback.PreferredAudioQuality
+import tech.musxi.core.settings.LockScreenLyricsMode
 import tech.musxi.core.settings.LyricsFontSize
 import tech.musxi.core.settings.ThemeMode
+import tech.musxi.player.lockscreen.LockScreenLyricsState
 import tech.musxi.player.ui.account.AboutUpdateUi
 import tech.musxi.player.ui.account.AccountDetailPage
 import tech.musxi.player.ui.account.AccountPageActions
 import tech.musxi.player.ui.account.AccountRowUi
 import tech.musxi.player.ui.account.UpdateActions
+import tech.musxi.player.ui.components.MusxiConfirmDialog
+import tech.musxi.player.ui.me.LockScreenLyricsSettingsActions
+import tech.musxi.player.ui.me.LockScreenLyricsSettingsPage
 import tech.musxi.player.ui.me.MeActions
 import tech.musxi.player.ui.me.MeScreen
 import tech.musxi.player.ui.me.MeUi
 import tech.musxi.player.ui.me.cacheSizeText
+import tech.musxi.player.ui.me.lockScreenLyricsSettingsUiOf
 import tech.musxi.player.ui.nav.NavStackHost
 import tech.musxi.player.ui.nav.NavStackState
 import tech.musxi.player.ui.theme.Accent
 
-/** Page keys of the "我的" tab's stack: the page itself and one page per platform. */
+/** Page keys of the "我的" tab's stack: root, per-platform account, and lock-screen lyrics settings. */
 internal const val MeRootKey = "me"
+internal const val MeLockScreenLyricsKey = "me/lockscreen-lyrics"
 private const val MeAccountPrefix = "me/account/"
 
 internal fun meAccountKey(platform: Platform): String = MeAccountPrefix + platform.name
@@ -51,7 +54,10 @@ class MeTabActions(
     val onSelectLibraryLock: (tech.musxi.player.ui.library.LibraryLock) -> Unit = {},
     val onSetFollowCover: (Boolean) -> Unit = {},
     val onSetShowTranslation: (Boolean) -> Unit = {},
-    val onSetMediaCardLyrics: (Boolean) -> Unit = {},
+    val onSelectLockScreenLyricsMode: (LockScreenLyricsMode) -> Unit = {},
+    val onOpenOverlayPermission: () -> Unit = {},
+    val onOpenAppPermissionSettings: () -> Unit = {},
+    val onRefreshLockScreenPermissions: () -> Unit = {},
     val onSetTransparency: (Boolean) -> Unit = {},
     val onSetThemeMode: (ThemeMode) -> Unit = {},
     val onSetDefaultQuality: (PreferredAudioQuality) -> Unit = {},
@@ -86,6 +92,8 @@ fun MeTab(
     backEnabled: Boolean = true,
     /** The root page's scroll, hoisted so tapping the tab again can return to the top. */
     scrollState: androidx.compose.foundation.ScrollState = androidx.compose.foundation.rememberScrollState(),
+    /** Observable lock-screen lyrics state for the permission guide inside the sub-page. */
+    lockScreenState: LockScreenLyricsState = LockScreenLyricsState(),
 ) {
     var askClear by remember { mutableStateOf(false) }
     val meActions = MeActions(
@@ -98,7 +106,7 @@ fun MeTab(
         onSetFollowCover = actions.onSetFollowCover,
         onSetShowTranslation = actions.onSetShowTranslation,
         onSelectFontSize = actions.onSetLyricsFontSize,
-        onSetMediaCardLyrics = actions.onSetMediaCardLyrics,
+        onOpenLockScreenLyrics = { nav.push(MeLockScreenLyricsKey) },
         onSelectThemeMode = actions.onSetThemeMode,
         onSetTransparency = actions.onSetTransparency,
         onSelectAccent = actions.onSetAccent,
@@ -106,9 +114,23 @@ fun MeTab(
         onFillLocalArtwork = actions.onFillLocalArtwork,
         onClearCache = { askClear = true },
     )
+    val lockScreenActions = remember(actions) {
+        LockScreenLyricsSettingsActions(
+            onSelectMode = actions.onSelectLockScreenLyricsMode,
+            onOpenOverlayPermission = actions.onOpenOverlayPermission,
+            onOpenAppSettings = actions.onOpenAppPermissionSettings,
+            onRefreshPermissions = actions.onRefreshLockScreenPermissions,
+        )
+    }
     NavStackHost(nav, backEnabled = backEnabled) { key ->
         val platform = meAccountPlatform(key)
         when {
+            key == MeLockScreenLyricsKey -> LockScreenLyricsSettingsPage(
+                ui = lockScreenLyricsSettingsUiOf(ui.lyrics.lockScreenLyricsMode, lockScreenState),
+                actions = lockScreenActions,
+                onBack = { nav.pop() },
+                bottomInset = bottomInset,
+            )
             platform != null -> AccountDetailPage(
                 platform = platform,
                 row = accountRows.firstOrNull { it.platform == platform },
@@ -129,20 +151,20 @@ fun MeTab(
             )
         }
     }
-    if (askClear) {
-        // A destructive action is the one thing that gets a dialog (spec section 9).
-        AlertDialog(
-            onDismissRequest = { askClear = false },
-            title = { Text("清除缓存？") },
-            text = { Text("封面、歌词和曲库缓存会被清除，用到时再重新获取。账号与设置不受影响。") },
-            confirmButton = {
-                TextButton(onClick = { askClear = false; actions.onClearCache() }) {
-                    Text("清除", color = MaterialTheme.colorScheme.error)
-                }
-            },
-            dismissButton = { TextButton(onClick = { askClear = false }) { Text("取消") } },
-        )
-    }
+    // Destructive confirmation via the unified glass dialog (spec section 9).
+    MusxiConfirmDialog(
+        visible = askClear,
+        title = "清除缓存？",
+        body = "封面、歌词和曲库缓存会被清除，用到时再重新获取。",
+        note = "账号登录状态与各项设置不受影响。",
+        confirmLabel = "清除",
+        danger = true,
+        onDismiss = { askClear = false },
+        onConfirm = {
+            askClear = false
+            actions.onClearCache()
+        },
+    )
 }
 
 /**

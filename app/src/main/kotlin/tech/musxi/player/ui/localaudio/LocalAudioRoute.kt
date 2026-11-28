@@ -168,22 +168,22 @@ fun LocalAudioHomeRoute(
         bottomInset = bottomInset,
         nowPlayingFolderId = nowPlayingFolderId,
     )
-    if (creating) {
-        LocalNameDialog(
-            title = "新建文件夹",
-            initial = "",
-            confirmLabel = "创建",
-            saving = saving,
-            onDismiss = { creating = false },
-            onConfirm = { name ->
-                saving = true
-                createFolderAndOpen(controller, name, onOpenFolder, onNotice) {
-                    saving = false
-                    creating = false
-                }
-            },
-        )
-    }
+    LocalNameDialog(
+        title = "新建文件夹",
+        initial = "",
+        confirmLabel = "创建",
+        saving = saving,
+        visible = creating,
+        onDismiss = { creating = false },
+        onConfirm = { name ->
+            if (!creating || saving) return@LocalNameDialog
+            saving = true
+            createFolderAndOpen(controller, name, onOpenFolder, onNotice) {
+                saving = false
+                creating = false
+            }
+        },
+    )
 }
 
 /**
@@ -686,13 +686,20 @@ fun LocalAudioFolderRoute(
         }
     }
 
-    when (val d = dialog) {
+    // Keep the last shown dialog across the 160ms exit animation so the card fades out cleanly.
+    val lastDialog = remember { arrayOfNulls<FolderDialog>(1) }
+    if (dialog != null) lastDialog[0] = dialog
+    val shownDialog = dialog ?: lastDialog[0]
+    val dialogVisible = dialog != null
+    when (val d = shownDialog) {
         null -> Unit
         FolderDialog.RenameFolder -> folder?.let { f ->
             LocalNameDialog(
                 title = "重命名文件夹", initial = f.name, confirmLabel = "保存", saving = saving,
+                visible = dialogVisible,
                 onDismiss = { dialog = null },
                 onConfirm = { name ->
+                    if (!dialogVisible || saving) return@LocalNameDialog
                     if (name.trim() == f.name) dialog = null
                     else { saving = true
                     controller.renameFolder(f.id, name) { r -> saving = false; dialog = null; if (r.isFailure) fail(r) } }
@@ -704,8 +711,10 @@ fun LocalAudioFolderRoute(
                 title = "删除文件夹「${f.name}」？",
                 text = "音频保留在本地库，此文件夹的手机文件夹关联一并移除。",
                 confirmLabel = "删除", danger = true, saving = saving,
+                visible = dialogVisible,
                 onDismiss = { dialog = null },
                 onConfirm = {
+                    if (!dialogVisible || saving) return@LocalConfirmDialog
                     saving = true
                     controller.deleteFolder(f.id) { r ->
                         saving = false
@@ -719,8 +728,10 @@ fun LocalAudioFolderRoute(
             title = "取消关联「${d.name}」？",
             text = "已导入的音频会保留在这个文件夹里，只是以后不能再从这个手机文件夹刷新。",
             confirmLabel = "取消关联", danger = true, saving = saving,
+            visible = dialogVisible,
             onDismiss = { dialog = null },
             onConfirm = {
+                if (!dialogVisible || saving) return@LocalConfirmDialog
                 saving = true
                 controller.unlinkDirectory(d.linkId) { r ->
                     saving = false
@@ -732,8 +743,10 @@ fun LocalAudioFolderRoute(
         is FolderDialog.RenameAudio -> index.item(d.id)?.let { item ->
             LocalNameDialog(
                 title = "重命名", initial = item.title, confirmLabel = "保存", saving = saving,
+                visible = dialogVisible,
                 onDismiss = { dialog = null },
                 onConfirm = { name ->
+                    if (!dialogVisible || saving) return@LocalNameDialog
                     // Saving the shown title unchanged would pin it as a custom name.
                     if (name.trim() == item.title) dialog = null
                     else { saving = true
@@ -741,6 +754,7 @@ fun LocalAudioFolderRoute(
                 },
                 // Only a renamed recording has an original name to go back to.
                 onRestore = if (item.displayName != null) ({
+                    if (!dialogVisible || saving) return@LocalNameDialog
                     saving = true
                     controller.renameAudio(d.id, null) { r -> saving = false; dialog = null; if (r.isFailure) fail(r) }
                 }) else null,
@@ -749,22 +763,33 @@ fun LocalAudioFolderRoute(
         is FolderDialog.DeleteAudios -> LocalConfirmDialog(
             title = if (d.ids.size == 1) "从本地库删除这一条？" else "从本地库删除 ${d.ids.size} 条？",
             text = (if (d.ids.size == 1) "会删除这条的" else "会删除这些音频的") +
-                "进度、书签和自定义名称。不会删除手机里的原文件；Musxi 中的副本会被清理。",
+                "进度、书签和自定义名称。",
+            note = "不会删除手机里的原文件；Musxi 中的副本会被清理。",
             confirmLabel = "删除", danger = true, saving = saving,
+            visible = dialogVisible,
             onDismiss = { dialog = null },
-            onConfirm = { deleteAudios(d.ids) },
+            onConfirm = {
+                if (!dialogVisible || saving) return@LocalConfirmDialog
+                deleteAudios(d.ids)
+            },
         )
         is FolderDialog.RemoveAudios -> LocalConfirmDialog(
             title = "从此文件夹移出 ${d.ids.size} 条？",
             text = "只是移出这个文件夹，音频、进度和书签都还在本地库里。",
             confirmLabel = "移出", danger = false, saving = saving,
+            visible = dialogVisible,
             onDismiss = { dialog = null },
-            onConfirm = { removeFromHere(d.ids) },
+            onConfirm = {
+                if (!dialogVisible || saving) return@LocalConfirmDialog
+                removeFromHere(d.ids)
+            },
         )
         is FolderDialog.NewFolderThen -> LocalNameDialog(
             title = "新建文件夹", initial = "", confirmLabel = "创建", saving = saving,
+            visible = dialogVisible,
             onDismiss = { dialog = null },
             onConfirm = { name ->
+                if (!dialogVisible || saving) return@LocalNameDialog
                 saving = true
                 controller.createFolder(name) { r ->
                     saving = false

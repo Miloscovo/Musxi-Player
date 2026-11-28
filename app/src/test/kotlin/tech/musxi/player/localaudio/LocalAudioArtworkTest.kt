@@ -27,6 +27,15 @@ import tech.musxi.core.localaudio.LocalAudioMetadata
 @Config(sdk = [35], application = Application::class, shadows = [ShadowMediaMetadataRetriever::class])
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class LocalAudioArtworkTest {
+    @Test fun dsfAutoCoverSkipsPlatformRetrieverAndStillHonorsCancellation() {
+        val source = MediaMetadataArtworkFrameSource(RuntimeEnvironment.getApplication())
+        var checks = 0
+        assertNull(source.frameOf(Uri.parse("content://not-opened/dsf"), LocalAudioMetadata("album.DSF")) { checks++ })
+        assertEquals(1, checks)
+        assertThrows(CancellationException::class.java) {
+            source.frameOf(Uri.parse("content://not-opened/dsf"), LocalAudioMetadata("album.dsf")) { throw CancellationException() }
+        }
+    }
     @get:Rule val temporary = TemporaryFolder()
     private val uri = Uri.parse("content://local-artwork-test/document/a")
     private val metadata = LocalAudioMetadata("clip.mp4", durationMs = 60_000)

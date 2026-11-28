@@ -1,5 +1,7 @@
 # Musxi Android 许可与来源
 
+2026-11-24 网易云歌曲取流适配 [api-enhanced `23d9e9d7ee5dfeccfc3b15916ccd9da1f76d3ea4`](https://github.com/NeteaseCloudMusicApiEnhanced/api-enhanced/tree/23d9e9d7ee5dfeccfc3b15916ccd9da1f76d3ea4) 的 `module/song_url_v1.js`、`module/register_xeapikey.js`、`util/xeapiKey.js`、`util/crypto.js` 和 `util/request.js`（MIT）。仅取流增加手机直连 XEAPI、公钥响应签名校验及有界解密；其余接口沿用原固定来源。新增 `org.whispersystems:curve25519-java:0.5.0`（Whisper Systems，GPLv3）纯 Java X25519 实现，以兼容 Android 8 及以上；与本项目 GPL-3.0-or-later 许可兼容，完整许可随包保留于 [curve25519-java-GPL-3.0.txt](platform-netease/src/main/assets/licenses/curve25519-java-GPL-3.0.txt)。不注册全局加密提供者，不打包官方登录 SDK。
+
 2026-11-13 发布后CI检查将自动换源的时间测试改为协程虚拟时钟，新增 `kotlinx-coroutines-test:1.10.2`（JetBrains，Apache-2.0）作为 playback 的 `testImplementation`，与既有 coroutines 版本一致。仅供宿主测试，不进入产品APK；许可全文沿用 `app/src/main/assets/licenses/` 中既有 Kotlin/coroutines 声明。
 
 2026-10-23 安卓0.1验收候选复用 Musxi PC 应用图标：来自本地PC v0.5.1工作树 `assets/icons/musxi.png`，PC CEF构建同目录 `musxi.ico` 用于exe。来源提交 `e72fba9feb6da22a1b8b207ba2fa07b29b96d36c`，沿用本项目的Musxi品牌素材及GPL来源记录；安卓只做不同密度缩放与自适应适配；alpha02 在 108dp 前景中增加 18dp inset，将完整图案收至可见 72dp 区域，避免主标识被裁切，未引入第三方图标包。AndroidX设备端Compose验收依赖仅进入androidTest测试APK，沿用AndroidX Apache-2.0声明，不进入产品运行依赖。

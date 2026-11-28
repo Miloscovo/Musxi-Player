@@ -1,5 +1,11 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android" xmlns:tools="http://schemas.android.com/tools">
     <application android:name="tech.musxi.player.DebugMusxiApplication" tools:replace="android:name">
+        <provider android:name="tech.musxi.player.DsfPipeValidationProvider"
+            android:authorities="${applicationId}.dsf.validation.documents"
+            android:exported="true" android:grantUriPermissions="true"
+            android:permission="android.permission.MANAGE_DOCUMENTS">
+            <intent-filter><action android:name="android.content.action.DOCUMENTS_PROVIDER" /></intent-filter>
+        </provider>
         <activity android:name="tech.musxi.player.LockScreenPageProbeActivity" android:exported="false"
             android:launchMode="singleTask" android:taskAffinity="${applicationId}.lockscreen"
             android:excludeFromRecents="true" android:showWhenLocked="true" />
@@ -7,6 +13,9 @@
         <activity android:name="tech.musxi.player.DeveloperActivity" android:exported="false" android:launchMode="singleTask"
             android:windowSoftInputMode="adjustResize" />
         <activity android:name="tech.musxi.player.ValidationFocusActivity" android:exported="false" />
+        <activity android:name="tech.musxi.player.AccountAuthorizationValidationActivity" android:exported="false"
+            android:taskAffinity="${applicationId}.accountvalidation" android:excludeFromRecents="true"
+            android:launchMode="singleTask" />
         <activity android:name="tech.musxi.player.LocalAudioPickerValidationActivity" android:exported="false" />
         <activity android:name="tech.musxi.player.QqWebLoginValidationActivity" android:exported="false" />
         <activity android:name="tech.musxi.player.KugouWebLoginValidationActivity" android:exported="false" />

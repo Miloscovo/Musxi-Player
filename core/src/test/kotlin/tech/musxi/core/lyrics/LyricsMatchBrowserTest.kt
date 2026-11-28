@@ -129,6 +129,57 @@ class LyricsMatchBrowserTest {
 
     private fun lyrics() = ParsedLyrics(emptyList(), "preview")
 
+    @Test fun guardedSearchStopsStaleQueuedWorkAndCompletesOnceForEveryPlatform() {
+        for (platform in Platform.entries) {
+            val fences = mutableListOf<() -> Boolean>()
+            val callbacks = mutableListOf<(Result<Page<SongSummary>>) -> Unit>()
+            val subject = LyricsMatchBrowser(identity = { identities[it] },
+                search = { _, _, _, _ -> throw AssertionError("Must use guarded fetch") },
+                previewFetch = { _, _, _ -> }, bindingAccess = { _, _, _, callback -> callback(Result.success(null)) },
+                guardedSearch = { _, _, _, current, callback -> fences += current; callbacks += callback })
+            subject.follow(original)
+            subject.search(platform, "first", 1)
+            assertTrue(fences[0]())
+            subject.search(platform, "second", 1)
+            assertFalse(fences[0]()); assertTrue(fences[1]())
+            callbacks[0](Result.success(Page(listOf(song(MediaKey(platform, "old"))), null, 1)))
+            assertTrue(subject.state.value.searching)
+            callbacks[1](Result.success(Page(listOf(song(MediaKey(platform, "new"))), null, 1)))
+            assertFalse(fences[1]())
+            callbacks[1](Result.failure(tech.musxi.core.library.LibraryPageFailure("network")))
+            assertEquals("new", subject.state.value.candidates.single().key.id)
+            assertNull(subject.state.value.error)
+            subject.search(platform, "cancel", 1); subject.cancel()
+            assertFalse(fences[2]())
+            callbacks[2](Result.success(Page(listOf(song(MediaKey(platform, "late"))), null, 1)))
+            assertTrue(subject.state.value.candidates.isEmpty())
+            subject.follow(original); subject.search(platform, "account", 1)
+            identities[platform] = identities.getValue(platform).copy(generation = identities.getValue(platform).generation + 1)
+            assertFalse(fences[3]())
+        }
+    }
+
+    @Test fun candidateMetadataIsAnImmutableSnapshotForEveryPlatform() {
+        for (platform in Platform.entries) {
+            val artists = mutableListOf("Artist")
+            val ids = mutableListOf("artist-1")
+            val rows = mutableListOf(SongSummary(MediaKey(platform, "song"), "Song", artists, "Album", 1000,
+                "https://untrusted.invalid/cover?private=1", ids))
+            val subject = LyricsMatchBrowser(identity = { identities[it] },
+                search = { _, _, _, callback -> callback(Result.success(Page(rows, null, 1))) },
+                previewFetch = { _, _, _ -> }, bindingAccess = { _, _, _, callback -> callback(Result.success(null)) })
+            subject.follow(original)
+            subject.search(platform, "Song", 1)
+            artists.clear(); ids.clear(); rows.clear()
+            val candidate = subject.state.value.candidates.single()
+            assertEquals(listOf("Artist"), candidate.artists)
+            assertEquals(listOf("artist-1"), candidate.artistIds)
+            assertNull(candidate.coverUrl)
+            org.junit.Assert.assertThrows(UnsupportedOperationException::class.java) { (candidate.artists as MutableList).clear() }
+            org.junit.Assert.assertThrows(UnsupportedOperationException::class.java) { (candidate.artistIds as MutableList).clear() }
+        }
+    }
+
     private fun song(key: MediaKey) = SongSummary(
         key,
         key.id,

@@ -7,6 +7,7 @@ import tech.musxi.core.account.MembershipLevel
 import tech.musxi.core.cache.CacheMaintenanceState
 import tech.musxi.core.playback.PreferredAudioQuality
 import tech.musxi.core.settings.AppSettings
+import tech.musxi.core.settings.LockScreenLyricsMode
 import tech.musxi.core.settings.LyricsColorMode
 import tech.musxi.core.settings.LyricsFontSize
 import tech.musxi.core.settings.LyricsTranslationPreference
@@ -79,6 +80,12 @@ fun fontSizeLabel(size: LyricsFontSize): String = when (size) {
     LyricsFontSize.SMALL -> "小"
     LyricsFontSize.MEDIUM -> "中"
     LyricsFontSize.LARGE -> "大"
+}
+
+fun lockScreenLyricsModeLabel(mode: LockScreenLyricsMode): String = when (mode) {
+    LockScreenLyricsMode.OFF -> "关闭"
+    LockScreenLyricsMode.CARD -> "媒体卡片歌词"
+    LockScreenLyricsMode.PAGE -> "锁屏歌词页"
 }
 
 fun themeModeLabel(mode: ThemeMode): String = when (mode) {
@@ -156,7 +163,7 @@ fun meUiOf(
         followCover = settings.lyricsColorMode == LyricsColorMode.COVER,
         showTranslation = showTranslationOf(settings.lyricsTranslationPreference),
         fontSize = settings.lyricsFontSize,
-        mediaCardLyrics = settings.mediaCardLyrics,
+        lockScreenLyricsMode = settings.effectiveLockScreenLyricsMode,
     ),
     appearance = MeAppearanceUi(
         themeMode = settings.themeMode,

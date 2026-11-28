@@ -1,5 +1,6 @@
 param(
     [switch]$Release,
+    [switch]$ReleaseCheck,
     [switch]$Test,
     [switch]$Lint,
     [switch]$Install,
@@ -12,6 +13,9 @@ Set-StrictMode -Version Latest
 
 if ($Release -and ($Test -or $Lint -or $Verify)) {
     throw '-Release cannot be combined with -Test or -Lint; release verification runs automatically.'
+}
+if ($ReleaseCheck -and ($Release -or $Test -or $Lint -or $Verify -or $Install)) {
+    throw '-ReleaseCheck only compiles/lints the release path; it cannot package or install.'
 }
 
 function Get-AndroidSdk {
@@ -229,7 +233,7 @@ if (!(Test-Path -LiteralPath $java)) { throw 'JAVA_HOME does not contain bin/jav
 
 $androidSdk = if ($Release -or $Install) { Get-AndroidSdk } else { $null }
 $androidTools = if ($Release) { Get-AndroidBuildTools $androidSdk } else { $null }
-[string[]]$tasks = @(if ($Release) { ':app:assembleRelease' } elseif ($Verify -or ($Test -and $Lint)) { ':verifyAndroid' } else { ':app:assembleDebug' })
+[string[]]$tasks = @(if ($Release) { ':app:assembleRelease' } elseif ($ReleaseCheck) { ':app:compileReleaseKotlin'; ':app:lintRelease'; ':app:processReleaseManifest' } elseif ($Verify -or ($Test -and $Lint)) { ':verifyAndroid' } else { ':app:assembleDebug' })
 if ($Release) { $tasks += '--no-configuration-cache' }
 if ($Verify) { $tasks += '-Pmusxi.verify.fresh=true' }
 if (!$Release -and !$Verify -and $Test -and !$Lint) {
@@ -292,6 +296,8 @@ try {
         $releaseResult = Invoke-ReleaseVerification -Apk $sourceApk -Apksigner $androidTools.Apksigner -Aapt $androidTools.Aapt -ArtifactDirectory $versionedArtifactDirectory -Metadata $metadata
         $apk = $releaseResult.Apk
         $launchPackage = 'tech.musxi.player'
+    } elseif ($ReleaseCheck) {
+        Write-Host 'Release source, Lint and merged manifest checked. No APK packaged, signed or installed.'
     } else {
         $apk = Join-Path $PSScriptRoot 'app/build/outputs/apk/debug/app-debug.apk'
         $debugHash = (Get-FileHash -LiteralPath $apk -Algorithm SHA256).Hash.ToLowerInvariant()

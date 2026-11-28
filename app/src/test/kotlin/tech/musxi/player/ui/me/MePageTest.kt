@@ -84,11 +84,18 @@ class MePageTest {
         assertEquals(listOf(true), seen)
     }
 
-    @Test fun mediaCardLyricsIsOffByDefaultAndReportsOn() {
-        val seen = mutableListOf<Boolean>()
-        setPage(MeActions(onSetMediaCardLyrics = { seen += it }))
-        compose.onNodeWithText("媒体卡片显示歌词").performScrollTo().assert(hasState("已关闭")).performClick()
-        assertEquals(listOf(true), seen)
+    @Test fun lockScreenLyricsRowShowsCurrentModeAndOpensSubpage() {
+        var opened = 0
+        setPage(MeActions(onOpenLockScreenLyrics = { opened++ }))
+        compose.onNodeWithText("锁屏歌词").performScrollTo().performClick()
+        assertEquals(1, opened)
+        ui = ui.copy(
+            lyrics = ui.lyrics.copy(
+                lockScreenLyricsMode = tech.musxi.core.settings.LockScreenLyricsMode.PAGE,
+            ),
+        )
+        compose.waitForIdle()
+        compose.onNodeWithText("锁屏歌词页").assertExists()
     }
 
     @Test fun theSwitchFollowsTheCallersNewValue() {

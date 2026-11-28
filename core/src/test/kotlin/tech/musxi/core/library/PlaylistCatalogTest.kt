@@ -1,5 +1,9 @@
 package tech.musxi.core.library
 
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -68,6 +72,144 @@ class PlaylistCatalogTest {
         assertEquals(listOf("2", "1", "4"), ids(f))
         assertTrue(f.catalog.state.value.customOrder)
         assertEquals(listOf("2", "1"), saved(f, ownerA))
+    }
+
+    @Test fun sameAccountReopenAndRefreshNeverPublishATemporaryEmptyOrMissingLikedRow() {
+        for (platform in Platform.entries) {
+            val f = Fixture(platform)
+            val rows = listOf(liked("9"), row("1")).map { it.copy(key = MediaKey(platform, it.key.id)) }
+            val first = page(rows, null)
+            f.open(first)
+            val observed = mutableListOf<PlaylistCatalogState>()
+            val scope = CoroutineScope(Dispatchers.Unconfined)
+            scope.launch { f.catalog.state.collect { observed += it } }
+            try {
+                // A menu/detail navigation reopens the home catalog. Hold cache IO to expose
+                // the intermediate state, then also check every synchronous Flow emission.
+                f.catalog.cancel()
+                f.catalog.open()
+                assertEquals(platform.name, rows, f.catalog.state.value.items)
+                f.sync()
+                assertEquals(rows, f.catalog.state.value.items)
+                f.catalog.refresh()
+                assertEquals(rows, f.catalog.state.value.items)
+                f.sync()
+                f.respond(first)
+                assertTrue("$platform published a blank home: $observed", observed.all { it.items == rows })
+            } finally { scope.cancel() }
+        }
+    }
+
+    @Test fun refreshFailureKeepsVisibleRowsButAConfirmedEmptyPrefixReplacesThem() {
+        val f = Fixture()
+        val first = page(listOf(liked("9"), row("1")), null)
+        f.open(first)
+        f.advance()
+        f.catalog.refresh(); f.sync()
+        f.fail("network")
+        assertEquals(first.items, f.catalog.state.value.items)
+        assertEquals("network", f.catalog.state.value.error)
+        assertFalse(f.catalog.state.value.loading)
+        f.catalog.refresh(); f.sync()
+        f.respond(page(emptyList(), null))
+        assertTrue(f.catalog.state.value.items.isEmpty())
+        assertTrue(f.catalog.state.value.complete)
+        assertNull(f.catalog.state.value.error)
+    }
+
+    @Test fun reopenDisplaySnapshotCannotProveCompletionOrAuthorizeOrderingAndNeverCrossesAccounts() {
+        val f = Fixture()
+        val first = page(listOf(liked("9"), row("1"), row("2")), 3)
+        f.open(first)
+        f.more(page(listOf(row("3")), null))
+        f.catalog.open(false) // Pause before the asynchronous first-page cache read.
+        assertEquals(first.items + row("3"), f.catalog.state.value.items)
+        assertFalse("display rows are not a rebuilt page chain", f.catalog.state.value.complete)
+        assertNull("display-only rows must not start an automatic page-0 request", f.catalog.state.value.nextOffset)
+        f.catalog.loadMore()
+        assertEquals(listOf(0, 3), f.playlistRequests)
+        var moved: Result<Unit>? = null
+        f.catalog.moveToStart(key("2"), f.catalog.state.value.revision) { moved = it }
+        assertEquals("invalid_request", failure(requireNotNull(moved)))
+        assertEquals(0, f.orders.writeAttempts)
+        f.identity = ownerB
+        f.catalog.accountChanged()
+        assertTrue("the old owner's display snapshot must disappear immediately", f.catalog.state.value.items.isEmpty())
+        f.sync()
+        assertTrue(f.catalog.state.value.items.isEmpty())
+        f.respond(page(listOf(row("3")), null))
+        assertEquals(listOf("3"), ids(f))
+    }
+
+    @Test fun explicitCacheCleanupAndOpenCatalogInvalidationDiscardAnyReopenDisplaySnapshot() {
+        for (invalidate in listOf(false, true)) {
+            val f = Fixture()
+            f.open(page(listOf(liked("9"), row("1")), null))
+            f.catalog.open(false)
+            assertTrue(f.catalog.state.value.items.isNotEmpty())
+            if (invalidate) f.catalog.invalidate(ownerA) else f.catalog.clearCachedPages()
+            assertTrue("explicit invalidation=$invalidate must clear visible rows", f.catalog.state.value.items.isEmpty())
+        }
+    }
+
+    @Test fun closedCatalogInvalidationKeepsDisplayUntilFreshPrefixWithoutAuthorizingPagingOrOrdering() {
+        for (platform in Platform.entries) {
+            val f = Fixture(platform)
+            fun rows(vararg ids: String) = ids.map { row(it).copy(key = MediaKey(platform, it)) }
+            val original = rows("1", "2", "3")
+            f.open(page(original.take(2), 2))
+            f.more(page(original.drop(2), null))
+            f.catalog.cancel()
+            val observed = mutableListOf<PlaylistCatalogState>()
+            val scope = CoroutineScope(Dispatchers.Unconfined)
+            scope.launch { f.catalog.state.collect { observed += it } }
+            try {
+                repeat(2) { f.catalog.invalidate(ownerA) }
+                assertEquals(original, f.catalog.state.value.items)
+                assertFalse(f.catalog.state.value.complete)
+                assertFalse(f.catalog.state.value.loading)
+                assertNull(f.catalog.state.value.nextOffset)
+                f.catalog.loadMore()
+                var moved: Result<Unit>? = null
+                f.catalog.moveToStart(MediaKey(platform, "2"), f.catalog.state.value.revision) { moved = it }
+                assertEquals("invalid_request", failure(requireNotNull(moved)))
+                assertEquals(0, f.orders.writeAttempts)
+                assertEquals(listOf(0, 2), f.playlistRequests)
+
+                f.catalog.open()
+                f.sync() // Stale disk prefix must not replace the full display snapshot.
+                assertTrue(f.catalog.state.value.loading)
+                assertTrue("$platform published a blank catalog: $observed", observed.all { it.items == original })
+                f.fail("network")
+                assertEquals(original, f.catalog.state.value.items)
+                assertEquals("network", f.catalog.state.value.error)
+                assertFalse(f.catalog.state.value.complete)
+                f.catalog.open()
+                f.sync()
+                val fresh = rows("4")
+                f.respond(page(fresh, null))
+                assertEquals(fresh, f.catalog.state.value.items)
+                assertTrue(f.catalog.state.value.complete)
+            } finally { scope.cancel() }
+        }
+    }
+
+    @Test fun closedInvalidationSnapshotIsClearedByCacheCleanupAndCannotCrossAccounts() {
+        for (switchAccount in listOf(false, true)) {
+            val f = Fixture()
+            f.open(page(listOf(row("1")), null))
+            f.catalog.cancel()
+            f.catalog.invalidate(ownerA)
+            assertEquals(listOf("1"), ids(f))
+            if (switchAccount) {
+                // Invalidation can precede the account collector's notification.
+                f.identity = ownerB
+                f.catalog.invalidate(ownerB)
+            } else f.catalog.clearCachedPages()
+            assertTrue(f.catalog.state.value.items.isEmpty())
+            f.catalog.open()
+            assertTrue(f.catalog.state.value.items.isEmpty())
+        }
     }
 
     @Test fun partialPagesNeverDropSavedIdsThatAreStillUnloaded() {
@@ -281,6 +423,55 @@ class PlaylistCatalogTest {
         }
     }
 
+    @Test fun kugouShortPageKeepsItsPageNumberContinuationUntilAnEmptyPageConfirmsCompletion() {
+        val f = Fixture(platform = Platform.KUGOU, stride = 30)
+        val rows = (1..4).map { row(it.toString()).copy(key = MediaKey(Platform.KUGOU, it.toString())) }
+        f.open(Page(rows, 30, null))
+        assertNull(f.catalog.state.value.error)
+        assertEquals(listOf("1", "2", "3", "4"), ids(f))
+        assertEquals(30, f.catalog.state.value.nextOffset)
+        assertFalse(f.catalog.state.value.complete)
+        f.more(Page(emptyList(), null, null))
+        assertEquals(listOf(0, 30), f.playlistRequests)
+        assertNull(f.catalog.state.value.error)
+        assertTrue(f.catalog.state.value.complete)
+        assertEquals(listOf("1", "2", "3", "4"), ids(f))
+    }
+
+    @Test fun pageNumberContinuationStillRejectsWrongStrideAndDuplicateIds() {
+        val one = row("1").copy(key = MediaKey(Platform.KUGOU, "1"))
+        val f = Fixture(platform = Platform.KUGOU, stride = 30)
+        f.open(Page(listOf(one), 1, null))
+        assertEquals("protocol", f.catalog.state.value.error)
+        assertTrue(f.catalog.state.value.items.isEmpty())
+        val duplicate = Fixture(platform = Platform.KUGOU, stride = 30)
+        duplicate.open(Page(listOf(one), 30, null))
+        duplicate.more(Page(listOf(one), null, null))
+        assertEquals("protocol", duplicate.catalog.state.value.error)
+        assertFalse(duplicate.catalog.state.value.complete)
+    }
+
+    @Test fun immediateRefreshRefetchesTheEvictedTerminalPageDespiteRecentSuccess() {
+        val f = Fixture(platform = Platform.KUGOU, stride = 30)
+        val first = Page(listOf(row("1").copy(key = MediaKey(Platform.KUGOU, "1"))), 30, null)
+        f.open(first)
+        f.more(Page(emptyList(), null, null))
+        assertTrue(f.catalog.state.value.complete)
+        repeat(3) {
+            // Stay inside the 30-second success window. Production disk storage discards
+            // all continuation pages when a fresh page 0 is committed.
+            f.catalog.refresh(); f.sync(); f.respond(first)
+            assertEquals(30, f.catalog.state.value.nextOffset)
+            f.catalog.loadMore(); f.sync()
+            assertTrue("A missing cached continuation must still fetch", f.catalog.state.value.loading)
+            f.respond(Page(emptyList(), null, null))
+            assertTrue(f.catalog.state.value.complete)
+            assertFalse(f.catalog.state.value.loading)
+            repeat(3) { f.catalog.loadMore(); f.sync() }
+        }
+        assertEquals(listOf(0, 30, 0, 30, 0, 30, 0, 30), f.playlistRequests)
+    }
+
     private fun failure(result: Result<Unit>) =
         (result.exceptionOrNull() as? LibraryPageFailure)?.category
 
@@ -292,7 +483,7 @@ class PlaylistCatalogTest {
     private fun liked(id: String) = PlaylistSummary(key(id), "我喜欢的音乐", null, 1, PlaylistKind.LIKED)
     private fun page(rows: List<PlaylistSummary>, next: Int?) = Page(rows, next, null)
 
-    private inner class Fixture {
+    private inner class Fixture(private val platform: Platform = Platform.NETEASE, stride: Int? = null) {
         var identity: LibraryCacheIdentity? = ownerA
         var now = 1_000L
         val cache = Cache()
@@ -310,9 +501,9 @@ class PlaylistCatalogTest {
             }
             override fun tracks(playlist: MediaKey, offset: Int,
                 result: (Result<Page<SongSummary>>) -> Unit) = throw AssertionError("unused")
-        }, { io += it }, { delivery += it }, now = { this@Fixture.now }, platform = Platform.NETEASE)
+        }, { io += it }, { delivery += it }, now = { this@Fixture.now }, platform = platform)
         val orders = Orders { identity }
-        val catalog = PlaylistCatalog(Platform.NETEASE, browser, { identity }, orders.access)
+        val catalog = PlaylistCatalog(platform, browser, { identity }, orders.access, continuationStride = stride)
 
         fun open(first: Page<PlaylistSummary>) { catalog.open(); sync(); respond(first) }
         fun more(next: Page<PlaylistSummary>) { catalog.loadMore(); sync(); respond(next) }
@@ -340,6 +531,12 @@ class PlaylistCatalogTest {
             sync()
         }
 
+        fun fail(category: String) {
+            assertTrue("expected a pending playlist request", pending.isNotEmpty())
+            pending.removeFirst().invoke(Result.failure(LibraryPageFailure(category)))
+            sync()
+        }
+
         fun sync() {
             while (io.isNotEmpty() || delivery.isNotEmpty()) {
                 while (io.isNotEmpty()) io.removeFirst().invoke()
@@ -350,10 +547,12 @@ class PlaylistCatalogTest {
     }
 
     private class Cache : LibraryPageStore {
-        private val playlists = mutableMapOf<Int, SavedLibraryPage<PlaylistSummary>>()
-        override fun readPlaylists(owner: String, offset: Int) = playlists[offset]
+        private val playlists = mutableMapOf<Pair<String, Int>, SavedLibraryPage<PlaylistSummary>>()
+        override fun readPlaylists(owner: String, offset: Int) = playlists[owner to offset]
         override fun writePlaylists(owner: String, offset: Int, value: SavedLibraryPage<PlaylistSummary>) {
-            playlists[offset] = value
+            // Match FileLibraryPageStore: a new prefix invalidates the cached tail.
+            if (offset == 0) playlists.keys.removeAll { it.first == owner }
+            playlists[owner to offset] = value
         }
         override fun readTracks(owner: String, playlist: MediaKey, offset: Int): SavedLibraryPage<SongSummary>? = null
         override fun writeTracks(owner: String, playlist: MediaKey, offset: Int,
